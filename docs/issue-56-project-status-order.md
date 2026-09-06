@@ -2,7 +2,7 @@
 
 ## 背景 / 动机
 
-对应 Issue：[#56](https://github.com/ShawnLiuSZ/task-dashborad/issues/56)
+对应 Issue：[#56](https://github.com/ShawnLiuSZ/task-dashboard/issues/56)
 
 重装 v0.3.24 后首次打开 App 时，若「Project 状态列」为当前视图模式，列顺序并非按 `project_statuses.order_index` 正序，而是呈现任务驱动的不稳定顺序（如 Backlog → Done → In progress，缺失中间列甚至混入其他账号的状态名）。切换账号或手动触发同步后恢复正常。
 
@@ -45,7 +45,7 @@
 
 ## 相关链接
 
-- Issue：[#56](https://github.com/ShawnLiuSZ/task-dashborad/issues/56)
+- Issue：[#56](https://github.com/ShawnLiuSZ/task-dashboard/issues/56)
 - 分支：`fix/issue-56-project-status-order`
 - Commit：`15bead3`
-- 关联：[#48](https://github.com/ShawnLiuSZ/task-dashborad/issues/48)（同一顶栏 Board 组件）
+- 关联：[#48](https://github.com/ShawnLiuSZ/task-dashboard/issues/48)（同一顶栏 Board 组件）

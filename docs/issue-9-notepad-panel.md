@@ -89,4 +89,4 @@
 
 ## 相关链接
 
-- Issue: https://github.com/ShawnLiuSZ/task-dashborad/issues/9
+- Issue: https://github.com/ShawnLiuSZ/task-dashboard/issues/9

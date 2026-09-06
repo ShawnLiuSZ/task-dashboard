@@ -51,7 +51,7 @@
 
 审查阶段产出过两条结论，经人工复核**不成立**，记录在此避免重复排查：
 
-1. **「AboutPanel 仓库链接拼写错误 task-dashborad」→ 误报。** `git remote get-url origin` 确认为 `git@github-shawn:ShawnLiuSZ/task-dashborad.git`，仓库名本身就是 `task-dashborad`。现有链接是正确的，改成 `task-dashboard` 才会 404。
+1. **「AboutPanel 仓库链接拼写错误 task-dashborad」→ 排查当时判定为误报，但该结论已被后续的仓库改名推翻。** 排查时 `origin` 确实指向 `ShawnLiuSZ/task-dashborad`，链接在当时是有效的；2026-09-06 晚间仓库正式改名为 `task-dashboard`，`AboutPanel` 与 `commands.rs` 中的引用均已同步更新（详见第 8 节）。结论：**拼写问题是真实存在的，只是以「改名」而非「改链接」的方式解决。**
 2. **「版本号 Cargo.toml 0.3.27 vs package.json 0.3.28 不一致」→ 不成立。** 在 develop 基线源码中四处均为 `0.3.27`（含 `Cargo.lock:3438`）。0.3.28 出现在 `feature/issue-52-custom-column-mapping` 分支上，属该分支未发布的版本 bump；`app/src-tauri/target/` 下的 0.3.28 是历史构建缓存，非源码。
 
 ## 5. 存疑（需运行时验证，本次未做）
@@ -73,3 +73,17 @@
 - 分支：`feature/lsz/bug-audit`，基线 `origin/develop` @ `23d63b8`
 - 关联历史修复：`9a0936e`（#55 按钮 loading 初始态）、`15bead3`（#56 Project Status 列顺序竞态）
 - 文档规范：`AGENTS.md` §2.2（状态机优先级）、§5（知识库文档）、§8.6（跨文件一致性）
+
+## 8. 后续变更：仓库改名 task-dashborad → task-dashboard（2026-09-06 21:05）
+
+本轮排查暴露出仓库名长期拼错（`dashborad` 少一个 `a`），用户决定改名。影响面与处置：
+
+| 类别 | 处置 |
+|---|---|
+| GitHub 仓库 | `gh repo rename task-dashboard --repo ShawnLiuSZ/task-dashborad` 已执行；目标名事先确认未被占用，执行账号持有 ADMIN 权限 |
+| 本地 remote | `git remote set-url origin git@github-shawn:ShawnLiuSZ/task-dashboard.git`，`git fetch` 验证通过 |
+| **功能性引用（不改会坏）** | `app/src-tauri/src/commands.rs:751` 更新检查用的 Releases API 地址、`:767` 兜底 releases 页 URL；`app/src/components/AboutPanel.tsx:101/102/104` 仓库链接与显示文本 |
+| 文档链接 | `docs/` 下 12 处 issue / PR 链接、中英 CHANGELOG 各 1 处 |
+| 工具配置 | `.trae/skills/github-issue-quick/SKILL.md` 中 `gh issue create --repo` 的目标仓库 |
+
+风险提示：GitHub 对改名仓库会保留旧名的重定向（web 与 git 操作均可用），因此历史链接不会立即 404；但 **API 路径的重定向不可依赖**，故 `commands.rs` 中的 API 地址是本次必须修改项。其他机器上的旧 clone 需各自执行 `git remote set-url`。

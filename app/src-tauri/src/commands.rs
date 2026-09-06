@@ -748,7 +748,7 @@ pub async fn check_latest_release() -> Result<CheckUpdate, String> {
             .build()
             .map_err(|e| format!("构造 HTTP 客户端失败: {e}"))?;
         let resp: serde_json::Value = client
-            .get("https://api.github.com/repos/ShawnLiuSZ/task-dashborad/releases/latest")
+            .get("https://api.github.com/repos/ShawnLiuSZ/task-dashboard/releases/latest")
             .send()
             .map_err(|e| format!("检查更新失败（网络）：{e}"))?
             .error_for_status()
@@ -764,7 +764,7 @@ pub async fn check_latest_release() -> Result<CheckUpdate, String> {
         let url = resp
             .get("html_url")
             .and_then(|v| v.as_str())
-            .unwrap_or("https://github.com/ShawnLiuSZ/task-dashborad/releases")
+            .unwrap_or("https://github.com/ShawnLiuSZ/task-dashboard/releases")
             .to_string();
         let up_to_date = !latest.is_empty() && latest == current;
         Ok(CheckUpdate {

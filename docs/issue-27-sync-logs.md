@@ -2,7 +2,7 @@
 
 ## 背景 / 动机
 
-**对应 Issue**：[GitHub #27](https://github.com/ShawnLiuSZ/task-dashborad/issues/27)
+**对应 Issue**：[GitHub #27](https://github.com/ShawnLiuSZ/task-dashboard/issues/27)
 
 **问题**：同步操作（定时/手动）执行后，用户无法查看同步历史和错误详情，难以排查「部分账号失败 / 422」等问题。
 
@@ -117,7 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_sync_logs_created ON sync_logs(created_at);
 
 ## 相关链接
 
-- **Issue**：[GitHub #27](https://github.com/ShawnLiuSZ/task-dashborad/issues/27)
+- **Issue**：[GitHub #27](https://github.com/ShawnLiuSZ/task-dashboard/issues/27)
 - **分支**：`feature/issue-27-sync-logs`
 - **PR**：待创建
 - **CHANGELOG**：见 `docs/CHANGELOG.md` v0.3.23 条目

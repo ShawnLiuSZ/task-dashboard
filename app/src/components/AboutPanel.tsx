@@ -98,10 +98,10 @@ export default function AboutPanel({ onClose }: Props) {
             <span className="muted small">{t("about.repoPath")}</span>
             <button
               className="about-repo-link"
-              title="https://github.com/ShawnLiuSZ/task-dashborad"
-              onClick={() => void api.openInBrowser("https://github.com/ShawnLiuSZ/task-dashborad")}
+              title="https://github.com/ShawnLiuSZ/task-dashboard"
+              onClick={() => void api.openInBrowser("https://github.com/ShawnLiuSZ/task-dashboard")}
             >
-              ShawnLiuSZ/task-dashborad ↗
+              ShawnLiuSZ/task-dashboard ↗
             </button>
           </div>
 
