@@ -454,39 +454,69 @@ TOOL_BY_NAME = {t["name"]: t for t in TOOLS}
 
 
 # --------------------------------------------------------------------------- #
-# JSON-RPC 2.0 over stdio（LSP 风格 Content-Length 分帧）
+# JSON-RPC 2.0 over stdio（双格式自动识别：NDJSON + Content-Length 兼容）
 # --------------------------------------------------------------------------- #
+
+NDJSON = "ndjson"
+CONTENT_LENGTH = "content-length"
+
+
 def read_message(stream):
-    """从二进制流读取一条带 Content-Length 头的 JSON-RPC 消息。EOF 时返回 None。"""
-    headers = {}
+    """读取一条 JSON-RPC 消息，返回 (msg, framing)。EOF 返回 (None, None)。
+
+    MCP stdio 规范为换行分隔 JSON；LSP 风格 Content-Length 头作为历史兼容保留。
+    首个有效字符判定分帧格式：`{` → NDJSON，否则 → Content-Length。
+    """
+    # 跳过消息间空行，用首行首字符判定分帧格式
     while True:
         line = stream.readline()
         if not line:
-            return None
+            return None, None
         if isinstance(line, bytes):
             line = line.decode("utf-8", "replace")
-        line = line.rstrip("\r\n")
-        if line == "":
+        if line.strip():
             break
-        if ":" in line:
-            k, v = line.split(":", 1)
+
+    if line.lstrip().startswith("{"):
+        try:
+            return json.loads(line), NDJSON
+        except ValueError as e:
+            print("[taskboard-mcp] NDJSON 解析失败，跳过该行: %s" % e, file=sys.stderr)
+            return None, None
+
+    headers = {}
+    while True:
+        stripped = line.rstrip("\r\n")
+        if stripped == "":
+            break
+        if ":" in stripped:
+            k, v = stripped.split(":", 1)
             headers[k.strip().lower()] = v.strip()
+        line = stream.readline()
+        if not line:
+            return None, None
+        if isinstance(line, bytes):
+            line = line.decode("utf-8", "replace")
+
     try:
         length = int(headers.get("content-length", "0"))
     except ValueError:
         length = 0
     if length <= 0:
-        return None
+        return None, None
     body = stream.read(length)
     if isinstance(body, bytes):
         body = body.decode("utf-8", "replace")
-    return json.loads(body)
+    return json.loads(body), CONTENT_LENGTH
 
 
-def write_message(stream, msg):
+def write_message(stream, msg, framing):
     data = json.dumps(msg, ensure_ascii=False).encode("utf-8")
-    stream.write(b"Content-Length: " + str(len(data)).encode() + b"\r\n\r\n")
-    stream.write(data)
+    if framing == NDJSON:
+        stream.write(data + b"\n")
+    else:
+        stream.write(b"Content-Length: " + str(len(data)).encode() + b"\r\n\r\n")
+        stream.write(data)
     stream.flush()
 
 
@@ -513,7 +543,7 @@ def handle(msg):
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "taskboard", "version": "0.3.24"},
+                "serverInfo": {"name": "taskboard", "version": "0.3.47"},
             },
         }
 
@@ -571,9 +601,10 @@ def handle(msg):
 def main():
     istream = sys.stdin.buffer
     ostream = sys.stdout.buffer
+    handled = 0
     while True:
         try:
-            msg = read_message(istream)
+            msg, framing = read_message(istream)
         except Exception as e:  # noqa: BLE001
             sys.stderr.write(f"[taskboard-mcp] 读取消息失败: {e}\n")
             break
@@ -585,7 +616,12 @@ def main():
             sys.stderr.write(f"[taskboard-mcp] 处理异常: {e}\n")
             resp = None
         if resp is not None:
-            write_message(ostream, resp)
+            write_message(ostream, resp, framing)
+        handled += 1
+    if handled == 0:
+        sys.stderr.write(
+            "[taskboard-mcp] 未收到任何有效 JSON-RPC 消息即断开——请检查客户端分帧格式\n"
+        )
 
 
 if __name__ == "__main__":

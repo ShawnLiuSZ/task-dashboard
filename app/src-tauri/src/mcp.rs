@@ -619,10 +619,55 @@ fn handle(conn: &Connection, msg: &Value) -> Option<Value> {
     }
 }
 
-/// 从二进制流（如 stdin）读取一条带 `Content-Length` 头的 JSON-RPC 消息。
+/// stdio 分帧格式。MCP 规范为换行分隔 JSON；LSP 风格的 Content-Length 头作为历史兼容保留。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Framing {
+    Ndjson,
+    ContentLength,
+}
+
+/// 从二进制流（如 stdin）读取一条 JSON-RPC 消息，并返回它使用的分帧格式。
 /// 逐字节读取以避免 BufRead 缓冲与 `read_exact` 混用导致的数据错位。EOF 返回 None。
-fn read_message(r: &mut impl Read) -> Option<Value> {
-    let mut header_bytes: Vec<u8> = Vec::new();
+///
+/// 首个有效字节判定分帧格式：
+/// - `{` → NDJSON（MCP 规范，Claude Code / Cursor 等标准客户端）
+/// - 否则 → Content-Length 头（LSP 风格，WorkBuddy / Codex 等历史兼容）
+fn read_message(r: &mut impl Read) -> Option<(Value, Framing)> {
+    // 跳过消息之间的空白（换行 / 空行），首个有效字节用于判定分帧格式
+    let mut first = [0u8; 1];
+    loop {
+        if r.read(&mut first).ok()? == 0 {
+            return None; // EOF
+        }
+        if !first[0].is_ascii_whitespace() {
+            break;
+        }
+    }
+
+    // NDJSON：本行剩余部分即完整 JSON（规范禁止消息内嵌换行）
+    if first[0] == b'{' {
+        let mut line = vec![first[0]];
+        let mut byte = [0u8; 1];
+        loop {
+            if r.read(&mut byte).ok()? == 0 {
+                break; // 末行可能无换行结尾
+            }
+            if byte[0] == b'\n' {
+                break;
+            }
+            line.push(byte[0]);
+        }
+        return match serde_json::from_slice(&line) {
+            Ok(v) => Some((v, Framing::Ndjson)),
+            Err(e) => {
+                eprintln!("[taskboard-mcp] NDJSON 解析失败，跳过该行: {e}");
+                None
+            }
+        };
+    }
+
+    // Content-Length 头：首字节已消费，需回填进头部缓冲
+    let mut header_bytes: Vec<u8> = vec![first[0]];
     let mut content_length: Option<usize> = None;
     loop {
         let mut byte = [0u8; 1];
@@ -630,13 +675,10 @@ fn read_message(r: &mut impl Read) -> Option<Value> {
             return None; // EOF
         }
         header_bytes.push(byte[0]);
-        // 头部结束标志：\r\n\r\n 或 \n\n
-        let done = header_bytes.ends_with(b"\r\n\r\n") || header_bytes.ends_with(b"\n\n");
-        if done {
+        if header_bytes.ends_with(b"\r\n\r\n") || header_bytes.ends_with(b"\n\n") {
             let header_str = String::from_utf8_lossy(&header_bytes);
             for line in header_str.split('\n') {
-                let line = line.trim_end(); // 去除可能的 \r
-                if let Some((k, v)) = line.split_once(':') {
+                if let Some((k, v)) = line.trim_end().split_once(':') {
                     if k.trim().eq_ignore_ascii_case("content-length") {
                         content_length = v.trim().parse().ok();
                     }
@@ -651,15 +693,23 @@ fn read_message(r: &mut impl Read) -> Option<Value> {
     }
     let mut body = vec![0u8; len];
     r.read_exact(&mut body).ok()?;
-    serde_json::from_slice(&body).ok()
+    serde_json::from_slice(&body)
+        .ok()
+        .map(|v| (v, Framing::ContentLength))
 }
 
-fn write_message(w: &mut impl Write, msg: &Value) {
+fn write_message(w: &mut impl Write, msg: &Value, framing: Framing) {
     let data = serde_json::to_vec(msg).unwrap_or_default();
-    let mut frame = Vec::new();
-    frame.extend_from_slice(format!("Content-Length: {}\r\n\r\n", data.len()).as_bytes());
-    frame.extend_from_slice(&data);
-    let _ = w.write_all(&frame);
+    match framing {
+        Framing::Ndjson => {
+            let _ = w.write_all(&data);
+            let _ = w.write_all(b"\n");
+        }
+        Framing::ContentLength => {
+            let _ = w.write_all(format!("Content-Length: {}\r\n\r\n", data.len()).as_bytes());
+            let _ = w.write_all(&data);
+        }
+    }
     let _ = w.flush();
 }
 
@@ -688,13 +738,20 @@ pub fn run() {
 
     let mut stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
+    let mut handled = 0u32;
     loop {
-        let msg = match read_message(&mut stdin) {
+        let (msg, framing) = match read_message(&mut stdin) {
             Some(m) => m,
             None => break, // EOF：客户端断开
         };
         if let Some(resp) = handle(&conn, &msg) {
-            write_message(&mut stdout, &resp);
+            write_message(&mut stdout, &resp, framing);
         }
+        handled += 1;
+    }
+    if handled == 0 {
+        eprintln!(
+            "[taskboard-mcp] 未收到任何有效 JSON-RPC 消息即断开——请检查客户端分帧格式"
+        );
     }
 }
