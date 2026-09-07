@@ -204,6 +204,14 @@ function BoardApp() {
     return m;
   }, [settings]);
 
+  // v0.3.43+：看板列展示方式为「每账号」配置。单账号视图取激活账号的 boardMode；
+  // 聚合视图（暂隐藏，未配置按账号展开）与账号缺失时回退到 project（默认）。
+  const boardMode = useMemo<BoardMode>(() => {
+    if (!settings) return "project";
+    if (settings.viewMode === "all") return "project";
+    return accountMap.get(settings.activeAccountId)?.boardMode ?? "project";
+  }, [settings, accountMap]);
+
   // 前端实时过滤：归属由后端 list_tasks 已筛；此处叠加 仓库 + 关键词（仓库/编号/标题）。
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -352,30 +360,8 @@ function BoardApp() {
           </button>
         )}
 
-        {/* v0.3.21+：看板列模式切换（status 四态 / project Project Status / custom 自定义列） */}
-        <select
-          className="select"
-          value={settings?.boardMode ?? "project"}
-          onChange={(e) => {
-            const mode = e.target.value as BoardMode;
-            if (mode !== settings?.boardMode) {
-              // 必须串行：并发执行时 get_settings 可能返回旧的 boardMode，把用户选择覆盖回去。
-              void (async () => {
-                try {
-                  await api.setBoardMode(mode);
-                  await loadSettings();
-                } catch (err) {
-                  setError(String(err));
-                }
-              })();
-            }
-          }}
-          title={t("settings.boardModeTitle")}
-        >
-          <option value="status">{t("settings.boardModeStatus")}</option>
-          <option value="project">{t("settings.boardModeProject")}</option>
-          <option value="custom">{t("settings.boardModeCustom")}</option>
-        </select>
+        {/* v0.3.43+：看板列展示方式已改为「每账号」在设置面板配置，此处不再提供切换下拉。 */}
+
       </div>
 
       {(error || lastResult) && (
@@ -393,7 +379,7 @@ function BoardApp() {
             selected={selected}
             onSelect={setSelected}
             accounts={accountMap}
-            boardMode={settings?.boardMode ?? "project"}
+            boardMode={boardMode}
             projectStatuses={projectStatuses}
             accountColumns={accountColumns}
           />
@@ -426,7 +412,11 @@ function BoardApp() {
             setActiveModal(null);
             void load();
           }}
-          onClose={() => setActiveModal(null)}
+          onClose={() => {
+            setActiveModal(null);
+            // v0.3.43+：展示方式在设置面板按账号修改，关闭后重载 settings 使看板即时生效。
+            void loadSettings();
+          }}
         />
       )}
 

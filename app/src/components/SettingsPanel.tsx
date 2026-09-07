@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useI18n, type LangMode } from "../i18n";
-import type { AccountColumn, Settings } from "../types";
+import type { AccountColumn, BoardMode, Settings } from "../types";
 
 interface Props {
   settings: Settings;
@@ -52,6 +52,11 @@ export default function SettingsPanel({
   const [colAccountId, setColAccountId] = useState<number | null>(
     settings.accounts.find((a) => a.isDefault)?.id ?? settings.accounts[0]?.id ?? null,
   );
+  // v0.3.43+：按账号配置「看板列展示方式」
+  const [bmAccountId, setBmAccountId] = useState<number | null>(
+    settings.activeAccountId || settings.accounts[0]?.id || null,
+  );
+  const [bmMode, setBmMode] = useState<BoardMode>("project");
   const [columns, setColumns] = useState<AccountColumn[]>([]);
   const [colSaving, setColSaving] = useState(false);
   const [colMsg, setColMsg] = useState<string | null>(null);
@@ -100,6 +105,12 @@ export default function SettingsPanel({
       .then((list) => setAvailableStatuses([...new Set(list.map((p) => p.name).filter(Boolean))]))
       .catch(() => setAvailableStatuses([]));
   }, [colAccountId]);
+
+  // v0.3.43+：切换账号时，展示方式下拉回显该账号已配置的模式（未配置默认 project）。
+  useEffect(() => {
+    const acct = settings.accounts.find((a) => a.id === bmAccountId);
+    setBmMode(acct?.boardMode ?? "project");
+  }, [bmAccountId, settings.accounts]);
 
   const save = async () => {
     setSaving(true);
@@ -377,6 +388,40 @@ export default function SettingsPanel({
               {diagMsg.text}
             </div>
           )}
+        </div>
+
+        <div className="field" style={{ display: tab === "columns" ? "block" : "none" }}>
+          <label>{t("settings.boardModeTitle")}</label>
+          <div className="muted small" style={{ marginBottom: 6 }}>{t("settings.boardModeDesc")}</div>
+          <div className="row" style={{ marginTop: 4, marginBottom: 8 }}>
+            <select
+              className="select"
+              value={bmAccountId ?? ""}
+              onChange={(e) => setBmAccountId(Number(e.target.value))}
+            >
+              {settings.accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.label}{a.isDefault ? " ★" : ""}
+                </option>
+              ))}
+            </select>
+            <select
+              className="select"
+              value={bmMode}
+              onChange={(e) => {
+                const mode = e.target.value as BoardMode;
+                if (bmAccountId == null || mode === bmMode) return;
+                setBmMode(mode);
+                api
+                  .setAccountBoardMode(bmAccountId, mode)
+                  .catch((err) => setErr(String(err)));
+              }}
+            >
+              <option value="project">{t("settings.boardModeProject")}</option>
+              <option value="status">{t("settings.boardModeStatus")}</option>
+              <option value="custom">{t("settings.boardModeCustom")}</option>
+            </select>
+          </div>
         </div>
 
         <div className="field" style={{ display: tab === "columns" ? "block" : "none" }}>

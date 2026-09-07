@@ -274,7 +274,7 @@ pub fn run() {
             commands::delete_label_mapping,
             // v0.3.21+：Label 列视图 + 看板模式切换。
             commands::get_label_columns_for_account,
-            commands::set_board_mode,
+            commands::set_account_board_mode,
             // v0.3.22+：Project Status 诊断。
             commands::diagnose_project_status,
             commands::list_projects,

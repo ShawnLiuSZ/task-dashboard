@@ -562,10 +562,6 @@ pub fn run(conn: &Connection) -> Result<SyncResult, String> {
     let active_id: i64 = crate::db::get_setting(conn, "active_account_id")
         .parse()
         .unwrap_or(0);
-    // v0.3.28+：看板列模式，决定是否启用自定义列映射（仅 custom 时写入 col_key）。
-    let board_mode = crate::db::get_setting(conn, "board_mode");
-    let board_mode = if board_mode.is_empty() { "project".to_string() } else { board_mode };
-
     let target: Vec<crate::db::Account> = match view_mode.as_str() {
         "all" => accounts.clone(),
         _ => accounts
@@ -605,8 +601,11 @@ pub fn run(conn: &Connection) -> Result<SyncResult, String> {
             total_failed.push(format!("{}: 未配置 PAT", login));
             continue;
         }
-        // 查找当前账号对应的日志 id
+        // 查当前账号对应的日志 id
         let log_id = log_ids.iter().find(|(aid, _)| *aid == account.id).map(|(_, lid)| *lid);
+        // v0.3.43+：看板列模式改为「每账号」配置（meta 里 board_mode:<id>），决定是否启用
+        // 自定义列映射（仅 custom 时写入 col_key）。未配置默认 project。
+        let board_mode = crate::db::get_account_board_mode(conn, account.id);
         match sync_account(conn, account, &pat, now, &board_mode) {
             Ok(r) => {
                 total_added += r.added;
@@ -675,6 +674,23 @@ mod tests {
     use super::*;
     use crate::db;
     use rusqlite::Connection;
+
+    #[test]
+    fn account_board_mode_defaults_and_validates() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .unwrap();
+        // 未配置默认 project
+        assert_eq!(db::get_account_board_mode(&conn, 1), "project");
+        // 合法值可写入并按账号隔离
+        db::set_account_board_mode(&conn, 1, "custom").unwrap();
+        db::set_account_board_mode(&conn, 2, "status").unwrap();
+        assert_eq!(db::get_account_board_mode(&conn, 1), "custom");
+        assert_eq!(db::get_account_board_mode(&conn, 2), "status");
+        // 非法值拒绝
+        assert!(db::set_account_board_mode(&conn, 1, "bogus").is_err());
+        assert_eq!(db::get_account_board_mode(&conn, 1), "custom");
+    }
 
     /// 头less 全量同步验证：直接打开生产库（与应用共用同一 SQLite 文件），
     /// 跑一次真实 `run`，再核对「PR 关联」是否真正落地（pr_number > 0 的任务数 > 0）。

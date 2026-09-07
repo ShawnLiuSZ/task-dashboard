@@ -122,6 +122,7 @@
   "settings.langZh": "简体中文",
   "settings.langEn": "English",
   "settings.boardModeTitle": "看板列模式",
+  "settings.boardModeDesc": "为每个账号独立配置看板列展示方式：切换账号后按该账号配置展示，顶栏不再提供切换。",
   "settings.boardModeStatus": "四态列（待处理/处理中/已处理/已完成）",
   "settings.loading": "加载中…",
   "settings.boardModeProject": "Project 状态列（按 GitHub Project Status 分列）",
