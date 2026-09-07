@@ -34,7 +34,18 @@ npm run tauri build    # 产出当前平台的 release 安装包
 
 ### 在线自动打包
 
-发布 Release 时由 GitHub Actions 自动构建三端安装包（macOS / Windows / Linux）。发布流程、签名前提与 runner 配置详见 [`docs/design-and-release.md`](./docs/design-and-release.md)。
+发布 Release 时由 GitHub Actions 自动构建多平台安装包。发布流程、签名前提与 runner 配置详见 [`docs/design-and-release.md`](./docs/design-and-release.md)。
+
+#### 支持的平台与架构
+
+| 平台 | 架构 | 格式 | 状态 |
+|------|------|------|------|
+| macOS | ARM (Apple Silicon) | .dmg / .app | ✅ 支持 |
+| macOS | x64 (Intel) | .dmg / .app | ✅ 支持 |
+| Windows | x64 | .exe (NSIS) | ✅ 支持 |
+| Windows | ARM64 | .exe (NSIS) | ✅ 支持 |
+| Linux (Debian/Ubuntu) | amd64 | .deb | ✅ 支持 |
+| Linux (通用) | x86_64 | .AppImage | ✅ 支持 |
 
 > **⚠️ 更新提醒**：**v0.3.24 及以下版本**因仓库迁移问题，应用内「检查更新」无法获取 Release 信息，**不能自动更新**。请到 [GitHub Releases](https://github.com/ShawnLiuSZ/task-dashboard/releases) 下载最新版安装包（或查看应用内「关于」页提示的下载链接）。
 
