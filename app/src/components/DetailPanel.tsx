@@ -5,8 +5,9 @@ import { fmtTime, useI18n } from "../i18n";
 
 // 主流 coding agent 列表：供「中断会话」记录时标注来源。可按需增删。
 // value 为规范化 slug（与 MCP/agent 自报名一致，便于存储与展示统一），
-// label 为下拉里展示的名称。存储只认 value。
-const AGENTS: { value: string; label: string }[] = [
+// label 为默认展示名；部分国内 agent 的 label 含中文，经 i18nKey 接入 i18n 随界面语言切换。
+type AgentOption = { value: string; label: string; i18nKey?: string };
+const AGENTS: AgentOption[] = [
   { value: "amazon-q", label: "Amazon Q" },
   { value: "augment", label: "Augment Code" },
   { value: "bolt", label: "Bolt.new" },
@@ -23,10 +24,10 @@ const AGENTS: { value: string; label: string }[] = [
   { value: "cursor", label: "Cursor" },
   { value: "deepseek", label: "DeepSeek" },
   { value: "devin", label: "Devin" },
-  { value: "doubao", label: "豆包 (Doubao)" },
+  { value: "doubao", label: "豆包 (Doubao)", i18nKey: "agents.doubao" },
   { value: "factory", label: "Factory Droid" },
   { value: "gemini-cli", label: "Gemini CLI" },
-  { value: "glm", label: "智谱 GLM" },
+  { value: "glm", label: "智谱 GLM", i18nKey: "agents.glm" },
   { value: "goose", label: "Goose" },
   { value: "grok", label: "Grok (xAI)" },
   { value: "helix", label: "Helix CLI" },
@@ -39,7 +40,7 @@ const AGENTS: { value: string; label: string }[] = [
   { value: "replit", label: "Replit Agent" },
   { value: "roo-code", label: "Roo Code" },
   { value: "tabnine", label: "Tabnine" },
-  { value: "tongyi", label: "通义灵码" },
+  { value: "tongyi", label: "通义灵码", i18nKey: "agents.tongyi" },
   { value: "trae", label: "Trae" },
   { value: "v0", label: "Vercel v0" },
   { value: "windsurf", label: "Windsurf" },
@@ -53,6 +54,16 @@ interface Props {
   onClose: () => void;
   onChanged: () => void;
 }
+
+// 取 agent 的显示名：带 i18nKey 的走 i18n，其余用默认 label；未知 slug 原样返回。
+const agentLabel = (
+  value: string,
+  t: (k: string, p?: Record<string, string | number>) => string,
+): string => {
+  const a = AGENTS.find((x) => x.value === value);
+  if (!a) return value;
+  return a.i18nKey ? t(a.i18nKey) : a.label;
+};
 
 export default function DetailPanel({ task, onClose, onChanged }: Props) {
   const { t, lang } = useI18n();
@@ -139,7 +150,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
           <select className="select" value={agent} onChange={(e) => setAgent(e.target.value)}>
             {AGENTS.map((a) => (
               <option key={a.value} value={a.value}>
-                {a.label}
+                {agentLabel(a.value, t)}
               </option>
             ))}
           </select>
@@ -172,7 +183,9 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
         {task.sessionId && (
           <div className="muted small">
             {t("detail.recordedAt", {
-              agent: task.sessionAgent || t("detail.unlabeled"),
+              agent: task.sessionAgent
+                ? agentLabel(task.sessionAgent, t)
+                : t("detail.unlabeled"),
               time: fmtTime(task.sessionAt ?? 0, lang),
             })}
           </div>
