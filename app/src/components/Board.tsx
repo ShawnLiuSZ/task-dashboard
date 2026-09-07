@@ -73,7 +73,8 @@ export default function Board({
 }: Props) {
   const t = useT();
 
-  if (boardMode === "project") {
+  // v0.3.43+: "status" (legacy) gracefully degrades to "project"
+  if (boardMode === "project" || boardMode === "status") {
     // GitHub Project Status 列视图
     const grouped = groupByProjectStatus(tasks);
     // 以 project_statuses 表为准，确保所有状态列都展示（即使无任务）

@@ -123,9 +123,9 @@
   "settings.langEn": "English",
   "settings.boardModeTitle": "Board Column Mode",
   "settings.boardModeDesc": "Per-account board column mode: the board follows each account's mode when switching accounts; the top-bar switch is removed.",
-  "settings.boardModeStatus": "Four-state columns (Todo/Doing/Processed/Done)",
+
   "settings.loading": "Loading…",
-  "settings.boardModeProject": "Project Status Columns (grouped by GitHub Project Status)",
+  "settings.boardModeProject": "Project Status Columns",
   "settings.boardModeCustom": "Custom Columns (per-account mapping rules)",
   "settings.customColumnsTitle": "Custom Column Mapping",
   "settings.customColumnsDesc": "Add/edit a column: enter its display name and select the Project statuses it should match (multi-select). Closed tasks auto-move to \"Done\".",

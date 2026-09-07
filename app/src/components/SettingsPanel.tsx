@@ -418,7 +418,6 @@ export default function SettingsPanel({
               }}
             >
               <option value="project">{t("settings.boardModeProject")}</option>
-              <option value="status">{t("settings.boardModeStatus")}</option>
               <option value="custom">{t("settings.boardModeCustom")}</option>
             </select>
           </div>

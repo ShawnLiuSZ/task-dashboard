@@ -928,7 +928,7 @@ body {
 }
 
 .modal {
-  width: 460px;
+  width: 520px;
   background: var(--surface);
   border-radius: 12px;
   padding: 18px 20px;

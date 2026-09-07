@@ -108,9 +108,17 @@ PRD §6 规划了「MCP Server + Skill」让 AI Agent 在执行任务时自动�
 }
 ```
 
-> 路径说明：上述为默认安装位置（`/Applications/TaskBoard.app/...`）。若你安装到了其他位置，把 `command` 改成实际 `TaskBoard.app/Contents/MacOS/taskboard` 的绝对路径即可。**未安装 app、改用** **`server.py`** **兜底**时，配置改为 `"command": "python3", "args": ["/path/to/mcp_server/server.py"]`。
+> **各平台 `command` 路径**：
 >
-> 注：已注册的 WorkBuddy MCP 需在其连接器页「信任」后才会激活；codex / cursor 等按各自 MCP 配置位置填入上述 `command` + `args` 即可。
+> | 平台 | 默认路径 |
+> |---|---|
+> | macOS | `/Applications/TaskBoard.app/Contents/MacOS/taskboard` |
+> | Windows | `C:\Program Files\TaskBoard\taskboard.exe` |
+> | Linux (deb) | `/usr/bin/taskboard` |
+>
+> 若安装到了非默认位置，把 `command` 改成实际 `taskboard` 二进制的绝对路径即可。**未安装 app、改用 `server.py` 兜底**时，配置改为 `"command": "python3", "args": ["/path/to/mcp_server/server.py"]`。
+>
+> WorkBuddy 已内置注册，需在其连接器页「信任」后才会激活；其余 agent（codex / cursor / opencode 等）按各自 MCP 配置位置填入上述 `command` + `args` 即可。
 
 ### 让 Agent 真正自动接上（触发逻辑）
 
