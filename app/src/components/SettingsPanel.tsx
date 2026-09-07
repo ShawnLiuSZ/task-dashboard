@@ -168,10 +168,19 @@ export default function SettingsPanel({
       setDiagMsg({
         ok: true,
         text:
-          `组织 ${res.org} / 用户 ${res.login}\n` +
-          `发现 ${projs.length} 个 Project：${projs.map((p: any) => p.name).join("、") || "（无）"}\n` +
-          `已拉取 Status ${res.status_count} 条` +
-          (statusKeys.length ? `，示例: ${statusKeys.slice(0, 8).join("、")}` : ""),
+          t("settings.diagOrgUser", { org: res.org, login: res.login }) +
+          "\n" +
+          t("settings.diagProjects", {
+            count: projs.length,
+            names:
+              projs.map((p: any) => p.name).join("、") ||
+              t("settings.diagNone"),
+          }) +
+          "\n" +
+          t("settings.diagStatuses", { count: res.status_count }) +
+          (statusKeys.length
+            ? t("settings.diagExample", { keys: statusKeys.slice(0, 8).join("、") })
+            : ""),
       });
     } catch (e) {
       setDiagMsg({ ok: false, text: String(e) });
