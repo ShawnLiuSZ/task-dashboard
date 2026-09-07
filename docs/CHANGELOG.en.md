@@ -2,6 +2,11 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.30 (2026-09-07) — Fix tasks wrongly removed on empty search results (#65)**
+  - **Background**: when the Search API returns 422, `search()` treated it as "no results"; partial search-source failures let real related tasks be marked stale and removed from the board (data-loss risk).
+  - **Changes**: **#65a** `github.rs::search()` — a 422 (including 422/non-2xx after rate-limit retry) now returns `Err` instead of an empty result, so it is recorded into `failed` and downstream can tell the search pipeline is incomplete. **#65b** `sync.rs::sync_account()` stale cleanup — when any search source fails, tasks still open are only un-staled and kept (not deleted); confirmed closed tasks are still marked done as before.
+  - **Acceptance**: sync no longer aborts or removes open tasks on search 422/failure; the "move off board" behavior is unchanged when search is complete. See KB doc [docs/issue-65-empty-search-no-delete.md](./issue-65-empty-search-no-delete.md).
+
 - **v0.3.29 (2026-09-06) — Board mode persistence and consistency fixes (#64 #72 #74)**
   - **Background**: a second audit found three defects in the board mode (boardMode) system that made custom columns unusable, caused tasks to disappear from the four-state view, and prevented mode switches from persisting.
   - **Changes**: **#64 boardMode persistence** — backend `Settings` struct adds `board_mode` field; `get_settings` reads it back from `meta.board_mode`; frontend serializes `setBoardMode` → `loadSettings` so the old value no longer overwrites the user's choice. **#72 restore four-state option** — board mode dropdown re-adds `status` (four-state) option; `Board.tsx` default changes from `status` to `project` to align with `db.rs` default. **#74 custom column gate** — `sync.rs` only applies custom column mapping when `board_mode == "custom"`, preventing tasks from being assigned a col_key status and vanishing from the four-state / Project views.

@@ -500,6 +500,9 @@ fn sync_account(
 
     let mut candidate_done = 0usize;
     let mut removed = 0usize;
+    // v0.3.29：任一搜索源失败说明同步数据源不完整，stale 判定不可信。
+    // 此时对仍 open 的任务只解除 stale 保留本地记录，绝不删（避免误删真实关联任务）。
+    let sources_incomplete = !failed.is_empty();
     for (key, repo, number, url) in stale_rows {
         // 从 URL 提取 repo_owner（格式：https://github.com/{owner}/{repo}/issues/{number}）
         let repo_owner_from_url = url
@@ -517,6 +520,16 @@ fn sync_account(
                 )
                 .map_err(|e| format!("标记候选已完成失败: {}", e))?;
                 candidate_done += 1;
+            }
+            Ok(_) if sources_incomplete => {
+                // 搜索源不完整：该任务可能只是本次没被拉到，不能据此移出看板。
+                // 仅解除 stale，避免下次同步重复进入此分支；保留本地手动态。
+                conn.execute(
+                    "UPDATE tasks SET stale = 0 WHERE key = ?1 AND account_id = ?2",
+                    rusqlite::params![&key, account.id],
+                )
+                .map_err(|e| format!("保留不删除任务失败: {}", e))?;
+                eprintln!("[sync] 搜索源不完整（{}），保留任务不过删: {}", failed.join("; "), key);
             }
             Ok(_) => {
                 conn.execute("DELETE FROM tasks WHERE key = ?1 AND account_id = ?2", rusqlite::params![&key, account.id])
