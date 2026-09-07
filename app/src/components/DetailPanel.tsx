@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, openExternal } from "../api";
 import { COLUMNS, type StatusKey, type Task } from "../types";
 import { fmtTime, useI18n } from "../i18n";
@@ -73,6 +73,14 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [handoff, setHandoff] = useState(task.handoff ?? "");
+  // 「已复制」提示的复位定时器：组件的卸载（切换任务、关闭面板）时需清理，
+  // 避免定时器在其后触发 setCopiedKey（在已卸载组件上 setState）。
+  const copiedTimer = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+    };
+  }, []);
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -91,7 +99,12 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
     try {
       await navigator.clipboard.writeText(text);
       setCopiedKey(key);
-      setTimeout(() => setCopiedKey(null), 1500);
+      // 复用 ref 管理复位定时器：连点前先清旧定时器，避免多个定时器叠加提前复位。
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => {
+        setCopiedKey(null);
+        copiedTimer.current = null;
+      }, 1500);
     } catch (e) {
       // 权限不足或非安全上下文时 writeText 会 reject：原先无 catch，
       // 既产生未处理拒绝，又让「已复制」态卡住不给任何反馈。
