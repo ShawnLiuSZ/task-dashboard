@@ -24,19 +24,19 @@ jobs:
         include:
           # macOS ARM (Apple Silicon)
           - platform: macos-latest
-            bundles: app,dmg,zip
+            bundles: app,dmg
             target: aarch64-apple-darwin
           # macOS x64 (Intel)
           - platform: macos-13
-            bundles: app,dmg,zip
+            bundles: app,dmg
             target: x86_64-apple-darwin
           # Windows x64
           - platform: windows-latest
-            bundles: nsis,msi,zip
+            bundles: nsis,msi
             target: x86_64-pc-windows-msvc
           # Windows ARM64
           - platform: windows-11-arm
-            bundles: nsis,msi,zip
+            bundles: nsis,msi
             target: aarch64-pc-windows-msvc
           # Linux amd64
           - platform: ubuntu-22.04
