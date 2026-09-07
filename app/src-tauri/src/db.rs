@@ -174,7 +174,9 @@ pub fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 /// 无 AppHandle 时的数据目录（与 Tauri `app_data_dir` 解析一致）：
-/// `~/Library/Application Support/com.shawnliu.taskboard`
+/// - macOS: `~/Library/Application Support/com.shawnliu.taskboard`
+/// - Windows: `%APPDATA%\com.shawnliu.taskboard`
+/// - Linux: `$XDG_CONFIG_HOME/com.shawnliu.taskboard`（缺省 `~/.config`）
 pub fn data_dir() -> Result<PathBuf, String> {
     let base = dirs::data_dir().ok_or_else(|| "无法定位用户数据目录".to_string())?;
     Ok(base.join(APP_IDENTIFIER))
