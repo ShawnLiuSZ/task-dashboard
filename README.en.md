@@ -36,6 +36,8 @@ Artifact location (by current platform): `app/src-tauri/target/release/bundle/{m
 
 Release builds are produced automatically by GitHub Actions for all three platforms (macOS / Windows / Linux). See [`docs/design-and-release.md`](./docs/design-and-release.md) for the release flow, signing prerequisites, and runner configuration.
 
+> **⚠️ Update notice**: **v0.3.24 and below** cannot auto-update — the in-app "Check for Updates" can no longer reach the Releases API due to a repository migration. Please download the latest installer from [GitHub Releases](https://github.com/ShawnLiuSZ/task-dashboard/releases) (or use the download link shown on the app's About page).
+
 ### Usage
 
 | Capability | Action |

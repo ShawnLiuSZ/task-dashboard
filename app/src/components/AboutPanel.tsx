@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "../api";
+import { api, openExternal } from "../api";
 import { useI18n } from "../i18n";
 import type { CheckUpdate } from "../types";
 
@@ -99,7 +99,7 @@ export default function AboutPanel({ onClose }: Props) {
             <button
               className="about-repo-link"
               title="https://github.com/ShawnLiuSZ/task-dashborad"
-              onClick={() => void api.openInBrowser("https://github.com/ShawnLiuSZ/task-dashborad")}
+              onClick={() => openExternal("https://github.com/ShawnLiuSZ/task-dashborad")}
             >
               ShawnLiuSZ/task-dashborad ↗
             </button>
@@ -120,7 +120,7 @@ export default function AboutPanel({ onClose }: Props) {
                   <button
                     className="btn primary"
                     style={{ marginTop: 6 }}
-                    onClick={() => void api.openInBrowser(state.data.url)}
+                    onClick={() => openExternal(state.data.url)}
                   >
                     {t("about.download")} ↗
                   </button>

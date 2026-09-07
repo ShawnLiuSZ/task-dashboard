@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { api, openExternal } from "../api";
 import { useI18n } from "../i18n";
 import { formatCountdownSeconds } from "../utils/format";
 import type { Account, DeviceLoginStart, Settings } from "../types";
@@ -102,7 +102,7 @@ export default function AccountsPanel({
       const st = await api.deviceLoginStart("");
       setOauthStart(st);
       setOauthPhase("code");
-      void api.openInBrowser(st.verificationUriComplete);
+      openExternal(st.verificationUriComplete);
       let interval = st.interval;
       while (oauthRunRef.current === runId) {
         await new Promise((r) => setTimeout(r, interval * 1000));
@@ -265,7 +265,7 @@ export default function AccountsPanel({
                   <div className="row" style={{ marginTop: 8 }}>
                     <button
                       className="btn"
-                      onClick={() => void api.openInBrowser(oauthStart.verificationUriComplete)}
+                      onClick={() => openExternal(oauthStart.verificationUriComplete)}
                     >
                       {t("settings.reopenAuth")}
                     </button>

@@ -15,6 +15,11 @@
 //! - record_session(issue, session_id, agent?)
 //! - record_handoff(issue, text)
 //! - clear_session(issue)
+//! - list_notes()
+//! - add_note(content, label?)
+//! - update_note(note_id, content)
+//! - update_note_label(note_id, label)
+//! - delete_note(note_id)
 
 use std::io::{Read, Write};
 
@@ -246,6 +251,91 @@ fn tool_clear_session(conn: &Connection, issue: &str) -> Result<Value, String> {
     Ok(json!({ "ok": true, "key": key }))
 }
 
+// ============================================================================
+// v0.3.28+：记事本工具（与 `mcp_server/server.py` 同名同参，返回结构一致）
+// ============================================================================
+
+/// 合法记事标签（与 `mcp_server/server.py::VALID_NOTE_LABELS` 一致）。
+const NOTE_LABELS: [&str; 4] = ["low", "medium", "high", "urgent"];
+
+/// 序列化为 snake_case，与既有工具（session_id 等）及 server.py 的 sqlite row 保持一致。
+fn note_to_value(n: &crate::db::Note) -> Value {
+    json!({
+        "id": n.id,
+        "content": n.content,
+        "label": n.label,
+        "created_at": n.created_at,
+        "updated_at": n.updated_at,
+    })
+}
+
+fn normalize_note_label(label: Option<&str>) -> Result<String, String> {
+    let l = label.unwrap_or("low").trim().to_lowercase();
+    if l.is_empty() {
+        return Ok("low".to_string());
+    }
+    if NOTE_LABELS.contains(&l.as_str()) {
+        Ok(l)
+    } else {
+        Err(format!("无效标签: {l}（可选: low/medium/high/urgent）"))
+    }
+}
+
+/// `note_id` 既接受 JSON 数字，也容忍字符串形式的数字（部分 agent 会传字符串）。
+fn note_id_arg(args: &Map<String, Value>) -> Result<i64, String> {
+    match args.get("note_id") {
+        Some(Value::Number(n)) => n.as_i64().ok_or_else(|| "note_id 必须是整数".to_string()),
+        Some(Value::String(s)) => s
+            .trim()
+            .parse::<i64>()
+            .map_err(|_| format!("note_id 非法: {s}")),
+        _ => Err("缺少 note_id 参数".to_string()),
+    }
+}
+
+fn tool_list_notes(conn: &Connection) -> Result<Value, String> {
+    let notes = crate::db::list_notes(conn)?;
+    Ok(Value::Array(notes.iter().map(note_to_value).collect()))
+}
+
+fn tool_add_note(
+    conn: &Connection,
+    content: Option<&str>,
+    label: Option<&str>,
+) -> Result<Value, String> {
+    let content = content.unwrap_or_default().trim();
+    if content.is_empty() {
+        return Err("记事内容不能为空".to_string());
+    }
+    let label = normalize_note_label(label)?;
+    let note = crate::db::add_note(conn, content, &label, crate::sync::now_secs())?;
+    Ok(note_to_value(&note))
+}
+
+fn tool_update_note(conn: &Connection, id: i64, content: Option<&str>) -> Result<Value, String> {
+    let content = content.unwrap_or_default().trim();
+    if content.is_empty() {
+        return Err("记事内容不能为空".to_string());
+    }
+    let note = crate::db::update_note(conn, id, content, crate::sync::now_secs())?;
+    Ok(note_to_value(&note))
+}
+
+fn tool_update_note_label(
+    conn: &Connection,
+    id: i64,
+    label: Option<&str>,
+) -> Result<Value, String> {
+    let label = normalize_note_label(label)?;
+    let note = crate::db::update_note_label(conn, id, &label)?;
+    Ok(note_to_value(&note))
+}
+
+fn tool_delete_note(conn: &Connection, id: i64) -> Result<Value, String> {
+    crate::db::delete_note(conn, id)?;
+    Ok(json!({ "ok": true, "note_id": id }))
+}
+
 fn call_tool(conn: &Connection, name: &str, args: &Map<String, Value>) -> Result<Value, String> {
     let get = |k: &str| -> Option<String> {
         args.get(k).and_then(|v| v.as_str()).map(|s| s.to_string())
@@ -274,6 +364,25 @@ fn call_tool(conn: &Connection, name: &str, args: &Map<String, Value>) -> Result
         "clear_session" => {
             let issue = get("issue").ok_or("缺少 issue 参数")?;
             tool_clear_session(conn, &issue)
+        }
+        "list_notes" => tool_list_notes(conn),
+        "add_note" => {
+            let content = get("content").ok_or("缺少 content 参数")?;
+            tool_add_note(conn, Some(&content), get("label").as_deref())
+        }
+        "update_note" => {
+            let id = note_id_arg(args)?;
+            let content = get("content").ok_or("缺少 content 参数")?;
+            tool_update_note(conn, id, Some(&content))
+        }
+        "update_note_label" => {
+            let id = note_id_arg(args)?;
+            let label = get("label").ok_or("缺少 label 参数")?;
+            tool_update_note_label(conn, id, Some(&label))
+        }
+        "delete_note" => {
+            let id = note_id_arg(args)?;
+            tool_delete_note(conn, id)
         }
         _ => Err(format!("未知工具: {name}")),
     }
@@ -350,6 +459,69 @@ fn tools_list() -> Value {
                     "issue": { "type": "string", "description": "issue 引用" }
                 },
                 "required": ["issue"]
+            }
+        },
+        {
+            "name": "list_notes",
+            "description": "列出所有记事，按创建时间降序（最新的在前）。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "name": "add_note",
+            "description": "新增一条记事，返回新记录（含 id、创建时间）。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "content": { "type": "string", "description": "记事内容" },
+                    "label": {
+                        "type": "string",
+                        "description": "标签：low/medium/high/urgent（默认 low）",
+                        "enum": ["low", "medium", "high", "urgent"]
+                    }
+                },
+                "required": ["content"]
+            }
+        },
+        {
+            "name": "update_note",
+            "description": "更新记事内容，返回更新后的记录。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "note_id": { "type": "integer", "description": "记事 id" },
+                    "content": { "type": "string", "description": "新的记事内容" }
+                },
+                "required": ["note_id", "content"]
+            }
+        },
+        {
+            "name": "update_note_label",
+            "description": "更新记事标签（low/medium/high/urgent），返回更新后的记录。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "note_id": { "type": "integer", "description": "记事 id" },
+                    "label": {
+                        "type": "string",
+                        "description": "标签：low/medium/high/urgent",
+                        "enum": ["low", "medium", "high", "urgent"]
+                    }
+                },
+                "required": ["note_id", "label"]
+            }
+        },
+        {
+            "name": "delete_note",
+            "description": "删除一条记事。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "note_id": { "type": "integer", "description": "记事 id" }
+                },
+                "required": ["note_id"]
             }
         }
     ])

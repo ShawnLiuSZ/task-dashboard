@@ -49,6 +49,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   latest_comment_url TEXT NOT NULL DEFAULT '',
   pr_number      INTEGER NOT NULL DEFAULT 0,
   pr_url         TEXT NOT NULL DEFAULT '',
+  -- v0.3.10：关联 PR 的分支（head.ref）。v0.3.28+ 同时写入 SCHEMA，
+  -- 避免任何只执行 SCHEMA 的建库路径漏掉 ALTER 迁移导致缺列。
+  branch         TEXT NOT NULL DEFAULT '',
+  -- v0.3.10：agent 写入的交接任务详情。
+  handoff        TEXT NOT NULL DEFAULT '',
   updated_at     TEXT,
   synced_at      INTEGER NOT NULL,
   -- v0.3.16：任务归属账号（来自 accounts.id）。v0.3.15 之前的数据迁移后默认 1。

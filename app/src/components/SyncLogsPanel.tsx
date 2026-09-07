@@ -41,14 +41,18 @@ export default function SyncLogsPanel({ onClose }: Props) {
   const [logs, setLogs] = useState<SyncLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [pruning, setPruning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const loadLogs = useCallback(async () => {
     setLoading(true);
     try {
       const data = await api.listSyncLogs(100);
       setLogs(data);
+      setError(null);
     } catch (e) {
+      // 失败必须可见：原先只 console.error，面板仍显示「暂无同步日志」，用户会误判。
       console.error("加载同步日志失败:", e);
+      setError(String(e));
     } finally {
       setLoading(false);
     }
@@ -63,6 +67,9 @@ export default function SyncLogsPanel({ onClose }: Props) {
     try {
       await api.pruneSyncLogs();
       await loadLogs();
+    } catch (e) {
+      console.error("清理同步日志失败:", e);
+      setError(String(e));
     } finally {
       setPruning(false);
     }
@@ -74,7 +81,9 @@ export default function SyncLogsPanel({ onClose }: Props) {
         <h3 className="modal-title">同步日志</h3>
 
         <div className="sync-logs-body">
-          {loading ? (
+          {error ? (
+            <div className="banner error">{error}</div>
+          ) : loading ? (
             <div className="muted small" style={{ padding: "12px 0" }}>
               加载中...
             </div>

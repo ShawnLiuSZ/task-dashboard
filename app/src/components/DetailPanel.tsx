@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api } from "../api";
+import { api, openExternal } from "../api";
 import { COLUMNS, type StatusKey, type Task } from "../types";
 import { fmtTime, useI18n } from "../i18n";
 
@@ -77,9 +77,16 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
   };
 
   const copyToClipboard = async (text: string, key: string) => {
-    await navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    setTimeout(() => setCopiedKey(null), 1500);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 1500);
+    } catch (e) {
+      // 权限不足或非安全上下文时 writeText 会 reject：原先无 catch，
+      // 既产生未处理拒绝，又让「已复制」态卡住不给任何反馈。
+      setErr(String(e));
+      setCopiedKey(null);
+    }
   };
 
   return (
@@ -205,7 +212,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
       <section className="detail-block">
         <div className="block-title">GitHub</div>
         <div className="row">
-          <button className="btn" onClick={() => void api.openInBrowser(task.url)}>
+          <button className="btn" onClick={() => openExternal(task.url)}>
             {t("detail.openInBrowser")}
           </button>
           <button
@@ -216,7 +223,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
           </button>
           {task.prNumber > 0 && task.prUrl && (
             <>
-              <button className="btn" onClick={() => void api.openInBrowser(task.prUrl)}>
+              <button className="btn" onClick={() => openExternal(task.prUrl)}>
                 PR #{task.prNumber}
               </button>
               <button
@@ -228,7 +235,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
             </>
           )}
           {task.latestCommentUrl && (
-            <button className="btn" onClick={() => void api.openInBrowser(task.latestCommentUrl)}>
+            <button className="btn" onClick={() => openExternal(task.latestCommentUrl)}>
               {t("detail.latestComment")}
             </button>
           )}

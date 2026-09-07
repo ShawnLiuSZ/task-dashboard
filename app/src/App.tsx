@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, onSynced } from "./api";
+import { api, onSynced, TASKBOARD_ERROR_EVENT } from "./api";
 import { fmtTime, I18nProvider, useI18n } from "./i18n";
 import Board from "./components/Board";
 import DetailPanel from "./components/DetailPanel";
@@ -32,6 +32,14 @@ function BoardApp() {
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [projectStatuses, setProjectStatuses] = useState<ProjectStatus[]>([]);
   const [accountColumns, setAccountColumns] = useState<AccountColumn[]>([]);
+
+  // v0.3.28+：监听全局错误上报（如 openExternal 失败），统一在错误 banner 显示，
+  // 避免无 UI 上下文的异步失败只落在 console 里造成「点了没反应」。
+  useEffect(() => {
+    const handler = (e: Event) => setError((e as CustomEvent<string>).detail);
+    window.addEventListener(TASKBOARD_ERROR_EVENT, handler);
+    return () => window.removeEventListener(TASKBOARD_ERROR_EVENT, handler);
+  }, []);
 
   // 同步结果 banner 4 秒后自动消失（错误 banner 不受影响，由下次操作覆盖）。
   useEffect(() => {
@@ -104,7 +112,9 @@ function BoardApp() {
       best.sort((a, b) => a.orderIndex - b.orderIndex);
       setProjectStatuses(best);
     } catch (e) {
+      // 项目状态决定看板列，失败必须可见，否则列静默缺失用户无从判断。
       console.warn("加载项目状态选项失败:", e);
+      setError(String(e));
     }
   }, [settings]);
 
@@ -138,13 +148,19 @@ function BoardApp() {
       setAccountColumns(cols.sort((a, b) => a.orderIndex - b.orderIndex));
     } catch (e) {
       console.warn("加载自定义列配置失败:", e);
+      // 同上：自定义列缺失会让看板列不完整，失败需可见。
+      setError(String(e));
     }
   }, [settings]);
 
   useEffect(() => {
     void load();
     void loadSettings();
-    const un = onSynced((r) => {
+    // onSynced 返回 Promise<unlisten>：cleanup 不能返回 Promise，否则 React
+    // 无法等待，快速重订阅时会短暂双订阅。用 cancelled + 变量持有解决。
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    void onSynced((r) => {
       void load();
       void loadSettings();
       // loadProjectStatuses 依赖 settings，下面的 useEffect 会在 settings 变化时自动触发
@@ -153,9 +169,16 @@ function BoardApp() {
       setLastResult(
         `${t("sync.result", { added: r.added, updated: r.updated, done: r.candidateDone })}${prune}${warn}`,
       );
+    }).then((f) => {
+      if (cancelled) {
+        f();
+        return;
+      }
+      unlisten = f;
     });
     return () => {
-      void un.then((f) => f());
+      cancelled = true;
+      unlisten?.();
     };
   }, [load, loadSettings, t]);
 
@@ -331,8 +354,15 @@ function BoardApp() {
           onChange={(e) => {
             const mode = e.target.value as BoardMode;
             if (mode !== settings?.boardMode) {
-              void api.setBoardMode(mode);
-              void loadSettings();
+              // 必须串行：并发执行时 get_settings 可能返回旧的 boardMode，把用户选择覆盖回去。
+              void (async () => {
+                try {
+                  await api.setBoardMode(mode);
+                  await loadSettings();
+                } catch (err) {
+                  setError(String(err));
+                }
+              })();
             }
           }}
           title={t("settings.boardModeTitle")}

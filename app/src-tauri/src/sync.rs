@@ -360,8 +360,11 @@ fn sync_account(
         } else if !mapped_status.is_empty() && mapped_status != "todo" {
             mapped_status
         } else if !gh_status_raw.is_empty() {
-            // gh_status 有值时优先用 map_project_status；映射不到则保持原样
-            map_project_status(&gh_status_raw).unwrap_or(&gh_status_raw).to_string()
+            // gh_status 有值时优先用 map_project_status；映射不到则保持本地状态。
+            // 绝不回落原始文案：非四态的 status 会让该任务不属于任何看板列，表现为「任务消失」。
+            map_project_status(&gh_status_raw)
+                .unwrap_or(&existing_status)
+                .to_string()
         } else {
             existing_status
         };
