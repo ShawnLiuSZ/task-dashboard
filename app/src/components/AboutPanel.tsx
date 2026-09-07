@@ -106,7 +106,6 @@ export default function AboutPanel({ onClose }: Props) {
             <h4>{t("about.mcpTitle")}</h4>
             <p className="muted small">{t("about.mcpDesc")}</p>
             <pre className="about-code">{buildMcpSnippet()}</pre>
-            <p className="muted small">{t("about.mcpWorkbuddy")}</p>
             <p className="muted small">{t("about.mcpFallback")}</p>
           </section>
 
