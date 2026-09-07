@@ -11,6 +11,15 @@ interface Props {
   accountLabel?: string;
   /** v0.3.22+：仓库颜色索引（0-19），用于仓库名标签配色。 */
   repoIndex?: number;
+  /** v0.3.43+：自定义列视图下，卡片右上角显示 project.status（gh_status）徽章。 */
+  showGhStatus?: boolean;
+}
+
+// 稳定哈希 gh_status → 0-19，复用 repo-N 色系，同状态保持一致颜色。
+function ghStatusColor(s: string): number {
+  let h = 7;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 997;
+  return h % 20;
 }
 
 // 在浏览器中打开外链：阻止 webview 自身跳转，改用本机默认浏览器打开（失败经 reportError 可见）。
@@ -20,7 +29,7 @@ function openLink(url: string, e: MouseEvent) {
   openExternal(url);
 }
 
-export default function TaskCard({ task, accountLabel, active, onClick, repoIndex }: Props) {
+export default function TaskCard({ task, accountLabel, active, onClick, repoIndex, showGhStatus }: Props) {
   const t = useT();
   const mine = task.ownership === "assigned";
   const assigneeNames = task.assignees
@@ -59,6 +68,15 @@ export default function TaskCard({ task, accountLabel, active, onClick, repoInde
         {task.ghState === "closed" && (
           <span className="gh-state gh-state-closed" title={t("card.ghState.closed")}>
             {t("card.ghState.closed")}
+          </span>
+        )}
+        {/* v0.3.43+：自定义列视图下显示 project.status 真实值徽章 */}
+        {showGhStatus && task.ghStatus && task.ghStatus.trim() !== "" && (
+          <span
+            className={`repo repo-${ghStatusColor(task.ghStatus)}`}
+            title={t("card.ghStatusTitle")}
+          >
+            {task.ghStatus}
           </span>
         )}
       </div>

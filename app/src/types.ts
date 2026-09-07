@@ -13,6 +13,8 @@ export interface Account {
   /** 是否已配置 PAT（不回显 token 本体）。 */
   hasPat: boolean;
   isDefault: boolean;
+  /** v0.3.43+：该账号的看板列展示方式（status/project/custom），未配置默认 project。 */
+  boardMode: BoardMode;
   createdAt: number;
 }
 
@@ -91,9 +93,7 @@ export interface Settings {
   activeAccountId: number;
   /** v0.3.16+：视图模式。 */
   viewMode: ViewMode;
-  /** v0.3.21+：看板列模式。status=四态列，project=Project 状态列。 */
-  boardMode: BoardMode;
-  /** v0.3.16+：所有账号列表（不含 PAT 本体）。 */
+  /** v0.3.16+：所有账号列表（不含 PAT 本体）。每个账号带各自的 boardMode（v0.3.43+）。 */
   accounts: Account[];
   /** v0.3.17+：GitHub OAuth Device Flow 的 client_id（注册 OAuth App 后填一次）。 */
   oauthClientId: string;

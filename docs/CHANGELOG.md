@@ -6,6 +6,32 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.45（2026-09-07）— 记事导出默认写入设备下载目录（#103）**
+
+  - **#103 导出默认下载目录**：`export_notes` 新增可选 `target_dir`；未传时经 `dirs::download_dir()` 落到系统真实下载目录（macOS `~/Downloads` / Windows `%USERPROFILE%\Downloads` / Linux `$XDG_DOWNLOAD_DIR`），取不到/不可写时回退应用数据目录 `notes-backup/`。新增 `resolve_export_dir` 做优先级 + 可写校验。**零新依赖**（`dirs` 已在用）。前端导出成功提示本就展示完整 `path`。详见 [docs/issue-103-notes-export-download.md](./issue-103-notes-export-download.md)。
+  - **验证**：`cargo check`；新增单测 `resolve_export_dir_prefers_target_then_download`（合 26 例）。
+
+- **v0.3.44（2026-09-07）— 首启自动清除 Gatekeeper 隔离标记，MCP 免 sudo 开箱即用（#101）**
+
+  - **#101 自动清除自身 quarantine**：macOS 首次启动在 `setup()` 用 `xattr` 检测主二进制（`taskboard mcp`）是否带 `com.apple.quarantine`，存在即 `xattr -dr` 递归清除（当前用户拥有自身 bundle，**无需 sudo**）。GUI 放行一次后自动清理，此后 MCP 客户端 spawn 不再触发 Gatekeeper 慢评估，根治「MCP 连接 30s 超时」。详见 [docs/issue-101-quarantine-autoclear.md](./issue-101-quarantine-autoclear.md)。
+  - **验证**：`cargo check`（macOS）通过；验收为多机手动（清除后 `xattr -l` 无 quarantine 标记、MCP 工具可发现可调用）。
+
+- **v0.3.43（2026-09-07）— 看板列展示方式改为每账号配置（#99）**
+
+  - **#99 每账号列展示方式**：移除顶栏展示方式切换下拉；在设置面板「自定义列」tab 按账号独立选择 status/project/custom（存 `meta` 的 `board_mode:<id>`，未配置默认 project）。切换账号后看板按该账号模式展示。自定义列视图下任务卡片右上角显示 `project.status` 彩色徽章（复用 20 色系，同状态同色）。
+  - **接口**：移除全局 `set_board_mode` 命令与 `Settings.board_mode` 字段；新增 `set_account_board_mode(account_id, mode)`；`accounts[]` 新增 `boardMode`。同步 `sync::run` 逐账号读取模式（仅该账号自己为 custom 才写 `col_key`）。零表结构变更、复用 `meta` 键值表。
+  - **验证**：`cargo test --lib`（新增 `account_board_mode_defaults_and_validates`，合计 24 例）、`npm run i18n:check`（zh/en 各 179 key）、`npx tsc --noEmit`、`npm test` 通过。详见 [docs/issue-99-board-mode-per-account.md](./issue-99-board-mode-per-account.md)。
+
+- **v0.3.42（2026-09-07）— 自定义列映射去重（#98）**
+
+  - **#98 新建列时已使用 status 置灰去重**：设置面板「自定义列」新建/编辑列时，已被**其它列**选用的 Project status 置灰且不可再次选中（`usedElsewhere` 由 `columns` + `editingCol` 实时派生；`toggleRule` 兜底拦截，覆盖自由输入路径）；正在编辑的列自身占用项保留可选，删除列后其占用项自动恢复可选。纯前端改动、零后端/schema 变更。新增 i18n key `settings.customColumns.usedElsewhere`。
+  - **验证**：`npm run i18n:check`（zh/en 各 178 key）、`npx tsc --noEmit`、`npm test`（3 例）通过。详见 [docs/issue-98-dedup-col-status.md](./issue-98-dedup-col-status.md)。
+
+- **v0.3.41（2026-09-07）— 首次启动 UI 卡死转圈修复（#97）**
+
+  - **#97 设置 / 关于 / 账号 / 同步日志 面板卡死**：根因是启动同步把整段 **GitHub 网络 I/O** 包在共享 `AppState.db` 的 `Mutex<Connection>` 里长持有，导致这些面板触发的读命令（同步非 async，跑在主线程）排队等锁 → macOS beachball、鼠标卡死转圈。修复：`run_sync` / `sync_now` 改用**独立 DB 连接**（`open_sync_conn`，复用 WAL + `busy_timeout`），同步不再占用共享锁，UI 随到随取。零新依赖、零 schema 变更、对外接口不变。
+  - **验证**：`cargo check`、`cargo test --lib`（23 例）通过。详见 [docs/issue-97-ui-freeze.md](./issue-97-ui-freeze.md)。
+
 - **v0.3.40（2026-09-07）— 设置面板 tab 化 + 自定义列映射下拉配置（#95）**
 
   - **#95 自定义列 Project status 映射配置**：设置面板改为 **tab 切换（基础设置 / 自定义列映射 / 诊断）**，自定义列配置独立成页、标题栏加关闭按钮。自定义列编辑移除「列标识(colKey)」概念 —— col_key 由系统自动生成，**用户只需填列显示名称 + 下选匹配的 Project status（下拉多选 chips + 自由输入）**，保存写 `matchRules` JSON 数组，后端逻辑与存储零改动、向后兼容。详见 [docs/issue-95-status-mapping-dropdown.md](./issue-95-status-mapping-dropdown.md)。

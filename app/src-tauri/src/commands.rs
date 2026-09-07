@@ -55,9 +55,7 @@ pub struct Settings {
     pub active_account_id: i64,
     /// v0.3.16+：视图模式。'single'=仅当前激活账号；'all'=所有账号任务聚合。
     pub view_mode: String,
-    /// v0.3.21+：看板列模式。'status'=四态列；'project'=Project Status 列；'custom'=自定义列。
-    pub board_mode: String,
-    /// v0.3.16+：所有账号列表（不含 PAT 本体）。
+    /// v0.3.16+：所有账号列表（不含 PAT 本体）。每个账号带各自的 board_mode（v0.3.43+）。
     pub accounts: Vec<Account>,
     /// v0.3.17+：GitHub OAuth Device Flow 的 client_id（注册 OAuth App 后填一次）。
     pub oauth_client_id: String,
@@ -187,7 +185,9 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncResult, String> {
         // 与 lib.rs::run_sync 同一去重标志：已有同步在跑则拒绝本次，避免并发触发背靠背全量同步。
         let _in_progress = crate::SyncGuard::acquire(&st.syncing)
             .ok_or_else(|| "已有同步进行中，请稍后再试".to_string())?;
-        let conn = st.db.lock().map_err(|e| e.to_string())?;
+        // 用独立连接跑同步：不持有共享 `AppState.db` 的 Mutex 跨网络 I/O，避免阻塞
+        // 主线程上的 UI 读命令（设置/账号/同步日志等面板）。见 lib.rs::open_sync_conn。
+        let conn = crate::db::open_db(&crate::db::db_path(&handle)?)?;
         crate::sync::run(&conn)
     })
     .await
@@ -306,8 +306,6 @@ pub fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settin
         .unwrap_or(0);
     let view_mode = crate::db::get_setting(&conn, "view_mode");
     let view_mode = if view_mode.is_empty() { "single".to_string() } else { view_mode };
-    let board_mode = crate::db::get_setting(&conn, "board_mode");
-    let board_mode = if board_mode.is_empty() { "project".to_string() } else { board_mode };
     Ok(Settings {
         schedule_minutes: crate::db::get_setting(&conn, "schedule_minutes")
             .parse::<u64>()
@@ -324,7 +322,6 @@ pub fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settin
         last_sync_error: crate::db::get_setting(&conn, "last_sync_error"),
         active_account_id,
         view_mode,
-        board_mode,
         accounts,
         oauth_client_id: crate::db::get_setting(&conn, "oauth_client_id"),
     })
@@ -743,15 +740,20 @@ pub fn set_view_mode(state: State<'_, AppState>, mode: String) -> Result<(), Str
     Ok(())
 }
 
-/// 设置看板列模式：'status' / 'project' / 'custom'。
-	#[tauri::command]
-	pub fn set_board_mode(state: State<'_, AppState>, mode: String) -> Result<(), String> {
-	    if mode != "status" && mode != "project" && mode != "custom" {
-	        return Err(format!("非法看板模式: {mode}（应为 status / project / custom）"));
-	    }
+/// v0.3.43+：设置某账号的看板列展示方式（status/project/custom）。
+/// 每个账号独立配置，存于 meta `board_mode:<account_id>`；未配置默认 project。
+#[tauri::command]
+pub fn set_account_board_mode(
+    state: State<'_, AppState>,
+    account_id: i64,
+    mode: String,
+) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    crate::db::set_setting(&conn, "board_mode", &mode)?;
-    Ok(())
+    // 校验账号存在
+    if crate::db::get_account_pat(&conn, account_id).is_err() {
+        return Err(format!("账号 #{account_id} 不存在"));
+    }
+    crate::db::set_account_board_mode(&conn, account_id, &mode)
 }
 
 // ============================================================================
@@ -1023,8 +1025,9 @@ pub fn delete_note(state: State<'_, AppState>, id: i64) -> Result<(), String> {
 
 /// 导出记事为 JSON 文件，返回写入的完整路径与条数。
 ///
-/// 写入位置固定为应用数据目录下 `notes-backup/`（macOS：
-/// `~/Library/Application Support/com.shawnliu.taskboard/notes-backup/`），
+/// 写入位置（v0.3.45+，#103）：优先用前端传入的 `target_dir`；未传则用系统「下载」目录
+/// （`dirs::download_dir()`：macOS `~/Downloads` / Windows `%USERPROFILE%\Downloads` /
+/// Linux `$XDG_DOWNLOAD_DIR`）。上述取不到或不可写时，回退应用数据目录 `notes-backup/`。
 /// 文件名 `notes-backup-YYYYMMDD-HHMMSS.json`。仅含记事业务数据，不含 token 等敏感信息。
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1033,13 +1036,41 @@ pub struct ExportNotesResult {
     pub count: usize,
 }
 
+/// #103：解析导出目标目录。优先级 target_dir → 系统下载目录 → 应用数据目录 `notes-backup/`。
+fn resolve_export_dir(target_dir: Option<&str>) -> Result<std::path::PathBuf, String> {
+    use std::path::PathBuf;
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(t) = target_dir {
+        if !t.trim().is_empty() {
+            candidates.push(PathBuf::from(t));
+        }
+    }
+    if let Some(dl) = dirs::download_dir() {
+        // download_dir 可能返回同 target_dir 的重复项，去重避免重复尝试。
+        if !candidates.iter().any(|c| c == &dl) {
+            candidates.push(dl);
+        }
+    }
+    for dir in candidates {
+        if std::fs::create_dir_all(&dir).is_ok() {
+            return Ok(dir);
+        }
+    }
+    let fallback = crate::db::data_dir()?.join("notes-backup");
+    std::fs::create_dir_all(&fallback).map_err(|e| format!("创建备份目录失败: {e}"))?;
+    Ok(fallback)
+}
+
 #[tauri::command]
-pub fn export_notes(state: State<'_, AppState>) -> Result<ExportNotesResult, String> {
+pub fn export_notes(
+    state: State<'_, AppState>,
+    target_dir: Option<String>,
+) -> Result<ExportNotesResult, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let notes = crate::db::list_notes(&conn)?;
 
-    let dir = crate::db::data_dir()?.join("notes-backup");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建备份目录失败: {e}"))?;
+    let dir = resolve_export_dir(target_dir.as_deref())?;
 
     let now = crate::sync::now_secs();
     let ts = format!(
@@ -1228,6 +1259,26 @@ mod tests {
         assert_eq!(hello.created_at, 100);
         assert_eq!(hello.updated_at, 200);
         assert_eq!(hello.label, "low");
+    }
+
+    // #103：导出目录解析 —— 空/空白 target 回退下载目录；合法 target 优先。
+    #[test]
+    fn resolve_export_dir_prefers_target_then_download() {
+        // 空白 target → 落到系统下载目录（或数据目录兜底）
+        for t in [Some(""), Some("   ")] {
+            let d = super::resolve_export_dir(t).unwrap();
+            let s = d.to_string_lossy();
+            assert!(
+                s.contains("Downloads") || s.contains("notes-backup"),
+                "未落到下载/兜底目录: {s}"
+            );
+        }
+        // 合法自定义目录优先于下载目录
+        let tmp = std::env::temp_dir().join(format!("tb_export_test_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let d2 = super::resolve_export_dir(Some(tmp.to_str().unwrap())).unwrap();
+        assert_eq!(d2, tmp);
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     // 校验 helper：helper_status 只放行四态，或该任务所属账号的自定义列 col_key。
