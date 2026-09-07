@@ -192,23 +192,61 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncResult, String> {
 }
 
 #[tauri::command]
-	pub fn update_task_status(
-	    state: State<'_, AppState>,
-	    key: String,
-	    status: String,
-	) -> Result<(), String> {
-	    // 允许自定义列值（col_0, col_1 等）通过；空串视为非法。
-	    if status.trim().is_empty() {
-	        return Err("状态不能为空".to_string());
-	    }
-	    let conn = state.db.lock().map_err(|e| e.to_string())?;
-	    conn.execute(
-	        "UPDATE tasks SET status = ?1 WHERE key = ?2",
-	        rusqlite::params![status, key],
-	    )
-	    .map_err(|e| e.to_string())?;
-	    Ok(())
-	}
+pub fn update_task_status(
+    state: State<'_, AppState>,
+    key: String,
+    status: String,
+) -> Result<(), String> {
+    // 中文四态归一化到英文四态，其余原样（自定义列 col_key）
+    let normalized = match status.trim() {
+        "待处理" => "todo".to_string(),
+        "处理中" => "doing".to_string(),
+        "已处理" => "processed".to_string(),
+        "已完成" => "done".to_string(),
+        s => s.to_string(),
+    };
+    if normalized.is_empty() {
+        return Err("状态不能为空".to_string());
+    }
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    validate_task_status(&conn, &key, &normalized)?;
+    conn.execute(
+        "UPDATE tasks SET status = ?1 WHERE key = ?2",
+        rusqlite::params![normalized, key],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 校验 status 是否合法：四态（含中文四态，已归一化）或该任务所属账号已知的自定义列 col_key。
+/// 不过滤会直接返回 Err，DB 不改动，避免任务因落入未知列而在看板「消失」。
+fn validate_task_status(conn: &rusqlite::Connection, key: &str, status: &str) -> Result<(), String> {
+    if matches!(status, "todo" | "doing" | "processed" | "done") {
+        return Ok(());
+    }
+    let account_id: Option<i64> = conn
+        .query_row(
+            "SELECT account_id FROM tasks WHERE key = ?1 LIMIT 1",
+            rusqlite::params![key],
+            |r| r.get(0),
+        )
+        .map(Some)
+        .unwrap_or(None);
+    if let Some(id) = account_id {
+        let cols = crate::db::list_account_columns(conn, id)?;
+        if cols.iter().any(|c| c.col_key == status) {
+            return Ok(());
+        }
+        let names: Vec<&str> = cols.iter().map(|c| c.col_key.as_str()).collect();
+        return Err(format!(
+            "非法状态: {status}（应为四态 todo/doing/processed/done 或该账号自定义列之一: {}）",
+            names.join("/")
+        ));
+    }
+    Err(format!(
+        "非法状态: {status}（应为四态 todo/doing/processed/done 或该任务账号的自定义列）"
+    ))
+}
 
 #[tauri::command]
 pub fn record_session(
@@ -1187,5 +1225,41 @@ mod tests {
         assert_eq!(hello.created_at, 100);
         assert_eq!(hello.updated_at, 200);
         assert_eq!(hello.label, "low");
+    }
+
+    // 校验 helper：helper_status 只放行四态，或该任务所属账号的自定义列 col_key。
+    #[test]
+    fn validate_status_accepts_four_states_and_account_columns() {
+        let conn = mem_conn();
+        // 插入一条直属某账号的任务；该账号定义自定义列 col_alpha。
+        conn.execute(
+            "INSERT INTO accounts (id, label, login, org, pat_token, is_default, created_at) VALUES (77, 'test', 'tester', '', 'pat', 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (key, owner, repo, number, title, url, gh_state, ownership, synced_at, account_id)
+             VALUES ('a#1', 'a', 'a', 1, 't', 'u', 'open', 'mine', 0, 77)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO account_columns (account_id, col_key, col_name, match_rules, order_index)
+             VALUES (77, 'col_alpha', 'Alpha', '[]', 0)",
+            [],
+        )
+        .unwrap();
+
+        // 四态放行
+        assert!(super::validate_task_status(&conn, "a#1", "todo").is_ok());
+        assert!(super::validate_task_status(&conn, "a#1", "done").is_ok());
+        // 该账号自定义列放行
+        assert!(super::validate_task_status(&conn, "a#1", "col_alpha").is_ok());
+        // 拼错/未知状态拒绝
+        assert!(super::validate_task_status(&conn, "a#1", "donee").is_err());
+        // 该任务账号无该自定义列 → 拒绝
+        assert!(super::validate_task_status(&conn, "a#1", "col_beta").is_err());
+        // 任务不存在：非四态一律拒绝（无账号可判定）
+        assert!(super::validate_task_status(&conn, "ghost#1", "col_alpha").is_err());
     }
 }

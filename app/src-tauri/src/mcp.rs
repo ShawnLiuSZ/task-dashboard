@@ -184,8 +184,34 @@ fn tool_get(conn: &Connection, issue: &str) -> Result<Value, String> {
 
 fn tool_update(conn: &Connection, issue: &str, status: &str) -> Result<Value, String> {
     let key = parse_issue_ref(issue)?;
-    let sk = resolve_status(status)
-        .ok_or_else(|| format!("非法状态: {status}（应为 todo/doing/processed/done 或中文四态）"))?;
+    // 优先四态（含中文）归一化；若非四态，校验是否为该任务所属账号的自定义列 col_key，
+    // 均不命中则拒绝，规避任务落入未知列而从看板消失。
+    let sk = match resolve_status(status) {
+        Some(s) => s.to_string(),
+        None => {
+            let account_id: Option<i64> = conn
+                .query_row(
+                    "SELECT account_id FROM tasks WHERE key = ?1 LIMIT 1",
+                    rusqlite::params![key],
+                    |r| r.get(0),
+                )
+                .map(Some)
+                .unwrap_or(None);
+            let hit = match account_id {
+                Some(aid) => crate::db::list_account_columns(conn, aid)?
+                    .iter()
+                    .any(|c| c.col_key == status),
+                None => false,
+            };
+            if hit {
+                status.to_string()
+            } else {
+                return Err(format!(
+                    "非法状态: {status}（应为四态 todo/doing/processed/done 或该任务账号的自定义列）"
+                ));
+            }
+        }
+    };
     let n = conn
         .execute(
             "UPDATE tasks SET status = ?1 WHERE key = ?2",
