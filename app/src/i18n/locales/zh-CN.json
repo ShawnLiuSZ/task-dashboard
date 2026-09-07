@@ -3,6 +3,7 @@
   "topbar.singleAccount": "单账号",
   "topbar.allAccounts": "全部账号",
   "topbar.switchAccount": "切换激活账号",
+  "topbar.switchAccountAll": "全部账号视图下禁用切换，聚合展示所有账号任务",
   "topbar.noAccounts": "（未配置）",
   "topbar.noPat": "未配置 PAT",
   "topbar.notLoggedIn": "未登录",
