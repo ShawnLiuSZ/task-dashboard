@@ -27,7 +27,8 @@ use rusqlite::Connection;
 use serde_json::{json, Map, Value};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
-const SERVER_VERSION: &str = "0.3.24";
+// 由 Cargo 包版本注入，与发版路径（package.json / Cargo.toml / tauri.conf.json）保持单点一致，
+// 避免手改字符串导致 serverInfo 版本落后。
 
 /// 返回给 agent 的列（与 `commands.rs::Task` 顺序兼容的子集）。
 const SELECT_COLS: &str =
@@ -566,7 +567,7 @@ fn handle(conn: &Connection, msg: &Value) -> Option<Value> {
             "result": {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": { "tools": {} },
-                "serverInfo": { "name": "taskboard", "version": SERVER_VERSION }
+                "serverInfo": { "name": "taskboard", "version": env!("CARGO_PKG_VERSION") }
             }
         })),
         "ping" => Some(json!({ "jsonrpc": "2.0", "id": id, "result": {} })),
