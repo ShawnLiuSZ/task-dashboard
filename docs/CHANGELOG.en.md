@@ -2,6 +2,13 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.48 (2026-09-07) — Expanded platform support & CI optimization (#118 #119 #120 #121 #122)**
+  - **#118 Expanded platform support**: Added macOS ARM/x64 and Windows ARM64 dual-architecture build support to GitHub Actions release workflow. See [docs/issue-118-expand-platform-support.md](./issue-118-expand-platform-support.md).
+  - **#119 Expanded Release build matrix**: Added arm64 support for all platforms, rpm format, and portable zip format. macOS/Windows/Linux all support dual architectures with new zip/msi/rpm formats. See [docs/issue-119-expand-release-matrix.md](./issue-119-expand-release-matrix.md).
+  - **#120 CI deprecation warning fix**: Upgraded GitHub Actions (checkout@v5, setup-node@v5, tauri-action@v2), Node.js version upgraded to 22 LTS, eliminating deprecation warnings. See [docs/issue-120-upgrade-ci-actions.md](./issue-120-upgrade-ci-actions.md).
+  - **#121 Removed agent-specific text from About page**: Removed WorkBuddy/claude-code specific agent onboarding text from AboutPanel, consolidated to generic description. See [docs/issue-121-remove-workbuddy-text.md](./issue-121-remove-workbuddy-text.md).
+  - **#122 Database path documented for all platforms**: README and Rust doc comments now cover Windows/Linux/macOS database paths. See [docs/issue-122-db-path-docs.md](./issue-122-db-path-docs.md).
+
 - **v0.3.47 (2026-09-07) — MCP stdio framing fix (#115)**
   - **#115 MCP stdio framing fix**: `read_message` now auto-detects framing format — first byte `{` triggers NDJSON (MCP spec), otherwise Content-Length header (LSP legacy compat); `write_message` responds in the same framing format as the request. Fixes `connection timed out after 30000ms` for Claude Code / Cursor and other standard MCP clients. Diagnostic stderr output added for silent exit paths. Both Rust and Python implementations updated in sync. See [docs/mcp-stdio-framing-ndjson.md](./mcp-stdio-framing-ndjson.md).
 

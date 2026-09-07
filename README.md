@@ -169,5 +169,5 @@ MCP Server 只提供工具；要让 Agent 在「开始 / 中断 / 说『生成�
 
 - [`docs/troubleshoot-mcp-timeout.md`](./docs/troubleshoot-mcp-timeout.md) — 排障：MCP 连接超时（30000ms）——macOS Gatekeeper / quarantine 隔离属性排查与修复
 
-> 版本 v0.3.19 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-05
+> 版本 v0.3.48 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-07
 

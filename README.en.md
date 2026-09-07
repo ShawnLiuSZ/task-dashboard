@@ -160,4 +160,4 @@ The MCP Server only provides tools. To make agents call them **automatically** o
 - [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — per-version update & fix log (v0.3.1 → v0.3.15)
 - [`docs/v0.3.15-pat-auth.md`](./docs/v0.3.15-pat-auth.md) — v0.3.15 PAT auth & visual polish design doc (gh replacement, card colors, multi-account plan)
 
-> Version v0.3.19 · Local cross-platform app (Windows / macOS / Linux), 2026-09-05
+> Version v0.3.48 · Local cross-platform app (Windows / macOS / Linux), 2026-09-07
