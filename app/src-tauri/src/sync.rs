@@ -139,6 +139,7 @@ fn sync_account(
     account: &crate::db::Account,
     pat: &str,
     now: i64,
+    board_mode: &str,
 ) -> Result<AccountSyncResult, String> {
     let client = github::GitHubClient::new(
         pat.to_string(),
@@ -335,7 +336,7 @@ fn sync_account(
             )
             .is_ok();
 
-        // 决定看板状态：closed→已完成；命中 label 映射→映射状态；项目中→按 Project Status 映射；不在项目中→维持本地手动态。
+        // 决定看板状态：closed→已完成；自定义列 gh_status 匹配→列 key；label 映射→映射状态；Project Status→映射；不在项目中→维持本地手动态。
         let gh_status_raw = project_status.get(&key).cloned().unwrap_or_default();
         let labels_csv = t.labels.join(",");
         // 先用 label 映射解析（优先级：repo > org > 全局默认 > state 兜底）
@@ -346,13 +347,26 @@ fn sync_account(
             &labels_csv,
             &t.state,
         );
+        // v0.3.28+：检查自定义列映射（按账号的 account_columns 匹配 gh_status）。
+        // 仅当看板模式为 custom 时才生效，否则四态/Project 视图下任务会因 status 变成 col_key 而消失。
+        let column_status = if board_mode == "custom" && !gh_status_raw.is_empty() {
+            crate::db::resolve_column_from_gh_status(conn, account.id, &gh_status_raw)
+        } else {
+            None
+        };
         let final_status: String = if t.state == "closed" {
             "done".to_string()
+        } else if let Some(col_key) = column_status {
+            // 自定义列映射优先于 label 映射和 Project Status 映射
+            col_key
         } else if !mapped_status.is_empty() && mapped_status != "todo" {
             mapped_status
         } else if !gh_status_raw.is_empty() {
-            // gh_status 有值时优先用 map_project_status；映射不到则保持原样
-            map_project_status(&gh_status_raw).unwrap_or(&gh_status_raw).to_string()
+            // gh_status 有值时优先用 map_project_status；映射不到则保持本地状态。
+            // 绝不回落原始文案：非四态的 status 会让该任务不属于任何看板列，表现为「任务消失」。
+            map_project_status(&gh_status_raw)
+                .unwrap_or(&existing_status)
+                .to_string()
         } else {
             existing_status
         };
@@ -486,6 +500,9 @@ fn sync_account(
 
     let mut candidate_done = 0usize;
     let mut removed = 0usize;
+    // v0.3.29：任一搜索源失败说明同步数据源不完整，stale 判定不可信。
+    // 此时对仍 open 的任务只解除 stale 保留本地记录，绝不删（避免误删真实关联任务）。
+    let sources_incomplete = !failed.is_empty();
     for (key, repo, number, url) in stale_rows {
         // 从 URL 提取 repo_owner（格式：https://github.com/{owner}/{repo}/issues/{number}）
         let repo_owner_from_url = url
@@ -503,6 +520,16 @@ fn sync_account(
                 )
                 .map_err(|e| format!("标记候选已完成失败: {}", e))?;
                 candidate_done += 1;
+            }
+            Ok(_) if sources_incomplete => {
+                // 搜索源不完整：该任务可能只是本次没被拉到，不能据此移出看板。
+                // 仅解除 stale，避免下次同步重复进入此分支；保留本地手动态。
+                conn.execute(
+                    "UPDATE tasks SET stale = 0 WHERE key = ?1 AND account_id = ?2",
+                    rusqlite::params![&key, account.id],
+                )
+                .map_err(|e| format!("保留不删除任务失败: {}", e))?;
+                eprintln!("[sync] 搜索源不完整（{}），保留任务不过删: {}", failed.join("; "), key);
             }
             Ok(_) => {
                 conn.execute("DELETE FROM tasks WHERE key = ?1 AND account_id = ?2", rusqlite::params![&key, account.id])
@@ -535,6 +562,9 @@ pub fn run(conn: &Connection) -> Result<SyncResult, String> {
     let active_id: i64 = crate::db::get_setting(conn, "active_account_id")
         .parse()
         .unwrap_or(0);
+    // v0.3.28+：看板列模式，决定是否启用自定义列映射（仅 custom 时写入 col_key）。
+    let board_mode = crate::db::get_setting(conn, "board_mode");
+    let board_mode = if board_mode.is_empty() { "project".to_string() } else { board_mode };
 
     let target: Vec<crate::db::Account> = match view_mode.as_str() {
         "all" => accounts.clone(),
@@ -577,7 +607,7 @@ pub fn run(conn: &Connection) -> Result<SyncResult, String> {
         }
         // 查找当前账号对应的日志 id
         let log_id = log_ids.iter().find(|(aid, _)| *aid == account.id).map(|(_, lid)| *lid);
-        match sync_account(conn, account, &pat, now) {
+        match sync_account(conn, account, &pat, now, &board_mode) {
             Ok(r) => {
                 total_added += r.added;
                 total_updated += r.updated;

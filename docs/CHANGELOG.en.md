@@ -2,6 +2,87 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.40 (2026-09-07) — Settings tab layout + custom-column Project status mapping (#95)**
+  - **#95 custom-column Project status mapping config**: the settings panel is now **tab-based (General / Column Mapping / Diagnose)**, and custom-column config is its own page with a close button in the title bar. The "column key (colKey)" concept is removed — `col_key` is auto-generated, so users only need to **enter a column display name and select the matched Project statuses (multi-select chips + free-text)**, which save to the `matchRules` JSON array. Backend logic and storage are unchanged and backward-compatible. See [docs/issue-95-status-mapping-dropdown.md](./issue-95-status-mapping-dropdown.md).
+  - **Verification**: `npx tsc --noEmit`, `npm run i18n:check` (zh-CN / en-US 177 keys each) pass.
+
+- **v0.3.39 (2026-09-07) — Audit cleanup wrap-up (#72 #73 #80)**
+  - **#72 board-mode dropdown status option**: verified `status / project / custom` options all exist (completed with v0.3.29 #64); no code change, issue closed.
+  - **#73 MCP serverInfo version injection**: removed hardcoded `SERVER_VERSION = "0.3.24"` from `mcp.rs`, switch to `env!("CARGO_PKG_VERSION")` for single-source versioning. Doc-compliance wrap-up — restore CHANGELOG references for orphan KBs: create [docs/issue-55-update-check.md](./issue-55-update-check.md) and reference [docs/issue-54-auth-account-refresh.md](./issue-54-auth-account-refresh.md), [docs/issue-55-update-check.md](./issue-55-update-check.md), [docs/issue-56-project-status-order.md](./issue-56-project-status-order.md).
+  - **#80 remove 21 dead i18n keys**: leftover keys from the removed "Label status mapping" and "Label column order" UIs (`settings.labelMapping.*`, `settings.labelColumns.*`, `settings.labelMappingsTitle/Desc`, `settings.labelColumnsTitle/Desc`) plus stale `settings.boardModeLabel`, `settings.boardModeLabelOnly`. zh-CN / en-US now 172 keys each, bilingual consistent.
+  - **Verification**: `npm run i18n:check` (172 keys each), `npx tsc --noEmit`, `cargo check` all pass.
+
+- **v0.3.38 (2026-09-07) — TaskCard repo color & all-accounts dropdown fixes (#77 #78)**
+  - **Background**: the four-state view's `TaskCard` missed `repoIndex` so repo labels shared a single color; on `viewMode=all` the account dropdown was still switchable but had no effect on the list, creating ambiguity.
+  - **Changes**: **#77** build a `repoIndexMap` in the four-state view and pass `repoIndex`, building separately per view so repo labels get distinct colors alphabetically. **#78** disable the account dropdown when `viewMode=all` and set the tooltip to clarify aggregation (new i18n key `topbar.switchAccountAll`).
+  - **Verification**: `npx tsc --noEmit` and `npm run i18n:check` (193 keys each) pass. See KB doc [docs/issue-77-78-card-board-fixes.md](./issue-77-78-card-board-fixes.md).
+
+- **v0.3.37 (2026-09-07) — NotesPanel shortcut & DetailPanel timer fixes (#75 #76)**
+  - **Background**: NotesPanel's ⌘/Ctrl+Enter shortcut bypassed the `adding` guard, creating duplicate notes on repeated presses; DetailPanel's bare `setTimeout` in `copyToClipboard` was never cleared, firing `setCopiedKey` after unmount (setState on unmounted component).
+  - **Changes**: **#75** the shortcut now requires `!adding && draft.trim()`, matching the add button's disabled condition — repeated presses / empty draft no longer trigger. **#76** `copyToClipboard` manages the reset timer via `useRef` (clear-old-then-store-new to avoid stacking); a cleanup `useEffect` clears the timer on unmount.
+  - **Verification**: `npx tsc --noEmit` passes. See KB doc [docs/issue-75-76-ui-fixes.md](./issue-75-76-ui-fixes.md).
+
+- **v0.3.36 (2026-09-07) — Fix i18n text leaks (#71)**
+  - **Background**: the SettingsPanel "Diagnose & Project List" diagnostic text and the DetailPanel agent dropdown (Doubao/Zhipu GLM/Tongyi Lingma) were hardcoded Chinese and did not follow the UI language (outside the scope already covered by #62).
+  - **Changes**: display-only i18n wiring. **DetailPanel**: the three Chinese agent labels get an `i18nKey`; new `agentLabel(value, t)` helper unifies translation for the dropdown and the "recorded at {agent}" echo. **SettingsPanel**: `diagnoseProject` composes text via `t()` interpolation. Locales gain 8 keys (`agents.doubao/glm/tongyi`, `settings.diag*`).
+  - **Verification**: `npm run i18n:check` passes (192 keys each), `npx tsc --noEmit` passes. See KB doc [docs/issue-71-i18n-leaks.md](./issue-71-i18n-leaks.md).
+
+- **v0.3.35 (2026-09-07) — Deduplicate concurrent `run_sync` (#69)**
+  - **Background**: multiple entry points (Tray "sync now", startup sync, scheduled sync, frontend `sync_now`) are unaware of each other and can run full syncs concurrently; `sync::run` holds the `db` lock across 5 Search + 1 GraphQL calls (5–15s), queuing back-to-back runs that block the UI and amplify GitHub rate limits.
+  - **Changes**: added a `syncing: AtomicBool` dedup flag to `AppState` and a `SyncGuard` (acquire via `swap`/reset on `Drop`). **`lib.rs::run_sync`** and **`commands.rs::sync_now`** share the same flag — when a sync is in progress, auto entry points skip silently and the manual button returns "sync in progress".
+  - **Verification**: new unit test `sync_guard_dedupes_concurrent_acquisition` covers acquisition dedup and reset-on-drop; `cargo test` lib 23 passed. See KB doc [docs/issue-69-sync-dedup.md](./issue-69-sync-dedup.md).
+
+- **v0.3.34 (2026-09-07) — validate `status` in `update_task_status` (#70)**
+  - **Background**: the frontend `update_task_status` wrote the passed `status` straight into `tasks.status` with no validation; a mistyped non-four-state value or a deleted custom-column key leaves the task in no column, silently disappearing from the board.
+  - **Changes**: unified the validation scope to "four states ∪ Chinese four states ∪ the task's account `account_columns::col_key`". **`commands.rs::update_task_status`** normalizes Chinese four states to English and adds `validate_task_status` — rejects non-four-state values that are not the account's custom columns and leaves the DB unchanged. **`mcp.rs::tool_update`** likewise validates the account's custom-column `col_key` (previously it rejected custom columns outright, inconsistent with the other entry).
+  - **Verification**: new unit test covers four-state pass, account custom-column pass, and rejection of typos/unknown columns/missing tasks; `cargo test` lib 22 passed. See KB doc [docs/issue-70-status-validation.md](./issue-70-status-validation.md).
+
+- **v0.3.33 (2026-09-07) — MCP dual-implementation consistency fixes (#68 #79)**
+  - **Background**: the built-in MCP (Rust `mcp.rs`) and the portable fallback (Python `server.py`) behave differently on `delete_note` return key and `update_note_label` empty-label handling, so the same call yields different results across environments.
+  - **Changes**: **#68** `server.py::tool_delete_note` return key `id` → `note_id`, aligning with Rust. **#79** `server.py::tool_update_note_label` empty label now falls back to `low` instead of erroring, consistent with `tool_add_note` and Rust `normalize_note_label`.
+  - **Acceptance**: built-in app and portable server return/persist identically for `delete_note`, `update_note_label("")`, and `add_note("")`. See KB doc [docs/issue-68-79-mcp-consistency.md](./issue-68-79-mcp-consistency.md).
+
+- **v0.3.32 (2026-09-07) — PRs in Project V2 are no longer treated as issues (#67)**
+  - **Background**: `fetch_project_issues` detected PRs by `pull_request`/`mergedAt`/`headRefOid`, but the GraphQL query did not select those fields, so the check was always false and PRs in Project V2 were pulled onto the board as issues.
+  - **Changes**: added `__typename` to the `content` selection; the type check now skips via `content["__typename"] == "PullRequest"`, which is reliable and consistent with the query.
+  - **Acceptance**: when a Project contains both issues and PRs, PRs no longer appear on the board after sync while issues still do (and do not occupy status columns). See KB doc [docs/issue-67-pr-typename.md](./issue-67-pr-typename.md).
+
+- **v0.3.31 (2026-09-07) — Reset DetailPanel session state on task switch (#66)**
+  - **Background**: `DetailPanel` initializes `sessionInput`/`agent`/`handoff` via `useState(task.sessionId)`, which only reads on first mount; when the selected task changes without the panel unmounting, state is not reset and the previous task's session/handoff can be written into the current task.
+  - **Changes**: `App.tsx` adds `key={selectedTask.key}` to `<DetailPanel>` so switching tasks forces a remount and state initializes from the new task.
+  - **Acceptance**: switching directly to another task (panel open) no longer shows the previous task's session/handoff values; switching back to the same task does not lose unsaved edits. See KB doc [docs/issue-66-detailpanel-session-reset.md](./issue-66-detailpanel-session-reset.md).
+
+- **v0.3.30 (2026-09-07) — Fix tasks wrongly removed on empty search results (#65)**
+  - **Background**: when the Search API returns 422, `search()` treated it as "no results"; partial search-source failures let real related tasks be marked stale and removed from the board (data-loss risk).
+  - **Changes**: **#65a** `github.rs::search()` — a 422 (including 422/non-2xx after rate-limit retry) now returns `Err` instead of an empty result, so it is recorded into `failed` and downstream can tell the search pipeline is incomplete. **#65b** `sync.rs::sync_account()` stale cleanup — when any search source fails, tasks still open are only un-staled and kept (not deleted); confirmed closed tasks are still marked done as before.
+  - **Acceptance**: sync no longer aborts or removes open tasks on search 422/failure; the "move off board" behavior is unchanged when search is complete. See KB doc [docs/issue-65-empty-search-no-delete.md](./issue-65-empty-search-no-delete.md).
+
+- **v0.3.29 (2026-09-06) — Board mode persistence and consistency fixes (#64 #72 #74)**
+  - **Background**: a second audit found three defects in the board mode (boardMode) system that made custom columns unusable, caused tasks to disappear from the four-state view, and prevented mode switches from persisting.
+  - **Changes**: **#64 boardMode persistence** — backend `Settings` struct adds `board_mode` field; `get_settings` reads it back from `meta.board_mode`; frontend serializes `setBoardMode` → `loadSettings` so the old value no longer overwrites the user's choice. **#72 restore four-state option** — board mode dropdown re-adds `status` (four-state) option; `Board.tsx` default changes from `status` to `project` to align with `db.rs` default. **#74 custom column gate** — `sync.rs` only applies custom column mapping when `board_mode == "custom"`, preventing tasks from being assigned a col_key status and vanishing from the four-state / Project views.
+  - **Acceptance**: board mode can be freely switched among status / project / custom and persists; sync under non-custom views no longer shunts tasks into custom columns; cargo check / tsc / i18n:check pass. See KB doc [docs/issue-64-board-mode-fixes.md](./issue-64-board-mode-fixes.md).
+
+- **v0.3.28 (2026-09-06) — Custom column mapping (#52)**
+  - **Background**: each account may use a different set of GitHub Project Status values; the board needs per-account custom column mapping rules instead of only fixed four-state columns or Project Status columns.
+  - **Changes**: backend adds `account_columns` table supporting per-account column config (col_key, col_name, match_rules, order_index); adds `list_account_columns` and `save_account_columns` Tauri commands; custom column mapping takes priority over label mapping and Project Status mapping in `sync.rs` status determination. Frontend `Board.tsx` adds `custom` mode rendering with dynamic columns per account config (unmatched tasks fall into "Unclassified" column); `App.tsx` adds "Custom Columns" option to the board mode dropdown; `SettingsPanel.tsx` adds column mapping editing UI (select account → column list → add/edit/delete → save). i18n adds 12 keys (zh-CN / en-US).
+  - **Acceptance**: each account can independently configure column mapping rules; matched tasks auto-sort into the corresponding columns after sync; selecting "Custom Columns" board mode renders the custom columns; closed tasks always go to "Done". See KB doc [docs/issue-52-custom-column-mapping.md](./issue-52-custom-column-mapping.md).
+
+- **v0.3.27 (2026-09-06) — Notepad export / import (#53)**
+  - **Background**: destructive updates (reinstall / data wipe / upgrade accidentally deleting SQLite) could lose local notepad data, and there was no backup/restore entry point.
+  - **Changes**: backend adds two Tauri commands `export_notes` and `import_notes` — exports all notes to JSON under the app data dir `notes-backup/`; import dedupes by content, preserves original timestamps, and never overwrites existing data. The `NotesPanel` header gains export/import icon buttons; after export it shows the saved path, after import it reports "added / skipped" counts.
+  - **Acceptance**: exported file is complete and readable; importing restores notes (content, label, timestamps) fully; repeated imports create no duplicates; data can be recovered after a destructive update. See KB doc [docs/issue-53-notes-backup.md](./issue-53-notes-backup.md).
+
+- **v0.3.26 (2026-09-06) — Auto-refresh the accounts modal after GitHub authorization (#54)**
+  - **Problem**: after completing the GitHub device-flow authorization inside the Accounts modal, the account list did not refresh; the newly authorized account only appeared after closing and reopening the modal.
+  - **Root cause**: `AccountsPanel` snapshotted the parent prop into local state (`useState<Account[]>(settings.accounts)`) with **no mechanism to sync later prop changes back into local state**. On successful authorization it only called `onAccountsChanged()` (the parent runs `loadSettings()`), so the local `accounts` never changed and only a remount could refresh it.
+  - **Changes**: `AccountsPanel.tsx` gained a `useEffect` that syncs `settings.accounts` back into local state; it replaces the list wholesale rather than appending, which inherently avoids duplicates. This also fixes the same-rooted issue where the "default" tag did not update immediately after "Set default".
+  - **Acceptance**: the account list auto-refreshes right after a successful authorization callback and the new account shows immediately; no need to close/reopen the modal; no duplicate accounts or data corruption.
+
+- **v0.3.25 (2026-09-06) — Fix disabled "Check for Updates" button (#55)**
+  - **Problem**: the "Check for Updates" button in the About modal was always disabled, so users could never trigger a check manually. Root cause: `AboutPanel` initialised `state` to `{ phase: "loading" }`, reusing one phase for both "not checked yet" and "checking in progress", while the button's `disabled` test was `state.phase === "loading"` — so it was disabled the moment the modal opened.
+  - **Changes**: `AboutPanel.tsx` adds an `idle` initial phase (not checked, clickable) and keeps `loading` strictly for "checking in progress"; removed the redundant `checkedOnce` flag; the button shows "Checking…" and is briefly disabled during a check to prevent double-clicks, then becomes clickable again once the check finishes (success or error); the up-to-date status now shows the concrete version number. `zh-CN.json` / `en-US.json`: `about.upToDate` gained a `{version}` placeholder.
+  - **Acceptance**: the button is clickable as soon as the modal opens; clicking it correctly shows either "up to date vX.Y.Z" or "new version X available (current: Y)" with a download link; the button returns to clickable after the check completes.
+
 - **v0.3.24 (2026-09-05) — Notepad & account system & sync logs & topbar layout (incl. #6/#7/#27/#26/#31/#24/#25/#37/#38/#41/#33/#9/#48)**
   - **Multi-account & account system (#25/#31/#33/#38)**: fixed second-account 422; added an accounts panel (add/remove/switch); deleting an account now cascades clean-up of all its local data; removed the org default switch.
   - **Notepad panel (#9)**: a standalone notes column on the far left of the board.

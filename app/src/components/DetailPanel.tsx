@@ -1,12 +1,13 @@
-import { useState } from "react";
-import { api } from "../api";
+import { useEffect, useRef, useState } from "react";
+import { api, openExternal } from "../api";
 import { COLUMNS, type StatusKey, type Task } from "../types";
 import { fmtTime, useI18n } from "../i18n";
 
 // 主流 coding agent 列表：供「中断会话」记录时标注来源。可按需增删。
 // value 为规范化 slug（与 MCP/agent 自报名一致，便于存储与展示统一），
-// label 为下拉里展示的名称。存储只认 value。
-const AGENTS: { value: string; label: string }[] = [
+// label 为默认展示名；部分国内 agent 的 label 含中文，经 i18nKey 接入 i18n 随界面语言切换。
+type AgentOption = { value: string; label: string; i18nKey?: string };
+const AGENTS: AgentOption[] = [
   { value: "amazon-q", label: "Amazon Q" },
   { value: "augment", label: "Augment Code" },
   { value: "bolt", label: "Bolt.new" },
@@ -23,10 +24,10 @@ const AGENTS: { value: string; label: string }[] = [
   { value: "cursor", label: "Cursor" },
   { value: "deepseek", label: "DeepSeek" },
   { value: "devin", label: "Devin" },
-  { value: "doubao", label: "豆包 (Doubao)" },
+  { value: "doubao", label: "豆包 (Doubao)", i18nKey: "agents.doubao" },
   { value: "factory", label: "Factory Droid" },
   { value: "gemini-cli", label: "Gemini CLI" },
-  { value: "glm", label: "智谱 GLM" },
+  { value: "glm", label: "智谱 GLM", i18nKey: "agents.glm" },
   { value: "goose", label: "Goose" },
   { value: "grok", label: "Grok (xAI)" },
   { value: "helix", label: "Helix CLI" },
@@ -39,7 +40,7 @@ const AGENTS: { value: string; label: string }[] = [
   { value: "replit", label: "Replit Agent" },
   { value: "roo-code", label: "Roo Code" },
   { value: "tabnine", label: "Tabnine" },
-  { value: "tongyi", label: "通义灵码" },
+  { value: "tongyi", label: "通义灵码", i18nKey: "agents.tongyi" },
   { value: "trae", label: "Trae" },
   { value: "v0", label: "Vercel v0" },
   { value: "windsurf", label: "Windsurf" },
@@ -54,6 +55,16 @@ interface Props {
   onChanged: () => void;
 }
 
+// 取 agent 的显示名：带 i18nKey 的走 i18n，其余用默认 label；未知 slug 原样返回。
+const agentLabel = (
+  value: string,
+  t: (k: string, p?: Record<string, string | number>) => string,
+): string => {
+  const a = AGENTS.find((x) => x.value === value);
+  if (!a) return value;
+  return a.i18nKey ? t(a.i18nKey) : a.label;
+};
+
 export default function DetailPanel({ task, onClose, onChanged }: Props) {
   const { t, lang } = useI18n();
   const [busy, setBusy] = useState(false);
@@ -62,6 +73,14 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [handoff, setHandoff] = useState(task.handoff ?? "");
+  // 「已复制」提示的复位定时器：组件的卸载（切换任务、关闭面板）时需清理，
+  // 避免定时器在其后触发 setCopiedKey（在已卸载组件上 setState）。
+  const copiedTimer = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+    };
+  }, []);
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -77,9 +96,21 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
   };
 
   const copyToClipboard = async (text: string, key: string) => {
-    await navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    setTimeout(() => setCopiedKey(null), 1500);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      // 复用 ref 管理复位定时器：连点前先清旧定时器，避免多个定时器叠加提前复位。
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => {
+        setCopiedKey(null);
+        copiedTimer.current = null;
+      }, 1500);
+    } catch (e) {
+      // 权限不足或非安全上下文时 writeText 会 reject：原先无 catch，
+      // 既产生未处理拒绝，又让「已复制」态卡住不给任何反馈。
+      setErr(String(e));
+      setCopiedKey(null);
+    }
   };
 
   return (
@@ -132,7 +163,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
           <select className="select" value={agent} onChange={(e) => setAgent(e.target.value)}>
             {AGENTS.map((a) => (
               <option key={a.value} value={a.value}>
-                {a.label}
+                {agentLabel(a.value, t)}
               </option>
             ))}
           </select>
@@ -165,7 +196,9 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
         {task.sessionId && (
           <div className="muted small">
             {t("detail.recordedAt", {
-              agent: task.sessionAgent || t("detail.unlabeled"),
+              agent: task.sessionAgent
+                ? agentLabel(task.sessionAgent, t)
+                : t("detail.unlabeled"),
               time: fmtTime(task.sessionAt ?? 0, lang),
             })}
           </div>
@@ -205,7 +238,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
       <section className="detail-block">
         <div className="block-title">GitHub</div>
         <div className="row">
-          <button className="btn" onClick={() => void api.openInBrowser(task.url)}>
+          <button className="btn" onClick={() => openExternal(task.url)}>
             {t("detail.openInBrowser")}
           </button>
           <button
@@ -216,7 +249,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
           </button>
           {task.prNumber > 0 && task.prUrl && (
             <>
-              <button className="btn" onClick={() => void api.openInBrowser(task.prUrl)}>
+              <button className="btn" onClick={() => openExternal(task.prUrl)}>
                 PR #{task.prNumber}
               </button>
               <button
@@ -228,7 +261,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
             </>
           )}
           {task.latestCommentUrl && (
-            <button className="btn" onClick={() => void api.openInBrowser(task.latestCommentUrl)}>
+            <button className="btn" onClick={() => openExternal(task.latestCommentUrl)}>
               {t("detail.latestComment")}
             </button>
           )}

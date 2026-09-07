@@ -3,7 +3,7 @@ export type Ownership = "assigned" | "notassignee" | "assigned-others";
 /** v0.3.16+：视图模式。`single`=仅显示激活账号任务；`all`=显示所有账号任务。 */
 export type ViewMode = "single" | "all";
 /** v0.3.21+：看板列模式。`status`=四态列；`project`=GitHub Project Status 列。 */
-export type BoardMode = "status" | "project";
+export type BoardMode = "status" | "project" | "custom";
 
 export interface Account {
   id: number;
@@ -200,6 +200,26 @@ export interface Note {
   label: "low" | "medium" | "high" | "urgent";
   createdAt: number;
   updatedAt: number;
+}
+
+/** v0.3.28+：自定义列映射（按账号配置看板列）。 */
+export interface AccountColumn {
+  id: number;
+  accountId: number;
+  colKey: string;
+  colName: string;
+  /** JSON 数组字符串，如 `["待开发","需求","规划"]` */
+  matchRules: string;
+  orderIndex: number;
+}
+
+/** v0.3.28+：自定义列配置输入（编辑时用）。 */
+export interface AccountColumnInput {
+  colKey: string;
+  colName: string;
+  /** JSON 数组字符串，如 `["待开发","需求","规划"]` */
+  matchRules: string;
+  orderIndex: number;
 }
 
 /**

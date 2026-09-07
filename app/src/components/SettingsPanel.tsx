@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { useI18n, type LangMode } from "../i18n";
-import type { Settings } from "../types";
+import type { AccountColumn, Settings } from "../types";
 
 interface Props {
   settings: Settings;
@@ -10,6 +10,13 @@ interface Props {
 }
 
 const PRESETS = [15, 30, 60, 120, 240];
+
+// 自动生成稳定的自定义列标识（col_key 是任务落库的 status 值，需唯一但不需用户输入）
+function genColKey(): string {
+  return `col_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
+type SettingsTab = "base" | "columns" | "diagnose";
 
 export default function SettingsPanel({
   settings,
@@ -28,6 +35,59 @@ export default function SettingsPanel({
   );
   const [projects, setProjects] = useState<any[]>([]);
 
+  // v0.3.28+：自定义列映射状态
+  const [colAccountId, setColAccountId] = useState<number | null>(
+    settings.accounts.find((a) => a.isDefault)?.id ?? settings.accounts[0]?.id ?? null,
+  );
+  const [columns, setColumns] = useState<AccountColumn[]>([]);
+  const [colSaving, setColSaving] = useState(false);
+  const [colMsg, setColMsg] = useState<string | null>(null);
+  const [editingCol, setEditingCol] = useState<{
+    index: number; // -1 = 新增
+    colKey: string;
+    colName: string;
+    matchRules: string;
+    orderIndex: number;
+  } | null>(null);
+
+  // v0.3.40+：自定义列 —— 该账号 Project V2 可选的 status 值（下拉配置用）
+  const [availableStatuses, setAvailableStatuses] = useState<string[]>([]);
+  // 当前编辑列的已选匹配值 chips
+  const [ruleChips, setRuleChips] = useState<string[]>([]);
+  // 自由输入追加框
+  const [ruleInput, setRuleInput] = useState("");
+
+  // v0.3.41+：设置面板 tab 切换（基础 / 自定义列 / 诊断）
+  const [tab, setTab] = useState<SettingsTab>("base");
+
+  const loadColumns = useCallback(async (accountId: number) => {
+    try {
+      const cols = await api.listAccountColumns(accountId);
+      setColumns(cols.sort((a, b) => a.orderIndex - b.orderIndex));
+    } catch {
+      setColumns([]);
+    }
+  }, []);
+
+  // 账号切换时重新加载列配置
+  useEffect(() => {
+    if (colAccountId != null) {
+      void loadColumns(colAccountId);
+    }
+  }, [colAccountId, loadColumns]);
+
+  // 账号切换时加载该项目可选的 Project status 值（供自定义列下拉配置）
+  useEffect(() => {
+    if (colAccountId == null) {
+      setAvailableStatuses([]);
+      return;
+    }
+    api
+      .listProjectStatuses(colAccountId)
+      .then((list) => setAvailableStatuses([...new Set(list.map((p) => p.name).filter(Boolean))]))
+      .catch(() => setAvailableStatuses([]));
+  }, [colAccountId]);
+
   const save = async () => {
     setSaving(true);
     setErr(null);
@@ -38,6 +98,110 @@ export default function SettingsPanel({
     } finally {
       setSaving(false);
     }
+  };
+
+  const saveColumns = async () => {
+    if (colAccountId == null) return;
+    setColSaving(true);
+    setColMsg(null);
+    try {
+      await api.saveAccountColumns(colAccountId, columns);
+      setColMsg(t("settings.customColumns.saved"));
+      await loadColumns(colAccountId);
+    } catch (e) {
+      setColMsg(String(e));
+    } finally {
+      setColSaving(false);
+    }
+  };
+
+  const startAddCol = () => {
+    // col_key 自动生成，用户无需关心；只填列名 + 匹配 status
+    setEditingCol({ index: -1, colKey: genColKey(), colName: "", matchRules: "", orderIndex: columns.length });
+    setRuleChips([]);
+    setRuleInput("");
+  };
+
+  const startEditCol = (col: AccountColumn, idx: number) => {
+    // 解析既有 matchRules（JSON 数组或逗号分隔）为 chips
+    let chips: string[] = [];
+    try {
+      const arr = JSON.parse(col.matchRules);
+      if (Array.isArray(arr)) {
+        chips = arr
+          .filter((s): s is string => typeof s === "string")
+          .map((s) => s.trim());
+      }
+    } catch {
+      chips = col.matchRules
+        .split(/[,，]/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+    }
+    chips = [...new Set(chips.filter((s) => s.length > 0))];
+    setRuleChips(chips);
+    setRuleInput("");
+    setEditingCol({
+      index: idx,
+      colKey: col.colKey,
+      colName: col.colName,
+      matchRules: col.matchRules,
+      orderIndex: col.orderIndex,
+    });
+  };
+
+  const confirmEditCol = () => {
+    if (!editingCol) return;
+    const { index, colKey, colName, orderIndex } = editingCol;
+    // 校验：col_key 已自动生成，用户只需填列名
+    if (!colKey.trim() || !colName.trim()) return;
+
+    // 已选 chips（去重）直接作为 matchRules 的 JSON 数组
+    const rulesArr = [...new Set(ruleChips.map((s) => s.trim()).filter((s) => s.length > 0))];
+    const rulesJson = JSON.stringify(rulesArr);
+
+    const newCol: AccountColumn = {
+      id: index >= 0 ? columns[index].id : 0,
+      accountId: colAccountId ?? 0,
+      colKey: colKey.trim(),
+      colName: colName.trim(),
+      matchRules: rulesJson,
+      orderIndex,
+    };
+
+    if (index >= 0) {
+      // 编辑已有列
+      const updated = [...columns];
+      updated[index] = newCol;
+      setColumns(updated);
+    } else {
+      // 新增列
+      setColumns([...columns, newCol]);
+    }
+    setEditingCol(null);
+  };
+
+  const deleteCol = (idx: number) => {
+    setColumns(columns.filter((_, i) => i !== idx));
+  };
+
+  const cancelEditCol = () => {
+    setEditingCol(null);
+    setRuleChips([]);
+    setRuleInput("");
+  };
+
+  const toggleRule = (v: string) => {
+    const vv = v.trim();
+    if (!vv) return;
+    setRuleChips((prev) => (prev.includes(vv) ? prev.filter((x) => x !== vv) : [...prev, vv]));
+  };
+
+  const addCustomRule = () => {
+    const vv = ruleInput.trim();
+    if (!vv) return;
+    toggleRule(vv);
+    setRuleInput("");
   };
 
   const diagnoseProject = async () => {
@@ -54,10 +218,19 @@ export default function SettingsPanel({
       setDiagMsg({
         ok: true,
         text:
-          `组织 ${res.org} / 用户 ${res.login}\n` +
-          `发现 ${projs.length} 个 Project：${projs.map((p: any) => p.name).join("、") || "（无）"}\n` +
-          `已拉取 Status ${res.status_count} 条` +
-          (statusKeys.length ? `，示例: ${statusKeys.slice(0, 8).join("、")}` : ""),
+          t("settings.diagOrgUser", { org: res.org, login: res.login }) +
+          "\n" +
+          t("settings.diagProjects", {
+            count: projs.length,
+            names:
+              projs.map((p: any) => p.name).join("、") ||
+              t("settings.diagNone"),
+          }) +
+          "\n" +
+          t("settings.diagStatuses", { count: res.status_count }) +
+          (statusKeys.length
+            ? t("settings.diagExample", { keys: statusKeys.slice(0, 8).join("、") })
+            : ""),
       });
     } catch (e) {
       setDiagMsg({ ok: false, text: String(e) });
@@ -77,9 +250,26 @@ export default function SettingsPanel({
   return (
     <div className="modal-mask" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3 className="modal-title">{t("settings.title")}</h3>
+        <h3 className="modal-title" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <span>{t("settings.title")}</span>
+          <button className="btn ghost small" onClick={onClose} title={t("btn.cancel")}>✕</button>
+        </h3>
 
-        <div className="field">
+        <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+          {( ["base", "columns", "diagnose"] as SettingsTab[]).map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setTab(k)}
+              className={`chip${tab === k ? " on" : ""}`}
+              style={{ padding: "4px 12px", cursor: "pointer" }}
+            >
+              {t(`settings.tab.${k}`)}
+            </button>
+          ))}
+        </div>
+
+        <div className="field" style={{ display: tab === "base" ? "block" : "none" }}>
           <label>{t("settings.language")}</label>
           <select
             className="select"
@@ -92,7 +282,7 @@ export default function SettingsPanel({
           </select>
         </div>
 
-        <div className="field">
+        <div className="field" style={{ display: tab === "base" ? "block" : "none" }}>
           <label>{t("settings.syncInterval")}</label>
           <div className="row">
             <input
@@ -118,7 +308,7 @@ export default function SettingsPanel({
           <div className="muted small">{t("settings.intervalHint")}</div>
         </div>
 
-        <div className="field">
+        <div className="field" style={{ display: tab === "diagnose" ? "block" : "none" }}>
           <label>{t("settings.projectDiag")}</label>
           <div className="row" style={{ marginTop: 4 }}>
             <select
@@ -162,7 +352,158 @@ export default function SettingsPanel({
           )}
         </div>
 
-        <div className="field">
+        <div className="field" style={{ display: tab === "columns" ? "block" : "none" }}>
+          <label>{t("settings.customColumnsTitle")}</label>
+          <div className="muted small" style={{ marginBottom: 6 }}>{t("settings.customColumnsDesc")}</div>
+
+          <div className="row" style={{ marginTop: 4, marginBottom: 8 }}>
+            <select
+              className="select"
+              value={colAccountId ?? ""}
+              onChange={(e) => {
+                const id = Number(e.target.value);
+                setColAccountId(id);
+              }}
+            >
+              {settings.accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.label}{a.isDefault ? " ★" : ""}
+                </option>
+              ))}
+            </select>
+            <button className="btn" onClick={startAddCol} disabled={colAccountId == null}>
+              + {t("settings.customColumns.add")}
+            </button>
+            <button className="btn primary" onClick={saveColumns} disabled={colSaving || colAccountId == null}>
+              {colSaving ? t("settings.loading") : t("btn.save")}
+            </button>
+          </div>
+
+          {colMsg && (
+            <div className={`banner inline ${colMsg === t("settings.customColumns.saved") ? "ok" : "error"}`} style={{ marginBottom: 6 }}>
+              {colMsg}
+            </div>
+          )}
+
+          {/* 列编辑表单 */}
+          {editingCol && (
+            <div className="col-editor" style={{ border: "1px solid var(--border)", borderRadius: 6, padding: 10, marginBottom: 8 }}>
+              <div className="row" style={{ gap: 6, marginBottom: 6 }}>
+                <div style={{ flex: 1 }}>
+                  <label className="small">{t("settings.customColumns.colName")}</label>
+                  <input
+                    className="input"
+                    placeholder="待开发"
+                    value={editingCol.colName}
+                    onChange={(e) => setEditingCol({ ...editingCol, colName: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div style={{ marginBottom: 6 }}>
+                <label className="small">{t("settings.customColumns.matchRules")}</label>
+                {availableStatuses.length > 0 ? (
+                  <div style={{ marginTop: 4 }}>
+                    {availableStatuses.map((s) => {
+                      const on = ruleChips.includes(s);
+                      return (
+                        <button
+                          key={`st_${s}`}
+                          type="button"
+                          onClick={() => toggleRule(s)}
+                          style={{
+                            padding: "3px 10px",
+                            margin: "0 6px 6px 0",
+                            borderRadius: 999,
+                            border: "1px solid var(--border)",
+                            cursor: "pointer",
+                            background: on ? "var(--accent, #4f6ef7)" : "transparent",
+                            color: on ? "#fff" : "inherit",
+                          }}
+                        >
+                          {s}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="muted small" style={{ marginBottom: 4 }}>
+                    {t("settings.customColumns.noStatus")}
+                  </div>
+                )}
+                <div className="row" style={{ gap: 6, marginTop: 6 }}>
+                  <input
+                    className="input"
+                    style={{ flex: 1 }}
+                    placeholder={t("settings.customColumns.otherValue")}
+                    value={ruleInput}
+                    onChange={(e) => setRuleInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        addCustomRule();
+                      }
+                    }}
+                  />
+                  <button className="btn ghost small" onClick={addCustomRule}>
+                    {t("settings.customColumns.addRule")}
+                  </button>
+                </div>
+                {ruleChips.length > 0 && (
+                  <div style={{ marginTop: 6 }}>
+                    <span className="muted small">{t("settings.customColumns.selected")}: </span>
+                    {ruleChips.map((r) => (
+                      <button
+                        key={`rule_${r}`}
+                        type="button"
+                        onClick={() => toggleRule(r)}
+                        title={t("settings.customColumns.remove")}
+                        className="chip"
+                        style={{ marginRight: 4, cursor: "pointer" }}
+                      >
+                        {r} ✕
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="row" style={{ gap: 6 }}>
+                <button className="btn primary" onClick={confirmEditCol} disabled={!editingCol.colName.trim()}>
+                  {t("btn.done")}
+                </button>
+                <button className="btn" onClick={cancelEditCol}>
+                  {t("btn.cancel")}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 列列表 */}
+          {columns.length === 0 && !editingCol && (
+            <div className="muted small">{t("settings.customColumns.empty")}</div>
+          )}
+          {columns.map((col, idx) => (
+            <div key={idx} className="col-row" style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid var(--border)" }}>
+              <span className="chip" style={{ minWidth: 24, textAlign: "center" }}>{idx}</span>
+              <span style={{ flex: 1, fontWeight: 500 }}>{col.colName}</span>
+              <span className="muted small" style={{ flex: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {(() => {
+                  try {
+                    const arr = JSON.parse(col.matchRules);
+                    return Array.isArray(arr) ? arr.join(", ") : col.matchRules;
+                  } catch { return col.matchRules; }
+                })()}
+              </span>
+              <button className="btn ghost small" onClick={() => startEditCol(col, idx)} title={t("settings.customColumns.edit")}>
+                {t("settings.customColumns.edit")}
+              </button>
+              <button className="btn ghost small" onClick={() => deleteCol(idx)} title={t("settings.customColumns.delete")}>
+                {t("settings.customColumns.delete")}
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="field" style={{ display: tab === "base" ? "block" : "none" }}>
           <label>{t("settings.ghPathLabel")}</label>
           <input
             className="input wide"
@@ -173,7 +514,7 @@ export default function SettingsPanel({
           <div className="muted small">{t("settings.ghPathHint")}</div>
         </div>
 
-        <div className="field readonly">
+        <div className="field readonly" style={{ display: tab === "base" ? "block" : "none" }}>
           <label>{t("settings.orgLabel")}</label>
           <div className="muted">
             {settings.org}
@@ -181,14 +522,14 @@ export default function SettingsPanel({
           </div>
         </div>
 
-        <div className="field readonly">
+        <div className="field readonly" style={{ display: tab === "base" ? "block" : "none" }}>
           <label>{t("settings.dbLabel")}</label>
           <div className="muted small path">{settings.dbPath}</div>
         </div>
 
-        {err && <div className="banner error">{err}</div>}
+        {err && <div className="banner error" style={{ display: tab === "base" ? "block" : "none" }}>{err}</div>}
 
-        <div className="modal-actions">
+        <div className="modal-actions" style={{ display: tab === "base" ? "flex" : "none" }}>
           <button className="btn" onClick={onClose}>
             {t("btn.cancel")}
           </button>

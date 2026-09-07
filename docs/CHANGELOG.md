@@ -6,6 +6,182 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.40（2026-09-07）— 设置面板 tab 化 + 自定义列映射下拉配置（#95）**
+
+  - **#95 自定义列 Project status 映射配置**：设置面板改为 **tab 切换（基础设置 / 自定义列映射 / 诊断）**，自定义列配置独立成页、标题栏加关闭按钮。自定义列编辑移除「列标识(colKey)」概念 —— col_key 由系统自动生成，**用户只需填列显示名称 + 下选匹配的 Project status（下拉多选 chips + 自由输入）**，保存写 `matchRules` JSON 数组，后端逻辑与存储零改动、向后兼容。详见 [docs/issue-95-status-mapping-dropdown.md](./issue-95-status-mapping-dropdown.md)。
+
+- **v0.3.39（2026-09-07）— 审计清理收尾（#72 #73 #80）**
+
+  - **#72 看板模式下拉补 status 选项**：核验确认 `status / project / custom` 三个选项均已存在（v0.3.29 #64 一并补齐），无需代码改动，关闭 issue。
+
+  - **#73 MCP serverInfo 版本注入**：`mcp.rs` 删除硬编码 `SERVER_VERSION = "0.3.24"`，改用 `env!("CARGO_PKG_VERSION")`，与发版三处版本保持单点一致，避免 serverInfo 版本落后。文档合规收尾——为孤岛 KB 恢复 CHANGELOG 引用：补建 [docs/issue-55-update-check.md](./issue-55-update-check.md)，并在本条目引用 [docs/issue-54-auth-account-refresh.md](./issue-54-auth-account-refresh.md)、[docs/issue-55-update-check.md](./issue-55-update-check.md)、[docs/issue-56-project-status-order.md](./issue-56-project-status-order.md)。
+
+  - **#80 清理 i18n 死 key**（共 21 个）：移除已不存在的「Label 状态映射」「Label 列顺序」两套 UI 的残留 key（`settings.labelMapping.*`、`settings.labelColumns.*`、`settings.labelMappingsTitle/Desc`、`settings.labelColumnsTitle/Desc`）及废弃的看板模式 `settings.boardModeLabel`、`settings.boardModeLabelOnly`。zh-CN / en-US 各由 193 → 172 个 key，双语一致。
+
+  - **验证**：`npm run i18n:check`（zh/en 各 172 key）、`npx tsc --noEmit`、`cargo check` 均通过。
+
+- **v0.3.38（2026-09-07）— TaskCard 仓库颜色与全部账号下拉修复（#77 #78）**
+
+  - **背景**：四态列视图的 TaskCard 漏传 `repoIndex`，仓库标签恒同色；`viewMode=all` 时账号下拉仍可切换但对列表无影响，语义含混。
+
+  - **改动**：
+
+    - **#77**：四态视图构建 `repoIndexMap` 并为 TaskCard 传 `repoIndex`，各视图独立构建，仓库标签按字母序取不同颜色。
+
+    - **#78**：`viewMode=all` 时账号下拉 `disabled`，`title` 提示聚合语义（新增 i18n key `topbar.switchAccountAll`）。
+
+  - **验证**：`npx tsc --noEmit`、`npm run i18n:check`（zh/en 各 193 key）通过。详见知识库文档 [docs/issue-77-78-card-board-fixes.md](./issue-77-78-card-board-fixes.md)。
+
+- **v0.3.37（2026-09-07）— NotesPanel 快捷键与 DetailPanel 定时器修复（#75 #76）**
+
+  - **背景**：NotesPanel Ctrl/⌘+Enter 快捷键绕过 `adding` 守卫，连按产生重复记事；DetailPanel `copyToClipboard` 的裸 `setTimeout` 未清理，组件卸载后仍触发 `setCopiedKey`（在已卸载组件上 setState）。
+
+  - **改动**：
+
+    - **#75**：快捷键触发收紧为 `!adding && draft.trim()`，与添加按钮禁用条件一致，连按/空草稿不再触发。
+
+    - **#76**：`copyToClipboard` 改用 `useRef` 管理复位定时器（先清旧再存新，避免叠加）；新增卸载 `useEffect` 清理定时器。
+
+  - **验证**：`npx tsc --noEmit` 通过。详见知识库文档 [docs/issue-75-76-ui-fixes.md](./issue-75-76-ui-fixes.md)。
+
+- **v0.3.36（2026-09-07）— i18n 文本泄漏修复（#71）**
+
+  - **背景**：SettingsPanel「诊断 & 项目列表」诊断文本与 DetailPanel agent 下拉（豆包/智谱 GLM/通义灵码）为硬编码中文，英文界面下不随语言切换（issue #62 已识别范围之外的新遗漏）。
+
+  - **改动**：纯展示层接入 i18n。
+
+    - DetailPanel：`AGENTS` 三项中文 label 增加 `i18nKey`；新增 `agentLabel(value, t)` helper，下拉与「记录于 {agent}」回显统一翻译。
+
+    - SettingsPanel：`diagnoseProject` 组装文本改为 `t()` 插值。
+
+    - 双语 locale 新增 `agents.doubao/glm/tongyi` 与 `settings.diag*` 共 8 个 key。
+
+  - **验证**：`npm run i18n:check` 通过（zh/en 各 192 key）、`npx tsc --noEmit` 通过。详见知识库文档 [docs/issue-71-i18n-leaks.md](./issue-71-i18n-leaks.md)。
+
+- **v0.3.35（2026-09-07）— run_sync 并发同步去重（#69）**
+
+  - **背景**：Tray「立即同步」、启动同步、定时同步、前端 `sync_now` 多入口互不感知，可并发触发全量同步；`sync::run` 持 `db` 锁跑 5 次 Search + 1 次 GraphQL（5~15s），并发时背靠背排队、阻塞 UI 并放大 GitHub 限流。
+
+  - **改动**：`AppState` 新增 `syncing: AtomicBool` 去重标志；新增 `SyncGuard`（`acquire` 抢占 / `Drop` 复位）。
+
+    - `lib.rs::run_sync` 与 `commands.rs::sync_now` 统一走同一把标志：已有同步在跑时自动入口静默跳过、手动入口返回「同步进行中」。
+
+  - **验证**：新增单测 `sync_guard_dedupes_concurrent_acquisition` 覆盖抢占去重与释放复位；`cargo test` lib 23 passed。详见知识库文档 [docs/issue-69-sync-dedup.md](./issue-69-sync-dedup.md)。
+
+- **v0.3.34（2026-09-07）— update_task_status 校验 status 合法性（#70）**
+
+  - **背景**：前端 `update_task_status` 把传入 status 直接写入 `tasks.status`，不校验合法性；拼错的非四态值或已删除的自定义列名落库后任务不属于任何列，从看板静默「消失」。
+
+  - **改动**：校验口径统一为「四态 ∪ 中文四态 ∪ 该任务账号的 `account_columns::col_key`」。
+
+    - `commands.rs::update_task_status`：中文四态归一化到英文四态；新增 `validate_task_status`，非四态非该账号自定义列时拒绝且 DB 不改动。
+
+    - `mcp.rs::tool_update`：非四态时同样校验该账号自定义列 `col_key`，命中放行，否则拒绝（此前一律拒绝自定义列，口径不一致）。
+
+  - **验证**：新增单测覆盖四态放行、该账号自定义列放行、拼错/未知列/任务不存在拒绝；`cargo test` lib 22 passed。详见知识库文档 [docs/issue-70-status-validation.md](./issue-70-status-validation.md)。
+
+- **v0.3.33（2026-09-07）— MCP 双实现一致性修复（#68 #79）**
+
+  - **背景**：内置 MCP（Rust `mcp.rs`）与便携兜底（Python `server.py`）在 `delete_note` 返回键、`update_note_label` 空标签处理上行为不一致，同一调用在不同环境下得到不同结果。
+
+  - **改动**：
+
+    - **#68**：`server.py::tool_delete_note` 返回键由 `id` 改为 `note_id`，与 Rust 端对齐。
+
+    - **#79**：`server.py::tool_update_note_label` 空标签由报错改为回落 `low`，与 `tool_add_note` 及 Rust `normalize_note_label` 统一。
+
+  - **验收**：内置 app 与便携 server 对 `delete_note`、`update_note_label("")`、`add_note("")` 返回/落库一致。详见知识库文档 [docs/issue-68-79-mcp-consistency.md](./issue-68-79-mcp-consistency.md)。
+
+- **v0.3.32（2026-09-07）— Project V2 中的 PR 不再被当作 issue 上板（#67）**
+
+  - **背景**：`fetch_project_issues` 用 `pull_request`/`mergedAt`/`headRefOid` 判型，但 GraphQL 查询并未选取这些字段，判断恒为假，导致 Project V2 里的 PR 被当作 issue 抓上看板。
+
+  - **改动**：GraphQL 查询 `content` 区新增 `__typename`；判型改用 `content["__typename"] == "PullRequest"` 跳过 PR，可靠且与查询强一致。
+
+  - **验收**：Project 中同时含 issue 与 PR 时，同步后 PR 不再上板，issue 正常上板、不占状态列。详见知识库文档 [docs/issue-67-pr-typename.md](./issue-67-pr-typename.md)。
+
+- **v0.3.31（2026-09-07）— DetailPanel 切换任务时会话状态重置（#66）**
+
+  - **背景**：DetailPanel 的 `sessionInput`/`agent`/`handoff` 用 `useState(task.sessionId)` 初始化但只在首次挂载取值，切换选中任务时组件未卸载、state 不重置，可能把上一个任务的会话/交接误写到当前任务。
+
+  - **改动**：`App.tsx` 给 `<DetailPanel>` 加 `key={selectedTask.key}`，任务切换时强制重挂载、状态随新任务初始化。
+
+  - **验收**：不关闭面板直接切到另一任务时，会话/交接输入不再残留上一任务的旧值；切回同一任务不丢未保存编辑。详见知识库文档 [docs/issue-66-detailpanel-session-reset.md](./issue-66-detailpanel-session-reset.md)。
+
+- **v0.3.30（2026-09-07）— 空搜索结果误删看板任务修复（#65）**
+
+  - **背景**：Search API 返回 422 时 `search()` 误当「空结果」，部分搜索源失败会让真实关联任务被标记陈旧后移出看板（数据丢失风险）。
+
+  - **改动**：
+
+    - `github.rs::search()`：422（含限流重试后仍 422/非 2xx）由返回空结果改为返回 `Err`，计入 `failed`，让下游感知搜索链路不完整。
+
+    - `sync.rs::sync_account()` stale 清理：任一搜索源失败时，对仍 open 的任务仅解除 stale、保留本地记录，不再 DELETE；确认已关闭的仍正常标记已完成。
+
+  - **验收**：搜索源 422/失败时同步不再中断，不再误删 open 任务；搜索完整时「移出看板」行为不变。详见知识库文档 [docs/issue-65-empty-search-no-delete.md](./issue-65-empty-search-no-delete.md)。
+
+- **v0.3.29（2026-09-06）— 看板列模式持久化与一致性修复（#64 #72 #74）**
+
+  - **背景**：二次审计发现看板列模式（boardMode）体系存在三处缺陷，导致自定义列功能不可用、四态视图任务消失、模式切换不持久。
+
+  - **改动**：
+
+    - **#64 boardMode 持久化**：后端 `Settings` 结构体补齐 `board_mode` 字段，`get_settings` 从 `meta.board_mode` 读回；前端切换模式后 `setBoardMode` → `loadSettings` 串行执行，不再被旧值覆盖。
+
+    - **#72 四态选项恢复**：看板模式下拉补回 `status`（四态）选项；`Board.tsx` 默认值由 `status` 改为 `project`，与 `db.rs` 默认值对齐。
+
+    - **#74 自定义列门控**：`sync.rs` 中自定义列映射仅在 `board_mode == "custom"` 时生效，避免四态 / Project 视图下任务 status 被写成 col_key 后从看板消失。
+
+  - **验收**：看板模式可在 status / project / custom 间自由切换并持久化；非 custom 视图下同步不会把任务分到自定义列导致消失；cargo check / tsc / i18n:check 通过。详见知识库文档 [docs/issue-64-board-mode-fixes.md](./issue-64-board-mode-fixes.md)。
+
+- **v0.3.28（2026-09-06）— 自定义列映射（#52）**
+
+  - **背景**：每个账号可能使用不同的 GitHub Project Status 值体系，看板需要支持按账号自定义列映射规则，而非只有固定的四态列或 Project Status 列。
+
+  - **改动**：
+
+    - 后端新增 `account_columns` 表，支持按账号独立配置列（col_key、col_name、match_rules、order_index）；新增 `list_account_columns`、`save_account_columns` 两个 Tauri command；`sync.rs` 状态判定中自定义列映射优先于 label 映射和 Project Status 映射。
+
+    - 前端 `Board.tsx` 新增 `custom` 模式渲染，按账号配置动态生成列，无匹配任务归入「未分类」列；`App.tsx` 看板模式下拉新增「自定义列」选项；`SettingsPanel.tsx` 新增列映射编辑界面（账号选择 → 列列表 → 增删改 → 保存）。
+
+    - i18n 新增 12 个 key（zh-CN / en-US）。
+
+  - **验收**：各账号可独立配置列映射规则；同步后匹配的任务自动归入对应列；切换看板模式为「自定义列」按自定义列渲染；关闭的任务始终归入「已完成」。详见知识库文档 [docs/issue-52-custom-column-mapping.md](./issue-52-custom-column-mapping.md)。
+
+- **v0.3.27（2026-09-06）— 记事本导出 / 导入功能（#53）**
+
+  - **背景**：破坏性更新（重新安装 / 清空数据 / 升级误删 SQLite）可能导致本地记事本数据丢失，此前无任何备份恢复入口。
+
+  - **改动**：
+
+    - 后端新增 `export_notes`、`import_notes` 两个 Tauri command：导出全部记事为 JSON 到应用数据目录 `notes-backup/`；导入按内容去重、保留原时间、不覆盖已有数据。
+
+    - 前端 `NotesPanel` header 增加导出 / 导入两个图标按钮；导出后提示保存路径，导入后反馈「新增 / 跳过」条数。
+
+  - **验收**：导出文件内容完整可读；从导出文件导入后记事（内容、label、时间）完整恢复；重复导入不产生重复条目；破坏性更新后可通过导入恢复。详见知识库文档 [docs/issue-53-notes-backup.md](./issue-53-notes-backup.md)。
+
+- **v0.3.26（2026-09-06）— 授权登录后账号 modal 自动刷新（#54）**
+
+  - **问题**：在「账号」modal 中完成 GitHub 设备授权登录后，账号列表不会自动刷新，新授权的账号不显示，必须手动关闭再重开 modal 才会出现。
+
+  - **根因**：`AccountsPanel` 把父级 props 快照进本地 state（`useState<Account[]>(settings.accounts)`），此后**没有任何机制把 props 变化同步回本地**。授权成功只调用 `onAccountsChanged()`（父级 `loadSettings()` 刷新 settings），本地 `accounts` 始终不变，只能靠组件重新挂载才刷新。
+
+  - **改动**：`AccountsPanel.tsx` 增加 `useEffect`，把 `settings.accounts` 同步回本地 state；全量替换而非追加，天然避免重复项。顺带修复同源问题——「设为默认」后默认标签不立即更新。
+
+  - **验收**：授权成功回调后账号列表自动刷新、新账号即时显示；无需关闭重开 modal；不出现重复账号或数据错乱。
+
+- **v0.3.25（2026-09-06）— 修复「检查更新」按钮不可点击（#55）**
+
+  - **问题**：关于页打开后「检查更新」按钮始终处于 disabled 状态，用户无法主动触发版本检查。根因是 `AboutPanel` 的 `state` 初始值被设为 `{ phase: "loading" }`，把「尚未检查」与「正在检查」复用了同一状态，而按钮的 `disabled` 判断是 `state.phase === "loading"`，导致一打开就被禁用。
+
+  - **改动**：
+
+    - `AboutPanel.tsx`：`State` 新增 `idle` 初始态（未检查、按钮可点击），`loading` 仅表示检查进行中；移除冗余的 `checkedOnce` 标志；检查中显示「检查中…」并短暂禁用以防重复点击，检查完成（成功 / 报错）后一律恢复可点击；已是最新时展示具体版本号。
+
+    - `zh-CN.json` / `en-US.json`：`about.upToDate` 增加 `{version}` 占位符，文案改为「当前已是最新版本 v{version}」。
+
+  - **验收**：按钮打开即可点击；点击后正确展示「当前已是最新版本 vX.Y.Z」或「发现新版本 X，当前为 Y + 下载跳转」；检查完成后按钮恢复可点击。
+
 - **v0.3.24（2026-09-05）— 记事本 + 账号体系 + 同步日志 + 顶栏布局（含 #6/#7/#27/#26/#31/#24/#25/#37/#38/#41/#33/#9/#48）**
   - **多账号与账号体系（#25/#31/#33/#38）**：修复第二个账号增收 422；新增账号管理面板（增删、切换）；删除账号时级联清理该账号下所有本地数据；移除 org 默认切换。
   - **记事本面板（#9）**：看板最左侧新增独立笔记列。

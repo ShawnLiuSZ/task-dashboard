@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   Account,
+  AccountColumn,
   BoardMode,
   CheckUpdate,
   DeviceLoginPoll,
@@ -107,7 +108,38 @@ export const api = {
   updateNoteLabel: (id: number, label: string) =>
     invoke<Note>("update_note_label", { id, label }),
   deleteNote: (id: number) => invoke<void>("delete_note", { id }),
+  // v0.3.27+：记事本导出 / 导入。
+  exportNotes: () =>
+    invoke<{ path: string; count: number }>("export_notes"),
+  importNotes: (json: string) =>
+    invoke<{ imported: number; skipped: number }>("import_notes", { json }),
+  // v0.3.28+：自定义列映射（按账号配置看板列）。
+  listAccountColumns: (accountId: number) =>
+    invoke<AccountColumn[]>("list_account_columns", { accountId }),
+  saveAccountColumns: (accountId: number, columns: AccountColumn[]) =>
+    invoke<void>("save_account_columns", { accountId, columns }),
 };
 export function onSynced(cb: (r: SyncResult) => void) {
   return listen<SyncResult>(SYNCED_EVENT, (e) => cb(e.payload));
+}
+
+/**
+ * v0.3.28+：全局错误上报通道。
+ *
+ * 用途：无 UI 上下文的异步失败（典型如 openInBrowser）若只 `console.error`，
+ * 用户侧表现为「点了没反应」。统一派发该事件，由 App 监听并显示在错误 banner。
+ */
+export const TASKBOARD_ERROR_EVENT = "taskboard://error";
+
+export function reportError(e: unknown): void {
+  const msg = String(e);
+  console.error("[taskboard]", msg);
+  window.dispatchEvent(
+    new CustomEvent<string>(TASKBOARD_ERROR_EVENT, { detail: msg }),
+  );
+}
+
+/** 打开外部链接；失败时经 reportError 给出可见提示，不再静默吞掉。 */
+export function openExternal(url: string): void {
+  api.openInBrowser(url).catch(reportError);
 }

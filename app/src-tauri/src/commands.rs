@@ -3,11 +3,9 @@ use serde::Serialize;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 
-use crate::db::{Account, LabelMapping, LabelMappingInput};
+use crate::db::{Account, AccountColumn, LabelMapping, LabelMappingInput};
 use crate::sync::SyncResult;
 use crate::AppState;
-
-const VALID_STATUS: &[&str] = &["todo", "doing", "processed", "done"];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,6 +55,8 @@ pub struct Settings {
     pub active_account_id: i64,
     /// v0.3.16+：视图模式。'single'=仅当前激活账号；'all'=所有账号任务聚合。
     pub view_mode: String,
+    /// v0.3.21+：看板列模式。'status'=四态列；'project'=Project Status 列；'custom'=自定义列。
+    pub board_mode: String,
     /// v0.3.16+：所有账号列表（不含 PAT 本体）。
     pub accounts: Vec<Account>,
     /// v0.3.17+：GitHub OAuth Device Flow 的 client_id（注册 OAuth App 后填一次）。
@@ -184,6 +184,9 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncResult, String> {
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let st = handle.state::<AppState>();
+        // 与 lib.rs::run_sync 同一去重标志：已有同步在跑则拒绝本次，避免并发触发背靠背全量同步。
+        let _in_progress = crate::SyncGuard::acquire(&st.syncing)
+            .ok_or_else(|| "已有同步进行中，请稍后再试".to_string())?;
         let conn = st.db.lock().map_err(|e| e.to_string())?;
         crate::sync::run(&conn)
     })
@@ -197,16 +200,55 @@ pub fn update_task_status(
     key: String,
     status: String,
 ) -> Result<(), String> {
-    if !VALID_STATUS.contains(&status.as_str()) {
-        return Err(format!("非法状态: {}", status));
+    // 中文四态归一化到英文四态，其余原样（自定义列 col_key）
+    let normalized = match status.trim() {
+        "待处理" => "todo".to_string(),
+        "处理中" => "doing".to_string(),
+        "已处理" => "processed".to_string(),
+        "已完成" => "done".to_string(),
+        s => s.to_string(),
+    };
+    if normalized.is_empty() {
+        return Err("状态不能为空".to_string());
     }
     let conn = state.db.lock().map_err(|e| e.to_string())?;
+    validate_task_status(&conn, &key, &normalized)?;
     conn.execute(
         "UPDATE tasks SET status = ?1 WHERE key = ?2",
-        rusqlite::params![status, key],
+        rusqlite::params![normalized, key],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// 校验 status 是否合法：四态（含中文四态，已归一化）或该任务所属账号已知的自定义列 col_key。
+/// 不过滤会直接返回 Err，DB 不改动，避免任务因落入未知列而在看板「消失」。
+fn validate_task_status(conn: &rusqlite::Connection, key: &str, status: &str) -> Result<(), String> {
+    if matches!(status, "todo" | "doing" | "processed" | "done") {
+        return Ok(());
+    }
+    let account_id: Option<i64> = conn
+        .query_row(
+            "SELECT account_id FROM tasks WHERE key = ?1 LIMIT 1",
+            rusqlite::params![key],
+            |r| r.get(0),
+        )
+        .map(Some)
+        .unwrap_or(None);
+    if let Some(id) = account_id {
+        let cols = crate::db::list_account_columns(conn, id)?;
+        if cols.iter().any(|c| c.col_key == status) {
+            return Ok(());
+        }
+        let names: Vec<&str> = cols.iter().map(|c| c.col_key.as_str()).collect();
+        return Err(format!(
+            "非法状态: {status}（应为四态 todo/doing/processed/done 或该账号自定义列之一: {}）",
+            names.join("/")
+        ));
+    }
+    Err(format!(
+        "非法状态: {status}（应为四态 todo/doing/processed/done 或该任务账号的自定义列）"
+    ))
 }
 
 #[tauri::command]
@@ -264,6 +306,8 @@ pub fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settin
         .unwrap_or(0);
     let view_mode = crate::db::get_setting(&conn, "view_mode");
     let view_mode = if view_mode.is_empty() { "single".to_string() } else { view_mode };
+    let board_mode = crate::db::get_setting(&conn, "board_mode");
+    let board_mode = if board_mode.is_empty() { "project".to_string() } else { board_mode };
     Ok(Settings {
         schedule_minutes: crate::db::get_setting(&conn, "schedule_minutes")
             .parse::<u64>()
@@ -280,6 +324,7 @@ pub fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settin
         last_sync_error: crate::db::get_setting(&conn, "last_sync_error"),
         active_account_id,
         view_mode,
+        board_mode,
         accounts,
         oauth_client_id: crate::db::get_setting(&conn, "oauth_client_id"),
     })
@@ -698,12 +743,12 @@ pub fn set_view_mode(state: State<'_, AppState>, mode: String) -> Result<(), Str
     Ok(())
 }
 
-/// 设置看板列模式：'status' / 'label'。
-#[tauri::command]
-pub fn set_board_mode(state: State<'_, AppState>, mode: String) -> Result<(), String> {
-    if mode != "status" && mode != "label" {
-        return Err(format!("非法看板模式: {mode}（应为 status / label）"));
-    }
+/// 设置看板列模式：'status' / 'project' / 'custom'。
+	#[tauri::command]
+	pub fn set_board_mode(state: State<'_, AppState>, mode: String) -> Result<(), String> {
+	    if mode != "status" && mode != "project" && mode != "custom" {
+	        return Err(format!("非法看板模式: {mode}（应为 status / project / custom）"));
+	    }
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     crate::db::set_setting(&conn, "board_mode", &mode)?;
     Ok(())
@@ -972,4 +1017,252 @@ pub fn update_note_label(state: State<'_, AppState>, id: i64, label: String) -> 
 pub fn delete_note(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     crate::db::delete_note(&conn, id)
+}
+
+// v0.3.27+：记事本导入 / 导出（防止破坏性更新时数据丢失）。
+
+/// 导出记事为 JSON 文件，返回写入的完整路径与条数。
+///
+/// 写入位置固定为应用数据目录下 `notes-backup/`（macOS：
+/// `~/Library/Application Support/com.shawnliu.taskboard/notes-backup/`），
+/// 文件名 `notes-backup-YYYYMMDD-HHMMSS.json`。仅含记事业务数据，不含 token 等敏感信息。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportNotesResult {
+    pub path: String,
+    pub count: usize,
+}
+
+#[tauri::command]
+pub fn export_notes(state: State<'_, AppState>) -> Result<ExportNotesResult, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let notes = crate::db::list_notes(&conn)?;
+
+    let dir = crate::db::data_dir()?.join("notes-backup");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建备份目录失败: {e}"))?;
+
+    let now = crate::sync::now_secs();
+    let ts = format!(
+        "{}{}",
+        time_str(now, "%Y%m%d"),
+        time_str(now, "%H%M%S")
+    );
+    let path = dir.join(format!("notes-backup-{ts}.json"));
+
+    #[derive(serde::Serialize)]
+    struct Payload<'a> {
+        version: u32,
+        exported_at: i64,
+        notes: &'a [crate::db::Note],
+    }
+    let payload = Payload {
+        version: 1,
+        exported_at: now,
+        notes: &notes,
+    };
+    let json = serde_json::to_string_pretty(&payload).map_err(|e| format!("序列化失败: {e}"))?;
+    std::fs::write(&path, json).map_err(|e| format!("写入导出文件失败: {e}"))?;
+
+    Ok(ExportNotesResult {
+        path: path.to_string_lossy().to_string(),
+        count: notes.len(),
+    })
+}
+
+/// 从 JSON 文本导入记事（由前端 file input 读取文件内容后传入，避免依赖文件系统权限）。
+/// 按内容 `content` 去重：已存在的跳过，其余插入并保留原始创建/更新时间。
+/// 返回导入条数与跳过条数。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportNotesResult {
+    pub imported: usize,
+    pub skipped: usize,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportNoteItem {
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    created_at: i64,
+    #[serde(default)]
+    updated_at: i64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ImportFile {
+    #[allow(dead_code)]
+    version: Option<u32>,
+    notes: Vec<ImportNoteItem>,
+}
+
+#[tauri::command]
+pub fn import_notes(state: State<'_, AppState>, json: String) -> Result<ImportNotesResult, String> {
+    let file: ImportFile =
+        serde_json::from_str(&json).map_err(|e| format!("解析导入数据失败: {e}"))?;
+
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let now = crate::sync::now_secs();
+    let mut imported = 0usize;
+    let mut skipped = 0usize;
+    for n in file.notes {
+        if n.content.trim().is_empty() {
+            continue;
+        }
+        let label = if n.label.is_empty() {
+            "low".to_string()
+        } else {
+            n.label
+        };
+        let created = if n.created_at > 0 { n.created_at } else { now };
+        let updated = if n.updated_at > 0 { n.updated_at } else { created };
+        match crate::db::import_note(&conn, &n.content, &label, created, updated) {
+            Ok(true) => imported += 1,
+            Ok(false) => skipped += 1,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(ImportNotesResult { imported, skipped })
+}
+
+// ============================================================================
+// v0.3.28+：自定义列映射（按账号配置看板列）
+// ============================================================================
+
+/// 列出某账号下所有自定义列。
+#[tauri::command]
+pub fn list_account_columns(
+    state: State<'_, AppState>,
+    account_id: i64,
+) -> Result<Vec<AccountColumn>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    crate::db::list_account_columns(&conn, account_id)
+}
+
+/// 保存某账号的列配置（全量替换）。
+#[tauri::command]
+pub fn save_account_columns(
+    state: State<'_, AppState>,
+    account_id: i64,
+    columns: Vec<AccountColumn>,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    crate::db::save_account_columns(&conn, account_id, &columns)
+}
+
+/// `now_secs` 按秒格式化为指定 `strftime` 模式（用于导出文件名）。
+fn time_str(ts: i64, fmt: &str) -> String {
+    let secs = ts as i64;
+    let days = secs.div_euclid(86400);
+    let rem = secs.rem_euclid(86400);
+    let (y, m, d) = civil_from_days(days);
+    let h = rem / 3600;
+    let mi = (rem % 3600) / 60;
+    let s = rem % 60;
+    match fmt {
+        "%Y%m%d" => format!("{y:04}{m:02}{d:02}"),
+        "%H%M%S" => format!("{h:02}{mi:02}{s:02}"),
+        _ => format!("{y:04}{m:02}{d:02}-{h:02}{mi:02}{s:02}"),
+    }
+}
+
+/// 自 1970-01-01 的 days 起算 civil date（EPOCH 兼容，无依赖）。
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z.rem_euclid(146097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+
+    /// 打开内存库临时文件的连接，并初始化 schema。
+    fn mem_conn() -> Connection {
+        let path = std::env::temp_dir().join(format!(
+            "taskboard_cmds_test_{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let conn = crate::db::open_db(&path).expect("打开测试库");
+        // 测试进程结束后清理
+        let _ = std::fs::remove_file(&path);
+        conn
+    }
+
+    // 导出文件名的时间戳：epoch 0、近期典型值。
+    #[test]
+    fn time_str_formats_epoch_and_boundaries() {
+        assert_eq!(super::time_str(0, "%Y%m%d"), "19700101");
+        assert_eq!(super::time_str(0, "%H%M%S"), "000000");
+        // 2025-01-05 08:00:00 UTC
+        assert_eq!(super::time_str(1736064000i64, "%Y%m%d"), "20250105");
+        assert_eq!(super::time_str(1736064000i64, "%H%M%S"), "080000");
+        // 1972-12-19 08:00:00 UTC
+        assert_eq!(super::time_str(93600000, "%Y%m%d"), "19721219");
+    }
+
+    // 导入去重：相同 content 只插入一次，保留时间字段。
+    #[test]
+    fn import_note_dedupes_by_content() {
+        let conn = mem_conn();
+        let first = crate::db::import_note(&conn, "hello", "low", 100, 200).unwrap();
+        assert!(first, "首次应插入");
+        let dup = crate::db::import_note(&conn, "hello", "high", 300, 400).unwrap();
+        assert!(!dup, "重复 content 应跳过");
+        let other = crate::db::import_note(&conn, "world", "medium", 500, 600).unwrap();
+        assert!(other, "不同 content 应插入");
+        let all = crate::db::list_notes(&conn).unwrap();
+        assert_eq!(all.len(), 2, "应有 2 条（hello + world）");
+        let hello = all.iter().find(|n| n.content == "hello").unwrap();
+        assert_eq!(hello.created_at, 100);
+        assert_eq!(hello.updated_at, 200);
+        assert_eq!(hello.label, "low");
+    }
+
+    // 校验 helper：helper_status 只放行四态，或该任务所属账号的自定义列 col_key。
+    #[test]
+    fn validate_status_accepts_four_states_and_account_columns() {
+        let conn = mem_conn();
+        // 插入一条直属某账号的任务；该账号定义自定义列 col_alpha。
+        conn.execute(
+            "INSERT INTO accounts (id, label, login, org, pat_token, is_default, created_at) VALUES (77, 'test', 'tester', '', 'pat', 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (key, owner, repo, number, title, url, gh_state, ownership, synced_at, account_id)
+             VALUES ('a#1', 'a', 'a', 1, 't', 'u', 'open', 'mine', 0, 77)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO account_columns (account_id, col_key, col_name, match_rules, order_index)
+             VALUES (77, 'col_alpha', 'Alpha', '[]', 0)",
+            [],
+        )
+        .unwrap();
+
+        // 四态放行
+        assert!(super::validate_task_status(&conn, "a#1", "todo").is_ok());
+        assert!(super::validate_task_status(&conn, "a#1", "done").is_ok());
+        // 该账号自定义列放行
+        assert!(super::validate_task_status(&conn, "a#1", "col_alpha").is_ok());
+        // 拼错/未知状态拒绝
+        assert!(super::validate_task_status(&conn, "a#1", "donee").is_err());
+        // 该任务账号无该自定义列 → 拒绝
+        assert!(super::validate_task_status(&conn, "a#1", "col_beta").is_err());
+        // 任务不存在：非四态一律拒绝（无账号可判定）
+        assert!(super::validate_task_status(&conn, "ghost#1", "col_alpha").is_err());
+    }
 }

@@ -265,7 +265,8 @@ def tool_update_note(note_id, content):
 
 def tool_update_note_label(note_id, label):
     """更新记事标签，返回更新后的记录。"""
-    label = (label or "").strip().lower()
+    # 与 Rust 端 normalize_note_label 对齐：空标签回落 low，而非报错。
+    label = (label or "low").strip().lower()
     if label not in VALID_NOTE_LABELS:
         raise ValueError(f"无效标签: {label}（可选: low/medium/high/urgent）")
     cur = conn().execute(
@@ -286,7 +287,7 @@ def tool_delete_note(note_id):
     if cur.rowcount == 0:
         raise ValueError(f"记事 #{note_id} 不存在")
     conn().commit()
-    return {"ok": True, "id": note_id}
+    return {"ok": True, "note_id": note_id}
 
 
 # --------------------------------------------------------------------------- #

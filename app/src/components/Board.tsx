@@ -1,4 +1,4 @@
-import { COLUMNS, type Account, type ProjectStatus, type StatusKey, type Task, type BoardMode } from "../types";
+import { COLUMNS, type Account, type AccountColumn, type ProjectStatus, type StatusKey, type Task, type BoardMode } from "../types";
 import { useT } from "../i18n";
 import TaskCard from "./TaskCard";
 
@@ -12,6 +12,8 @@ interface Props {
   boardMode?: BoardMode;
   /** v0.3.22+：项目 Status 选项（来自 project_statuses 表，用于列排序）。 */
   projectStatuses?: ProjectStatus[];
+  /** v0.3.28+：自定义列配置（按账号配置看板列）。 */
+  accountColumns?: AccountColumn[];
 }
 
 // GitHub Project Status 原文到显示用键的映射（用于分组去重）。
@@ -36,13 +38,14 @@ function groupByProjectStatus(tasks: Task[]): Map<string, Task[]> {
   return map;
 }
 
-// 按 project_statuses 表的 order_index 排序；无表数据时回退到原始顺序。
+// 按 project_statuses 表的 order_index 排序；无表数据时回退到字母序（稳定可预测）。
 function sortProjectStatusKeys(
   keys: string[],
   projectStatuses?: ProjectStatus[],
 ): string[] {
   if (!projectStatuses || projectStatuses.length === 0) {
-    return keys;
+    // 无 project_statuses 表数据时，按字母序排序，避免返回 tasks 遍历顺序导致的不稳定渲染
+    return [...keys].sort((a, b) => a.localeCompare(b));
   }
   const orderMap = new Map<string, number>();
   for (const ps of projectStatuses) {
@@ -64,8 +67,9 @@ export default function Board({
   selected,
   onSelect,
   accounts,
-  boardMode = "status",
+  boardMode = "project",
   projectStatuses,
+  accountColumns,
 }: Props) {
   const t = useT();
 
@@ -134,8 +138,79 @@ export default function Board({
     );
   }
 
+  if (boardMode === "custom" && accountColumns && accountColumns.length > 0) {
+    // 自定义列视图（按账号配置渲染）
+    const byColumn = (colKey: string) =>
+      tasks.filter((task) => task.status === colKey);
+    // 无匹配的任务归入「未分类」列
+    const unmatched = tasks.filter(
+      (task) => !accountColumns.some((col) => task.status === col.colKey),
+    );
+
+    // 构建 repo name -> 颜色索引映射
+    const allRepos = [...new Set(tasks.map((t) => t.repo))].sort();
+    const repoIndexMap = new Map<string, number>();
+    allRepos.forEach((r, i) => repoIndexMap.set(r, i));
+
+    return (
+      <div className="board">
+        {accountColumns.map((col, idx) => {
+          const items = byColumn(col.colKey);
+          return (
+            <section key={col.colKey} className={`column column-status-${idx % 20}`}>
+              <div className="column-head">
+                <span className={`dot dot-status-${idx % 20}`} />
+                <span className="column-title">{col.colName}</span>
+                <span className="count">{items.length}</span>
+              </div>
+              <div className="column-body">
+                {items.length === 0 && <div className="empty">{col.colName}</div>}
+                {items.map((task) => (
+                  <TaskCard
+                    key={task.key}
+                    task={task}
+                    accountLabel={accounts?.get(task.accountId)?.label}
+                    active={task.key === selected}
+                    onClick={() => onSelect(task.key)}
+                    repoIndex={repoIndexMap.get(task.repo) ?? 0}
+                  />
+                ))}
+              </div>
+            </section>
+          );
+        })}
+        {/* 未匹配任务列 */}
+        {unmatched.length > 0 && (
+          <section className="column column-unclassified">
+            <div className="column-head">
+              <span className="dot dot-unclassified" />
+              <span className="column-title">{t("detail.unlabeled")}</span>
+              <span className="count">{unmatched.length}</span>
+            </div>
+            <div className="column-body">
+              {unmatched.map((task) => (
+                <TaskCard
+                  key={task.key}
+                  task={task}
+                  accountLabel={accounts?.get(task.accountId)?.label}
+                  active={task.key === selected}
+                  onClick={() => onSelect(task.key)}
+                  repoIndex={repoIndexMap.get(task.repo) ?? 0}
+                />
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
+    );
+  }
+
   // 四态列视图（默认）
   const byStatus = (s: StatusKey) => tasks.filter((task) => task.status === s);
+  // 构建 repo name -> 颜色索引映射（与 project 视图一致，取不同颜色）
+  const allRepos = [...new Set(tasks.map((t) => t.repo))].sort();
+  const repoIndexMap = new Map<string, number>();
+  allRepos.forEach((r, i) => repoIndexMap.set(r, i));
 
   return (
     <div className="board">
@@ -157,6 +232,7 @@ export default function Board({
                   accountLabel={accounts?.get(task.accountId)?.label}
                   active={task.key === selected}
                   onClick={() => onSelect(task.key)}
+                  repoIndex={repoIndexMap.get(task.repo) ?? 0}
                 />
               ))}
             </div>

@@ -1617,6 +1617,20 @@ body {
   color: #c0392b;
 }
 
+/* 记事本 header 工具组：常显（不同于 note-card 内 hover 显示） */
+.notes-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.notes-tool-button:disabled,
+.note-tool:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* ---------- 编辑 / 删除确认态 ---------- */
 
 .note-card.editing,
@@ -1688,6 +1702,33 @@ body {
 .btn.small.ghost:hover {
   background: var(--surface-2);
   color: var(--text);
+}
+
+/* ---------- 记事本提示条（success 风格，用于导出/导入反馈） ---------- */
+.note-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #eaf6ef;
+  color: #1c7c3d;
+  font-size: 11px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.note-notice .note-tool {
+  opacity: 1;
+  color: #1c7c3d;
+  width: 18px;
+  height: 18px;
+}
+
+.note-notice .note-tool:hover {
+  background: rgba(28, 124, 61, 0.12);
+  color: #1c7c3d;
 }
 
 /* ---------- 记事本错误提示 ---------- */

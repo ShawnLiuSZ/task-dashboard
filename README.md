@@ -36,6 +36,8 @@ npm run tauri build    # 产出当前平台的 release 安装包
 
 发布 Release 时由 GitHub Actions 自动构建三端安装包（macOS / Windows / Linux）。发布流程、签名前提与 runner 配置详见 [`docs/design-and-release.md`](./docs/design-and-release.md)。
 
+> **⚠️ 更新提醒**：**v0.3.24 及以下版本**因仓库迁移问题，应用内「检查更新」无法获取 Release 信息，**不能自动更新**。请到 [GitHub Releases](https://github.com/ShawnLiuSZ/task-dashboard/releases) 下载最新版安装包（或查看应用内「关于」页提示的下载链接）。
+
 ### 使用
 
 | 能力        | 操作                                                                                                                                                  |
@@ -133,6 +135,8 @@ MCP Server 只提供工具；要让 Agent 在「开始 / 中断 / 说『生成�
 - [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → v0.3.15）
 
 - [`docs/v0.3.15-pat-auth.md`](./docs/v0.3.15-pat-auth.md) — v0.3.15 PAT 认证与 visual polish 设计文档（gh 替换、卡片配色、多账号规划）
+
+- [`docs/troubleshoot-mcp-timeout.md`](./docs/troubleshoot-mcp-timeout.md) — 排障：MCP 连接超时（30000ms）——macOS Gatekeeper / quarantine 隔离属性排查与修复
 
 > 版本 v0.3.19 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-05
 

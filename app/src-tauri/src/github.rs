@@ -694,6 +694,7 @@ impl GitHubClient {
                   pageInfo {{ hasNextPage endCursor }}
                   nodes {{
                     content {{
+                      __typename
                       ... on Issue {{
                         number title url state
                         repository {{ name owner {{ login }} }}
@@ -723,11 +724,10 @@ impl GitHubClient {
                 .ok_or_else(|| "项目条目格式异常".to_string())?;
             for n in page_nodes {
                 let content = &n["content"];
-                // 跳过 PR
-                if content.get("pull_request").is_some()
-                    || content.get("mergedAt").is_some()
-                    || content.get("headRefOid").is_some()
-                {
+                // 跳过 PR：按 GraphQL __typename 可靠判型。
+                // 修复前尝试用 pull_request/mergedAt/headRefOid 字段判型，但查询并未选取这些字段，
+                // 判断恒为假，导致 Project V2 中的 PR 被当作 issue 上板。
+                if content["__typename"].as_str() == Some("PullRequest") {
                     continue;
                 }
                 let num = match content["number"].as_i64() {
@@ -914,7 +914,10 @@ impl GitHubClient {
             if status.as_u16() == 422 {
                 let body = resp.text().unwrap_or_default();
                 eprintln!("[sync] Search API 422: {} - {}", q, body.chars().take(120).collect::<String>());
-                break;
+                // v0.3.29：422 是对整个 query 无效（限定的 repo 引用不可访问资源），
+                // 该源应视为「失败」而非「成功但无结果」，返回 Err 交由调用方计入 failed，
+                // 否则会被误当空结果，进而把真实关联任务标记陈旧后移出看板。
+                return Err(format!("Search API 422: {}", body.chars().take(120).collect::<String>()));
             }
             if status.as_u16() == 429 || status.as_u16() == 403 {
                 let retry_after = resp
@@ -932,7 +935,8 @@ impl GitHubClient {
                 if status2.as_u16() == 422 || !status2.is_success() {
                     let body = resp2.text().unwrap_or_default();
                     eprintln!("[sync] Search API 重试失败 ({}): {}", status2.as_u16(), body.chars().take(120).collect::<String>());
-                    break;
+                    // v0.3.29：重试后仍失败（含 422/非 2xx），视为该源失败，避免被当空结果误删任务。
+                    return Err(format!("Search API 重试失败 ({}): {}", status2.as_u16(), body.chars().take(120).collect::<String>()));
                 }
                 let v = resp2.json::<serde_json::Value>().map_err(|e| e.to_string())?;
                 let items = v.get("items").and_then(|i| i.as_array()).cloned().unwrap_or_default();

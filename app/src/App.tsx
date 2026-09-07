@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, onSynced } from "./api";
+import { api, onSynced, TASKBOARD_ERROR_EVENT } from "./api";
 import { fmtTime, I18nProvider, useI18n } from "./i18n";
 import Board from "./components/Board";
 import DetailPanel from "./components/DetailPanel";
@@ -8,7 +8,7 @@ import AboutPanel from "./components/AboutPanel";
 import AccountsPanel from "./components/AccountsPanel";
 import SyncLogsPanel from "./components/SyncLogsPanel";
 import NotesPanel from "./components/NotesPanel";
-import type { Account, BoardMode, ProjectStatus, Settings as SettingsT, Task } from "./types";
+import type { Account, AccountColumn, BoardMode, ProjectStatus, Settings as SettingsT, Task } from "./types";
 
 export default function App() {
   return (
@@ -31,6 +31,15 @@ function BoardApp() {
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [projectStatuses, setProjectStatuses] = useState<ProjectStatus[]>([]);
+  const [accountColumns, setAccountColumns] = useState<AccountColumn[]>([]);
+
+  // v0.3.28+：监听全局错误上报（如 openExternal 失败），统一在错误 banner 显示，
+  // 避免无 UI 上下文的异步失败只落在 console 里造成「点了没反应」。
+  useEffect(() => {
+    const handler = (e: Event) => setError((e as CustomEvent<string>).detail);
+    window.addEventListener(TASKBOARD_ERROR_EVENT, handler);
+    return () => window.removeEventListener(TASKBOARD_ERROR_EVENT, handler);
+  }, []);
 
   // 同步结果 banner 4 秒后自动消失（错误 banner 不受影响，由下次操作覆盖）。
   useEffect(() => {
@@ -66,50 +75,119 @@ function BoardApp() {
 
   const loadProjectStatuses = useCallback(async () => {
     try {
-      const activeId = settings?.activeAccountId;
-      if (activeId) {
-        const all = await api.listProjectStatuses(activeId);
-        // 按 project_github_id 分组，取条目数最多的项目（主项目）的状态
-        const byProject = new Map<string, typeof all>();
-        for (const ps of all) {
-          const arr = byProject.get(ps.projectGithubId) ?? [];
-          arr.push(ps);
-          byProject.set(ps.projectGithubId, arr);
+      if (!settings) return;
+      const activeId = settings.activeAccountId;
+      if (!activeId) return;
+
+      // viewMode="all" 时聚合所有账号的 project_statuses，按字母序合并去重
+      // （聚合视图下每个账号可能属于不同项目，无法用单一 order_index）
+      if (settings.viewMode === "all") {
+        const accounts = settings.accounts ?? [];
+        const merged = new Map<string, ProjectStatus>();
+        for (const a of accounts) {
+          if (!a.id) continue;
+          const list = await api.listProjectStatuses(a.id);
+          for (const ps of list) {
+            // 去重：同名状态只保留第一个（按首次出现顺序）
+            if (!merged.has(ps.name)) merged.set(ps.name, ps);
+          }
         }
-        // 取条目最多的项目
-        let best: typeof all = [];
-        for (const arr of byProject.values()) {
-          if (arr.length > best.length) best = arr;
-        }
-        setProjectStatuses(best);
+        setProjectStatuses([...merged.values()].sort((a, b) => a.name.localeCompare(b.name)));
+        return;
       }
+
+      // 单账号视图：取条目数最多的项目（主项目）的状态，按 order_index 排序
+      const all = await api.listProjectStatuses(activeId);
+      const byProject = new Map<string, typeof all>();
+      for (const ps of all) {
+        const arr = byProject.get(ps.projectGithubId) ?? [];
+        arr.push(ps);
+        byProject.set(ps.projectGithubId, arr);
+      }
+      let best: typeof all = [];
+      for (const arr of byProject.values()) {
+        if (arr.length > best.length) best = arr;
+      }
+      // 确保按 order_index 正序（后端已按此排序，但重新过滤后可能丢失）
+      best.sort((a, b) => a.orderIndex - b.orderIndex);
+      setProjectStatuses(best);
     } catch (e) {
+      // 项目状态决定看板列，失败必须可见，否则列静默缺失用户无从判断。
       console.warn("加载项目状态选项失败:", e);
+      setError(String(e));
     }
-  }, [settings?.activeAccountId]);
+  }, [settings]);
+
+  // v0.3.28+：加载自定义列配置
+  const loadAccountColumns = useCallback(async () => {
+    try {
+      if (!settings) return;
+      const activeId = settings.activeAccountId;
+      if (!activeId) {
+        setAccountColumns([]);
+        return;
+      }
+
+      if (settings.viewMode === "all") {
+        // 聚合视图：合并所有账号的自定义列（按 col_key 去重）
+        const accounts = settings.accounts ?? [];
+        const merged = new Map<string, AccountColumn>();
+        for (const a of accounts) {
+          if (!a.id) continue;
+          const list = await api.listAccountColumns(a.id);
+          for (const col of list) {
+            if (!merged.has(col.colKey)) merged.set(col.colKey, col);
+          }
+        }
+        setAccountColumns([...merged.values()].sort((a, b) => a.orderIndex - b.orderIndex));
+        return;
+      }
+
+      // 单账号视图
+      const cols = await api.listAccountColumns(activeId);
+      setAccountColumns(cols.sort((a, b) => a.orderIndex - b.orderIndex));
+    } catch (e) {
+      console.warn("加载自定义列配置失败:", e);
+      // 同上：自定义列缺失会让看板列不完整，失败需可见。
+      setError(String(e));
+    }
+  }, [settings]);
 
   useEffect(() => {
     void load();
     void loadSettings();
-    const un = onSynced((r) => {
+    // onSynced 返回 Promise<unlisten>：cleanup 不能返回 Promise，否则 React
+    // 无法等待，快速重订阅时会短暂双订阅。用 cancelled + 变量持有解决。
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    void onSynced((r) => {
       void load();
       void loadSettings();
-      void loadProjectStatuses();
+      // loadProjectStatuses 依赖 settings，下面的 useEffect 会在 settings 变化时自动触发
       const warn = r.warning ? ` · ⚠️ ${r.warning}` : "";
       const prune = r.pruned > 0 ? ` · ${t("sync.pruned", { n: r.pruned })}` : "";
       setLastResult(
         `${t("sync.result", { added: r.added, updated: r.updated, done: r.candidateDone })}${prune}${warn}`,
       );
+    }).then((f) => {
+      if (cancelled) {
+        f();
+        return;
+      }
+      unlisten = f;
     });
     return () => {
-      void un.then((f) => f());
+      cancelled = true;
+      unlisten?.();
     };
   }, [load, loadSettings, t]);
 
-  // settings 加载完成后拉取项目 Status 选项
+  // settings 就绪（activeAccountId / viewMode / accounts 任一变化）后拉取项目 Status 选项和自定义列
   useEffect(() => {
+    if (!settings) return;
     void loadProjectStatuses();
-  }, [loadProjectStatuses]);
+    void loadAccountColumns();
+  }, [settings, loadProjectStatuses, loadAccountColumns]);
 
   // 仓库列表（去重排序），用于仓库筛选下拉。
   const repos = useMemo(
@@ -180,7 +258,12 @@ function BoardApp() {
             className="select"
             value={settings?.activeAccountId ?? 0}
             onChange={(e) => void handleSwitchAccount(Number(e.target.value))}
-            title={t("topbar.switchAccount")}
+            title={
+              settings?.viewMode === "all"
+                ? t("topbar.switchAccountAll")
+                : t("topbar.switchAccount")
+            }
+            disabled={settings?.viewMode === "all"}
           >
             {(settings?.accounts ?? []).length === 0 && (
               <option value={0}>{t("topbar.noAccounts")}</option>
@@ -269,20 +352,29 @@ function BoardApp() {
           </button>
         )}
 
-        {/* v0.3.21+：看板列模式切换（Project Status 列视图） */}
+        {/* v0.3.21+：看板列模式切换（status 四态 / project Project Status / custom 自定义列） */}
         <select
           className="select"
           value={settings?.boardMode ?? "project"}
           onChange={(e) => {
             const mode = e.target.value as BoardMode;
             if (mode !== settings?.boardMode) {
-              void api.setBoardMode(mode);
-              void loadSettings();
+              // 必须串行：并发执行时 get_settings 可能返回旧的 boardMode，把用户选择覆盖回去。
+              void (async () => {
+                try {
+                  await api.setBoardMode(mode);
+                  await loadSettings();
+                } catch (err) {
+                  setError(String(err));
+                }
+              })();
             }
           }}
           title={t("settings.boardModeTitle")}
         >
+          <option value="status">{t("settings.boardModeStatus")}</option>
           <option value="project">{t("settings.boardModeProject")}</option>
+          <option value="custom">{t("settings.boardModeCustom")}</option>
         </select>
       </div>
 
@@ -303,6 +395,7 @@ function BoardApp() {
             accounts={accountMap}
             boardMode={settings?.boardMode ?? "project"}
             projectStatuses={projectStatuses}
+            accountColumns={accountColumns}
           />
         </div>
       </div>
@@ -315,6 +408,7 @@ function BoardApp() {
             title={t("detail.clickBackdropClose")}
           />
           <DetailPanel
+            key={selectedTask.key}
             task={selectedTask}
             onClose={() => setSelected(null)}
             onChanged={() => {

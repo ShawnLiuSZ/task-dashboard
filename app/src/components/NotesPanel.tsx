@@ -46,6 +46,8 @@ const ICON = {
   close: "M6 6l12 12 M18 6L6 18",
   collapse: "M14 6l-6 6 6 6",
   expand: "M10 6l6 6-6 6",
+  download: "M12 3v12 M7 10l5 5 5-5 M5 21h14",
+  upload: "M12 15V3 M7 8l5-5 5 5 M5 21h14",
 };
 
 /** 收起状态持久化键（本地偏好，不入数据库）。 */
@@ -129,6 +131,9 @@ export default function NotesPanel() {
   const [saving, setSaving] = useState(false);
   const [confirmId, setConfirmId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   // 收起后列表内容完全不渲染（避免旁人看到），状态记在本地，重启后保持。
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem(COLLAPSED_KEY) === "1",
@@ -224,6 +229,61 @@ export default function NotesPanel() {
     [loadNotes],
   );
 
+  // v0.3.27+：导出全部记事为 JSON 文件到应用数据目录下的 notes-backup/。
+  const handleExport = useCallback(async () => {
+    if (busy) return;
+    setBusy("export");
+    setNotice(null);
+    setError(null);
+    try {
+      const res = await api.exportNotes();
+      if (res.count === 0) {
+        setNotice("当前没有记事可导出");
+      } else {
+        setNotice(`已导出 ${res.count} 条记事 → ${res.path}`);
+      }
+    } catch (e) {
+      console.error("导出记事失败:", e);
+      setError(`导出失败：${errText(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  }, [busy]);
+
+  // v0.3.27+：从 JSON 文件导入记事（按内容去重，不覆盖已有数据）。
+  const handleImport = useCallback(
+    async (file: File | null) => {
+      if (!file || busy) return;
+      setBusy("import");
+      setNotice(null);
+      setError(null);
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text) as { notes?: { content?: string }[] };
+        if (!Array.isArray(parsed.notes) || parsed.notes.length === 0) {
+          throw new Error("文件中没有可导入的记事");
+        }
+        // 校验格式：至少第一条含 content 字段
+        if (!parsed.notes.some((n) => typeof n.content === "string")) {
+          throw new Error("无法识别的格式：应为 notes-backup 导出文件");
+        }
+        // 前端读文件内容传给后端解析（Tauri 2 不暴露 file.path），后端按 content 去重
+        const res = await api.importNotes(text);
+        setNotice(
+          `导入完成：新增 ${res.imported} 条，跳过重复 ${res.skipped} 条`,
+        );
+        await loadNotes();
+      } catch (e) {
+        console.error("导入记事失败:", e);
+        setError(`导入失败：${errText(e)}`);
+      } finally {
+        setBusy(null);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
+    },
+    [busy, loadNotes],
+  );
+
   // 收起态：只留一条竖向导轨，列表内容完全不渲染。
   if (collapsed) {
     return (
@@ -252,17 +312,57 @@ export default function NotesPanel() {
         </span>
         <span className="notes-title">记事本</span>
         <span className="notes-count">{notes.length}</span>
-        <button
-          type="button"
-          className="note-tool"
-          title="收起记事本（内容不再显示）"
-          onClick={() => setCollapsed(true)}
-        >
-          <Icon d={ICON.collapse} size={13} />
-        </button>
+        <div className="notes-tools">
+          <button
+            type="button"
+            className="note-tool"
+            title="导出全部记事为 JSON 备份"
+            onClick={() => void handleExport()}
+            disabled={busy !== null}
+          >
+            <Icon d={ICON.download} size={13} />
+          </button>
+          <button
+            type="button"
+            className="note-tool"
+            title="从 JSON 备份导入记事（按内容去重）"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={busy !== null}
+          >
+            <Icon d={ICON.upload} size={13} />
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json,.json"
+            style={{ display: "none" }}
+            onChange={(e) => void handleImport(e.target.files?.[0] ?? null)}
+          />
+          <button
+            type="button"
+            className="note-tool"
+            title="收起记事本（内容不再显示）"
+            onClick={() => setCollapsed(true)}
+          >
+            <Icon d={ICON.collapse} size={13} />
+          </button>
+        </div>
       </header>
 
       <div className="notes-body">
+        {notice && (
+          <div className="note-notice" role="status">
+            <span>{notice}</span>
+            <button
+              type="button"
+              className="note-tool"
+              title="关闭"
+              onClick={() => setNotice(null)}
+            >
+              <Icon d={ICON.close} size={12} />
+            </button>
+          </div>
+        )}
         {error && (
           <div className="note-error" role="alert">
             <span>{error}</span>
@@ -287,7 +387,7 @@ export default function NotesPanel() {
             rows={1}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !adding && draft.trim()) {
                 e.preventDefault();
                 void handleAdd();
               }

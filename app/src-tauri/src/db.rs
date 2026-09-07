@@ -49,6 +49,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   latest_comment_url TEXT NOT NULL DEFAULT '',
   pr_number      INTEGER NOT NULL DEFAULT 0,
   pr_url         TEXT NOT NULL DEFAULT '',
+  -- v0.3.10：关联 PR 的分支（head.ref）。v0.3.28+ 同时写入 SCHEMA，
+  -- 避免任何只执行 SCHEMA 的建库路径漏掉 ALTER 迁移导致缺列。
+  branch         TEXT NOT NULL DEFAULT '',
+  -- v0.3.10：agent 写入的交接任务详情。
+  handoff        TEXT NOT NULL DEFAULT '',
   updated_at     TEXT,
   synced_at      INTEGER NOT NULL,
   -- v0.3.16：任务归属账号（来自 accounts.id）。v0.3.15 之前的数据迁移后默认 1。
@@ -119,13 +124,24 @@ CREATE INDEX IF NOT EXISTS idx_sync_logs_account ON sync_logs(account_id);
 CREATE INDEX IF NOT EXISTS idx_sync_logs_created ON sync_logs(created_at);
 
 CREATE TABLE IF NOT EXISTS notes (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  content    TEXT NOT NULL,
-  label      TEXT NOT NULL DEFAULT 'low',
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-"#;
+	  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	  content    TEXT NOT NULL,
+	  label      TEXT NOT NULL DEFAULT 'low',
+	  created_at INTEGER NOT NULL,
+	  updated_at INTEGER NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS account_columns (
+	  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	  account_id  INTEGER NOT NULL,
+	  col_key     TEXT NOT NULL,
+	  col_name    TEXT NOT NULL,
+	  match_rules TEXT NOT NULL DEFAULT '[]',
+	  order_index INTEGER NOT NULL DEFAULT 0,
+	  UNIQUE(account_id, col_key)
+	);
+	CREATE INDEX IF NOT EXISTS idx_account_columns_account ON account_columns(account_id);
+	"#;
 
 pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     ("schedule_minutes", "60"),
@@ -538,7 +554,10 @@ pub fn delete_account(conn: &Connection, id: i64) -> Result<(), String> {
         // 4. 删除 sync_logs
         conn.execute("DELETE FROM sync_logs WHERE account_id = ?1", [id])
             .map_err(|e| format!("删除 sync_logs 失败: {e}"))?;
-        // 5. 删除账号本身
+        // 5. 删除 account_columns（v0.3.28+）
+        conn.execute("DELETE FROM account_columns WHERE account_id = ?1", [id])
+            .map_err(|e| format!("删除 account_columns 失败: {e}"))?;
+        // 6. 删除账号本身
         conn.execute("DELETE FROM accounts WHERE id = ?1", [id])
             .map_err(|e| format!("删除账号失败: {e}"))?;
         Ok(())
@@ -1208,4 +1227,123 @@ pub fn delete_note(conn: &Connection, id: i64) -> Result<(), String> {
         return Err(format!("记事 #{id} 不存在"));
     }
     Ok(())
+}
+
+// ============================================================================
+// v0.3.28+：自定义列映射（按账号配置看板列）
+// ============================================================================
+
+/// 自定义列记录（与 account_columns 表一一对应；前端用）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountColumn {
+    pub id: i64,
+    pub account_id: i64,
+    pub col_key: String,
+    pub col_name: String,
+    /// JSON 数组，每个元素是一个 gh_status 匹配值，如 `["待开发","需求","规划"]`
+    pub match_rules: String,
+    pub order_index: i64,
+}
+
+/// 列出某账号下所有自定义列，按 order_index 升序。
+pub fn list_account_columns(conn: &Connection, account_id: i64) -> Result<Vec<AccountColumn>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, account_id, col_key, col_name, match_rules, order_index
+             FROM account_columns WHERE account_id = ?1
+             ORDER BY order_index ASC",
+        )
+        .map_err(|e| format!("查询自定义列失败: {}", e))?;
+    let rows = stmt
+        .query_map([account_id], |r| {
+            Ok(AccountColumn {
+                id: r.get(0)?,
+                account_id: r.get(1)?,
+                col_key: r.get(2)?,
+                col_name: r.get(3)?,
+                match_rules: r.get(4)?,
+                order_index: r.get(5)?,
+            })
+        })
+        .map_err(|e| format!("遍历自定义列失败: {}", e))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取自定义列行失败: {}", e))?);
+    }
+    Ok(out)
+}
+
+/// 保存某账号的列配置（全量替换：先删后插，原子事务）。
+/// `columns` 为待保存的列列表，order_index 由调用方决定。
+pub fn save_account_columns(
+    conn: &Connection,
+    account_id: i64,
+    columns: &[AccountColumn],
+) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // 先删旧配置
+    tx.execute("DELETE FROM account_columns WHERE account_id = ?1", [account_id])
+        .map_err(|e| format!("清空旧列配置失败: {e}"))?;
+    // 再插入新配置
+    for col in columns {
+        let match_rules = if col.match_rules.is_empty() { "[]" } else { &col.match_rules };
+        tx.execute(
+            "INSERT INTO account_columns (account_id, col_key, col_name, match_rules, order_index)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![account_id, col.col_key, col.col_name, match_rules, col.order_index],
+        )
+        .map_err(|e| format!("插入列配置失败: {e}"))?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 根据账号的列映射规则，解析 gh_status 对应的列 key。
+/// 遍历所有列，逐一检查 match_rules JSON 数组是否包含该 gh_status。
+/// 若命中，返回该列的 col_key；否则返回 None（由 sync 回退到默认逻辑）。
+pub fn resolve_column_from_gh_status(
+    conn: &Connection,
+    account_id: i64,
+    gh_status: &str,
+) -> Option<String> {
+    if gh_status.is_empty() {
+        return None;
+    }
+    let columns = list_account_columns(conn, account_id).ok()?;
+    for col in &columns {
+        if let Ok(rules) = serde_json::from_str::<Vec<String>>(&col.match_rules) {
+            if rules.iter().any(|r| r == gh_status) {
+                return Some(col.col_key.clone());
+            }
+        }
+    }
+    None
+}
+
+/// v0.3.27+：导入记事。按内容 `content` 去重，已存在则跳过；保留导入文件的
+/// 创建/更新时间。返回是否真正插入（`true`=新插入，`false`=重复跳过）。
+pub fn import_note(
+    conn: &Connection,
+    content: &str,
+    label: &str,
+    created_at: i64,
+    updated_at: i64,
+) -> Result<bool, String> {
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM notes WHERE content = ?1)",
+            [content],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("查重记事失败: {e}"))?;
+    if exists {
+        return Ok(false);
+    }
+    conn.execute(
+        "INSERT INTO notes (content, label, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![content, label, created_at, updated_at],
+    )
+    .map_err(|e| format!("导入记事失败: {e}"))?;
+    Ok(true)
 }
