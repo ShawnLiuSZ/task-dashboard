@@ -2,6 +2,10 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.40 (2026-09-07) — Custom-column Project status dropdown config (#95)**
+  - **#95 custom-column mapping dropdown**: the custom-column editor replaces the "match rules" text input with a **Project V2 status dropdown multi-select (chips) + free-text append**. Options come from the account's `list_project_statuses`, avoiding manual value guessing that caused silent mismatches. Saving still writes the `matchRules` JSON array; backend logic and storage are unchanged and backward-compatible with existing hand-entered rules. See [docs/issue-95-status-mapping-dropdown.md](./issue-95-status-mapping-dropdown.md).
+  - **Verification**: `npx tsc --noEmit`, `npm run i18n:check` (zh-CN / en-US 177 keys each) pass.
+
 - **v0.3.39 (2026-09-07) — Audit cleanup wrap-up (#72 #73 #80)**
   - **#72 board-mode dropdown status option**: verified `status / project / custom` options all exist (completed with v0.3.29 #64); no code change, issue closed.
   - **#73 MCP serverInfo version injection**: removed hardcoded `SERVER_VERSION = "0.3.24"` from `mcp.rs`, switch to `env!("CARGO_PKG_VERSION")` for single-source versioning. Doc-compliance wrap-up — restore CHANGELOG references for orphan KBs: create [docs/issue-55-update-check.md](./issue-55-update-check.md) and reference [docs/issue-54-auth-account-refresh.md](./issue-54-auth-account-refresh.md), [docs/issue-55-update-check.md](./issue-55-update-check.md), [docs/issue-56-project-status-order.md](./issue-56-project-status-order.md).

@@ -6,6 +6,10 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.40（2026-09-07）— 自定义列 Project status 下拉配置（#95）**
+
+  - **#95 自定义列映射下拉配置**：自定义列配置界面把「匹配规则」文本框改为 **Project V2 status 下拉多选（chips）+ 自由输入追加**。可选项来自该账号 `list_project_statuses`，避免手填猜值导致匹配失败；保存仍写 `matchRules` JSON 数组，后端逻辑与存储零改动、向后兼容既有手填配置。详见 [docs/issue-95-status-mapping-dropdown.md](./issue-95-status-mapping-dropdown.md)。
+
 - **v0.3.39（2026-09-07）— 审计清理收尾（#72 #73 #80）**
 
   - **#72 看板模式下拉补 status 选项**：核验确认 `status / project / custom` 三个选项均已存在（v0.3.29 #64 一并补齐），无需代码改动，关闭 issue。
