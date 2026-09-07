@@ -2,6 +2,11 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.33 (2026-09-07) — MCP dual-implementation consistency fixes (#68 #79)**
+  - **Background**: the built-in MCP (Rust `mcp.rs`) and the portable fallback (Python `server.py`) behave differently on `delete_note` return key and `update_note_label` empty-label handling, so the same call yields different results across environments.
+  - **Changes**: **#68** `server.py::tool_delete_note` return key `id` → `note_id`, aligning with Rust. **#79** `server.py::tool_update_note_label` empty label now falls back to `low` instead of erroring, consistent with `tool_add_note` and Rust `normalize_note_label`.
+  - **Acceptance**: built-in app and portable server return/persist identically for `delete_note`, `update_note_label("")`, and `add_note("")`. See KB doc [docs/issue-68-79-mcp-consistency.md](./issue-68-79-mcp-consistency.md).
+
 - **v0.3.32 (2026-09-07) — PRs in Project V2 are no longer treated as issues (#67)**
   - **Background**: `fetch_project_issues` detected PRs by `pull_request`/`mergedAt`/`headRefOid`, but the GraphQL query did not select those fields, so the check was always false and PRs in Project V2 were pulled onto the board as issues.
   - **Changes**: added `__typename` to the `content` selection; the type check now skips via `content["__typename"] == "PullRequest"`, which is reliable and consistent with the query.

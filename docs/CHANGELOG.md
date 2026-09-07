@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.33（2026-09-07）— MCP 双实现一致性修复（#68 #79）**
+
+  - **背景**：内置 MCP（Rust `mcp.rs`）与便携兜底（Python `server.py`）在 `delete_note` 返回键、`update_note_label` 空标签处理上行为不一致，同一调用在不同环境下得到不同结果。
+
+  - **改动**：
+
+    - **#68**：`server.py::tool_delete_note` 返回键由 `id` 改为 `note_id`，与 Rust 端对齐。
+
+    - **#79**：`server.py::tool_update_note_label` 空标签由报错改为回落 `low`，与 `tool_add_note` 及 Rust `normalize_note_label` 统一。
+
+  - **验收**：内置 app 与便携 server 对 `delete_note`、`update_note_label("")`、`add_note("")` 返回/落库一致。详见知识库文档 [docs/issue-68-79-mcp-consistency.md](./issue-68-79-mcp-consistency.md)。
+
 - **v0.3.32（2026-09-07）— Project V2 中的 PR 不再被当作 issue 上板（#67）**
 
   - **背景**：`fetch_project_issues` 用 `pull_request`/`mergedAt`/`headRefOid` 判型，但 GraphQL 查询并未选取这些字段，判断恒为假，导致 Project V2 里的 PR 被当作 issue 抓上看板。
