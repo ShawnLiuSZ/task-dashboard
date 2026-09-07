@@ -6,6 +6,20 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.36（2026-09-07）— i18n 文本泄漏修复（#71）**
+
+  - **背景**：SettingsPanel「诊断 & 项目列表」诊断文本与 DetailPanel agent 下拉（豆包/智谱 GLM/通义灵码）为硬编码中文，英文界面下不随语言切换（issue #62 已识别范围之外的新遗漏）。
+
+  - **改动**：纯展示层接入 i18n。
+
+    - DetailPanel：`AGENTS` 三项中文 label 增加 `i18nKey`；新增 `agentLabel(value, t)` helper，下拉与「记录于 {agent}」回显统一翻译。
+
+    - SettingsPanel：`diagnoseProject` 组装文本改为 `t()` 插值。
+
+    - 双语 locale 新增 `agents.doubao/glm/tongyi` 与 `settings.diag*` 共 8 个 key。
+
+  - **验证**：`npm run i18n:check` 通过（zh/en 各 192 key）、`npx tsc --noEmit` 通过。详见知识库文档 [docs/issue-71-i18n-leaks.md](./issue-71-i18n-leaks.md)。
+
 - **v0.3.35（2026-09-07）— run_sync 并发同步去重（#69）**
 
   - **背景**：Tray「立即同步」、启动同步、定时同步、前端 `sync_now` 多入口互不感知，可并发触发全量同步；`sync::run` 持 `db` 锁跑 5 次 Search + 1 次 GraphQL（5~15s），并发时背靠背排队、阻塞 UI 并放大 GitHub 限流。

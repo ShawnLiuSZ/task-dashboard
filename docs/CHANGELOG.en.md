@@ -2,6 +2,11 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.36 (2026-09-07) — Fix i18n text leaks (#71)**
+  - **Background**: the SettingsPanel "Diagnose & Project List" diagnostic text and the DetailPanel agent dropdown (Doubao/Zhipu GLM/Tongyi Lingma) were hardcoded Chinese and did not follow the UI language (outside the scope already covered by #62).
+  - **Changes**: display-only i18n wiring. **DetailPanel**: the three Chinese agent labels get an `i18nKey`; new `agentLabel(value, t)` helper unifies translation for the dropdown and the "recorded at {agent}" echo. **SettingsPanel**: `diagnoseProject` composes text via `t()` interpolation. Locales gain 8 keys (`agents.doubao/glm/tongyi`, `settings.diag*`).
+  - **Verification**: `npm run i18n:check` passes (192 keys each), `npx tsc --noEmit` passes. See KB doc [docs/issue-71-i18n-leaks.md](./issue-71-i18n-leaks.md).
+
 - **v0.3.35 (2026-09-07) — Deduplicate concurrent `run_sync` (#69)**
   - **Background**: multiple entry points (Tray "sync now", startup sync, scheduled sync, frontend `sync_now`) are unaware of each other and can run full syncs concurrently; `sync::run` holds the `db` lock across 5 Search + 1 GraphQL calls (5–15s), queuing back-to-back runs that block the UI and amplify GitHub rate limits.
   - **Changes**: added a `syncing: AtomicBool` dedup flag to `AppState` and a `SyncGuard` (acquire via `swap`/reset on `Drop`). **`lib.rs::run_sync`** and **`commands.rs::sync_now`** share the same flag — when a sync is in progress, auto entry points skip silently and the manual button returns "sync in progress".
