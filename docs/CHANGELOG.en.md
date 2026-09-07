@@ -2,8 +2,8 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **v0.3.40 (2026-09-07) — Custom-column Project status dropdown config (#95)**
-  - **#95 custom-column mapping dropdown**: the custom-column editor replaces the "match rules" text input with a **Project V2 status dropdown multi-select (chips) + free-text append**. Options come from the account's `list_project_statuses`, avoiding manual value guessing that caused silent mismatches. Saving still writes the `matchRules` JSON array; backend logic and storage are unchanged and backward-compatible with existing hand-entered rules. See [docs/issue-95-status-mapping-dropdown.md](./issue-95-status-mapping-dropdown.md).
+- **v0.3.40 (2026-09-07) — Settings tab layout + custom-column Project status mapping (#95)**
+  - **#95 custom-column Project status mapping config**: the settings panel is now **tab-based (General / Column Mapping / Diagnose)**, and custom-column config is its own page with a close button in the title bar. The "column key (colKey)" concept is removed — `col_key` is auto-generated, so users only need to **enter a column display name and select the matched Project statuses (multi-select chips + free-text)**, which save to the `matchRules` JSON array. Backend logic and storage are unchanged and backward-compatible. See [docs/issue-95-status-mapping-dropdown.md](./issue-95-status-mapping-dropdown.md).
   - **Verification**: `npx tsc --noEmit`, `npm run i18n:check` (zh-CN / en-US 177 keys each) pass.
 
 - **v0.3.39 (2026-09-07) — Audit cleanup wrap-up (#72 #73 #80)**

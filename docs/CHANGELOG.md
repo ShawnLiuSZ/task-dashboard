@@ -6,9 +6,9 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **v0.3.40（2026-09-07）— 自定义列 Project status 下拉配置（#95）**
+- **v0.3.40（2026-09-07）— 设置面板 tab 化 + 自定义列映射下拉配置（#95）**
 
-  - **#95 自定义列映射下拉配置**：自定义列配置界面把「匹配规则」文本框改为 **Project V2 status 下拉多选（chips）+ 自由输入追加**。可选项来自该账号 `list_project_statuses`，避免手填猜值导致匹配失败；保存仍写 `matchRules` JSON 数组，后端逻辑与存储零改动、向后兼容既有手填配置。详见 [docs/issue-95-status-mapping-dropdown.md](./issue-95-status-mapping-dropdown.md)。
+  - **#95 自定义列 Project status 映射配置**：设置面板改为 **tab 切换（基础设置 / 自定义列映射 / 诊断）**，自定义列配置独立成页、标题栏加关闭按钮。自定义列编辑移除「列标识(colKey)」概念 —— col_key 由系统自动生成，**用户只需填列显示名称 + 下选匹配的 Project status（下拉多选 chips + 自由输入）**，保存写 `matchRules` JSON 数组，后端逻辑与存储零改动、向后兼容。详见 [docs/issue-95-status-mapping-dropdown.md](./issue-95-status-mapping-dropdown.md)。
 
 - **v0.3.39（2026-09-07）— 审计清理收尾（#72 #73 #80）**
 
