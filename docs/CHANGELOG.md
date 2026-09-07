@@ -6,6 +6,16 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.35（2026-09-07）— run_sync 并发同步去重（#69）**
+
+  - **背景**：Tray「立即同步」、启动同步、定时同步、前端 `sync_now` 多入口互不感知，可并发触发全量同步；`sync::run` 持 `db` 锁跑 5 次 Search + 1 次 GraphQL（5~15s），并发时背靠背排队、阻塞 UI 并放大 GitHub 限流。
+
+  - **改动**：`AppState` 新增 `syncing: AtomicBool` 去重标志；新增 `SyncGuard`（`acquire` 抢占 / `Drop` 复位）。
+
+    - `lib.rs::run_sync` 与 `commands.rs::sync_now` 统一走同一把标志：已有同步在跑时自动入口静默跳过、手动入口返回「同步进行中」。
+
+  - **验证**：新增单测 `sync_guard_dedupes_concurrent_acquisition` 覆盖抢占去重与释放复位；`cargo test` lib 23 passed。详见知识库文档 [docs/issue-69-sync-dedup.md](./issue-69-sync-dedup.md)。
+
 - **v0.3.34（2026-09-07）— update_task_status 校验 status 合法性（#70）**
 
   - **背景**：前端 `update_task_status` 把传入 status 直接写入 `tasks.status`，不校验合法性；拼错的非四态值或已删除的自定义列名落库后任务不属于任何列，从看板静默「消失」。
