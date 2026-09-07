@@ -6,6 +6,11 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.44（2026-09-07）— 首启自动清除 Gatekeeper 隔离标记，MCP 免 sudo 开箱即用（#101）**
+
+  - **#101 自动清除自身 quarantine**：macOS 首次启动在 `setup()` 用 `xattr` 检测主二进制（`taskboard mcp`）是否带 `com.apple.quarantine`，存在即 `xattr -dr` 递归清除（当前用户拥有自身 bundle，**无需 sudo**）。GUI 放行一次后自动清理，此后 MCP 客户端 spawn 不再触发 Gatekeeper 慢评估，根治「MCP 连接 30s 超时」。详见 [docs/issue-101-quarantine-autoclear.md](./issue-101-quarantine-autoclear.md)。
+  - **验证**：`cargo check`（macOS）通过；验收为多机手动（清除后 `xattr -l` 无 quarantine 标记、MCP 工具可发现可调用）。
+
 - **v0.3.43（2026-09-07）— 看板列展示方式改为每账号配置（#99）**
 
   - **#99 每账号列展示方式**：移除顶栏展示方式切换下拉；在设置面板「自定义列」tab 按账号独立选择 status/project/custom（存 `meta` 的 `board_mode:<id>`，未配置默认 project）。切换账号后看板按该账号模式展示。自定义列视图下任务卡片右上角显示 `project.status` 彩色徽章（复用 20 色系，同状态同色）。

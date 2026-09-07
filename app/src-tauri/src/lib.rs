@@ -17,6 +17,58 @@ mod mcp;
 mod oauth;
 mod sync;
 
+/// #101：macOS 首次启动自动清除自身可执行文件上的 `com.apple.quarantine`。
+///
+/// 背景：本 App 为 ad-hoc 签名（`signingIdentity = "-"`，未公证）。Gatekeeper 会对带
+/// quarantine 标记的二进制做首次评估，使 MCP 客户端 spawn 主二进制（`taskboard mcp`）时
+/// 拖慢 / 拦截握手 → `connection timed out after 30000ms`。
+///
+/// 关键事实：当前登录用户拥有自身 bundle，移除自身文件的 quarantine **无需 sudo**。
+/// 因此只要 GUI 打开过一次（Gatekeeper 放行一次），即可在启动时自动递归清除，此后 MCP
+/// 子进程 spawn 不再触发慢评估。返回是否发生清除，供前端弹一次性提示。
+#[cfg(target_os = "macos")]
+pub fn autoclear_self_quarantine() -> bool {
+    use std::process::Command;
+
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let path = exe.to_string_lossy().into_owned();
+
+    let has_quarantine = |p: &str| -> bool {
+        Command::new("xattr")
+            .arg("-l")
+            .arg(p)
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("com.apple.quarantine"))
+            .unwrap_or(false)
+    };
+
+    if !has_quarantine(&path) {
+        return false;
+    }
+    // 递归清除自身 quarantine（当前用户拥有自身 bundle，免 root）。
+    let removed = Command::new("xattr")
+        .arg("-dr")
+        .arg("com.apple.quarantine")
+        .arg(&path)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    !has_quarantine(&path) || removed
+}
+
+/// 启动时执行 #101 自动清除并可外发一次性提示事件。
+#[cfg(target_os = "macos")]
+pub fn autoclear_self_quarantine_and_notify(app: &AppHandle) {
+    if autoclear_self_quarantine() {
+        let msg = "已自动清除应用的 Gatekeeper 隔离标记，重新连接 MCP 即可。";
+        let _ = app.emit("quarantine-cleared", msg);
+        eprintln!("[#101] quarantine cleared for self executable");
+    }
+}
+
 /// 同步进行中去重标志：true 表示已有一次同步正在跑，后续触发直接跳过。
 /// 防止 Tray「立即同步」、启动同步、定时同步、前端按钮并发时背靠背跑多次全量同步。
 pub struct AppState {
@@ -178,6 +230,10 @@ pub fn run_mcp() {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            // #101：macOS 首启自动清除自身 quarantine，免 sudo 修复 MCP 连接超时。
+            #[cfg(target_os = "macos")]
+            autoclear_self_quarantine_and_notify(app.handle());
+
             let handle = app.handle().clone();
             let conn = db::init(&handle).map_err(|e| {
                 Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
