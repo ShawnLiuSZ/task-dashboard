@@ -2,6 +2,10 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.40 (2026-09-07) — Settings tab layout + custom-column Project status mapping (#95)**
+  - **#95 custom-column Project status mapping config**: the settings panel is now **tab-based (General / Column Mapping / Diagnose)**, and custom-column config is its own page with a close button in the title bar. The "column key (colKey)" concept is removed — `col_key` is auto-generated, so users only need to **enter a column display name and select the matched Project statuses (multi-select chips + free-text)**, which save to the `matchRules` JSON array. Backend logic and storage are unchanged and backward-compatible. See [docs/issue-95-status-mapping-dropdown.md](./issue-95-status-mapping-dropdown.md).
+  - **Verification**: `npx tsc --noEmit`, `npm run i18n:check` (zh-CN / en-US 177 keys each) pass.
+
 - **v0.3.39 (2026-09-07) — Audit cleanup wrap-up (#72 #73 #80)**
   - **#72 board-mode dropdown status option**: verified `status / project / custom` options all exist (completed with v0.3.29 #64); no code change, issue closed.
   - **#73 MCP serverInfo version injection**: removed hardcoded `SERVER_VERSION = "0.3.24"` from `mcp.rs`, switch to `env!("CARGO_PKG_VERSION")` for single-source versioning. Doc-compliance wrap-up — restore CHANGELOG references for orphan KBs: create [docs/issue-55-update-check.md](./issue-55-update-check.md) and reference [docs/issue-54-auth-account-refresh.md](./issue-54-auth-account-refresh.md), [docs/issue-55-update-check.md](./issue-55-update-check.md), [docs/issue-56-project-status-order.md](./issue-56-project-status-order.md).
