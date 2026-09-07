@@ -2,6 +2,11 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.38 (2026-09-07) — TaskCard repo color & all-accounts dropdown fixes (#77 #78)**
+  - **Background**: the four-state view's `TaskCard` missed `repoIndex` so repo labels shared a single color; on `viewMode=all` the account dropdown was still switchable but had no effect on the list, creating ambiguity.
+  - **Changes**: **#77** build a `repoIndexMap` in the four-state view and pass `repoIndex`, building separately per view so repo labels get distinct colors alphabetically. **#78** disable the account dropdown when `viewMode=all` and set the tooltip to clarify aggregation (new i18n key `topbar.switchAccountAll`).
+  - **Verification**: `npx tsc --noEmit` and `npm run i18n:check` (193 keys each) pass. See KB doc [docs/issue-77-78-card-board-fixes.md](./issue-77-78-card-board-fixes.md).
+
 - **v0.3.37 (2026-09-07) — NotesPanel shortcut & DetailPanel timer fixes (#75 #76)**
   - **Background**: NotesPanel's ⌘/Ctrl+Enter shortcut bypassed the `adding` guard, creating duplicate notes on repeated presses; DetailPanel's bare `setTimeout` in `copyToClipboard` was never cleared, firing `setCopiedKey` after unmount (setState on unmounted component).
   - **Changes**: **#75** the shortcut now requires `!adding && draft.trim()`, matching the add button's disabled condition — repeated presses / empty draft no longer trigger. **#76** `copyToClipboard` manages the reset timer via `useRef` (clear-old-then-store-new to avoid stacking); a cleanup `useEffect` clears the timer on unmount.

@@ -3,6 +3,7 @@
   "topbar.singleAccount": "Single account",
   "topbar.allAccounts": "All accounts",
   "topbar.switchAccount": "Switch active account",
+  "topbar.switchAccountAll": "Disabled in All-accounts view: tasks are aggregated across accounts",
   "topbar.noAccounts": "(not configured)",
   "topbar.noPat": "PAT not configured",
   "topbar.notLoggedIn": "Not signed in",

@@ -258,7 +258,12 @@ function BoardApp() {
             className="select"
             value={settings?.activeAccountId ?? 0}
             onChange={(e) => void handleSwitchAccount(Number(e.target.value))}
-            title={t("topbar.switchAccount")}
+            title={
+              settings?.viewMode === "all"
+                ? t("topbar.switchAccountAll")
+                : t("topbar.switchAccount")
+            }
+            disabled={settings?.viewMode === "all"}
           >
             {(settings?.accounts ?? []).length === 0 && (
               <option value={0}>{t("topbar.noAccounts")}</option>

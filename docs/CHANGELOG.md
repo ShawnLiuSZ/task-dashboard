@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.38（2026-09-07）— TaskCard 仓库颜色与全部账号下拉修复（#77 #78）**
+
+  - **背景**：四态列视图的 TaskCard 漏传 `repoIndex`，仓库标签恒同色；`viewMode=all` 时账号下拉仍可切换但对列表无影响，语义含混。
+
+  - **改动**：
+
+    - **#77**：四态视图构建 `repoIndexMap` 并为 TaskCard 传 `repoIndex`，各视图独立构建，仓库标签按字母序取不同颜色。
+
+    - **#78**：`viewMode=all` 时账号下拉 `disabled`，`title` 提示聚合语义（新增 i18n key `topbar.switchAccountAll`）。
+
+  - **验证**：`npx tsc --noEmit`、`npm run i18n:check`（zh/en 各 193 key）通过。详见知识库文档 [docs/issue-77-78-card-board-fixes.md](./issue-77-78-card-board-fixes.md)。
+
 - **v0.3.37（2026-09-07）— NotesPanel 快捷键与 DetailPanel 定时器修复（#75 #76）**
 
   - **背景**：NotesPanel Ctrl/⌘+Enter 快捷键绕过 `adding` 守卫，连按产生重复记事；DetailPanel `copyToClipboard` 的裸 `setTimeout` 未清理，组件卸载后仍触发 `setCopiedKey`（在已卸载组件上 setState）。

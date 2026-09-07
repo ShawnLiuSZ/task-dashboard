@@ -1,6 +1,6 @@
 [package]
 name = "taskboard"
-version = "0.3.37"
+version = "0.3.38"
 description = "GitHub 个人任务看板"
 authors = ["liushizhao"]
 edition = "2021"

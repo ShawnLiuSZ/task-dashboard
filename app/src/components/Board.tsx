@@ -207,6 +207,10 @@ export default function Board({
 
   // 四态列视图（默认）
   const byStatus = (s: StatusKey) => tasks.filter((task) => task.status === s);
+  // 构建 repo name -> 颜色索引映射（与 project 视图一致，取不同颜色）
+  const allRepos = [...new Set(tasks.map((t) => t.repo))].sort();
+  const repoIndexMap = new Map<string, number>();
+  allRepos.forEach((r, i) => repoIndexMap.set(r, i));
 
   return (
     <div className="board">
@@ -228,6 +232,7 @@ export default function Board({
                   accountLabel={accounts?.get(task.accountId)?.label}
                   active={task.key === selected}
                   onClick={() => onSelect(task.key)}
+                  repoIndex={repoIndexMap.get(task.repo) ?? 0}
                 />
               ))}
             </div>
