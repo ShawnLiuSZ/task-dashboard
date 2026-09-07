@@ -6,6 +6,16 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.39（2026-09-07）— 审计清理收尾（#72 #73 #80）**
+
+  - **#72 看板模式下拉补 status 选项**：核验确认 `status / project / custom` 三个选项均已存在（v0.3.29 #64 一并补齐），无需代码改动，关闭 issue。
+
+  - **#73 MCP serverInfo 版本注入**：`mcp.rs` 删除硬编码 `SERVER_VERSION = "0.3.24"`，改用 `env!("CARGO_PKG_VERSION")`，与发版三处版本保持单点一致，避免 serverInfo 版本落后。文档合规收尾——为孤岛 KB 恢复 CHANGELOG 引用：补建 [docs/issue-55-update-check.md](./issue-55-update-check.md)，并在本条目引用 [docs/issue-54-auth-account-refresh.md](./issue-54-auth-account-refresh.md)、[docs/issue-55-update-check.md](./issue-55-update-check.md)、[docs/issue-56-project-status-order.md](./issue-56-project-status-order.md)。
+
+  - **#80 清理 i18n 死 key**（共 21 个）：移除已不存在的「Label 状态映射」「Label 列顺序」两套 UI 的残留 key（`settings.labelMapping.*`、`settings.labelColumns.*`、`settings.labelMappingsTitle/Desc`、`settings.labelColumnsTitle/Desc`）及废弃的看板模式 `settings.boardModeLabel`、`settings.boardModeLabelOnly`。zh-CN / en-US 各由 193 → 172 个 key，双语一致。
+
+  - **验证**：`npm run i18n:check`（zh/en 各 172 key）、`npx tsc --noEmit`、`cargo check` 均通过。
+
 - **v0.3.38（2026-09-07）— TaskCard 仓库颜色与全部账号下拉修复（#77 #78）**
 
   - **背景**：四态列视图的 TaskCard 漏传 `repoIndex`，仓库标签恒同色；`viewMode=all` 时账号下拉仍可切换但对列表无影响，语义含混。

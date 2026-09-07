@@ -2,6 +2,12 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.39 (2026-09-07) — Audit cleanup wrap-up (#72 #73 #80)**
+  - **#72 board-mode dropdown status option**: verified `status / project / custom` options all exist (completed with v0.3.29 #64); no code change, issue closed.
+  - **#73 MCP serverInfo version injection**: removed hardcoded `SERVER_VERSION = "0.3.24"` from `mcp.rs`, switch to `env!("CARGO_PKG_VERSION")` for single-source versioning. Doc-compliance wrap-up — restore CHANGELOG references for orphan KBs: create [docs/issue-55-update-check.md](./issue-55-update-check.md) and reference [docs/issue-54-auth-account-refresh.md](./issue-54-auth-account-refresh.md), [docs/issue-55-update-check.md](./issue-55-update-check.md), [docs/issue-56-project-status-order.md](./issue-56-project-status-order.md).
+  - **#80 remove 21 dead i18n keys**: leftover keys from the removed "Label status mapping" and "Label column order" UIs (`settings.labelMapping.*`, `settings.labelColumns.*`, `settings.labelMappingsTitle/Desc`, `settings.labelColumnsTitle/Desc`) plus stale `settings.boardModeLabel`, `settings.boardModeLabelOnly`. zh-CN / en-US now 172 keys each, bilingual consistent.
+  - **Verification**: `npm run i18n:check` (172 keys each), `npx tsc --noEmit`, `cargo check` all pass.
+
 - **v0.3.38 (2026-09-07) — TaskCard repo color & all-accounts dropdown fixes (#77 #78)**
   - **Background**: the four-state view's `TaskCard` missed `repoIndex` so repo labels shared a single color; on `viewMode=all` the account dropdown was still switchable but had no effect on the list, creating ambiguity.
   - **Changes**: **#77** build a `repoIndexMap` in the four-state view and pass `repoIndex`, building separately per view so repo labels get distinct colors alphabetically. **#78** disable the account dropdown when `viewMode=all` and set the tooltip to clarify aggregation (new i18n key `topbar.switchAccountAll`).
