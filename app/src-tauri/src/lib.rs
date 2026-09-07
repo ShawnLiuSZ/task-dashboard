@@ -106,30 +106,41 @@ mod tests {
     }
 }
 
+/// 打开专用于同步的独立连接。
+///
+/// 同步会跨大量 GitHub 网络 I/O 反复写库，若与 UI 命令共享 `AppState.db` 的
+/// `Mutex<Connection>`，同步期间所有读取命令（设置/账号/同步日志/自定义列等面板）
+/// 都要排队等锁——这些命令又跑在主线程，表现为 macOS beachball、鼠标卡死转圈。
+/// 改为独立连接后，同步不再占用共享锁：WAL + `busy_timeout` 保证多连接并发安全
+/// （读不阻塞，写互斥按 busy_timeout 依次排队）。
+fn open_sync_conn(app: &AppHandle) -> Result<Connection, String> {
+    db::open_db(&db::db_path(app)?)
+}
+
 /// 执行一次同步，并刷新菜单栏角标、通知前端刷新列表。
 pub fn run_sync(app: &AppHandle) -> Option<sync::SyncResult> {
-    // v0.3.35+：并发去重。已有同步在跑（Tray/启动/定时/前端按钮并发触发）时直接跳过本次，
-    // 避免背靠背跑多次全量同步：既阻塞 UI（持 db 锁）又放大 GitHub 限流。
+    // 并发去重。已有同步在跑（Tray/启动/定时/前端按钮并发触发）时直接跳过本次，
+    // 避免背靠背跑多次全量同步：既放大 GitHub 限流又阻塞编辑。
     let state = app.state::<AppState>();
     let _in_progress = SyncGuard::acquire(&state.syncing)?;
 
-    let state = app.state::<AppState>();
-    // v0.3.16+：检查是否有可用账号（accounts 表）或旧版 PAT（兼容）。
+    // 同步使用独立连接，避免长持有共享 `AppState.db` 的 Mutex（见 open_sync_conn 注释）。
+    let conn = match open_sync_conn(app) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[sync] 打开同步连接失败: {}", e);
+            return None;
+        }
+    };
+
+    // 检查是否有可用账号（accounts 表）或旧版 PAT（兼容）。
     // 不存在则跳过本次、记错误、清错误信息。
     // 之所以跳过而非报错：避免自动同步在用户未配置时反复循环报错刷屏。
     let has_accounts = {
-        let conn = match state.db.lock() {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("[sync] db lock 失败: {}", e);
-                return None;
-            }
-        };
         let accounts = db::list_accounts(&conn).unwrap_or_default();
         !accounts.is_empty() || !db::get_setting(&conn, "pat_token").is_empty()
     };
     if !has_accounts {
-        let conn = state.db.lock().ok()?;
         let _ = db::set_setting(
             &conn,
             "last_sync_error",
@@ -137,25 +148,16 @@ pub fn run_sync(app: &AppHandle) -> Option<sync::SyncResult> {
         );
         return None;
     }
-    let result = {
-        let conn = match state.db.lock() {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("[sync] db lock 失败: {}", e);
-                return None;
-            }
-        };
-        match sync::run(&conn) {
-            Ok(r) => {
-                // 成功同步：清掉旧错误信息，banner 自动消失。
-                let _ = db::set_setting(&conn, "last_sync_error", "");
-                Some(r)
-            }
-            Err(e) => {
-                eprintln!("[sync] 同步失败: {}", e);
-                let _ = db::set_setting(&conn, "last_sync_error", &e);
-                None
-            }
+    let result = match sync::run(&conn) {
+        Ok(r) => {
+            // 成功同步：清掉旧错误信息，banner 自动消失。
+            let _ = db::set_setting(&conn, "last_sync_error", "");
+            Some(r)
+        }
+        Err(e) => {
+            eprintln!("[sync] 同步失败: {}", e);
+            let _ = db::set_setting(&conn, "last_sync_error", &e);
+            None
         }
     };
     refresh_tray(app);

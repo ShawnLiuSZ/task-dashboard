@@ -187,7 +187,9 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncResult, String> {
         // 与 lib.rs::run_sync 同一去重标志：已有同步在跑则拒绝本次，避免并发触发背靠背全量同步。
         let _in_progress = crate::SyncGuard::acquire(&st.syncing)
             .ok_or_else(|| "已有同步进行中，请稍后再试".to_string())?;
-        let conn = st.db.lock().map_err(|e| e.to_string())?;
+        // 用独立连接跑同步：不持有共享 `AppState.db` 的 Mutex 跨网络 I/O，避免阻塞
+        // 主线程上的 UI 读命令（设置/账号/同步日志等面板）。见 lib.rs::open_sync_conn。
+        let conn = crate::db::open_db(&crate::db::db_path(&handle)?)?;
         crate::sync::run(&conn)
     })
     .await
