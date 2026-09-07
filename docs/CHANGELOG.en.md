@@ -2,6 +2,11 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.31 (2026-09-07) — Reset DetailPanel session state on task switch (#66)**
+  - **Background**: `DetailPanel` initializes `sessionInput`/`agent`/`handoff` via `useState(task.sessionId)`, which only reads on first mount; when the selected task changes without the panel unmounting, state is not reset and the previous task's session/handoff can be written into the current task.
+  - **Changes**: `App.tsx` adds `key={selectedTask.key}` to `<DetailPanel>` so switching tasks forces a remount and state initializes from the new task.
+  - **Acceptance**: switching directly to another task (panel open) no longer shows the previous task's session/handoff values; switching back to the same task does not lose unsaved edits. See KB doc [docs/issue-66-detailpanel-session-reset.md](./issue-66-detailpanel-session-reset.md).
+
 - **v0.3.30 (2026-09-07) — Fix tasks wrongly removed on empty search results (#65)**
   - **Background**: when the Search API returns 422, `search()` treated it as "no results"; partial search-source failures let real related tasks be marked stale and removed from the board (data-loss risk).
   - **Changes**: **#65a** `github.rs::search()` — a 422 (including 422/non-2xx after rate-limit retry) now returns `Err` instead of an empty result, so it is recorded into `failed` and downstream can tell the search pipeline is incomplete. **#65b** `sync.rs::sync_account()` stale cleanup — when any search source fails, tasks still open are only un-staled and kept (not deleted); confirmed closed tasks are still marked done as before.

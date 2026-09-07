@@ -6,6 +6,14 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.31（2026-09-07）— DetailPanel 切换任务时会话状态重置（#66）**
+
+  - **背景**：DetailPanel 的 `sessionInput`/`agent`/`handoff` 用 `useState(task.sessionId)` 初始化但只在首次挂载取值，切换选中任务时组件未卸载、state 不重置，可能把上一个任务的会话/交接误写到当前任务。
+
+  - **改动**：`App.tsx` 给 `<DetailPanel>` 加 `key={selectedTask.key}`，任务切换时强制重挂载、状态随新任务初始化。
+
+  - **验收**：不关闭面板直接切到另一任务时，会话/交接输入不再残留上一任务的旧值；切回同一任务不丢未保存编辑。详见知识库文档 [docs/issue-66-detailpanel-session-reset.md](./issue-66-detailpanel-session-reset.md)。
+
 - **v0.3.30（2026-09-07）— 空搜索结果误删看板任务修复（#65）**
 
   - **背景**：Search API 返回 422 时 `search()` 误当「空结果」，部分搜索源失败会让真实关联任务被标记陈旧后移出看板（数据丢失风险）。

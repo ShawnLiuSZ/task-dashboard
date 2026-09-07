@@ -403,6 +403,7 @@ function BoardApp() {
             title={t("detail.clickBackdropClose")}
           />
           <DetailPanel
+            key={selectedTask.key}
             task={selectedTask}
             onClose={() => setSelected(null)}
             onChanged={() => {
