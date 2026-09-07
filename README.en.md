@@ -108,9 +108,17 @@ PRD §6 planned a "MCP Server + Skill" so AI agents automatically maintain the b
 }
 ```
 
-> Path note: the above is the default install location (`/Applications/TaskBoard.app/...`). If you installed elsewhere, point `command` at your actual `TaskBoard.app/Contents/MacOS/taskboard` absolute path. If the app is **not installed and you use the `server.py` fallback**, set it to `"command": "python3", "args": ["/path/to/mcp_server/server.py"]`.
+> **Platform-specific `command` paths**:
 >
-> Note: a registered WorkBuddy MCP must be "trusted" on its connectors page before it activates; for codex / cursor etc., fill in the same `command` + `args` per each tool's own MCP config location.
+> | Platform | Default path |
+> |---|---|
+> | macOS | `/Applications/TaskBoard.app/Contents/MacOS/taskboard` |
+> | Windows | `C:\Program Files\TaskBoard\taskboard.exe` |
+> | Linux (deb) | `/usr/bin/taskboard` |
+>
+> If you installed to a non-default location, change `command` to the actual `taskboard` binary path. If the app is **not installed and you use the `server.py` fallback**, set it to `"command": "python3", "args": ["/path/to/mcp_server/server.py"]`.
+>
+> WorkBuddy has it registered; trust it on its connectors page. For other agents (codex / cursor / opencode, etc.), fill in the same `command` + `args` per each tool's own MCP config location.
 
 ### Making agents actually hook in (trigger logic)
 
