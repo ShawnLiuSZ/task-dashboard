@@ -6,6 +6,10 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.46（开发中）— MCP 接入文档完善：关于页按平台展示、README 覆盖全平台（#109）**
+
+  - **#109 MCP 全平台文档**：AboutPanel 通过 `navigator.userAgent` 检测当前平台，动态生成 macOS / Windows / Linux 对应 command 路径的 MCP snippet；README 新增三平台路径表格，收敛为单个 agent 完整配置示例。详见 [docs/issue-109-mcp-platform-docs.md](./issue-109-mcp-platform-docs.md)。
+
 - **v0.3.45（2026-09-07）— 记事导出默认写入设备下载目录（#103）**
 
   - **#103 导出默认下载目录**：`export_notes` 新增可选 `target_dir`；未传时经 `dirs::download_dir()` 落到系统真实下载目录（macOS `~/Downloads` / Windows `%USERPROFILE%\Downloads` / Linux `$XDG_DOWNLOAD_DIR`），取不到/不可写时回退应用数据目录 `notes-backup/`。新增 `resolve_export_dir` 做优先级 + 可写校验。**零新依赖**（`dirs` 已在用）。前端导出成功提示本就展示完整 `path`。详见 [docs/issue-103-notes-export-download.md](./issue-103-notes-export-download.md)。
