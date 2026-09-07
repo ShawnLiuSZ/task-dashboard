@@ -136,6 +136,7 @@
   "settings.customColumns.empty": "No columns configured, add one",
   "settings.customColumns.saved": "Column config saved",
   "settings.customColumns.noStatus": "No selectable Project status for this account yet; add custom match values below.",
+  "settings.customColumns.usedElsewhere": "Already used by another column; duplicate is not allowed.",
   "settings.customColumns.otherValue": "Type a custom match value, then Enter or Add",
   "settings.customColumns.addRule": "Add",
   "settings.customColumns.selected": "Selected match values",

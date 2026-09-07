@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useI18n, type LangMode } from "../i18n";
 import type { AccountColumn, Settings } from "../types";
@@ -14,6 +14,19 @@ const PRESETS = [15, 30, 60, 120, 240];
 // 自动生成稳定的自定义列标识（col_key 是任务落库的 status 值，需唯一但不需用户输入）
 function genColKey(): string {
   return `col_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
+// 解析列的 matchRules（JSON 数组或逗号分隔）为去重的 status 字符串数组。
+function parseMatchRules(matchRules: string): string[] {
+  try {
+    const arr = JSON.parse(matchRules);
+    if (Array.isArray(arr)) {
+      return [...new Set(arr.filter((s): s is string => typeof s === "string").map((s) => s.trim()).filter((s) => s.length > 0))];
+    }
+  } catch {
+    // 兼容旧数据：逗号分隔
+  }
+  return [...new Set(matchRules.split(/[,，]/).map((s) => s.trim()).filter((s) => s.length > 0))];
 }
 
 type SettingsTab = "base" | "columns" | "diagnose";
@@ -191,9 +204,23 @@ export default function SettingsPanel({
     setRuleInput("");
   };
 
+  // v0.3.42+：已被「其它列」选用的 status —— 新建列时这些值不可再选（置灰去重）。
+  // 正在编辑的列自身不算重复，允许保留其既有选值（删除则恢复可选）。
+  const usedElsewhere = useMemo(() => {
+    const used = new Set<string>();
+    const editingIndex = editingCol?.index ?? -1;
+    columns.forEach((col, idx) => {
+      if (idx === editingIndex) return;
+      parseMatchRules(col.matchRules).forEach((s) => used.add(s));
+    });
+    return used;
+  }, [columns, editingCol]);
+
   const toggleRule = (v: string) => {
     const vv = v.trim();
     if (!vv) return;
+    // 已被其它列使用的 status 禁止重复添加（本列已选中需允许移除，故放行已选中值）。
+    if (usedElsewhere.has(vv) && !ruleChips.includes(vv)) return;
     setRuleChips((prev) => (prev.includes(vv) ? prev.filter((x) => x !== vv) : [...prev, vv]));
   };
 
@@ -405,17 +432,21 @@ export default function SettingsPanel({
                   <div style={{ marginTop: 4 }}>
                     {availableStatuses.map((s) => {
                       const on = ruleChips.includes(s);
+                      const disabled = usedElsewhere.has(s) && !on;
                       return (
                         <button
                           key={`st_${s}`}
                           type="button"
-                          onClick={() => toggleRule(s)}
+                          onClick={() => !disabled && toggleRule(s)}
+                          disabled={disabled}
+                          title={disabled ? t("settings.customColumns.usedElsewhere") : undefined}
                           style={{
                             padding: "3px 10px",
                             margin: "0 6px 6px 0",
                             borderRadius: 999,
                             border: "1px solid var(--border)",
-                            cursor: "pointer",
+                            cursor: disabled ? "not-allowed" : "pointer",
+                            opacity: disabled ? 0.45 : 1,
                             background: on ? "var(--accent, #4f6ef7)" : "transparent",
                             color: on ? "#fff" : "inherit",
                           }}

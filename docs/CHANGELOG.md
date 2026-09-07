@@ -6,6 +6,11 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.42（2026-09-07）— 自定义列映射去重（#98）**
+
+  - **#98 新建列时已使用 status 置灰去重**：设置面板「自定义列」新建/编辑列时，已被**其它列**选用的 Project status 置灰且不可再次选中（`usedElsewhere` 由 `columns` + `editingCol` 实时派生；`toggleRule` 兜底拦截，覆盖自由输入路径）；正在编辑的列自身占用项保留可选，删除列后其占用项自动恢复可选。纯前端改动、零后端/schema 变更。新增 i18n key `settings.customColumns.usedElsewhere`。
+  - **验证**：`npm run i18n:check`（zh/en 各 178 key）、`npx tsc --noEmit`、`npm test`（3 例）通过。详见 [docs/issue-98-dedup-col-status.md](./issue-98-dedup-col-status.md)。
+
 - **v0.3.41（2026-09-07）— 首次启动 UI 卡死转圈修复（#97）**
 
   - **#97 设置 / 关于 / 账号 / 同步日志 面板卡死**：根因是启动同步把整段 **GitHub 网络 I/O** 包在共享 `AppState.db` 的 `Mutex<Connection>` 里长持有，导致这些面板触发的读命令（同步非 async，跑在主线程）排队等锁 → macOS beachball、鼠标卡死转圈。修复：`run_sync` / `sync_now` 改用**独立 DB 连接**（`open_sync_conn`，复用 WAL + `busy_timeout`），同步不再占用共享锁，UI 随到随取。零新依赖、零 schema 变更、对外接口不变。
