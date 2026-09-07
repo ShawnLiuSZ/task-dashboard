@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -16,8 +17,11 @@ mod mcp;
 mod oauth;
 mod sync;
 
+/// 同步进行中去重标志：true 表示已有一次同步正在跑，后续触发直接跳过。
+/// 防止 Tray「立即同步」、启动同步、定时同步、前端按钮并发时背靠背跑多次全量同步。
 pub struct AppState {
     pub db: Mutex<Connection>,
+    pub syncing: AtomicBool,
 }
 
 const TRAY_ID: &str = "main";
@@ -67,8 +71,48 @@ fn refresh_tray(app: &AppHandle) {
     }
 }
 
+/// 同步进行中 RAII 标记：函数返回（含提前 return）时自动复位 `syncing`。
+/// `acquire` 返回 `None` 表示已有同步在跑（去重），调用方应直接跳过本次触发。
+pub(crate) struct SyncGuard<'a>(pub(crate) &'a AtomicBool);
+impl<'a> SyncGuard<'a> {
+    pub(crate) fn acquire(flag: &'a AtomicBool) -> Option<Self> {
+        if flag.swap(true, Ordering::SeqCst) {
+            None
+        } else {
+            Some(SyncGuard(flag))
+        }
+    }
+}
+impl Drop for SyncGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_guard_dedupes_concurrent_acquisition() {
+        let flag = AtomicBool::new(false);
+        let a = SyncGuard::acquire(&flag).expect("首次应可获取");
+        // 已有 guard 持有期间，再次获取应去重返回 None
+        assert!(SyncGuard::acquire(&flag).is_none(), "并发第二次获取应被去重");
+        drop(a);
+        // guard 释放后应能再次获取
+        assert!(SyncGuard::acquire(&flag).is_some(), "释放后应可重新获取");
+        assert!(!flag.load(Ordering::SeqCst), "释放后标志应复位");
+    }
+}
+
 /// 执行一次同步，并刷新菜单栏角标、通知前端刷新列表。
 pub fn run_sync(app: &AppHandle) -> Option<sync::SyncResult> {
+    // v0.3.35+：并发去重。已有同步在跑（Tray/启动/定时/前端按钮并发触发）时直接跳过本次，
+    // 避免背靠背跑多次全量同步：既阻塞 UI（持 db 锁）又放大 GitHub 限流。
+    let state = app.state::<AppState>();
+    let _in_progress = SyncGuard::acquire(&state.syncing)?;
+
     let state = app.state::<AppState>();
     // v0.3.16+：检查是否有可用账号（accounts 表）或旧版 PAT（兼容）。
     // 不存在则跳过本次、记错误、清错误信息。
@@ -139,6 +183,7 @@ pub fn run() {
             })?;
             app.manage(AppState {
                 db: Mutex::new(conn),
+                syncing: AtomicBool::new(false),
             });
 
             let show_item = MenuItem::with_id(app, "show", "显示看板", true, None::<&str>)?;

@@ -2,6 +2,11 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.35 (2026-09-07) — Deduplicate concurrent `run_sync` (#69)**
+  - **Background**: multiple entry points (Tray "sync now", startup sync, scheduled sync, frontend `sync_now`) are unaware of each other and can run full syncs concurrently; `sync::run` holds the `db` lock across 5 Search + 1 GraphQL calls (5–15s), queuing back-to-back runs that block the UI and amplify GitHub rate limits.
+  - **Changes**: added a `syncing: AtomicBool` dedup flag to `AppState` and a `SyncGuard` (acquire via `swap`/reset on `Drop`). **`lib.rs::run_sync`** and **`commands.rs::sync_now`** share the same flag — when a sync is in progress, auto entry points skip silently and the manual button returns "sync in progress".
+  - **Verification**: new unit test `sync_guard_dedupes_concurrent_acquisition` covers acquisition dedup and reset-on-drop; `cargo test` lib 23 passed. See KB doc [docs/issue-69-sync-dedup.md](./issue-69-sync-dedup.md).
+
 - **v0.3.34 (2026-09-07) — validate `status` in `update_task_status` (#70)**
   - **Background**: the frontend `update_task_status` wrote the passed `status` straight into `tasks.status` with no validation; a mistyped non-four-state value or a deleted custom-column key leaves the task in no column, silently disappearing from the board.
   - **Changes**: unified the validation scope to "four states ∪ Chinese four states ∪ the task's account `account_columns::col_key`". **`commands.rs::update_task_status`** normalizes Chinese four states to English and adds `validate_task_status` — rejects non-four-state values that are not the account's custom columns and leaves the DB unchanged. **`mcp.rs::tool_update`** likewise validates the account's custom-column `col_key` (previously it rejected custom columns outright, inconsistent with the other entry).
