@@ -387,7 +387,7 @@ export default function NotesPanel() {
             rows={1}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !adding && draft.trim()) {
                 e.preventDefault();
                 void handleAdd();
               }

@@ -2,6 +2,11 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.37 (2026-09-07) — NotesPanel shortcut & DetailPanel timer fixes (#75 #76)**
+  - **Background**: NotesPanel's ⌘/Ctrl+Enter shortcut bypassed the `adding` guard, creating duplicate notes on repeated presses; DetailPanel's bare `setTimeout` in `copyToClipboard` was never cleared, firing `setCopiedKey` after unmount (setState on unmounted component).
+  - **Changes**: **#75** the shortcut now requires `!adding && draft.trim()`, matching the add button's disabled condition — repeated presses / empty draft no longer trigger. **#76** `copyToClipboard` manages the reset timer via `useRef` (clear-old-then-store-new to avoid stacking); a cleanup `useEffect` clears the timer on unmount.
+  - **Verification**: `npx tsc --noEmit` passes. See KB doc [docs/issue-75-76-ui-fixes.md](./issue-75-76-ui-fixes.md).
+
 - **v0.3.36 (2026-09-07) — Fix i18n text leaks (#71)**
   - **Background**: the SettingsPanel "Diagnose & Project List" diagnostic text and the DetailPanel agent dropdown (Doubao/Zhipu GLM/Tongyi Lingma) were hardcoded Chinese and did not follow the UI language (outside the scope already covered by #62).
   - **Changes**: display-only i18n wiring. **DetailPanel**: the three Chinese agent labels get an `i18nKey`; new `agentLabel(value, t)` helper unifies translation for the dropdown and the "recorded at {agent}" echo. **SettingsPanel**: `diagnoseProject` composes text via `t()` interpolation. Locales gain 8 keys (`agents.doubao/glm/tongyi`, `settings.diag*`).

@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.37（2026-09-07）— NotesPanel 快捷键与 DetailPanel 定时器修复（#75 #76）**
+
+  - **背景**：NotesPanel Ctrl/⌘+Enter 快捷键绕过 `adding` 守卫，连按产生重复记事；DetailPanel `copyToClipboard` 的裸 `setTimeout` 未清理，组件卸载后仍触发 `setCopiedKey`（在已卸载组件上 setState）。
+
+  - **改动**：
+
+    - **#75**：快捷键触发收紧为 `!adding && draft.trim()`，与添加按钮禁用条件一致，连按/空草稿不再触发。
+
+    - **#76**：`copyToClipboard` 改用 `useRef` 管理复位定时器（先清旧再存新，避免叠加）；新增卸载 `useEffect` 清理定时器。
+
+  - **验证**：`npx tsc --noEmit` 通过。详见知识库文档 [docs/issue-75-76-ui-fixes.md](./issue-75-76-ui-fixes.md)。
+
 - **v0.3.36（2026-09-07）— i18n 文本泄漏修复（#71）**
 
   - **背景**：SettingsPanel「诊断 & 项目列表」诊断文本与 DetailPanel agent 下拉（豆包/智谱 GLM/通义灵码）为硬编码中文，英文界面下不随语言切换（issue #62 已识别范围之外的新遗漏）。
