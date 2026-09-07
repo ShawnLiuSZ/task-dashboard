@@ -2,6 +2,11 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.34 (2026-09-07) — validate `status` in `update_task_status` (#70)**
+  - **Background**: the frontend `update_task_status` wrote the passed `status` straight into `tasks.status` with no validation; a mistyped non-four-state value or a deleted custom-column key leaves the task in no column, silently disappearing from the board.
+  - **Changes**: unified the validation scope to "four states ∪ Chinese four states ∪ the task's account `account_columns::col_key`". **`commands.rs::update_task_status`** normalizes Chinese four states to English and adds `validate_task_status` — rejects non-four-state values that are not the account's custom columns and leaves the DB unchanged. **`mcp.rs::tool_update`** likewise validates the account's custom-column `col_key` (previously it rejected custom columns outright, inconsistent with the other entry).
+  - **Verification**: new unit test covers four-state pass, account custom-column pass, and rejection of typos/unknown columns/missing tasks; `cargo test` lib 22 passed. See KB doc [docs/issue-70-status-validation.md](./issue-70-status-validation.md).
+
 - **v0.3.33 (2026-09-07) — MCP dual-implementation consistency fixes (#68 #79)**
   - **Background**: the built-in MCP (Rust `mcp.rs`) and the portable fallback (Python `server.py`) behave differently on `delete_note` return key and `update_note_label` empty-label handling, so the same call yields different results across environments.
   - **Changes**: **#68** `server.py::tool_delete_note` return key `id` → `note_id`, aligning with Rust. **#79** `server.py::tool_update_note_label` empty label now falls back to `low` instead of erroring, consistent with `tool_add_note` and Rust `normalize_note_label`.

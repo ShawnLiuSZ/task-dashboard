@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.34（2026-09-07）— update_task_status 校验 status 合法性（#70）**
+
+  - **背景**：前端 `update_task_status` 把传入 status 直接写入 `tasks.status`，不校验合法性；拼错的非四态值或已删除的自定义列名落库后任务不属于任何列，从看板静默「消失」。
+
+  - **改动**：校验口径统一为「四态 ∪ 中文四态 ∪ 该任务账号的 `account_columns::col_key`」。
+
+    - `commands.rs::update_task_status`：中文四态归一化到英文四态；新增 `validate_task_status`，非四态非该账号自定义列时拒绝且 DB 不改动。
+
+    - `mcp.rs::tool_update`：非四态时同样校验该账号自定义列 `col_key`，命中放行，否则拒绝（此前一律拒绝自定义列，口径不一致）。
+
+  - **验证**：新增单测覆盖四态放行、该账号自定义列放行、拼错/未知列/任务不存在拒绝；`cargo test` lib 22 passed。详见知识库文档 [docs/issue-70-status-validation.md](./issue-70-status-validation.md)。
+
 - **v0.3.33（2026-09-07）— MCP 双实现一致性修复（#68 #79）**
 
   - **背景**：内置 MCP（Rust `mcp.rs`）与便携兜底（Python `server.py`）在 `delete_note` 返回键、`update_note_label` 空标签处理上行为不一致，同一调用在不同环境下得到不同结果。
