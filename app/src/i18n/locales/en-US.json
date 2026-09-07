@@ -176,6 +176,5 @@
   "about.dataPath": "~/Library/Application Support/com.shawnliu.taskboard/taskboard.db",
   "about.mcpTitle": "MCP setup (AI agents maintain the board)",
   "about.mcpDesc": "The app ships a built-in \"taskboard mcp\" subcommand (stdio JSON-RPC reading the same SQLite, zero Python deps). Add it to your agent's MCP config:",
-  "about.mcpWorkbuddy": "WorkBuddy has it registered; trust it on its connector page. For claude-code, add to ~/.claude.json:",
   "about.mcpFallback": "Portable fallback (no app installed): use python3 + mcp_server/server.py; override the DB path with the TASKBOARD_DB env var."
 }
