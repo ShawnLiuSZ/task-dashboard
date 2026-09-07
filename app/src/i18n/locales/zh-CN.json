@@ -176,6 +176,5 @@
   "about.dataPath": "~/Library/Application Support/com.shawnliu.taskboard/taskboard.db",
   "about.mcpTitle": "MCP 接入（AI Agent 自动维护看板）",
   "about.mcpDesc": "App 内置 taskboard mcp 子命令（stdio JSON-RPC，复用同一 SQLite，零 Python 依赖）。在 Agent 的 MCP 配置中加入：",
-  "about.mcpWorkbuddy": "WorkBuddy 已内置注册，在其连接器页「信任」后激活；claude-code 于 ~/.claude.json 添加：",
   "about.mcpFallback": "便携兜底（未装 App）：command 改为 python3 + mcp_server/server.py；数据库路径可用 TASKBOARD_DB 环境变量覆盖。"
 }

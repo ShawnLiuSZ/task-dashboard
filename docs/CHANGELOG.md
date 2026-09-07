@@ -6,6 +6,14 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.48（2026-09-07）— 扩展平台支持与 CI 优化（#118 #119 #120 #121 #122）**
+
+  - **#118 扩展平台支持**：GitHub Actions release 工作流新增 macOS ARM/x64、Windows ARM64 双架构构建支持。详见 [docs/issue-118-expand-platform-support.md](./issue-118-expand-platform-support.md)。
+  - **#119 扩展 Release 打包矩阵**：补齐 arm64 全平台、rpm 与独立便携 zip 格式。macOS/Windows/Linux 均支持双架构，新增 zip/msi/rpm 格式。详见 [docs/issue-119-expand-release-matrix.md](./issue-119-expand-release-matrix.md)。
+  - **#120 CI 弃用警告修复**：升级 GitHub Actions（checkout@v5、setup-node@v5、tauri-action@v2），Node.js 版本升级到 22 LTS，消除弃用警告。详见 [docs/issue-120-upgrade-ci-actions.md](./issue-120-upgrade-ci-actions.md)。
+  - **#121 关于页删除专属话术**：移除 AboutPanel 中 WorkBuddy/claude-code 专属性 agent 接入话术，收敛为通用说明。详见 [docs/issue-121-remove-workbuddy-text.md](./issue-121-remove-workbuddy-text.md)。
+  - **#122 数据库路径全平台标注**：README 与 Rust 注释覆盖 Windows/Linux/macOS 三平台数据库路径。详见 [docs/issue-122-db-path-docs.md](./issue-122-db-path-docs.md)。
+
 - **v0.3.47（2026-09-07）— MCP stdio 分帧格式修复（#115）**
 
   - **#115 MCP stdio 分帧格式修复**：`read_message` 改为双格式自动识别——首字节 `{` 走 NDJSON（MCP 规范），否则走 Content-Length 头（LSP 历史兼容）；`write_message` 回以与请求相同的分帧格式。根治 Claude Code / Cursor 等标准 MCP 客户端连接时 `connection timed out after 30000ms`。失败路径新增 stderr 诊断输出。Rust + Python 两份实现同步修改。详见 [docs/mcp-stdio-framing-ndjson.md](./mcp-stdio-framing-ndjson.md)。
