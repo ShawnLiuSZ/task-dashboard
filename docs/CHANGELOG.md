@@ -6,10 +6,11 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **v0.3.46（开发中）— 设置页看板列模式精简（#108）+ MCP 接入文档完善（#109）**
+- **v0.3.46（开发中）— 设置页看板列模式精简（#108）+ MCP 接入文档完善（#109）+ MCP stdio 分帧格式修复（#115）**
 
   - **#108 看板列模式精简**：移除下拉菜单中的「四态列」选项，仅保留「Project 状态列」和「自定义列」两项；`boardModeProject` 文案精简为「Project 状态列」；历史 `boardMode="status"` 账号在 Board.tsx 渲染层优雅降级为 `project`，零 schema 变更。设置页 modal 宽度从 460px 调整为 520px。详见 [docs/issue-108-simplify-board-mode.md](./issue-108-simplify-board-mode.md)。
   - **#109 MCP 全平台文档**：AboutPanel 通过 `navigator.userAgent` 检测当前平台，动态生成 macOS / Windows / Linux 对应 command 路径的 MCP snippet；README 新增三平台路径表格，收敛为单个 agent 完整配置示例。详见 [docs/issue-109-mcp-platform-docs.md](./issue-109-mcp-platform-docs.md)。
+  - **#115 MCP stdio 分帧格式修复**：`read_message` 改为双格式自动识别——首字节 `{` 走 NDJSON（MCP 规范），否则走 Content-Length 头（LSP 历史兼容）；`write_message` 回以与请求相同的分帧格式。根治 Claude Code / Cursor 等标准 MCP 客户端连接时 `connection timed out after 30000ms`。失败路径新增 stderr 诊断输出。Rust + Python 两份实现同步修改。详见 [docs/mcp-stdio-framing-ndjson.md](./mcp-stdio-framing-ndjson.md)。
 
 - **v0.3.45（2026-09-07）— 记事导出默认写入设备下载目录（#103）**
 
