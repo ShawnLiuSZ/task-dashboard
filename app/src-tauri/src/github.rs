@@ -694,6 +694,7 @@ impl GitHubClient {
                   pageInfo {{ hasNextPage endCursor }}
                   nodes {{
                     content {{
+                      __typename
                       ... on Issue {{
                         number title url state
                         repository {{ name owner {{ login }} }}
@@ -723,11 +724,10 @@ impl GitHubClient {
                 .ok_or_else(|| "项目条目格式异常".to_string())?;
             for n in page_nodes {
                 let content = &n["content"];
-                // 跳过 PR
-                if content.get("pull_request").is_some()
-                    || content.get("mergedAt").is_some()
-                    || content.get("headRefOid").is_some()
-                {
+                // 跳过 PR：按 GraphQL __typename 可靠判型。
+                // 修复前尝试用 pull_request/mergedAt/headRefOid 字段判型，但查询并未选取这些字段，
+                // 判断恒为假，导致 Project V2 中的 PR 被当作 issue 上板。
+                if content["__typename"].as_str() == Some("PullRequest") {
                     continue;
                 }
                 let num = match content["number"].as_i64() {

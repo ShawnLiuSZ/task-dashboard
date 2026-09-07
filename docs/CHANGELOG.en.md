@@ -2,6 +2,11 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.32 (2026-09-07) — PRs in Project V2 are no longer treated as issues (#67)**
+  - **Background**: `fetch_project_issues` detected PRs by `pull_request`/`mergedAt`/`headRefOid`, but the GraphQL query did not select those fields, so the check was always false and PRs in Project V2 were pulled onto the board as issues.
+  - **Changes**: added `__typename` to the `content` selection; the type check now skips via `content["__typename"] == "PullRequest"`, which is reliable and consistent with the query.
+  - **Acceptance**: when a Project contains both issues and PRs, PRs no longer appear on the board after sync while issues still do (and do not occupy status columns). See KB doc [docs/issue-67-pr-typename.md](./issue-67-pr-typename.md).
+
 - **v0.3.31 (2026-09-07) — Reset DetailPanel session state on task switch (#66)**
   - **Background**: `DetailPanel` initializes `sessionInput`/`agent`/`handoff` via `useState(task.sessionId)`, which only reads on first mount; when the selected task changes without the panel unmounting, state is not reset and the previous task's session/handoff can be written into the current task.
   - **Changes**: `App.tsx` adds `key={selectedTask.key}` to `<DetailPanel>` so switching tasks forces a remount and state initializes from the new task.

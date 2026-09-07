@@ -6,6 +6,14 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.32（2026-09-07）— Project V2 中的 PR 不再被当作 issue 上板（#67）**
+
+  - **背景**：`fetch_project_issues` 用 `pull_request`/`mergedAt`/`headRefOid` 判型，但 GraphQL 查询并未选取这些字段，判断恒为假，导致 Project V2 里的 PR 被当作 issue 抓上看板。
+
+  - **改动**：GraphQL 查询 `content` 区新增 `__typename`；判型改用 `content["__typename"] == "PullRequest"` 跳过 PR，可靠且与查询强一致。
+
+  - **验收**：Project 中同时含 issue 与 PR 时，同步后 PR 不再上板，issue 正常上板、不占状态列。详见知识库文档 [docs/issue-67-pr-typename.md](./issue-67-pr-typename.md)。
+
 - **v0.3.31（2026-09-07）— DetailPanel 切换任务时会话状态重置（#66）**
 
   - **背景**：DetailPanel 的 `sessionInput`/`agent`/`handoff` 用 `useState(task.sessionId)` 初始化但只在首次挂载取值，切换选中任务时组件未卸载、state 不重置，可能把上一个任务的会话/交接误写到当前任务。
