@@ -61,7 +61,11 @@ xattr -l "/Applications/TaskBoard.app"                   # 是否带 com.apple.q
 
 ### 3. 修复（无需签名证书，本机自用）
 
-清除隔离属性（一次 sudo，之后永久）：
+**优先：App 首启自动清除（v0.3.44+）。** 只要用 GUI 打开过一次 TaskBoard（首次会让你放行一次，属系统强制行为），App 会在启动时
+检测并自动 `xattr -dr` 清除自身 bundle 的 quarantine——**无需 sudo、无需手动命令**。规则：一次 GUI 放行 + 自动清除 = 永久可用。
+见 [issue-101-quarantine-autoclear.md](./issue-101-quarantine-autoclear.md)。
+
+若 App 完全打不开（被 Gatekeeper 硬拦、进不了首启逻辑），才需要手动 fallback：
 
 ```bash
 sudo xattr -dr com.apple.quarantine "/Applications/TaskBoard.app"
@@ -86,7 +90,8 @@ xattr -l "/Applications/TaskBoard.app/Contents/MacOS/taskboard"
 
 ## 接口 / 行为变更
 
-无代码 / API 变更，纯环境排障。
+- v0.3.44+：新增 macOS 启动期自动清除自身 quarantine 逻辑（`taskboard` 主二进制的 `com.apple.quarantine`），无需手动 sudo；无外部 API / MCP 工具变更。见 [issue-101-quarantine-autoclear.md](./issue-101-quarantine-autoclear.md)。
+- 此前的方案（手动 `sudo xattr -dr`）保留为「App 完全打不开」时的 fallback。
 
 ## 数据 / Schema 变更
 
@@ -101,5 +106,6 @@ xattr -l "/Applications/TaskBoard.app/Contents/MacOS/taskboard"
 ## 相关链接
 
 - [Issue #87](https://github.com/ShawnLiuSZ/task-dashboard/issues/87)（诊断评论：issuecomment-5564810715、issuecomment-5564841800）
+- [Issue #101](https://github.com/ShawnLiuSZ/task-dashboard/issues/101)（自动清除）
 - [docs/CHANGELOG.md](./CHANGELOG.md)
 - MCP 工具契约：[mcp_server/AGENT_INSTRUCTIONS.md](../mcp_server/AGENT_INSTRUCTIONS.md)
