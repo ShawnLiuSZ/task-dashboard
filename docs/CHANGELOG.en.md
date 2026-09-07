@@ -2,6 +2,11 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.29 (2026-09-06) — Board mode persistence and consistency fixes (#64 #72 #74)**
+  - **Background**: a second audit found three defects in the board mode (boardMode) system that made custom columns unusable, caused tasks to disappear from the four-state view, and prevented mode switches from persisting.
+  - **Changes**: **#64 boardMode persistence** — backend `Settings` struct adds `board_mode` field; `get_settings` reads it back from `meta.board_mode`; frontend serializes `setBoardMode` → `loadSettings` so the old value no longer overwrites the user's choice. **#72 restore four-state option** — board mode dropdown re-adds `status` (four-state) option; `Board.tsx` default changes from `status` to `project` to align with `db.rs` default. **#74 custom column gate** — `sync.rs` only applies custom column mapping when `board_mode == "custom"`, preventing tasks from being assigned a col_key status and vanishing from the four-state / Project views.
+  - **Acceptance**: board mode can be freely switched among status / project / custom and persists; sync under non-custom views no longer shunts tasks into custom columns; cargo check / tsc / i18n:check pass. See KB doc [docs/issue-64-board-mode-fixes.md](./issue-64-board-mode-fixes.md).
+
 - **v0.3.28 (2026-09-06) — Custom column mapping (#52)**
   - **Background**: each account may use a different set of GitHub Project Status values; the board needs per-account custom column mapping rules instead of only fixed four-state columns or Project Status columns.
   - **Changes**: backend adds `account_columns` table supporting per-account column config (col_key, col_name, match_rules, order_index); adds `list_account_columns` and `save_account_columns` Tauri commands; custom column mapping takes priority over label mapping and Project Status mapping in `sync.rs` status determination. Frontend `Board.tsx` adds `custom` mode rendering with dynamic columns per account config (unmatched tasks fall into "Unclassified" column); `App.tsx` adds "Custom Columns" option to the board mode dropdown; `SettingsPanel.tsx` adds column mapping editing UI (select account → column list → add/edit/delete → save). i18n adds 12 keys (zh-CN / en-US).

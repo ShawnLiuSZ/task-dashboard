@@ -139,6 +139,7 @@ fn sync_account(
     account: &crate::db::Account,
     pat: &str,
     now: i64,
+    board_mode: &str,
 ) -> Result<AccountSyncResult, String> {
     let client = github::GitHubClient::new(
         pat.to_string(),
@@ -346,8 +347,9 @@ fn sync_account(
             &labels_csv,
             &t.state,
         );
-        // v0.3.28+：检查自定义列映射（按账号的 account_columns 匹配 gh_status）
-        let column_status = if !gh_status_raw.is_empty() {
+        // v0.3.28+：检查自定义列映射（按账号的 account_columns 匹配 gh_status）。
+        // 仅当看板模式为 custom 时才生效，否则四态/Project 视图下任务会因 status 变成 col_key 而消失。
+        let column_status = if board_mode == "custom" && !gh_status_raw.is_empty() {
             crate::db::resolve_column_from_gh_status(conn, account.id, &gh_status_raw)
         } else {
             None
@@ -547,6 +549,9 @@ pub fn run(conn: &Connection) -> Result<SyncResult, String> {
     let active_id: i64 = crate::db::get_setting(conn, "active_account_id")
         .parse()
         .unwrap_or(0);
+    // v0.3.28+：看板列模式，决定是否启用自定义列映射（仅 custom 时写入 col_key）。
+    let board_mode = crate::db::get_setting(conn, "board_mode");
+    let board_mode = if board_mode.is_empty() { "project".to_string() } else { board_mode };
 
     let target: Vec<crate::db::Account> = match view_mode.as_str() {
         "all" => accounts.clone(),
@@ -589,7 +594,7 @@ pub fn run(conn: &Connection) -> Result<SyncResult, String> {
         }
         // 查找当前账号对应的日志 id
         let log_id = log_ids.iter().find(|(aid, _)| *aid == account.id).map(|(_, lid)| *lid);
-        match sync_account(conn, account, &pat, now) {
+        match sync_account(conn, account, &pat, now, &board_mode) {
             Ok(r) => {
                 total_added += r.added;
                 total_updated += r.updated;

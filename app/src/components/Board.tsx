@@ -67,7 +67,7 @@ export default function Board({
   selected,
   onSelect,
   accounts,
-  boardMode = "status",
+  boardMode = "project",
   projectStatuses,
   accountColumns,
 }: Props) {

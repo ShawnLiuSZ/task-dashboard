@@ -6,6 +6,20 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.29（2026-09-06）— 看板列模式持久化与一致性修复（#64 #72 #74）**
+
+  - **背景**：二次审计发现看板列模式（boardMode）体系存在三处缺陷，导致自定义列功能不可用、四态视图任务消失、模式切换不持久。
+
+  - **改动**：
+
+    - **#64 boardMode 持久化**：后端 `Settings` 结构体补齐 `board_mode` 字段，`get_settings` 从 `meta.board_mode` 读回；前端切换模式后 `setBoardMode` → `loadSettings` 串行执行，不再被旧值覆盖。
+
+    - **#72 四态选项恢复**：看板模式下拉补回 `status`（四态）选项；`Board.tsx` 默认值由 `status` 改为 `project`，与 `db.rs` 默认值对齐。
+
+    - **#74 自定义列门控**：`sync.rs` 中自定义列映射仅在 `board_mode == "custom"` 时生效，避免四态 / Project 视图下任务 status 被写成 col_key 后从看板消失。
+
+  - **验收**：看板模式可在 status / project / custom 间自由切换并持久化；非 custom 视图下同步不会把任务分到自定义列导致消失；cargo check / tsc / i18n:check 通过。详见知识库文档 [docs/issue-64-board-mode-fixes.md](./issue-64-board-mode-fixes.md)。
+
 - **v0.3.28（2026-09-06）— 自定义列映射（#52）**
 
   - **背景**：每个账号可能使用不同的 GitHub Project Status 值体系，看板需要支持按账号自定义列映射规则，而非只有固定的四态列或 Project Status 列。

@@ -55,6 +55,8 @@ pub struct Settings {
     pub active_account_id: i64,
     /// v0.3.16+：视图模式。'single'=仅当前激活账号；'all'=所有账号任务聚合。
     pub view_mode: String,
+    /// v0.3.21+：看板列模式。'status'=四态列；'project'=Project Status 列；'custom'=自定义列。
+    pub board_mode: String,
     /// v0.3.16+：所有账号列表（不含 PAT 本体）。
     pub accounts: Vec<Account>,
     /// v0.3.17+：GitHub OAuth Device Flow 的 client_id（注册 OAuth App 后填一次）。
@@ -263,6 +265,8 @@ pub fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settin
         .unwrap_or(0);
     let view_mode = crate::db::get_setting(&conn, "view_mode");
     let view_mode = if view_mode.is_empty() { "single".to_string() } else { view_mode };
+    let board_mode = crate::db::get_setting(&conn, "board_mode");
+    let board_mode = if board_mode.is_empty() { "project".to_string() } else { board_mode };
     Ok(Settings {
         schedule_minutes: crate::db::get_setting(&conn, "schedule_minutes")
             .parse::<u64>()
@@ -279,6 +283,7 @@ pub fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settin
         last_sync_error: crate::db::get_setting(&conn, "last_sync_error"),
         active_account_id,
         view_mode,
+        board_mode,
         accounts,
         oauth_client_id: crate::db::get_setting(&conn, "oauth_client_id"),
     })

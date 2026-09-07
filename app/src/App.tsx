@@ -347,7 +347,7 @@ function BoardApp() {
           </button>
         )}
 
-        {/* v0.3.21+：看板列模式切换（Project Status 列视图） */}
+        {/* v0.3.21+：看板列模式切换（status 四态 / project Project Status / custom 自定义列） */}
         <select
           className="select"
           value={settings?.boardMode ?? "project"}
@@ -367,9 +367,10 @@ function BoardApp() {
           }}
           title={t("settings.boardModeTitle")}
         >
+          <option value="status">{t("settings.boardModeStatus")}</option>
           <option value="project">{t("settings.boardModeProject")}</option>
-              <option value="custom">{t("settings.boardModeCustom")}</option>
-	        </select>
+          <option value="custom">{t("settings.boardModeCustom")}</option>
+        </select>
       </div>
 
       {(error || lastResult) && (
