@@ -55,9 +55,7 @@ pub struct Settings {
     pub active_account_id: i64,
     /// v0.3.16+：视图模式。'single'=仅当前激活账号；'all'=所有账号任务聚合。
     pub view_mode: String,
-    /// v0.3.21+：看板列模式。'status'=四态列；'project'=Project Status 列；'custom'=自定义列。
-    pub board_mode: String,
-    /// v0.3.16+：所有账号列表（不含 PAT 本体）。
+    /// v0.3.16+：所有账号列表（不含 PAT 本体）。每个账号带各自的 board_mode（v0.3.43+）。
     pub accounts: Vec<Account>,
     /// v0.3.17+：GitHub OAuth Device Flow 的 client_id（注册 OAuth App 后填一次）。
     pub oauth_client_id: String,
@@ -308,8 +306,6 @@ pub fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settin
         .unwrap_or(0);
     let view_mode = crate::db::get_setting(&conn, "view_mode");
     let view_mode = if view_mode.is_empty() { "single".to_string() } else { view_mode };
-    let board_mode = crate::db::get_setting(&conn, "board_mode");
-    let board_mode = if board_mode.is_empty() { "project".to_string() } else { board_mode };
     Ok(Settings {
         schedule_minutes: crate::db::get_setting(&conn, "schedule_minutes")
             .parse::<u64>()
@@ -326,7 +322,6 @@ pub fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settin
         last_sync_error: crate::db::get_setting(&conn, "last_sync_error"),
         active_account_id,
         view_mode,
-        board_mode,
         accounts,
         oauth_client_id: crate::db::get_setting(&conn, "oauth_client_id"),
     })
@@ -745,15 +740,20 @@ pub fn set_view_mode(state: State<'_, AppState>, mode: String) -> Result<(), Str
     Ok(())
 }
 
-/// 设置看板列模式：'status' / 'project' / 'custom'。
-	#[tauri::command]
-	pub fn set_board_mode(state: State<'_, AppState>, mode: String) -> Result<(), String> {
-	    if mode != "status" && mode != "project" && mode != "custom" {
-	        return Err(format!("非法看板模式: {mode}（应为 status / project / custom）"));
-	    }
+/// v0.3.43+：设置某账号的看板列展示方式（status/project/custom）。
+/// 每个账号独立配置，存于 meta `board_mode:<account_id>`；未配置默认 project。
+#[tauri::command]
+pub fn set_account_board_mode(
+    state: State<'_, AppState>,
+    account_id: i64,
+    mode: String,
+) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    crate::db::set_setting(&conn, "board_mode", &mode)?;
-    Ok(())
+    // 校验账号存在
+    if crate::db::get_account_pat(&conn, account_id).is_err() {
+        return Err(format!("账号 #{account_id} 不存在"));
+    }
+    crate::db::set_account_board_mode(&conn, account_id, &mode)
 }
 
 // ============================================================================

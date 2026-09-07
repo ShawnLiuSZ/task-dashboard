@@ -84,8 +84,9 @@ export const api = {
       orderIndex: input.orderIndex,
     }),
   deleteLabelMapping: (id: number) => invoke<void>("delete_label_mapping", { id }),
-  // v0.3.21+：看板列模式切换 + Label 列视图配置。
-  setBoardMode: (mode: BoardMode) => invoke<void>("set_board_mode", { mode }),
+  // v0.3.43+：按账号设置看板列展示方式（status/project/custom），在设置面板配置。
+  setAccountBoardMode: (accountId: number, mode: BoardMode) =>
+    invoke<void>("set_account_board_mode", { accountId, mode }),
   getLabelColumnsForAccount: (accountId: number) =>
     invoke<LabelMapping[]>("get_label_columns_for_account", { accountId }),
   // v0.3.22+：Project Status 诊断。

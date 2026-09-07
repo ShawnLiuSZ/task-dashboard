@@ -344,7 +344,38 @@ pub struct Account {
     /// 是否已配置 PAT（不回显 token 本体，避免泄漏）。
     pub has_pat: bool,
     pub is_default: bool,
+    /// v0.3.43+：该账号的看板列展示方式（status/project/custom），存于 meta 的 `board_mode:<id>`。
+    /// 未配置时默认 project。
+    pub board_mode: String,
     pub created_at: i64,
+}
+
+/// meta 表里按账号存储看板列展示方式的 key。
+pub fn account_board_mode_key(account_id: i64) -> String {
+    format!("board_mode:{}", account_id)
+}
+
+/// 读取某账号的看板列展示方式；未配置默认 project。
+pub fn get_account_board_mode(conn: &Connection, account_id: i64) -> String {
+    let v = get_setting(conn, &account_board_mode_key(account_id));
+    if v.is_empty() {
+        "project".to_string()
+    } else {
+        v
+    }
+}
+
+/// 校验看板列展示方式是否合法（status/project/custom）。
+pub fn is_valid_board_mode(mode: &str) -> bool {
+    matches!(mode, "status" | "project" | "custom")
+}
+
+/// 写入某账号的看板列展示方式（仅接受合法值）。
+pub fn set_account_board_mode(conn: &Connection, account_id: i64, mode: &str) -> Result<(), String> {
+    if !is_valid_board_mode(mode) {
+        return Err(format!("非法的看板列展示方式: {mode}"));
+    }
+    set_setting(conn, &account_board_mode_key(account_id), mode)
 }
 
 /// 列出全部账号，按 id 升序。
@@ -366,6 +397,7 @@ pub fn list_accounts(conn: &Connection) -> Result<Vec<Account>, String> {
                 org: r.get(3)?,
                 has_pat: !pat.is_empty(),
                 is_default: is_default != 0,
+                board_mode: get_account_board_mode(conn, r.get(0)?),
                 created_at: r.get(6)?,
             })
         })

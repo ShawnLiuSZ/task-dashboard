@@ -6,6 +6,12 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.43（2026-09-07）— 看板列展示方式改为每账号配置（#99）**
+
+  - **#99 每账号列展示方式**：移除顶栏展示方式切换下拉；在设置面板「自定义列」tab 按账号独立选择 status/project/custom（存 `meta` 的 `board_mode:<id>`，未配置默认 project）。切换账号后看板按该账号模式展示。自定义列视图下任务卡片右上角显示 `project.status` 彩色徽章（复用 20 色系，同状态同色）。
+  - **接口**：移除全局 `set_board_mode` 命令与 `Settings.board_mode` 字段；新增 `set_account_board_mode(account_id, mode)`；`accounts[]` 新增 `boardMode`。同步 `sync::run` 逐账号读取模式（仅该账号自己为 custom 才写 `col_key`）。零表结构变更、复用 `meta` 键值表。
+  - **验证**：`cargo test --lib`（新增 `account_board_mode_defaults_and_validates`，合计 24 例）、`npm run i18n:check`（zh/en 各 179 key）、`npx tsc --noEmit`、`npm test` 通过。详见 [docs/issue-99-board-mode-per-account.md](./issue-99-board-mode-per-account.md)。
+
 - **v0.3.42（2026-09-07）— 自定义列映射去重（#98）**
 
   - **#98 新建列时已使用 status 置灰去重**：设置面板「自定义列」新建/编辑列时，已被**其它列**选用的 Project status 置灰且不可再次选中（`usedElsewhere` 由 `columns` + `editingCol` 实时派生；`toggleRule` 兜底拦截，覆盖自由输入路径）；正在编辑的列自身占用项保留可选，删除列后其占用项自动恢复可选。纯前端改动、零后端/schema 变更。新增 i18n key `settings.customColumns.usedElsewhere`。
