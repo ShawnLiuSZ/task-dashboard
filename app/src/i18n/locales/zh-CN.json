@@ -123,9 +123,9 @@
   "settings.langEn": "English",
   "settings.boardModeTitle": "看板列模式",
   "settings.boardModeDesc": "为每个账号独立配置看板列展示方式：切换账号后按该账号配置展示，顶栏不再提供切换。",
-  "settings.boardModeStatus": "四态列（待处理/处理中/已处理/已完成）",
+
   "settings.loading": "加载中…",
-  "settings.boardModeProject": "Project 状态列（按 GitHub Project Status 分列）",
+  "settings.boardModeProject": "Project 状态列",
   "settings.boardModeCustom": "自定义列（按账号配置映射规则）",
   "settings.customColumnsTitle": "自定义列映射",
   "settings.customColumnsDesc": "新增/编辑列：填写列显示名称，并在下方选择该列应匹配的 Project 状态（多个可多选）；关闭的任务自动归入「已完成」。",
