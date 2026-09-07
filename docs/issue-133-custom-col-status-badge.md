@@ -35,6 +35,15 @@ if !columns.is_empty() {
 }
 ```
 
+### Bug 3: 自定义列模式下无列配置时徽章不显示
+
+**根因**：`Board.tsx` 默认四态列视图未传递 `showGhStatus`。当 `boardMode === "custom"` 但 `accountColumns` 为空时，回退到默认视图，徽章不显示。
+
+**修复**：在 `Board.tsx` 默认视图中传递 `showGhStatus={boardMode === "custom"}`：
+```tsx
+showGhStatus={boardMode === "custom"}
+```
+
 ## 接口 / 行为变更
 
 - 卡片右上角的 project.status 徽章现在正确右对齐显示
