@@ -1310,6 +1310,7 @@ pub fn list_account_columns(conn: &Connection, account_id: i64) -> Result<Vec<Ac
 
 /// 保存某账号的列配置（全量替换：先删后插，原子事务）。
 /// `columns` 为待保存的列列表，order_index 由调用方决定。
+/// 若列配置非空，自动将账号的 boardMode 设为 "custom"（确保同步时启用列映射）。
 pub fn save_account_columns(
     conn: &Connection,
     account_id: i64,
@@ -1328,6 +1329,14 @@ pub fn save_account_columns(
             rusqlite::params![account_id, col.col_key, col.col_name, match_rules, col.order_index],
         )
         .map_err(|e| format!("插入列配置失败: {e}"))?;
+    }
+    // v0.3.48+: 有列配置时自动启用 custom 模式（同步时才会写入 col_key）
+    if !columns.is_empty() {
+        let current = get_account_board_mode(&tx, account_id);
+        if current != "custom" {
+            set_account_board_mode(&tx, account_id, "custom")
+                .map_err(|e| format!("设置自定义列模式失败: {e}"))?;
+        }
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
