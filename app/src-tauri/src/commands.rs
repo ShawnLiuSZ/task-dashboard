@@ -1025,8 +1025,9 @@ pub fn delete_note(state: State<'_, AppState>, id: i64) -> Result<(), String> {
 
 /// 导出记事为 JSON 文件，返回写入的完整路径与条数。
 ///
-/// 写入位置固定为应用数据目录下 `notes-backup/`（macOS：
-/// `~/Library/Application Support/com.shawnliu.taskboard/notes-backup/`），
+/// 写入位置（v0.3.45+，#103）：优先用前端传入的 `target_dir`；未传则用系统「下载」目录
+/// （`dirs::download_dir()`：macOS `~/Downloads` / Windows `%USERPROFILE%\Downloads` /
+/// Linux `$XDG_DOWNLOAD_DIR`）。上述取不到或不可写时，回退应用数据目录 `notes-backup/`。
 /// 文件名 `notes-backup-YYYYMMDD-HHMMSS.json`。仅含记事业务数据，不含 token 等敏感信息。
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1035,13 +1036,41 @@ pub struct ExportNotesResult {
     pub count: usize,
 }
 
+/// #103：解析导出目标目录。优先级 target_dir → 系统下载目录 → 应用数据目录 `notes-backup/`。
+fn resolve_export_dir(target_dir: Option<&str>) -> Result<std::path::PathBuf, String> {
+    use std::path::PathBuf;
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(t) = target_dir {
+        if !t.trim().is_empty() {
+            candidates.push(PathBuf::from(t));
+        }
+    }
+    if let Some(dl) = dirs::download_dir() {
+        // download_dir 可能返回同 target_dir 的重复项，去重避免重复尝试。
+        if !candidates.iter().any(|c| c == &dl) {
+            candidates.push(dl);
+        }
+    }
+    for dir in candidates {
+        if std::fs::create_dir_all(&dir).is_ok() {
+            return Ok(dir);
+        }
+    }
+    let fallback = crate::db::data_dir()?.join("notes-backup");
+    std::fs::create_dir_all(&fallback).map_err(|e| format!("创建备份目录失败: {e}"))?;
+    Ok(fallback)
+}
+
 #[tauri::command]
-pub fn export_notes(state: State<'_, AppState>) -> Result<ExportNotesResult, String> {
+pub fn export_notes(
+    state: State<'_, AppState>,
+    target_dir: Option<String>,
+) -> Result<ExportNotesResult, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let notes = crate::db::list_notes(&conn)?;
 
-    let dir = crate::db::data_dir()?.join("notes-backup");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建备份目录失败: {e}"))?;
+    let dir = resolve_export_dir(target_dir.as_deref())?;
 
     let now = crate::sync::now_secs();
     let ts = format!(
@@ -1230,6 +1259,26 @@ mod tests {
         assert_eq!(hello.created_at, 100);
         assert_eq!(hello.updated_at, 200);
         assert_eq!(hello.label, "low");
+    }
+
+    // #103：导出目录解析 —— 空/空白 target 回退下载目录；合法 target 优先。
+    #[test]
+    fn resolve_export_dir_prefers_target_then_download() {
+        // 空白 target → 落到系统下载目录（或数据目录兜底）
+        for t in [Some(""), Some("   ")] {
+            let d = super::resolve_export_dir(t).unwrap();
+            let s = d.to_string_lossy();
+            assert!(
+                s.contains("Downloads") || s.contains("notes-backup"),
+                "未落到下载/兜底目录: {s}"
+            );
+        }
+        // 合法自定义目录优先于下载目录
+        let tmp = std::env::temp_dir().join(format!("tb_export_test_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let d2 = super::resolve_export_dir(Some(tmp.to_str().unwrap())).unwrap();
+        assert_eq!(d2, tmp);
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     // 校验 helper：helper_status 只放行四态，或该任务所属账号的自定义列 col_key。

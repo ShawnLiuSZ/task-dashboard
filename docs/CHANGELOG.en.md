@@ -2,6 +2,10 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.45 (2026-09-07) — Notes export defaults to the device downloads dir (#103)**
+  - **#103 export to downloads**: `export_notes` gains an optional `target_dir`; when omitted it writes via `dirs::download_dir()` to the real system download dir (macOS `~/Downloads` / Windows `%USERPROFILE%\Downloads` / Linux `$XDG_DOWNLOAD_DIR`), falling back to the app data dir's `notes-backup/` when unavailable/unwritable. Added `resolve_export_dir` for precedence + writability checks. **Zero new deps** (`dirs` already in use). The frontend success notice already shows the full `path`. See [docs/issue-103-notes-export-download.md](./issue-103-notes-export-download.md).
+  - **Verification**: `cargo check`; new unit test `resolve_export_dir_prefers_target_then_download` (26 total).
+
 - **v0.3.44 (2026-09-07) — Auto-clear Gatekeeper quarantine on first launch; MCP works out of the box without sudo (#101)**
   - **#101 self-quarantine auto-clear**: on macOS first launch, `setup()` detects `com.apple.quarantine` on the main binary (`taskboard mcp`) via `xattr` and recursively removes it (`xattr -dr`) when present — the current user owns its own bundle, so **no sudo** is needed. After one GUI approval, the app clears the quarantine itself; subsequent MCP clients spawn the binary without the slow Gatekeeper evaluation, fixing the "MCP connection timed out after 30000ms" issue. See [docs/issue-101-quarantine-autoclear.md](./issue-101-quarantine-autoclear.md).
   - **Verification**: `cargo check` (macOS) passes; acceptance is multi-machine manual (`xattr -l` shows no quarantine after launch, MCP tools discoverable/callable).

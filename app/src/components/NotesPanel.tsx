@@ -229,7 +229,7 @@ export default function NotesPanel() {
     [loadNotes],
   );
 
-  // v0.3.27+：导出全部记事为 JSON 文件到应用数据目录下的 notes-backup/。
+  // v0.3.27+：导出全部记事为 JSON 文件（v0.3.45+ 默认写入系统下载目录，展示完整路径）。
   const handleExport = useCallback(async () => {
     if (busy) return;
     setBusy("export");
