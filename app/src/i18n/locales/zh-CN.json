@@ -136,6 +136,7 @@
   "settings.customColumns.empty": "暂无列配置，请添加",
   "settings.customColumns.saved": "列配置已保存",
   "settings.customColumns.noStatus": "该账号暂无可用 Project 状态，可用下方输入框手动添加匹配值。",
+  "settings.customColumns.usedElsewhere": "该状态已被其它列使用，禁止重复添加",
   "settings.customColumns.otherValue": "输入自定义匹配值后回车或点添加",
   "settings.customColumns.addRule": "添加",
   "settings.customColumns.selected": "已选匹配值",
