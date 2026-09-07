@@ -2,10 +2,12 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **v0.3.46 (in progress) — Settings board mode simplified (#108) + MCP cross-platform docs (#109) + MCP stdio framing fix (#115)**
+- **v0.3.47 (2026-09-07) — MCP stdio framing fix (#115)**
+  - **#115 MCP stdio framing fix**: `read_message` now auto-detects framing format — first byte `{` triggers NDJSON (MCP spec), otherwise Content-Length header (LSP legacy compat); `write_message` responds in the same framing format as the request. Fixes `connection timed out after 30000ms` for Claude Code / Cursor and other standard MCP clients. Diagnostic stderr output added for silent exit paths. Both Rust and Python implementations updated in sync. See [docs/mcp-stdio-framing-ndjson.md](./mcp-stdio-framing-ndjson.md).
+
+- **v0.3.46 (2026-09-07) — Settings board mode simplified (#108) + MCP cross-platform docs (#109)**
   - **#108 board mode simplified**: removed the "Four-state columns" option from the settings dropdown, keeping only "Project Status Columns" and "Custom Columns"; simplified `boardModeProject` text; legacy `boardMode="status"` accounts gracefully degrade to `project` in Board.tsx — zero schema changes. Settings modal width increased from 460px to 520px. See [docs/issue-108-simplify-board-mode.md](./issue-108-simplify-board-mode.md).
   - **#109 MCP cross-platform docs**: AboutPanel detects the current OS via `navigator.userAgent` and renders the matching `command` path in the MCP snippet (macOS / Windows / Linux). README adds a platform-specific path table and consolidates to a single agent config example. See [docs/issue-109-mcp-platform-docs.md](./issue-109-mcp-platform-docs.md).
-  - **#115 MCP stdio framing fix**: `read_message` now auto-detects framing format — first byte `{` triggers NDJSON (MCP spec), otherwise Content-Length header (LSP legacy compat); `write_message` responds in the same framing format as the request. Fixes `connection timed out after 30000ms` for Claude Code / Cursor and other standard MCP clients. Diagnostic stderr output added for silent exit paths. Both Rust and Python implementations updated in sync. See [docs/mcp-stdio-framing-ndjson.md](./mcp-stdio-framing-ndjson.md).
 
 - **v0.3.45 (2026-09-07) — Notes export defaults to the device downloads dir (#103)**
   - **#103 export to downloads**: `export_notes` gains an optional `target_dir`; when omitted it writes via `dirs::download_dir()` to the real system download dir (macOS `~/Downloads` / Windows `%USERPROFILE%\Downloads` / Linux `$XDG_DOWNLOAD_DIR`), falling back to the app data dir's `notes-backup/` when unavailable/unwritable. Added `resolve_export_dir` for precedence + writability checks. **Zero new deps** (`dirs` already in use). The frontend success notice already shows the full `path`. See [docs/issue-103-notes-export-download.md](./issue-103-notes-export-download.md).
