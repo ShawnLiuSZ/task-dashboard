@@ -971,12 +971,19 @@ pub fn list_sync_logs(state: State<'_, AppState>, limit: Option<i64>) -> Result<
     crate::db::list_sync_logs(&conn, limit)
 }
 
-/// 清理超过 7 天的同步日志。
+/// 清理超过 30 天的同步日志。
 #[tauri::command]
 pub fn prune_sync_logs(state: State<'_, AppState>) -> Result<usize, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let now = crate::sync::now_secs();
     crate::db::prune_sync_logs(&conn, now)
+}
+
+/// 清空全部同步日志（不可恢复）。
+#[tauri::command]
+pub fn clear_sync_logs(state: State<'_, AppState>) -> Result<usize, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    crate::db::clear_sync_logs(&conn)
 }
 
 // ============================================================================

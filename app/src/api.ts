@@ -100,6 +100,7 @@ export const api = {
   listSyncLogs: (limit?: number) =>
     invoke<SyncLog[]>("list_sync_logs", { limit: limit ?? 50 }),
   pruneSyncLogs: () => invoke<number>("prune_sync_logs"),
+  clearSyncLogs: () => invoke<number>("clear_sync_logs"),
   // v0.3.24+：记事本管理。
   listNotes: () => invoke<Note[]>("list_notes"),
   addNote: (content: string, label?: string) =>
