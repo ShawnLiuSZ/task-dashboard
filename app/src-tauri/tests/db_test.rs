@@ -48,11 +48,11 @@ fn open_db_creates_schema_and_writes_defaults() {
         }
         assert!(!actual.is_empty(), "默认设置 {} 不应为空", k);
     }
-    // 任务表可写可读。
+    // 任务表可写可读（v0.3.50 起为 issue_key/issue_state 布局）。
     conn.execute(
-        "INSERT INTO tasks (key, owner, repo, number, title, url, gh_state,
+        "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
                             ownership, status, synced_at, account_id)
-         VALUES ('r#1','o','r',1,'t','u','open','assigned','todo',1,1)",
+         VALUES ('o/r#1','o','r',1,'t','u','open','assigned','todo',1,1)",
         [],
     )
     .expect("INSERT 任务必须成功");
@@ -107,17 +107,22 @@ fn insert_second_account_is_not_default() {
 #[test]
 fn insert_account_validates_required_fields() {
     let conn = fresh_db();
+    // label / login / pat 空 → Err
     assert!(db::insert_account(&conn, "", "alice", "o", "p").is_err());
     assert!(db::insert_account(&conn, "L", "", "o", "p").is_err());
-    assert!(db::insert_account(&conn, "L", "alice", "", "p").is_err());
     assert!(db::insert_account(&conn, "L", "alice", "o", "").is_err());
-    // 全部合法
-    assert!(db::insert_account(&conn, "  L  ", "  alice  ", "  o  ", "  p  ").is_ok());
+    // org 允许为空（个人账号无组织归属时可省略，见 db.rs insert_account）
+    assert!(db::insert_account(&conn, "L", "alice", "", "p").is_ok());
+    // 全部合法 + trim 生效
+    assert!(db::insert_account(&conn, "  L2  ", "  alice2  ", "  o2  ", "  p2  ").is_ok());
     let accs = db::list_accounts(&conn).unwrap();
-    // trim 必须生效
+    assert_eq!(accs.len(), 2, "org 为空的第一条 + 全量的第二条");
     assert_eq!(accs[0].label, "L");
     assert_eq!(accs[0].login, "alice");
-    assert_eq!(accs[0].org, "o");
+    assert_eq!(accs[0].org, "", "org 空应保留为空");
+    assert_eq!(accs[1].label, "L2", "trim 必须生效");
+    assert_eq!(accs[1].login, "alice2");
+    assert_eq!(accs[1].org, "o2");
 }
 
 #[test]
@@ -193,17 +198,17 @@ fn delete_account_blocks_default_and_orphan_task_id_kept() {
     let c = db::insert_account(&conn, "C", "carol", "FoodsUp", "ghp_c").unwrap();
     // 插一条归属 a（已删）的任务——account_id=1 是历史值
     conn.execute(
-        "INSERT INTO tasks (key, owner, repo, number, title, url, gh_state,
+        "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
                             ownership, status, synced_at, account_id)
-         VALUES ('r#1','o','r',1,'t','u','open','assigned','todo',1,?1)",
+         VALUES ('o/r#1','o','r',1,'t','u','open','assigned','todo',1,?1)",
         [a],
     )
     .unwrap();
     // 再插一条归属 b 的任务，删 b 后这条也应保留
     conn.execute(
-        "INSERT INTO tasks (key, owner, repo, number, title, url, gh_state,
+        "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
                             ownership, status, synced_at, account_id)
-         VALUES ('r#2','o','r',2,'t2','u2','open','assigned','todo',1,?1)",
+         VALUES ('o/r#2','o','r',2,'t2','u2','open','assigned','todo',1,?1)",
         [b],
     )
     .unwrap();
@@ -227,12 +232,11 @@ fn delete_account_blocks_default_and_orphan_task_id_kept() {
         .unwrap();
     assert_eq!(
         still_a, 1,
-        "归属已删账号的 task.account_id 必须保留，便于 UI 标注账号已删除"
+        "删除账号 b 不应影响已删账号 a 遗留的任务（account_id 保留，用于账号已删除徽章）"
     );
     assert_eq!(
-        still_b, 1,
-        "归属当前被删账号的 task.account_id 同样保留（孤儿任务）
-         ——不在 delete_account 路径上清除，因为任务本身可能还在被代理领着"
+        still_b, 0,
+        "删除账号 b 会级联删除其名下任务（delete_account 事务内 DELETE tasks）"
     );
 }
 
@@ -374,4 +378,178 @@ fn open_db_recovers_from_dirty_journal_file() {
         [],
     )
     .unwrap();
+}
+
+// ===== v0.3.50  tasks 表物理重建 ====================================
+
+/// 手工构造一个 v0.3.49 老库（含旧 `key`/`gh_state`/`gh_status` 以及 TEXT 型 updated_at），
+/// 模拟发布前登录过、`user_version=0` 的真实老库；再交给 open_db 触发 v2 物理重建。
+fn legacy_tasks_db(path: &std::path::Path) -> Connection {
+    let conn = Connection::open(path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS meta (
+           key TEXT PRIMARY KEY, value TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS tasks (
+           key          TEXT PRIMARY KEY,
+           owner        TEXT NOT NULL,
+           repo         TEXT NOT NULL,
+           number       INTEGER NOT NULL,
+           title        TEXT NOT NULL,
+           url          TEXT NOT NULL,
+           gh_state     TEXT NOT NULL,
+           ownership    TEXT NOT NULL,
+           status       TEXT NOT NULL DEFAULT 'todo',
+           session_id   TEXT, session_agent TEXT, session_at INTEGER,
+           candidate_done INTEGER NOT NULL DEFAULT 0,
+           stale        INTEGER NOT NULL DEFAULT 0,
+           gh_status    TEXT NOT NULL DEFAULT '',
+           assignees    TEXT NOT NULL DEFAULT '',
+           labels       TEXT NOT NULL DEFAULT '',
+           done_at      INTEGER NOT NULL DEFAULT 0,
+           mentioned    INTEGER NOT NULL DEFAULT 0,
+           comments_count INTEGER NOT NULL DEFAULT 0,
+           latest_comment_url TEXT NOT NULL DEFAULT '',
+           pr_number    INTEGER NOT NULL DEFAULT 0,
+           pr_url       TEXT NOT NULL DEFAULT '',
+           branch       TEXT NOT NULL DEFAULT '',
+           handoff      TEXT NOT NULL DEFAULT '',
+           updated_at   TEXT,
+           synced_at    INTEGER NOT NULL,
+           account_id   INTEGER NOT NULL DEFAULT 1
+         );",
+    )
+    .unwrap();
+    conn
+}
+
+#[test]
+fn migrate_v2_rebuilds_legacy_tasks_preserving_data() {
+    let dir = tempdir();
+    let path = dir.join("taskboard.db");
+
+    // 老库造数。updated_at 为 RFC3339 文本，迁移时应换算成 INTEGER 秒。
+    let conn = legacy_tasks_db(&path);
+    let ts = "2026-01-02T03:04:05Z";
+    let expect_secs: i64 = conn
+        .query_row("SELECT CAST(strftime('%s', ?1) AS INTEGER)", [ts], |r| r.get(0))
+        .unwrap();
+    conn.execute(
+        "INSERT INTO tasks (key, owner, repo, number, title, url, gh_state, ownership,
+                            status, gh_status, assignees, labels, synced_at, updated_at)
+         VALUES ('o/r#27','owner','repo',27,'Bug A','https://x','open','assigned',
+                 'doing','In Progress','alice','bug',1000,?1)",
+        [ts],
+    )
+    .unwrap();
+    drop(conn);
+
+    // open_db 触发 v0.3.50 物理重建。
+    let conn = db::open_db(&path).unwrap();
+
+    // 新列名应存在，旧列名应消失。
+    let info = |name: &str| -> bool {
+        conn.prepare("SELECT 1 FROM pragma_table_info('tasks') WHERE name = ?1")
+            .unwrap()
+            .exists(rusqlite::params![name])
+            .unwrap()
+    };
+    for gone in ["key", "gh_state", "gh_status"] {
+        assert!(!info(gone), "旧列 {} 应在重建后消失", gone);
+    }
+    for kept in ["id", "issue_key", "issue_state", "project_status", "updated_at"] {
+        assert!(info(kept), "新列 {} 应存在", kept);
+    }
+
+    // 复合唯一键存在。
+    let uniq: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_index_list('tasks') WHERE \"unique\" = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let has_uniq = conn
+        .prepare(
+            "SELECT 1 FROM pragma_index_info(
+               (SELECT name FROM pragma_index_list('tasks')
+                 WHERE \"unique\" = 1 AND origin = 'u' LIMIT 1)
+             ) WHERE name IN ('repo','number','account_id')",
+        )
+        .unwrap()
+        .exists([])
+        .unwrap_or(false);
+    assert!(uniq >= 1 && has_uniq, "应存在 UNIQUE(repo,number,account_id)");
+
+    // 数据完整迁移 + 字段重命名 + updated_at 类型/值转换。
+    let (issue_key, issue_state, project_status, updated_at): (String, String, String, i64) =
+        conn.query_row(
+            "SELECT issue_key, issue_state, project_status, updated_at FROM tasks",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(issue_key, "o/r#27");
+    assert_eq!(issue_state, "open", "gh_state 应重命名为 issue_state");
+    assert_eq!(project_status, "In Progress", "gh_status 应重命名为 project_status");
+    assert_eq!(updated_at, expect_secs, "updated_at 应为 INTEGER 秒（由 RFC3339 换算）");
+}
+
+#[test]
+fn migrate_v2_rebuild_is_idempotent() {
+    let dir = tempdir();
+    let path = dir.join("taskboard.db");
+    let conn = legacy_tasks_db(&path);
+    conn.execute(
+        "INSERT INTO tasks (key, owner, repo, number, title, url, gh_state,
+                            ownership, status, synced_at)
+         VALUES ('o/r#1','o','r',1,'t','u','open','assigned','todo',1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    // 第一次 open_db 触发重建。
+    let conn = db::open_db(&path).unwrap();
+    drop(conn);
+    // 再次 open_db：不应重复重建，也不应报错；旧列 key 不应回春。
+    let conn = db::open_db(&path).unwrap();
+    let has_key: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'key'")
+        .unwrap()
+        .exists([])
+        .unwrap();
+    assert!(!has_key, "二次 open_db 不应把 tasks 打回旧布局");
+    let (issue_key, n): (String, i64) = conn
+        .query_row("SELECT issue_key, COUNT(*) OVER () FROM tasks", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(issue_key, "o/r#1");
+    assert_eq!(n, 1, "数据不应在二次 open_db 中丢失");
+}
+
+#[test]
+fn tasks_allow_same_repo_number_across_accounts() {
+    // v0.3.50 复合唯一键：不同账号可持有相同 (repo, number)，不再互相覆盖。
+    let conn = fresh_db();
+    conn.execute_batch(
+        "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
+                            ownership, status, synced_at, account_id)
+         VALUES
+           ('o/r#1','o','r',1,'t1','u','open','assigned','todo',1,1),
+           ('o/r#1','o','r',1,'t1b','u','open','assigned','todo',1,2);",
+    )
+    .unwrap();
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tasks", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 2, "两账号同 (repo,number) 应共存");
+    // 同账号重复 (repo, number) 仍被唯一键拦截。
+    let dup = conn.execute_batch(
+        "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
+                            ownership, status, synced_at, account_id)
+         VALUES ('o/r#1','o','r',1,'t-dup','u','open','assigned','todo',1,1);",
+    );
+    assert!(dup.is_err(), "同账号重复 (repo,number) 应触发唯一键冲突");
 }

@@ -114,7 +114,15 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
   };
 
   return (
-    <aside className="detail">
+    <aside
+      className="detail"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${task.repo}#${task.number}`}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+    >
       <div className="detail-head">
         <div>
           <span className="repo">{task.repo}</span>
@@ -143,7 +151,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
               key={c.key}
               className={`seg-btn${task.status === c.key ? " on" : ""}`}
               disabled={busy}
-              onClick={() => run(() => api.updateStatus(task.key, c.key as StatusKey))}
+              onClick={() => run(() => api.updateStatus(task.issueKey, c.key as StatusKey))}
             >
               {t(`status.${c.key}`)}
             </button>
@@ -173,7 +181,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
             className="btn"
             disabled={busy || !sessionInput.trim()}
             onClick={() =>
-              run(() => api.recordSession(task.key, sessionInput.trim(), agent))
+              run(() => api.recordSession(task.issueKey, sessionInput.trim(), agent))
             }
           >
             {t("btn.record")}
@@ -181,7 +189,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
           <button
             className="btn"
             disabled={busy || !task.sessionId}
-            onClick={() => run(() => api.clearSession(task.key))}
+            onClick={() => run(() => api.clearSession(task.issueKey))}
           >
             {t("btn.clear")}
           </button>
@@ -218,7 +226,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
           <button
             className="btn"
             disabled={busy || !handoff.trim()}
-            onClick={() => run(() => api.recordHandoff(task.key, handoff.trim()))}
+            onClick={() => run(() => api.recordHandoff(task.issueKey, handoff.trim()))}
           >
             {t("btn.save")}
           </button>

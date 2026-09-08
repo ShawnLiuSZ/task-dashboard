@@ -7,6 +7,7 @@ import type {
   CheckUpdate,
   DeviceLoginPoll,
   DeviceLoginStart,
+  DiagnoseResult,
   LabelMapping,
   LabelMappingInput,
   Note,
@@ -91,7 +92,7 @@ export const api = {
     invoke<LabelMapping[]>("get_label_columns_for_account", { accountId }),
   // v0.3.22+：Project Status 诊断。
   diagnoseProjectStatus: (accountId: number) =>
-    invoke<any>("diagnose_project_status", { accountId }),
+    invoke<DiagnoseResult>("diagnose_project_status", { accountId }),
   listProjects: (accountId: number) =>
     invoke<Project[]>("list_projects", { accountId }),
   listProjectStatuses: (accountId: number) =>
@@ -100,6 +101,7 @@ export const api = {
   listSyncLogs: (limit?: number) =>
     invoke<SyncLog[]>("list_sync_logs", { limit: limit ?? 50 }),
   pruneSyncLogs: () => invoke<number>("prune_sync_logs"),
+  clearSyncLogs: () => invoke<number>("clear_sync_logs"),
   // v0.3.24+：记事本管理。
   listNotes: () => invoke<Note[]>("list_notes"),
   addNote: (content: string, label?: string) =>
