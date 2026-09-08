@@ -605,7 +605,7 @@ fn read_message(r: &mut impl Read) -> Option<(Value, Framing)> {
         return match serde_json::from_slice(&line) {
             Ok(v) => Some((v, Framing::Ndjson)),
             Err(e) => {
-                eprintln!("[taskboard-mcp] NDJSON 解析失败，跳过该行: {e}");
+                crate::tlog!("[taskboard-mcp] NDJSON 解析失败，跳过该行: {e}");
                 None
             }
         };
@@ -663,14 +663,14 @@ pub fn run() {
     let path = match db_path_for_mcp() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("[taskboard-mcp] 无法确定数据库路径: {e}");
+            crate::tlog!("[taskboard-mcp] 无法确定数据库路径: {e}");
             std::process::exit(1);
         }
     };
     let conn = match crate::db::open_db(&path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!(
+            crate::tlog!(
                 "[taskboard-mcp] 打开数据库失败（请先运行一次 TaskBoard App 生成 {}）: {e}",
                 path.display()
             );
@@ -678,7 +678,7 @@ pub fn run() {
         }
     };
     if let Err(e) = conn.execute_batch("PRAGMA busy_timeout=5000;") {
-        eprintln!("[taskboard-mcp] 设置 busy_timeout 失败: {e}");
+        crate::tlog!("[taskboard-mcp] 设置 busy_timeout 失败: {e}");
     }
 
     let mut stdin = std::io::stdin();
@@ -695,7 +695,7 @@ pub fn run() {
         handled += 1;
     }
     if handled == 0 {
-        eprintln!(
+        crate::tlog!(
             "[taskboard-mcp] 未收到任何有效 JSON-RPC 消息即断开——请检查客户端分帧格式"
         );
     }

@@ -7,13 +7,8 @@ use tauri::{AppHandle, Manager};
 /// 同时用于推导无 GUI 运行时的本地数据目录（MCP 子命令等）。
 pub const APP_IDENTIFIER: &str = "com.shawnliu.taskboard";
 
-/// 检查是否启用详细日志（TASKBOARD_LOG=1 或 TASKBOARD_LOG=debug）。
-/// MCP 调用时默认静默，仅在排障时显式开启。
-fn verbose_enabled() -> bool {
-    std::env::var("TASKBOARD_LOG")
-        .map(|v| matches!(v.as_str(), "1" | "debug" | "verbose" | "true"))
-        .unwrap_or(false)
-}
+// v0.3.49 (#149)：详细日志门控已迁移至 `crate::common::verbose_enabled`，
+// 诊断输出一律走 `crate::tlog!`；此处不再保留私有版本。
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS accounts (
@@ -208,6 +203,19 @@ pub fn db_path_default() -> Result<PathBuf, String> {
 /// WAL 与 DELETE 共存时不冲突——已有的 `-journal` 文件如果存在，SQLite 会自动 forward-rollback。
 pub fn open_db(path: &Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| format!("打开数据库失败: {}", e))?;
+    // v0.3.49 (#149)：库文件含 PAT 明文，Unix 下收紧为仅所有者可读写。
+    // best-effort：权限设置失败不阻断打开（多用户共享机器上的纵深防御）。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(md) = std::fs::metadata(path) {
+            let mut perm = md.permissions();
+            if perm.mode() & 0o777 != 0o600 {
+                perm.set_mode(0o600);
+                let _ = std::fs::set_permissions(path, perm);
+            }
+        }
+    }
     // v0.3.16+: WAL 模式 + NORMAL 同步。WAL 文件保留部分未 checkpoint 数据，崩溃后仍可读。
     // 必须先设（再做任何事务），否则后续 BEGIN/COMMIT 仍走 DELETE 路径。
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
@@ -251,15 +259,15 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
         "CREATE INDEX IF NOT EXISTS idx_label_mappings_repo ON label_mappings(repo)",
     ] {
         if let Err(e) = conn.execute(idx_sql, []) {
-            if verbose_enabled() {
-                eprintln!("[db] label_mappings 索引创建跳过: {}", e);
+            if crate::common::verbose_enabled() {
+                crate::tlog!("[db] label_mappings 索引创建跳过: {}", e);
             }
         }
     }
     // v0.3.21：label_mappings 增加 order_index 列（用于 Label 列视图排序）。
     if let Err(e) = conn.execute("ALTER TABLE label_mappings ADD COLUMN order_index INTEGER NOT NULL DEFAULT 0", []) {
-        if verbose_enabled() {
-            eprintln!("[db] label_mappings order_index 列迁移跳过: {}", e);
+        if crate::common::verbose_enabled() {
+            crate::tlog!("[db] label_mappings order_index 列迁移跳过: {}", e);
         }
     }
     // v0.3.24：notes 表补 label 列。早期无标签版本的库里 notes 只有 4 列，
@@ -269,15 +277,15 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
         "ALTER TABLE notes ADD COLUMN label TEXT NOT NULL DEFAULT 'low'",
         [],
     ) {
-        if verbose_enabled() {
-            eprintln!("[db] notes label 列迁移跳过（已存在）: {}", e);
+        if crate::common::verbose_enabled() {
+            crate::tlog!("[db] notes label 列迁移跳过（已存在）: {}", e);
         }
     }
     // v0.3.15 → v0.3.16 自动迁移：把 v0.3.15 写在 meta.pat_token 的单账号 PAT
     // 迁到 accounts 表（首条默认账号）。原 meta 字段保留作兼容兜底，单账号视图仍可读。
     if let Err(e) = migrate_v0315_to_accounts(&conn) {
-        if verbose_enabled() {
-            eprintln!("[db] v0.3.15 → v0.3.16 迁移失败（已保留兜底字段）: {}", e);
+        if crate::common::verbose_enabled() {
+            crate::tlog!("[db] v0.3.15 → v0.3.16 迁移失败（已保留兜底字段）: {}", e);
         }
     }
     Ok(conn)
@@ -305,8 +313,8 @@ fn migrate_legacy_alters(conn: &Connection) {
         if let Err(e) = conn.execute(col_sql, []) {
             // **不再吞掉**：v0.3.16 之前是 `let _ = ...`，导致脏 DB 被静默接受，下次 sync
             // 触发 panic。默认静默（MCP 调用时不刷屏），仅 TASKBOARD_LOG=1 时输出。
-            if verbose_enabled() {
-                eprintln!("[db] 列迁移跳过（已存在或 schema 不兼容）: {} | sql={}", e, col_sql);
+            if crate::common::verbose_enabled() {
+                crate::tlog!("[db] 列迁移跳过（已存在或 schema 不兼容）: {} | sql={}", e, col_sql);
             }
         }
     }
@@ -359,8 +367,8 @@ fn migrate_v0315_to_accounts(conn: &Connection) -> Result<(), String> {
         );
     }
     set_setting(conn, "active_account_id", &new_id.to_string())?;
-    if verbose_enabled() {
-        eprintln!(
+    if crate::common::verbose_enabled() {
+        crate::tlog!(
             "[db] v0.3.15 → v0.3.16 自动迁移完成：新账号 id={} @{} (org={})",
             new_id, login, org
         );
@@ -1115,8 +1123,8 @@ pub fn load_column_rules(conn: &Connection, account_id: i64) -> Result<Vec<Colum
                 rules,
             }),
             Err(e) => {
-                if verbose_enabled() {
-                    eprintln!(
+                if crate::common::verbose_enabled() {
+                    crate::tlog!(
                         "[db] 自定义列 {} 的 match_rules 非法，已跳过: {}",
                         col.col_key, e
                     );
@@ -1595,6 +1603,18 @@ mod tests {
         // 幂等：重复 open 不报错。
         drop(conn);
         let _ = open_db(&path).unwrap();
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #149：库文件含 PAT 明文，Unix 下 open 后应为 0600。
+    #[cfg(unix)]
+    #[test]
+    fn db_file_permissions_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = tmp_db("perms");
+        let _ = open_db(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "库文件应为 0600，实际 {mode:o}");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

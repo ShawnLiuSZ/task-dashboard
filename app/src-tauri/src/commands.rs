@@ -365,10 +365,30 @@ pub fn save_settings(
 
 #[tauri::command]
 pub fn open_in_browser(url: String) -> Result<(), String> {
-    std::process::Command::new("open")
-        .arg(&url)
-        .spawn()
-        .map_err(|e| format!("打开浏览器失败: {}", e))?;
+    // v0.3.49 (#149)：先过白名单（仅 https GitHub 域），再按平台分发。
+    // Windows 的 `start` 是 cmd 内建命令，须经 `cmd /C start "" <url>` 调用。
+    let url = crate::common::validate_browser_url(&url)?;
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("打开浏览器失败: {e}"))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .spawn()
+            .map_err(|e| format!("打开浏览器失败: {e}"))?;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("打开浏览器失败: {e}"))?;
+    }
     Ok(())
 }
 
