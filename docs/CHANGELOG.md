@@ -6,6 +6,10 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.52（2026-09-08）— 设置面板假死修复（#167）**
+
+  - **#167 同步/诊断期间点击设置假死**：`diagnose_project_status` / `test_pat` / `test_account_pat` / `save_pat` / `add_account` / `update_account` 六个命令原为同步命令，内含 GitHub 网络 I/O，在 Tauri 主线程执行期间阻塞事件循环 → macOS beachball 假死。统一改为 `async + spawn_blocking`（与 v0.3.7 `sync_now` 同款模式），网络重活放工作线程池，主线程仅快速取 DB 数据后立即返回。纯 SQL 配置命令不受影响，同步用独立连接 + WAL 不阻塞读者。零接口变更、零前端改动。详见 [docs/issue-167-async-net-commands.md](./issue-167-async-net-commands.md)。
+
 - **v0.3.51（2026-09-08）— 前端修复三连（#159 #160 #161）**
 
   - **#159 自定义列空配置回退 project 列**：账号未配置自定义列时选择「自定义列」展示，不再误导性回退到四态列，改为回退到 project.status 状态列。详见 [docs/issue-159-160-161-frontend-bugs.md](./issue-159-160-161-frontend-bugs.md)。

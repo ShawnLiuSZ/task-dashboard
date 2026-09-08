@@ -2,6 +2,10 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.52 (2026-09-08) — Settings-panel freeze fix (#167)**
+
+  - **#167 UI freezes when opening settings during sync/diagnosis**: `diagnose_project_status`, `test_pat`, `test_account_pat`, `save_pat`, `add_account` and `update_account` were synchronous commands containing GitHub network I/O; running them on the Tauri main thread blocked the event loop → macOS beachball. All six were converted to `async + spawn_blocking` (same pattern as `sync_now` in v0.3.7), moving network work to a worker-thread pool while the main thread only fetches DB data quickly and returns. Pure-SQL config commands are unaffected; sync uses a separate connection and WAL so readers are never blocked. Zero API change, zero frontend change. See [docs/issue-167-async-net-commands.md](./issue-167-async-net-commands.md).
+
 - **v0.3.51 (2026-09-08) — Frontend fix trio (#159 #160 #161)**
 
   - **#159 Custom-column mode falls back to project columns when empty**: Selecting "Custom columns" for an account with no columns configured no longer misleadingly falls back to the four-state columns; it now falls back to the project.status columns. See [docs/issue-159-160-161-frontend-bugs.md](./issue-159-160-161-frontend-bugs.md).
