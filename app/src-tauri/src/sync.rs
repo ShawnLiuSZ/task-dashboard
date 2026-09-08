@@ -551,7 +551,7 @@ fn sync_account(
     })
 }
 
-pub fn run(conn: &Connection) -> Result<SyncResult, String> {
+pub fn run(conn: &Connection, trigger_type: &str) -> Result<SyncResult, String> {
     // v0.3.16+：决定本次同步的目标账号集。
     // view_mode='single' → 仅同步 active_account_id；'all' → 同步所有账号。
     let accounts = crate::db::list_accounts(conn)?;
@@ -580,7 +580,7 @@ pub fn run(conn: &Connection) -> Result<SyncResult, String> {
     // v0.3.23：记录同步开始日志（每个账号一条）
     let mut log_ids: Vec<(i64, i64)> = Vec::new(); // (account_id, log_id)
     for account in &target {
-        if let Ok(log_id) = crate::db::insert_sync_log(conn, account.id, "auto", now) {
+        if let Ok(log_id) = crate::db::insert_sync_log(conn, account.id, trigger_type, now) {
             log_ids.push((account.id, log_id));
         }
     }

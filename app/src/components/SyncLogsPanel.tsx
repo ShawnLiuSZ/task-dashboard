@@ -35,6 +35,13 @@ function StatusBadge({ status }: { status: string }) {
   return <span className="badge muted">⏳ 进行中</span>;
 }
 
+/** v0.3.49+：同步触发类型映射。 */
+const TRIGGER_LABELS: Record<string, string> = {
+  auto: "自动",
+  manual: "手动",
+  startup: "启动",
+};
+
 /** v0.3.23+ 同步日志弹窗：展示最近的同步历史与错误。 */
 export default function SyncLogsPanel({ onClose }: Props) {
   const { t } = useI18n();
@@ -110,7 +117,7 @@ export default function SyncLogsPanel({ onClose }: Props) {
                   {logs.map((log) => (
                     <tr key={log.id}>
                       <td className="nowrap">{formatTime(log.createdAt)}</td>
-                      <td>{log.triggerType === "manual" ? "手动" : "自动"}</td>
+                      <td>{TRIGGER_LABELS[log.triggerType] ?? log.triggerType}</td>
                       <td>{duration(log.startedAt, log.finishedAt)}</td>
                       <td><StatusBadge status={log.status} /></td>
                       <td>{log.added}</td>

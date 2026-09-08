@@ -188,7 +188,7 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncResult, String> {
         // 用独立连接跑同步：不持有共享 `AppState.db` 的 Mutex 跨网络 I/O，避免阻塞
         // 主线程上的 UI 读命令（设置/账号/同步日志等面板）。见 lib.rs::open_sync_conn。
         let conn = crate::db::open_db(&crate::db::db_path(&handle)?)?;
-        crate::sync::run(&conn)
+        crate::sync::run(&conn, "manual")
     })
     .await
     .map_err(|e| format!("同步线程异常: {}", e))?
