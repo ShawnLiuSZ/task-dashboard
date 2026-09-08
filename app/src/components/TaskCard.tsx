@@ -73,7 +73,7 @@ export default function TaskCard({ task, accountLabel, active, onClick, repoInde
         {/* v0.3.43+：自定义列视图下显示 project.status 真实值徽章 */}
         {showGhStatus && task.ghStatus && task.ghStatus.trim() !== "" && (
           <span
-            className={`repo repo-${ghStatusColor(task.ghStatus)}`}
+            className={`gh-status repo repo-${ghStatusColor(task.ghStatus)}`}
             title={t("card.ghStatusTitle")}
           >
             {task.ghStatus}

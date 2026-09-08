@@ -236,6 +236,7 @@ export default function Board({
                   active={task.key === selected}
                   onClick={() => onSelect(task.key)}
                   repoIndex={repoIndexMap.get(task.repo) ?? 0}
+                  showGhStatus={boardMode === "custom"}
                 />
               ))}
             </div>
