@@ -63,6 +63,39 @@ function sortProjectStatusKeys(
   });
 }
 
+export type BoardViewKind = "project" | "custom" | "fourstate";
+
+/** v0.3.51 (#159)：根据看板模式与自定义列配置决定实际渲染视图。
+ * custom 模式未配置任何自定义列时回退到 project 视图，避免误导性的四态列；
+ * status（legacy）优雅降级为 project；其余情况保留四态列作终极兜底。 */
+export function resolveBoardView(
+  boardMode: BoardMode,
+  accountColumns: AccountColumn[] | undefined,
+): BoardViewKind {
+  if (boardMode === "custom") {
+    return accountColumns && accountColumns.length > 0 ? "custom" : "project";
+  }
+  if (boardMode === "project" || boardMode === "status") return "project";
+  return "fourstate";
+}
+
+/** v0.3.51 (#159)：自定义列分组——任务 status 命中列 colKey 归入对应组，未命中进 unmatched。 */
+export function groupTasksByCustomColumns(
+  tasks: Task[],
+  accountColumns: AccountColumn[] | undefined,
+): { groups: Map<string, Task[]>; unmatched: Task[] } {
+  const cols = accountColumns ?? [];
+  const valid = new Set(cols.map((c) => c.colKey));
+  const groups = new Map<string, Task[]>();
+  for (const c of cols) groups.set(c.colKey, []);
+  const unmatched: Task[] = [];
+  for (const task of tasks) {
+    if (valid.has(task.status)) groups.get(task.status)?.push(task);
+    else unmatched.push(task);
+  }
+  return { groups, unmatched };
+}
+
 // v0.3.49 (#145)：memo + 全量 useMemo。tasks 数组引用不变时整板跳过重渲染；
 // 分组/排序/颜色映射均为单遍计算，不再每列扫全量。
 function Board({
@@ -106,18 +139,10 @@ function Board({
   }, [projectStatuses]);
 
   // 自定义列视图：单遍分组（列 key -> 任务）+ 未匹配列，替代原来的每列 filter 全量扫。
-  const customGroups = useMemo(() => {
-    const cols = accountColumns ?? [];
-    const valid = new Set(cols.map((c) => c.colKey));
-    const groups = new Map<string, Task[]>();
-    for (const c of cols) groups.set(c.colKey, []);
-    const unmatched: Task[] = [];
-    for (const task of tasks) {
-      if (valid.has(task.status)) groups.get(task.status)?.push(task);
-      else unmatched.push(task);
-    }
-    return { groups, unmatched };
-  }, [tasks, accountColumns]);
+  const customGroups = useMemo(
+    () => groupTasksByCustomColumns(tasks, accountColumns),
+    [tasks, accountColumns],
+  );
 
   // 四态视图：单遍分组。
   const statusGroups = useMemo(() => {
@@ -138,12 +163,8 @@ function Board({
 
   // v0.3.43+: "status" (legacy) gracefully degrades to "project"
   // v0.3.51 (#159): custom 模式未配置自定义列时回退到 project 列，避免误导性的四态列
-  const hasCustomColumns = !!accountColumns && accountColumns.length > 0;
-  if (
-    boardMode === "project" ||
-    boardMode === "status" ||
-    (boardMode === "custom" && !hasCustomColumns)
-  ) {
+  const view = resolveBoardView(boardMode, accountColumns);
+  if (view === "project") {
     // GitHub Project Status 列视图
     return (
       <div className="board">
@@ -179,8 +200,8 @@ function Board({
     );
   }
 
-  if (boardMode === "custom") {
-    // 自定义列视图（按账号配置渲染）；此处 hasCustomColumns 为 true，accountColumns 非空
+  if (view === "custom") {
+    // 自定义列视图（按账号配置渲染）；此处 view 为 custom 时 accountColumns 非空
     const { groups, unmatched } = customGroups;
     const cols = accountColumns ?? [];
     return (

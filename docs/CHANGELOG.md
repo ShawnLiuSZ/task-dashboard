@@ -11,6 +11,7 @@
   - **#159 自定义列空配置回退 project 列**：账号未配置自定义列时选择「自定义列」展示，不再误导性回退到四态列，改为回退到 project.status 状态列。详见 [docs/issue-159-160-161-frontend-bugs.md](./issue-159-160-161-frontend-bugs.md)。
   - **#160 应用内确认弹窗替代 window.confirm**：Tauri WebView 原生不支持 `window.confirm`（静默返回 false），「清理全部日志」「删除账号」的二次确认改为应用内 ConfirmDialog 弹窗，根治点了没反应。详见 [docs/issue-159-160-161-frontend-bugs.md](./issue-159-160-161-frontend-bugs.md)。
   - **#161 同步日志错误信息可展开**：错误单元格默认单行截断，hover 有全文 tooltip，点击展开/收起完整错误信息。详见 [docs/issue-159-160-161-frontend-bugs.md](./issue-159-160-161-frontend-bugs.md)。
+  - **#163 前端测试补充**：新增 3 个测试文件 18 个用例（合计 21 例），零依赖覆盖 #159/#160/#161 修复逻辑，为可测性抽出 `resolveBoardView` 等 4 个纯函数。详见 [docs/issue-163-frontend-tests.md](./issue-163-frontend-tests.md)。
 
 - **v0.3.50（2026-09-08）— tasks 表物理重建（#155）**
 
