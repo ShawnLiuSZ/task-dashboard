@@ -11,6 +11,7 @@ use tauri::{
 };
 
 mod commands;
+mod common;
 pub mod db;
 mod github;
 mod mcp;
