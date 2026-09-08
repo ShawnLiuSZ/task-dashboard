@@ -200,55 +200,16 @@ pub fn update_task_status(
     key: String,
     status: String,
 ) -> Result<(), String> {
-    // 中文四态归一化到英文四态，其余原样（自定义列 col_key）
-    let normalized = match status.trim() {
-        "待处理" => "todo".to_string(),
-        "处理中" => "doing".to_string(),
-        "已处理" => "processed".to_string(),
-        "已完成" => "done".to_string(),
-        s => s.to_string(),
-    };
-    if normalized.is_empty() {
+    // 中文四态归一化到英文四态，其余原样（自定义列 col_key，由校验函数放行或拒绝）。
+    let t = status.trim();
+    if t.is_empty() {
         return Err("状态不能为空".to_string());
     }
+    // v0.3.49 (#147)：归一化 + 校验 + 写入走公共模块（与 mcp.rs 同一实现）。
+    let normalized = crate::common::normalize_status(t).unwrap_or_else(|| t.to_string());
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    validate_task_status(&conn, &key, &normalized)?;
-    conn.execute(
-        "UPDATE tasks SET status = ?1 WHERE key = ?2",
-        rusqlite::params![normalized, key],
-    )
-    .map_err(|e| e.to_string())?;
+    crate::common::set_task_status(&conn, &key, &normalized)?;
     Ok(())
-}
-
-/// 校验 status 是否合法：四态（含中文四态，已归一化）或该任务所属账号已知的自定义列 col_key。
-/// 不过滤会直接返回 Err，DB 不改动，避免任务因落入未知列而在看板「消失」。
-fn validate_task_status(conn: &rusqlite::Connection, key: &str, status: &str) -> Result<(), String> {
-    if matches!(status, "todo" | "doing" | "processed" | "done") {
-        return Ok(());
-    }
-    let account_id: Option<i64> = conn
-        .query_row(
-            "SELECT account_id FROM tasks WHERE key = ?1 LIMIT 1",
-            rusqlite::params![key],
-            |r| r.get(0),
-        )
-        .map(Some)
-        .unwrap_or(None);
-    if let Some(id) = account_id {
-        let cols = crate::db::list_account_columns(conn, id)?;
-        if cols.iter().any(|c| c.col_key == status) {
-            return Ok(());
-        }
-        let names: Vec<&str> = cols.iter().map(|c| c.col_key.as_str()).collect();
-        return Err(format!(
-            "非法状态: {status}（应为四态 todo/doing/processed/done 或该账号自定义列之一: {}）",
-            names.join("/")
-        ));
-    }
-    Err(format!(
-        "非法状态: {status}（应为四态 todo/doing/processed/done 或该任务账号的自定义列）"
-    ))
 }
 
 #[tauri::command]
@@ -260,22 +221,15 @@ pub fn record_session(
 ) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let now = crate::sync::now_secs();
-    conn.execute(
-        "UPDATE tasks SET session_id = ?1, session_agent = ?2, session_at = ?3 WHERE key = ?4",
-        rusqlite::params![session_id, agent.unwrap_or_default(), now, key],
-    )
-    .map_err(|e| e.to_string())?;
+    // v0.3.49 (#147)：SQL 走公共模块（与 mcp.rs 同一实现）；0 行也静默 Ok（原有行为）。
+    crate::common::touch_session(&conn, &key, &session_id, agent.as_deref(), now)?;
     Ok(())
 }
 
 #[tauri::command]
 pub fn clear_session(state: State<'_, AppState>, key: String) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    conn.execute(
-        "UPDATE tasks SET session_id = NULL, session_agent = NULL WHERE key = ?1",
-        [key],
-    )
-    .map_err(|e| e.to_string())?;
+    crate::common::clear_task_session(&conn, &key)?;
     Ok(())
 }
 
@@ -288,11 +242,8 @@ pub fn record_handoff(
     text: String,
 ) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    conn.execute(
-        "UPDATE tasks SET handoff = ?1 WHERE key = ?2",
-        rusqlite::params![text, key],
-    )
-    .map_err(|e| e.to_string())?;
+    // v0.3.49 (#147)：SQL 走公共模块（与 mcp.rs 同一实现）。
+    crate::common::record_task_handoff(&conn, &key, &text)?;
     Ok(())
 }
 
@@ -1002,7 +953,8 @@ pub fn list_notes(state: State<'_, AppState>) -> Result<Vec<crate::db::Note>, St
 pub fn add_note(state: State<'_, AppState>, content: String, label: Option<String>) -> Result<crate::db::Note, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let now = crate::sync::now_secs();
-    let label = label.unwrap_or_else(|| "low".to_string());
+    // v0.3.49 (#147)：标签走统一校验（此前任意字符串可入库，与 MCP 约束分叉）。
+    let label = crate::common::normalize_note_label(label.as_deref())?;
     crate::db::add_note(&conn, &content, &label, now)
 }
 
@@ -1017,6 +969,8 @@ pub fn update_note(state: State<'_, AppState>, id: i64, content: String) -> Resu
 /// 更新记事标签。
 #[tauri::command]
 pub fn update_note_label(state: State<'_, AppState>, id: i64, label: String) -> Result<crate::db::Note, String> {
+    // v0.3.49 (#147)：标签走统一校验（此前任意字符串可入库）。
+    let label = crate::common::normalize_note_label(Some(&label))?;
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     crate::db::update_note_label(&conn, id, &label)
 }
@@ -1144,6 +1098,11 @@ pub fn import_notes(state: State<'_, AppState>, json: String) -> Result<ImportNo
 
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let now = crate::sync::now_secs();
+    // v0.3.49 (#147)：整个导入包在一个事务里（原来每条 1 SELECT + 1 INSERT，
+    // 大导入慢且可部分成功）。失败整体回滚。
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("开启导入事务失败: {e}"))?;
     let mut imported = 0usize;
     let mut skipped = 0usize;
     for n in file.notes {
@@ -1157,12 +1116,14 @@ pub fn import_notes(state: State<'_, AppState>, json: String) -> Result<ImportNo
         };
         let created = if n.created_at > 0 { n.created_at } else { now };
         let updated = if n.updated_at > 0 { n.updated_at } else { created };
-        match crate::db::import_note(&conn, &n.content, &label, created, updated) {
+        match crate::db::import_note(&tx, &n.content, &label, created, updated) {
             Ok(true) => imported += 1,
             Ok(false) => skipped += 1,
             Err(e) => return Err(e),
         }
     }
+    tx.commit()
+        .map_err(|e| format!("提交导入事务失败: {e}"))?;
     Ok(ImportNotesResult { imported, skipped })
 }
 
@@ -1312,15 +1273,15 @@ mod tests {
         .unwrap();
 
         // 四态放行
-        assert!(super::validate_task_status(&conn, "a#1", "todo").is_ok());
-        assert!(super::validate_task_status(&conn, "a#1", "done").is_ok());
+        assert!(crate::common::validate_task_status(&conn, "a#1", "todo").is_ok());
+        assert!(crate::common::validate_task_status(&conn, "a#1", "done").is_ok());
         // 该账号自定义列放行
-        assert!(super::validate_task_status(&conn, "a#1", "col_alpha").is_ok());
+        assert!(crate::common::validate_task_status(&conn, "a#1", "col_alpha").is_ok());
         // 拼错/未知状态拒绝
-        assert!(super::validate_task_status(&conn, "a#1", "donee").is_err());
+        assert!(crate::common::validate_task_status(&conn, "a#1", "donee").is_err());
         // 该任务账号无该自定义列 → 拒绝
-        assert!(super::validate_task_status(&conn, "a#1", "col_beta").is_err());
+        assert!(crate::common::validate_task_status(&conn, "a#1", "col_beta").is_err());
         // 任务不存在：非四态一律拒绝（无账号可判定）
-        assert!(super::validate_task_status(&conn, "ghost#1", "col_alpha").is_err());
+        assert!(crate::common::validate_task_status(&conn, "ghost#1", "col_alpha").is_err());
     }
 }

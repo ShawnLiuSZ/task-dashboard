@@ -186,19 +186,9 @@ fn sync_account(
             if let Err(e) = crate::db::prune_projects(conn, account.id, &github_ids) {
                 eprintln!("[sync] 清理旧项目失败: {}", e);
             }
-            // 为每个项目拉取 Status 字段选项及顺序
+            // 旧项目状态选项先清空，后面并行拉到后再批量写入。
             if let Err(e) = crate::db::clear_project_statuses(conn, account.id) {
                 eprintln!("[sync] 清空旧项目状态失败: {}", e);
-            }
-            for gid in &github_ids {
-                match client.fetch_project_status_options(gid) {
-                    Ok(opts) => {
-                        if let Err(e) = crate::db::upsert_project_statuses(conn, account.id, gid, &opts, now) {
-                            eprintln!("[sync] 存储项目 {} 状态选项失败: {}", gid, e);
-                        }
-                    }
-                    Err(e) => eprintln!("[sync] 拉取项目 {} 状态选项失败: {}", gid, e),
-                }
             }
             github_ids
         }
@@ -208,16 +198,105 @@ fn sync_account(
         }
     };
 
+    // v0.3.49 (#143)：各 project 的 Status 选项 + issue 列表并行拉取（纯网络），
+    // DB 写入仍串行（同一连接）。线程 panic 按该项目失败处理（gid 为空即跳过）。
+    // fetch_project_issues 返回 status_map 和项目中发现的完整 issue 列表，
+    // 用于将「项目中有但搜索源未覆盖」的 issue 合并进同步数据。
+    let fetched_projects: Vec<(
+        String,
+        Vec<(String, i64)>,
+        std::collections::HashMap<String, String>,
+        Vec<github::RawTask>,
+    )> = std::thread::scope(|s| {
+        let handles: Vec<_> = project_ids
+            .iter()
+            .map(|gid| {
+                let gid = gid.clone();
+                let client = &client;
+                let org = &account.org;
+                s.spawn(move || {
+                    let opts = match client.fetch_project_status_options(&gid) {
+                        Ok(o) => o,
+                        Err(e) => {
+                            eprintln!("[sync] 拉取项目 {gid} 状态选项失败: {e}");
+                            Vec::new()
+                        }
+                    };
+                    let (status_map, issues) =
+                        match client.fetch_project_issues(&gid, org) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                eprintln!("[sync] 拉取项目 {gid} 状态/issue 失败: {e}");
+                                (std::collections::HashMap::new(), Vec::new())
+                            }
+                        };
+                    (gid, opts, status_map, issues)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| {
+                h.join().unwrap_or_else(|_| {
+                    (
+                        String::new(),
+                        Vec::new(),
+                        std::collections::HashMap::new(),
+                        Vec::new(),
+                    )
+                })
+            })
+            .collect()
+    });
+    let mut project_status: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut project_issues: Vec<github::RawTask> = Vec::new();
+    for (gid, opts, status_map, issues) in fetched_projects {
+        if gid.is_empty() {
+            continue;
+        }
+        if !opts.is_empty() {
+            if let Err(e) = crate::db::upsert_project_statuses(conn, account.id, &gid, &opts, now)
+            {
+                eprintln!("[sync] 存储项目 {gid} 状态选项失败: {e}");
+            }
+        }
+        eprintln!(
+            "[sync] project {gid}: status_map={} issues={}",
+            status_map.len(),
+            issues.len()
+        );
+        project_status.extend(status_map);
+        project_issues.extend(issues);
+    }
+    if project_status.is_empty() && !project_ids.is_empty() {
+        eprintln!("[sync] 警告：所有项目的 Status 映射均为空（可能没有 Status 字段）");
+    }
+
     // 多源合并：以多个稳定查询（assignee/author/mentions/commenter）覆盖 `involves:`
     // 的偶发漏拉缺陷，确保任何「与我相关」的 issue 都不会缺失。按 key 去重。
     // best-effort：单源失败不中断整次同步，其余源照常并入。
-    let sources: Vec<(&str, Result<Vec<github::RawTask>, String>)> = vec![
-        ("assignee", client.fetch_assigned()),
-        ("author", client.fetch_authored()),
-        ("mentions", client.fetch_mentioned()),
-        ("commenter", client.fetch_commented()),
-        ("involves", client.fetch_related()),
-    ];
+    //
+    // v0.3.49 (#143)：5 源 `thread::scope` 并行（Search 限流由客户端内的共享门控，
+    // 任意两次调用间隔 ≥ 2s）。线程 panic 按该源失败处理，不掀翻整次同步。
+    let sources: Vec<(&str, Result<Vec<github::RawTask>, String>)> = std::thread::scope(|s| {
+        let handles = [
+            ("assignee", s.spawn(|| client.fetch_assigned())),
+            ("author", s.spawn(|| client.fetch_authored())),
+            ("mentions", s.spawn(|| client.fetch_mentioned())),
+            ("commenter", s.spawn(|| client.fetch_commented())),
+            ("involves", s.spawn(|| client.fetch_related())),
+        ];
+        handles
+            .into_iter()
+            .map(|(name, h)| {
+                let r = h
+                    .join()
+                    .unwrap_or_else(|_| Err(format!("{name}: 拉取线程异常")));
+                (name, r)
+            })
+            .collect()
+    });
     let mut lists: Vec<Vec<github::RawTask>> = Vec::new();
     let mut failed: Vec<String> = Vec::new();
     let mut mention_keys: HashSet<String> = HashSet::new();
@@ -282,32 +361,7 @@ fn sync_account(
         }
     }
 
-    // 拉取所有项目的 Status 字段 + 完整 issue 信息（best-effort）。
-    // fetch_project_issues 返回 status_map 和项目中发现的完整 issue 列表，
-    // 用于将「项目中有但搜索源未覆盖」的 issue 合并进同步数据。
-    let mut project_status: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    let mut project_issues: Vec<github::RawTask> = Vec::new();
-    for pid in &project_ids {
-        match client.fetch_project_issues(pid, &account.org) {
-            Ok((status_map, issues)) => {
-                project_status.extend(status_map);
-                eprintln!(
-                    "[sync] project {}: status_map={} issues={}",
-                    pid,
-                    project_status.len(),
-                    issues.len()
-                );
-                project_issues.extend(issues);
-            }
-            Err(e) => eprintln!("[sync] 拉取项目 {} 状态/issue 失败: {}", pid, e),
-        }
-    }
-    if project_status.is_empty() && !project_ids.is_empty() {
-        eprintln!("[sync] 警告：所有项目的 Status 映射均为空（可能没有 Status 字段）");
-    }
-
-    // 将项目中发现的 issue 合并进 raw（去重：搜索源已有的跳过）。
+    // 项目中发现的 issue 已在上面并行拉取时合并到 project_issues（去重：搜索源已有的跳过）。
     // 这确保「项目中有但用户非 assignee/author/mentions/commenter」的 issue 也能上板。
     let existing_keys: HashSet<String> = raw.iter().map(|t| format!("{}#{}", t.repo, t.number)).collect();
     let mut merged_from_project = 0usize;

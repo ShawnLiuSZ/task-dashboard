@@ -220,34 +220,23 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
         "DELETE FROM notes WHERE id NOT IN (SELECT MIN(id) FROM notes GROUP BY content)",
         [],
     );
+    // v0.3.49 (#147)：schema 版本（PRAGMA user_version）。0 = 未版本化老库，
+    // 建连成功后记为 1；后续每次 schema 变更加版本号并在此分步迁移，
+    // 热路径（version ≥ 1）跳过下面的 ALTER 补齐循环。
+    let schema_ver: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap_or(0);
     // schema 初始化（WAL 模式下多个连接可并发读，但写仍互斥）。
     conn.execute_batch(SCHEMA)
         .map_err(|e| format!("初始化表结构失败: {}", e))?;
-    // 迁移：兼容已存在的旧库，缺列则补（列已存在时 ALTER 会报错，忽略即可）。
-    for col_sql in [
-        "ALTER TABLE tasks ADD COLUMN gh_status TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN assignees TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN labels TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN done_at INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE tasks ADD COLUMN mentioned INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE tasks ADD COLUMN comments_count INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE tasks ADD COLUMN latest_comment_url TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN pr_number INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE tasks ADD COLUMN pr_url TEXT NOT NULL DEFAULT ''",
-        // v0.3.10：关联 PR 的分支（head.ref），以及 agent 写入的交接任务详情。
-        "ALTER TABLE tasks ADD COLUMN branch TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN handoff TEXT NOT NULL DEFAULT ''",
-        // v0.3.16：任务归属账号；旧库默认 1（迁移会先插一条 accounts，再保证该 id 命中）。
-        "ALTER TABLE tasks ADD COLUMN account_id INTEGER NOT NULL DEFAULT 1",
-    ] {
-        if let Err(e) = conn.execute(col_sql, []) {
-            // **不再吞掉**：v0.3.16 之前是 `let _ = ...`，导致脏 DB 被静默接受，下次 sync
-            // 触发 panic。默认静默（MCP 调用时不刷屏），仅 TASKBOARD_LOG=1 时输出。
-            if verbose_enabled() {
-                eprintln!("[db] 列迁移跳过（已存在或 schema 不兼容）: {} | sql={}", e, col_sql);
-            }
-        }
+    // v0.3.49 (#147)：仅未版本化老库（version 0）跑下面的 ALTER 补齐；
+    // version ≥ 1 的热路径跳过（SCHEMA 已是 IF NOT EXISTS 幂等）。
+    if schema_ver < 1 {
+        migrate_legacy_alters(&conn);
+        // 补齐成功即记版本（best-effort，失败下次重跑补齐，无害）。
+        let _ = conn.pragma_update(None, "user_version", 1);
     }
+    // 以下默认设置与各版本表级迁移（每次建连都跑，全部幂等；列补齐已由上面的版本门控处理）。
     for (k, v) in DEFAULT_SETTINGS {
         conn.execute(
             "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO NOTHING",
@@ -292,6 +281,35 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
         }
     }
     Ok(conn)
+}
+
+/// v0.3.49 (#147)：未版本化老库（user_version 0）的一次性列补齐。
+/// 列已存在时 ALTER 会报错，忽略即可（缺列则补上）。
+fn migrate_legacy_alters(conn: &Connection) {
+    for col_sql in [
+        "ALTER TABLE tasks ADD COLUMN gh_status TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN assignees TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN labels TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN done_at INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN mentioned INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN comments_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN latest_comment_url TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN pr_number INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN pr_url TEXT NOT NULL DEFAULT ''",
+        // v0.3.10：关联 PR 的分支（head.ref），以及 agent 写入的交接任务详情。
+        "ALTER TABLE tasks ADD COLUMN branch TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN handoff TEXT NOT NULL DEFAULT ''",
+        // v0.3.16：任务归属账号；旧库默认 1（迁移会先插一条 accounts，再保证该 id 命中）。
+        "ALTER TABLE tasks ADD COLUMN account_id INTEGER NOT NULL DEFAULT 1",
+    ] {
+        if let Err(e) = conn.execute(col_sql, []) {
+            // **不再吞掉**：v0.3.16 之前是 `let _ = ...`，导致脏 DB 被静默接受，下次 sync
+            // 触发 panic。默认静默（MCP 调用时不刷屏），仅 TASKBOARD_LOG=1 时输出。
+            if verbose_enabled() {
+                eprintln!("[db] 列迁移跳过（已存在或 schema 不兼容）: {} | sql={}", e, col_sql);
+            }
+        }
+    }
 }
 
 /// 把 v0.3.15 写在 `meta.pat_token` 的 PAT 自动迁到 `accounts` 表第一条记录。
@@ -587,41 +605,33 @@ pub fn delete_account(conn: &Connection, id: i64) -> Result<(), String> {
     if exists == 0 {
         return Err(format!("账号 #{id} 不存在"));
     }
-    // 在同一事务中原子删除所有关联数据
-    conn.execute_batch("BEGIN IMMEDIATE")
+    // 在同一事务中原子删除所有关联数据。
+    // v0.3.49 (#147)：改用 RAII 事务（与他处 unchecked_transaction 一致）；
+    // 中间失败或 panic 时自动回滚，不再残留手写 BEGIN 锁。
+    let tx = conn
+        .unchecked_transaction()
         .map_err(|e| format!("开启事务失败: {e}"))?;
-    let result = (|| {
-        // 1. 删除 tasks
-        conn.execute("DELETE FROM tasks WHERE account_id = ?1", [id])
-            .map_err(|e| format!("删除 tasks 失败: {e}"))?;
-        // 2. 删除 projects
-        conn.execute("DELETE FROM projects WHERE account_id = ?1", [id])
-            .map_err(|e| format!("删除 projects 失败: {e}"))?;
-        // 3. 删除 project_statuses
-        conn.execute("DELETE FROM project_statuses WHERE account_id = ?1", [id])
-            .map_err(|e| format!("删除 project_statuses 失败: {e}"))?;
-        // 4. 删除 sync_logs
-        conn.execute("DELETE FROM sync_logs WHERE account_id = ?1", [id])
-            .map_err(|e| format!("删除 sync_logs 失败: {e}"))?;
-        // 5. 删除 account_columns（v0.3.28+）
-        conn.execute("DELETE FROM account_columns WHERE account_id = ?1", [id])
-            .map_err(|e| format!("删除 account_columns 失败: {e}"))?;
-        // 6. 删除账号本身
-        conn.execute("DELETE FROM accounts WHERE id = ?1", [id])
-            .map_err(|e| format!("删除账号失败: {e}"))?;
-        Ok(())
-    })();
-    match result {
-        Ok(()) => {
-            conn.execute_batch("COMMIT")
-                .map_err(|e| format!("提交事务失败: {e}"))?;
-            Ok(())
-        }
-        Err(e) => {
-            let _ = conn.execute_batch("ROLLBACK");
-            Err(e)
-        }
-    }
+    // 1. 删除 tasks
+    tx.execute("DELETE FROM tasks WHERE account_id = ?1", [id])
+        .map_err(|e| format!("删除 tasks 失败: {e}"))?;
+    // 2. 删除 projects
+    tx.execute("DELETE FROM projects WHERE account_id = ?1", [id])
+        .map_err(|e| format!("删除 projects 失败: {e}"))?;
+    // 3. 删除 project_statuses
+    tx.execute("DELETE FROM project_statuses WHERE account_id = ?1", [id])
+        .map_err(|e| format!("删除 project_statuses 失败: {e}"))?;
+    // 4. 删除 sync_logs
+    tx.execute("DELETE FROM sync_logs WHERE account_id = ?1", [id])
+        .map_err(|e| format!("删除 sync_logs 失败: {e}"))?;
+    // 5. 删除 account_columns（v0.3.28+）
+    tx.execute("DELETE FROM account_columns WHERE account_id = ?1", [id])
+        .map_err(|e| format!("删除 account_columns 失败: {e}"))?;
+    // 6. 删除账号本身
+    tx.execute("DELETE FROM accounts WHERE id = ?1", [id])
+        .map_err(|e| format!("删除账号失败: {e}"))?;
+    tx.commit()
+        .map_err(|e| format!("提交事务失败: {e}"))?;
+    Ok(())
 }
 
 /// 项目记录（与 projects 表一一对应；前端用）。
