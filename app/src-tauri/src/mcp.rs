@@ -32,7 +32,7 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// 返回给 agent 的列（与 `commands.rs::Task` 顺序兼容的子集）。
 const SELECT_COLS: &str =
-    "key, repo, number, title, status, ownership, assignees, session_id, session_agent, handoff, updated_at";
+    "issue_key, repo, number, title, status, ownership, assignees, session_id, session_agent, handoff, updated_at";
 
 fn db_path_for_mcp() -> Result<std::path::PathBuf, String> {
     if let Ok(p) = std::env::var("TASKBOARD_DB") {
@@ -43,15 +43,9 @@ fn db_path_for_mcp() -> Result<std::path::PathBuf, String> {
     crate::db::db_path_default()
 }
 
+/// v0.3.49 (#147)：中英四态归一化走公共模块（与 commands.rs 同一实现）。
 fn resolve_status(s: &str) -> Option<String> {
-    match s {
-        "todo" | "doing" | "processed" | "done" => Some(s.to_string()),
-        "待处理" => Some("todo".to_string()),
-        "处理中" => Some("doing".to_string()),
-        "已处理" => Some("processed".to_string()),
-        "已完成" => Some("done".to_string()),
-        _ => None,
-    }
+    crate::common::normalize_status(s)
 }
 
 /// 把多种 issue 引用归一化为 DB 主键 `repo#number`。
@@ -95,7 +89,7 @@ fn parse_issue_ref(ref_: &str) -> Result<String, String> {
 
 fn row_to_value(r: &rusqlite::Row) -> rusqlite::Result<Value> {
     let mut m = Map::new();
-    m.insert("key".into(), Value::String(r.get::<_, String>(0)?));
+    m.insert("issue_key".into(), Value::String(r.get::<_, String>(0)?));
     m.insert("repo".into(), Value::String(r.get::<_, String>(1)?));
     m.insert("number".into(), Value::Number(r.get::<_, i64>(2)?.into()));
     m.insert("title".into(), Value::String(r.get::<_, String>(3)?));
@@ -115,8 +109,8 @@ fn row_to_value(r: &rusqlite::Row) -> rusqlite::Result<Value> {
     m.insert("handoff".into(), Value::String(r.get::<_, String>(9)?));
     m.insert(
         "updated_at".into(),
-        match r.get::<_, Option<String>>(10)? {
-            Some(s) => Value::String(s),
+        match r.get::<_, Option<i64>>(10)? {
+            Some(s) => Value::Number(s.into()),
             None => Value::Null,
         },
     );
@@ -163,7 +157,7 @@ fn tool_list(
 fn tool_get(conn: &Connection, issue: &str) -> Result<Value, String> {
     let key = parse_issue_ref(issue)?;
     let mut stmt = conn
-        .prepare(&format!("SELECT {SELECT_COLS} FROM tasks WHERE key = ?1"))
+        .prepare(&format!("SELECT {SELECT_COLS} FROM tasks WHERE issue_key = ?1"))
         .map_err(|e| e.to_string())?;
     let mut rows = stmt
         .query_map([key.clone()], row_to_value)
@@ -175,54 +169,27 @@ fn tool_get(conn: &Connection, issue: &str) -> Result<Value, String> {
                 _ => Map::new(),
             };
             m.insert("found".into(), Value::Bool(true));
-            m.insert("key".into(), Value::String(key));
+            m.insert("issue_key".into(), Value::String(key));
             Ok(Value::Object(m))
         }
         Some(Err(e)) => Err(e.to_string()),
-        None => Ok(json!({ "found": false, "key": key })),
+        None => Ok(json!({ "found": false, "issue_key": key })),
     }
 }
 
 fn tool_update(conn: &Connection, issue: &str, status: &str) -> Result<Value, String> {
     let key = parse_issue_ref(issue)?;
-    // 优先四态（含中文）归一化；若非四态，校验是否为该任务所属账号的自定义列 col_key，
-    // 均不命中则拒绝，规避任务落入未知列而从看板消失。
-    let sk = match resolve_status(status) {
-        Some(s) => s.to_string(),
-        None => {
-            let account_id: Option<i64> = conn
-                .query_row(
-                    "SELECT account_id FROM tasks WHERE key = ?1 LIMIT 1",
-                    rusqlite::params![key],
-                    |r| r.get(0),
-                )
-                .map(Some)
-                .unwrap_or(None);
-            let hit = match account_id {
-                Some(aid) => crate::db::list_account_columns(conn, aid)?
-                    .iter()
-                    .any(|c| c.col_key == status),
-                None => false,
-            };
-            if hit {
-                status.to_string()
-            } else {
-                return Err(format!(
-                    "非法状态: {status}（应为四态 todo/doing/processed/done 或该任务账号的自定义列）"
-                ));
-            }
-        }
-    };
-    let n = conn
-        .execute(
-            "UPDATE tasks SET status = ?1 WHERE key = ?2",
-            rusqlite::params![sk, key],
-        )
-        .map_err(|e| e.to_string())?;
+    // v0.3.49 (#147)：归一化 + 校验 + 写入走公共模块（与 commands.rs 同一实现）。
+    let t = status.trim();
+    if t.is_empty() {
+        return Err("状态不能为空".to_string());
+    }
+    let sk = resolve_status(t).unwrap_or_else(|| t.to_string());
+    let n = crate::common::set_task_status(conn, &key, &sk)?;
     if n == 0 {
         return Err(format!("任务不存在: {key}"));
     }
-    Ok(json!({ "ok": true, "key": key, "status": sk }))
+    Ok(json!({ "ok": true, "issue_key": key, "status": sk }))
 }
 
 fn tool_record_session(
@@ -238,52 +205,37 @@ fn tool_record_session(
     }
     let agent = agent.unwrap_or_default().trim().to_string();
     let now = crate::sync::now_secs();
-    let n = conn
-        .execute(
-            "UPDATE tasks SET session_id = ?1, session_agent = ?2, session_at = ?3 WHERE key = ?4",
-            rusqlite::params![sid, agent, now, key],
-        )
-        .map_err(|e| e.to_string())?;
+    // v0.3.49 (#147)：SQL 走公共模块（与 commands.rs 同一实现）。
+    let n = crate::common::touch_session(conn, &key, sid, Some(&agent), now)?;
     if n == 0 {
         return Err(format!("任务不存在: {key}"));
     }
-    Ok(json!({ "ok": true, "key": key }))
+    Ok(json!({ "ok": true, "issue_key": key }))
 }
 
 fn tool_record_handoff(conn: &Connection, issue: &str, text: &str) -> Result<Value, String> {
     let key = parse_issue_ref(issue)?;
-    let n = conn
-        .execute(
-            "UPDATE tasks SET handoff = ?1 WHERE key = ?2",
-            rusqlite::params![text, key],
-        )
-        .map_err(|e| e.to_string())?;
+    // v0.3.49 (#147)：SQL 走公共模块（与 commands.rs 同一实现）。
+    let n = crate::common::record_task_handoff(conn, &key, text)?;
     if n == 0 {
         return Err(format!("任务不存在: {key}"));
     }
-    Ok(json!({ "ok": true, "key": key, "handoff_len": text.len() }))
+    Ok(json!({ "ok": true, "issue_key": key, "handoff_len": text.len() }))
 }
 
 fn tool_clear_session(conn: &Connection, issue: &str) -> Result<Value, String> {
     let key = parse_issue_ref(issue)?;
-    let n = conn
-        .execute(
-            "UPDATE tasks SET session_id = NULL, session_agent = NULL WHERE key = ?1",
-            [key.clone()],
-        )
-        .map_err(|e| e.to_string())?;
+    // v0.3.49 (#147)：SQL 走公共模块（与 commands.rs 同一实现）。
+    let n = crate::common::clear_task_session(conn, &key)?;
     if n == 0 {
         return Err(format!("任务不存在: {key}"));
     }
-    Ok(json!({ "ok": true, "key": key }))
+    Ok(json!({ "ok": true, "issue_key": key }))
 }
 
 // ============================================================================
 // v0.3.28+：记事本工具（与 `mcp_server/server.py` 同名同参，返回结构一致）
 // ============================================================================
-
-/// 合法记事标签（与 `mcp_server/server.py::VALID_NOTE_LABELS` 一致）。
-const NOTE_LABELS: [&str; 4] = ["low", "medium", "high", "urgent"];
 
 /// 序列化为 snake_case，与既有工具（session_id 等）及 server.py 的 sqlite row 保持一致。
 fn note_to_value(n: &crate::db::Note) -> Value {
@@ -296,16 +248,9 @@ fn note_to_value(n: &crate::db::Note) -> Value {
     })
 }
 
+/// v0.3.49 (#147)：标签归一化走公共模块（与 commands.rs 同一实现）。
 fn normalize_note_label(label: Option<&str>) -> Result<String, String> {
-    let l = label.unwrap_or("low").trim().to_lowercase();
-    if l.is_empty() {
-        return Ok("low".to_string());
-    }
-    if NOTE_LABELS.contains(&l.as_str()) {
-        Ok(l)
-    } else {
-        Err(format!("无效标签: {l}（可选: low/medium/high/urgent）"))
-    }
+    crate::common::normalize_note_label(label)
 }
 
 /// `note_id` 既接受 JSON 数字，也容忍字符串形式的数字（部分 agent 会传字符串）。
@@ -660,7 +605,7 @@ fn read_message(r: &mut impl Read) -> Option<(Value, Framing)> {
         return match serde_json::from_slice(&line) {
             Ok(v) => Some((v, Framing::Ndjson)),
             Err(e) => {
-                eprintln!("[taskboard-mcp] NDJSON 解析失败，跳过该行: {e}");
+                crate::tlog!("[taskboard-mcp] NDJSON 解析失败，跳过该行: {e}");
                 None
             }
         };
@@ -718,14 +663,14 @@ pub fn run() {
     let path = match db_path_for_mcp() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("[taskboard-mcp] 无法确定数据库路径: {e}");
+            crate::tlog!("[taskboard-mcp] 无法确定数据库路径: {e}");
             std::process::exit(1);
         }
     };
     let conn = match crate::db::open_db(&path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!(
+            crate::tlog!(
                 "[taskboard-mcp] 打开数据库失败（请先运行一次 TaskBoard App 生成 {}）: {e}",
                 path.display()
             );
@@ -733,7 +678,7 @@ pub fn run() {
         }
     };
     if let Err(e) = conn.execute_batch("PRAGMA busy_timeout=5000;") {
-        eprintln!("[taskboard-mcp] 设置 busy_timeout 失败: {e}");
+        crate::tlog!("[taskboard-mcp] 设置 busy_timeout 失败: {e}");
     }
 
     let mut stdin = std::io::stdin();
@@ -750,7 +695,7 @@ pub fn run() {
         handled += 1;
     }
     if handled == 0 {
-        eprintln!(
+        crate::tlog!(
             "[taskboard-mcp] 未收到任何有效 JSON-RPC 消息即断开——请检查客户端分帧格式"
         );
     }

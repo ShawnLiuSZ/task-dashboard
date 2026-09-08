@@ -171,10 +171,10 @@ def tool_update_task_status(issue, status):
     sk = resolve_status(status)
     if not sk:
         raise ValueError(f"非法状态: {status}（应为 todo/doing/processed/done 或中文四态）")
-    cur = conn().execute("UPDATE tasks SET status=? WHERE key=?", (sk, key))
+    cur = conn().execute("UPDATE tasks SET status=? WHERE issue_key=?", (sk, key))
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
-    return {"ok": True, "key": key, "status": sk}
+    return {"ok": True, "issue_key": key, "status": sk}
 
 
 def tool_record_session(issue, session_id, agent=None):
@@ -183,12 +183,12 @@ def tool_record_session(issue, session_id, agent=None):
     if not sid:
         raise ValueError("session_id 不能为空")
     cur = conn().execute(
-        "UPDATE tasks SET session_id=?, session_agent=?, session_at=? WHERE key=?",
+        "UPDATE tasks SET session_id=?, session_agent=?, session_at=? WHERE issue_key=?",
         (sid, (agent or "").strip(), int(time.time()), key),
     )
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
-    return {"ok": True, "key": key}
+    return {"ok": True, "issue_key": key}
 
 
 def tool_record_handoff(issue, text):
@@ -203,11 +203,11 @@ def tool_record_handoff(issue, text):
 def tool_clear_session(issue):
     key = parse_issue_ref(issue)
     cur = conn().execute(
-        "UPDATE tasks SET session_id=NULL, session_agent=NULL WHERE key=?", (key,)
+        "UPDATE tasks SET session_id=NULL, session_agent=NULL WHERE issue_key=?", (key,)
     )
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
-    return {"ok": True, "key": key}
+    return {"ok": True, "issue_key": key}
 
 
 # --------------------------------------------------------------------------- #

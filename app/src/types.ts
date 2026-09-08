@@ -40,16 +40,16 @@ export interface ProjectStatus {
 }
 
 export interface Task {
-  key: string;
+  issueKey: string;
   owner: string;
   repo: string;
   number: number;
   title: string;
   url: string;
-  ghState: string;
+  issueState: string;
   ownership: Ownership;
   status: StatusKey;
-  ghStatus: string;
+  projectStatus: string;
   assignees: string;
   mentioned: boolean;
   latestCommentUrl: string;
@@ -61,7 +61,7 @@ export interface Task {
   sessionAt: number | null;
   candidateDone: boolean;
   handoff: string;
-  updatedAt: string | null;
+  updatedAt: number | null;
   /** v0.3.16+：归属账号 id（指向 accounts.id）。 */
   accountId: number;
 }
@@ -163,6 +163,25 @@ export interface LabelMappingInput {
   label: string;
   status: StatusKey;
   orderIndex: number;
+}
+
+/** v0.3.22+：Project Status 诊断返回（后端 snake_case 原样）。 */
+export interface DiagnosedProject {
+  github_id: string;
+  name: string;
+  number_of_items: number;
+  owner_type: string;
+  fields: string[];
+}
+
+/** v0.3.49 (#148)：`diagnose_project_status` 命令返回值，替代此前的 `any`。 */
+export interface DiagnoseResult {
+  org: string;
+  login: string;
+  projects: DiagnosedProject[];
+  status_count: number;
+  /** `repo#number -> Status 原文` 采样（后端为 `[key, value][]` 数组）。 */
+  sample_statuses: [string, string][] | null;
 }
 
 /** v0.3.21+：Label 列视图的列配置（含兜底「未标记」列）。 */

@@ -6,7 +6,8 @@
   --border-strong: rgba(0, 0, 0, 0.2);
   --text: #1d1d1f;
   --text-2: #6e6e73;
-  --text-3: #9a9aa0;
+  /* v0.3.49 (#150)：加深弱文本，对比度从 ~2.8:1 提到 AA 级（浅底上 ≥ 4.5:1）。 */
+  --text-3: #6b6b70;
   --accent: #0a6cff;
   --amber-bg: #fdf0d5;
   --amber-text: #8a5a00;
@@ -230,6 +231,10 @@ body {
 
 /* 列底色保持中性，状态色只落在列头胶囊上，与白色卡片不打架。 */
 .column-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
   margin: 8px 8px 2px;
   padding: 5px 10px;
   border-radius: 7px;
@@ -260,13 +265,6 @@ body {
 }
 .column-head .count {
   margin-left: auto;
-}
-
-.column-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
 }
 
 .column-title {
@@ -549,16 +547,7 @@ body {
 .gh-status-18 { background: #fdf4ff; color: #a21caf; border-color: #f0abfc; }
 .gh-status-19 { background: #fefce8; color: #a16207; border-color: #fef08a; }
 
-/* v0.3.17+：issue 状态独立行（标题下方），左对齐、不与标题行挤占。
-   （后调整：状态徽章回到 card-top「★我的」之后，本行样式保留仅供回退参考。） */
-.gh-status-row {
-  display: flex;
-  margin: -2px 0 4px;
-}
-
-.gh-status-row .gh-status {
-  margin-left: 0;
-}
+/* v0.3.49 (#150)：.gh-status-row 已无引用（状态徽章回到 card-top），死码删除。 */
 
 /* v0.3.17+：账号徽章独占卡片最顶行。 */
 .account-row-top {
@@ -1760,4 +1749,11 @@ body {
 .note-error .note-tool:hover {
   background: rgba(163, 45, 45, 0.12);
   color: #a32d2d;
+}
+
+/* v0.3.49 (#150)：减弱动效偏好下关闭所有过渡。 */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
 }
