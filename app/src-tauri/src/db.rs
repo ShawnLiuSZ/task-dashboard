@@ -1131,15 +1131,23 @@ pub fn list_sync_logs(conn: &Connection, limit: i64) -> Result<Vec<SyncLog>, Str
     Ok(out)
 }
 
-/// 清理超过 7 天的同步日志（保留策略）。
+/// 清理超过 30 天的同步日志（保留策略）。
 pub fn prune_sync_logs(conn: &Connection, now: i64) -> Result<usize, String> {
-    let seven_days_secs = 7 * 24 * 60 * 60;
+    let thirty_days_secs = 30 * 24 * 60 * 60;
     let n = conn
         .execute(
             "DELETE FROM sync_logs WHERE ?1 - created_at > ?2",
-            [now, seven_days_secs],
+            [now, thirty_days_secs],
         )
         .map_err(|e| format!("清理过期同步日志失败: {e}"))?;
+    Ok(n)
+}
+
+/// 清空全部同步日志（不可恢复）。
+pub fn clear_sync_logs(conn: &Connection) -> Result<usize, String> {
+    let n = conn
+        .execute("DELETE FROM sync_logs", [])
+        .map_err(|e| format!("清空同步日志失败: {e}"))?;
     Ok(n)
 }
 

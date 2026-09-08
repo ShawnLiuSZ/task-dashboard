@@ -3,6 +3,13 @@ import { api } from "../api";
 import { useI18n } from "../i18n";
 import type { SyncLog } from "../types";
 
+/** v0.3.49+：同步触发类型映射。 */
+const TRIGGER_LABELS: Record<string, string> = {
+  auto: "自动",
+  manual: "手动",
+  startup: "启动",
+};
+
 interface Props {
   onClose: () => void;
 }
@@ -35,19 +42,13 @@ function StatusBadge({ status }: { status: string }) {
   return <span className="badge muted">⏳ 进行中</span>;
 }
 
-/** v0.3.49+：同步触发类型映射。 */
-const TRIGGER_LABELS: Record<string, string> = {
-  auto: "自动",
-  manual: "手动",
-  startup: "启动",
-};
-
 /** v0.3.23+ 同步日志弹窗：展示最近的同步历史与错误。 */
 export default function SyncLogsPanel({ onClose }: Props) {
   const { t } = useI18n();
   const [logs, setLogs] = useState<SyncLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [pruning, setPruning] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadLogs = useCallback(async () => {
@@ -79,6 +80,19 @@ export default function SyncLogsPanel({ onClose }: Props) {
       setError(String(e));
     } finally {
       setPruning(false);
+    }
+  }, [loadLogs]);
+
+  const handleClear = useCallback(async () => {
+    setClearing(true);
+    try {
+      await api.clearSyncLogs();
+      await loadLogs();
+    } catch (e) {
+      console.error("清空同步日志失败:", e);
+      setError(String(e));
+    } finally {
+      setClearing(false);
     }
   }, [loadLogs]);
 
@@ -143,7 +157,18 @@ export default function SyncLogsPanel({ onClose }: Props) {
             onClick={handlePrune}
             disabled={pruning}
           >
-            {pruning ? "清理中..." : "清理过期日志"}
+            {pruning ? "清理中..." : t("syncLogs.pruneExpired")}
+          </button>
+          <button
+            className="btn ghost"
+            onClick={() => {
+              if (window.confirm(t("syncLogs.clearAllConfirm"))) {
+                void handleClear();
+              }
+            }}
+            disabled={clearing}
+          >
+            {clearing ? "清理中..." : t("syncLogs.clearAll")}
           </button>
         </div>
       </div>
