@@ -1,4 +1,5 @@
 use rusqlite::{Connection, Result};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
@@ -140,7 +141,14 @@ CREATE TABLE IF NOT EXISTS notes (
 	  order_index INTEGER NOT NULL DEFAULT 0,
 	  UNIQUE(account_id, col_key)
 	);
-	CREATE INDEX IF NOT EXISTS idx_account_columns_account ON account_columns(account_id);
+ 	CREATE INDEX IF NOT EXISTS idx_account_columns_account ON account_columns(account_id);
+
+-- v0.3.49：热查询复合/覆盖索引（#146）。execute_batch 每次 open_db 都跑，
+-- IF NOT EXISTS 保证老库幂等补齐、新库直接建好。
+CREATE INDEX IF NOT EXISTS idx_label_mappings_org_repo_label ON label_mappings(org, repo, label);
+CREATE INDEX IF NOT EXISTS idx_tasks_board ON tasks(account_id, candidate_done, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tasks_status_done_at ON tasks(status, done_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notes_content ON notes(content);
 	"#;
 
 pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
@@ -205,6 +213,13 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
     let _ = conn.pragma_update(None, "synchronous", "NORMAL");
     let _ = conn.pragma_update(None, "busy_timeout", 5000);
+    // v0.3.49 (#146)：notes.content 即将加唯一索引，老库若有重复 content 会导致
+    // 下面的 execute_batch 直接失败、整个库打不开。先去重（保留最早 id），
+    // best-effort：首建库时 notes 表尚不存在，报错忽略即可。
+    let _ = conn.execute(
+        "DELETE FROM notes WHERE id NOT IN (SELECT MIN(id) FROM notes GROUP BY content)",
+        [],
+    );
     // schema 初始化（WAL 模式下多个连接可并发读，但写仍互斥）。
     conn.execute_batch(SCHEMA)
         .map_err(|e| format!("初始化表结构失败: {}", e))?;
@@ -932,6 +947,9 @@ pub fn delete_label_mapping(conn: &Connection, id: i64) -> Result<(), String> {
 
 /// 根据 org/repo/labels 解析状态（优先级：repo 映射 > org 映射 > 全局默认 > 兜底 state）。
 /// labels 为逗号分隔的字符串。
+///
+/// v0.3.49 (#144)：逻辑已下沉到纯内存的 [`resolve_status_from_rules`]，
+/// 本函数仅做一次全量加载后委托（调用方应优先用预加载版本，避免任务循环内 N+1 查询）。
 pub fn resolve_status_from_labels(
     conn: &Connection,
     org: &str,
@@ -939,38 +957,10 @@ pub fn resolve_status_from_labels(
     labels_csv: &str,
     fallback_state: &str,
 ) -> String {
-    // 解析 labels
-    let labels: Vec<&str> = labels_csv
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-    if labels.is_empty() {
-        return fallback_state_from_gh_state(fallback_state);
+    match load_label_rules(conn) {
+        Ok(rules) => resolve_status_from_rules(&rules, org, repo, labels_csv, fallback_state),
+        Err(_) => fallback_state_from_gh_state(fallback_state),
     }
-
-    // 先尝试 repo 级映射（精确匹配 org+repo+label）
-    for label in &labels {
-        if let Ok(mapped) = conn.query_row(
-            "SELECT status FROM label_mappings WHERE org = ?1 AND repo = ?2 AND label = ?3",
-            rusqlite::params![org, repo, label],
-            |r| r.get::<_, String>(0),
-        ) {
-            return mapped;
-        }
-    }
-    // 再尝试 org 级映射（repo 为空字符串）
-    for label in &labels {
-        if let Ok(mapped) = conn.query_row(
-            "SELECT status FROM label_mappings WHERE org = ?1 AND repo = '' AND label = ?2",
-            rusqlite::params![org, label],
-            |r| r.get::<_, String>(0),
-        ) {
-            return mapped;
-        }
-    }
-    // 最后回退到 state 逻辑
-    fallback_state_from_gh_state(fallback_state)
 }
 
 /// 为 Label 列视图获取某账号的列配置：返回该账号 org 下的 label 映射（按 order_index 排序）。
@@ -1023,6 +1013,169 @@ fn fallback_state_from_gh_state(gh_state: &str) -> String {
     } else {
         "todo".to_string() // open 默认待处理，实际同步时会被 Project Status 覆盖
     }
+}
+
+// ============================================================================
+// v0.3.49 (#144)：同步热路径预加载 — 任务循环外一次加载、循环内 O(1) 查。
+// 语义与逐条查询版本完全一致（repo 级 > org 级；列按 order_index 先命中者胜）。
+// ============================================================================
+
+/// 预加载的 label 映射规则（`label_mappings` 全量快照）。
+#[derive(Debug, Clone)]
+pub struct LabelRule {
+    pub org: String,
+    pub repo: String,
+    pub label: String,
+    pub status: String,
+}
+
+/// 一次加载全部 label 映射规则（同步任务循环外调用一次）。
+pub fn load_label_rules(conn: &Connection) -> Result<Vec<LabelRule>, String> {
+    let mut stmt = conn
+        .prepare("SELECT org, repo, label, status FROM label_mappings")
+        .map_err(|e| format!("预加载 label 映射失败: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(LabelRule {
+                org: r.get(0)?,
+                repo: r.get(1)?,
+                label: r.get(2)?,
+                status: r.get(3)?,
+            })
+        })
+        .map_err(|e| format!("遍历 label 映射失败: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取 label 映射行失败: {e}"))?);
+    }
+    Ok(out)
+}
+
+/// 纯内存解析 label → 状态。优先级与旧逐条查询版本一致：
+/// 先按 labels 出现顺序查 repo 级（org+repo+label），再按同样顺序查 org 级（repo=''）。
+pub fn resolve_status_from_rules(
+    rules: &[LabelRule],
+    org: &str,
+    repo: &str,
+    labels_csv: &str,
+    fallback_state: &str,
+) -> String {
+    let labels: Vec<&str> = labels_csv
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if labels.is_empty() {
+        return fallback_state_from_gh_state(fallback_state);
+    }
+    for label in &labels {
+        if let Some(rule) = rules
+            .iter()
+            .find(|r| r.org == org && r.repo == repo && r.label == *label)
+        {
+            return rule.status.clone();
+        }
+    }
+    for label in &labels {
+        if let Some(rule) = rules
+            .iter()
+            .find(|r| r.org == org && r.repo.is_empty() && r.label == *label)
+        {
+            return rule.status.clone();
+        }
+    }
+    fallback_state_from_gh_state(fallback_state)
+}
+
+/// 预加载的自定义列规则（`match_rules` JSON 已解析一次，顺序即 order_index 升序）。
+#[derive(Debug, Clone)]
+pub struct ColumnRule {
+    pub col_key: String,
+    pub rules: Vec<String>,
+}
+
+/// 一次加载某账号的自定义列规则（`match_rules` 解析一次；非法 JSON 的列跳过）。
+pub fn load_column_rules(conn: &Connection, account_id: i64) -> Result<Vec<ColumnRule>, String> {
+    let columns = list_account_columns(conn, account_id)?;
+    let mut out = Vec::new();
+    for col in &columns {
+        match serde_json::from_str::<Vec<String>>(&col.match_rules) {
+            Ok(rules) => out.push(ColumnRule {
+                col_key: col.col_key.clone(),
+                rules,
+            }),
+            Err(e) => {
+                if verbose_enabled() {
+                    eprintln!(
+                        "[db] 自定义列 {} 的 match_rules 非法，已跳过: {}",
+                        col.col_key, e
+                    );
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// 纯内存解析 gh_status → 列 key（首个命中的列胜出，与旧循环顺序一致）。
+pub fn resolve_column_from_rules(rules: &[ColumnRule], gh_status: &str) -> Option<String> {
+    if gh_status.is_empty() {
+        return None;
+    }
+    for col in rules {
+        if col.rules.iter().any(|r| r == gh_status) {
+            return Some(col.col_key.clone());
+        }
+    }
+    None
+}
+
+/// 同步循环外一次加载的既有任务快照（同一 `account_id`）。
+#[derive(Debug, Clone, Default)]
+pub struct ExistingTask {
+    pub status: String,
+    pub comments: i64,
+    pub mentioned: i64,
+    pub pr_number: i64,
+    pub pr_url: String,
+    pub comment_url: String,
+    pub branch: String,
+}
+
+/// 一次加载某账号下全部任务的既有快照，key 为 `repo#number`。
+pub fn load_existing_tasks(
+    conn: &Connection,
+    account_id: i64,
+) -> Result<HashMap<String, ExistingTask>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT key, status, comments_count, mentioned, pr_number, pr_url,
+                    latest_comment_url, branch
+             FROM tasks WHERE account_id = ?1",
+        )
+        .map_err(|e| format!("预加载既有任务失败: {e}"))?;
+    let rows = stmt
+        .query_map([account_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                ExistingTask {
+                    status: r.get(1)?,
+                    comments: r.get(2)?,
+                    mentioned: r.get(3)?,
+                    pr_number: r.get(4)?,
+                    pr_url: r.get(5)?,
+                    comment_url: r.get(6)?,
+                    branch: r.get(7)?,
+                },
+            ))
+        })
+        .map_err(|e| format!("遍历既有任务失败: {e}"))?;
+    let mut out = HashMap::new();
+    for r in rows {
+        let (k, v) = r.map_err(|e| format!("读取既有任务行失败: {e}"))?;
+        out.insert(k, v);
+    }
+    Ok(out)
 }
 
 // ============================================================================
@@ -1353,23 +1506,16 @@ pub fn save_account_columns(
 /// 根据账号的列映射规则，解析 gh_status 对应的列 key。
 /// 遍历所有列，逐一检查 match_rules JSON 数组是否包含该 gh_status。
 /// 若命中，返回该列的 col_key；否则返回 None（由 sync 回退到默认逻辑）。
+///
+/// v0.3.49 (#144)：逻辑已下沉到纯内存的 [`resolve_column_from_rules`]，
+/// 本函数仅做一次加载后委托（调用方应优先用预加载版本）。
 pub fn resolve_column_from_gh_status(
     conn: &Connection,
     account_id: i64,
     gh_status: &str,
 ) -> Option<String> {
-    if gh_status.is_empty() {
-        return None;
-    }
-    let columns = list_account_columns(conn, account_id).ok()?;
-    for col in &columns {
-        if let Ok(rules) = serde_json::from_str::<Vec<String>>(&col.match_rules) {
-            if rules.iter().any(|r| r == gh_status) {
-                return Some(col.col_key.clone());
-            }
-        }
-    }
-    None
+    let rules = load_column_rules(conn, account_id).ok()?;
+    resolve_column_from_rules(&rules, gh_status)
 }
 
 /// v0.3.27+：导入记事。按内容 `content` 去重，已存在则跳过；保留导入文件的
@@ -1397,4 +1543,144 @@ pub fn import_note(
     )
     .map_err(|e| format!("导入记事失败: {e}"))?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp_db(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "taskboard_db_test_{}_{}",
+            name,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("taskboard.db")
+    }
+
+    /// #146：热查询索引必须存在（新库建出、老库幂等补齐）。
+    #[test]
+    fn perf_indexes_exist_after_open() {
+        let path = tmp_db("indexes");
+        let conn = open_db(&path).unwrap();
+        for idx in [
+            "idx_label_mappings_org_repo_label",
+            "idx_tasks_board",
+            "idx_tasks_status_done_at",
+            "idx_notes_content",
+        ] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                    [idx],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "索引 {idx} 应存在");
+        }
+        // 幂等：重复 open 不报错。
+        drop(conn);
+        let _ = open_db(&path).unwrap();
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #146：老库 notes 有重复 content 时 open_db 不炸，且去重保留最早 id。
+    #[test]
+    fn notes_dedup_before_unique_index() {
+        let path = tmp_db("dedup");
+        {
+            let conn = open_db(&path).unwrap();
+            conn.execute(
+                "INSERT INTO notes (content, label, created_at, updated_at) VALUES ('dup', 'low', 1, 1)",
+                [],
+            )
+            .unwrap();
+            // 先删索引再插脏数据，模拟老库在唯一索引建成前的重复行。
+            conn.execute("DROP INDEX idx_notes_content", []).unwrap();
+            conn.execute(
+                "INSERT INTO notes (content, label, created_at, updated_at) VALUES ('dup', 'high', 2, 2)",
+                [],
+            )
+            .unwrap();
+        }
+        // 重开：去重生效 + 唯一索引重建，不报错。
+        let conn = open_db(&path).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM notes WHERE content = 'dup'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(n, 1, "重复 content 应只剩 1 条");
+        let label: String = conn
+            .query_row("SELECT label FROM notes WHERE content = 'dup'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(label, "low", "应保留最早 id 的记录");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #144：纯内存解析与旧逐条查询语义一致（repo 级 > org 级 > 兜底）。
+    #[test]
+    fn resolve_status_from_rules_matches_priority() {
+        let rules = vec![
+            LabelRule {
+                org: "acme".into(),
+                repo: "".into(),
+                label: "bug".into(),
+                status: "doing".into(),
+            },
+            LabelRule {
+                org: "acme".into(),
+                repo: "web".into(),
+                label: "bug".into(),
+                status: "processed".into(),
+            },
+        ];
+        // repo 级优先于 org 级。
+        assert_eq!(
+            resolve_status_from_rules(&rules, "acme", "web", "bug", "open"),
+            "processed"
+        );
+        // 无 repo 映射时回退 org 级。
+        assert_eq!(
+            resolve_status_from_rules(&rules, "acme", "api", "bug", "open"),
+            "doing"
+        );
+        // 无命中回退 state 兜底。
+        assert_eq!(
+            resolve_status_from_rules(&rules, "acme", "web", "chore", "closed"),
+            "done"
+        );
+        assert_eq!(
+            resolve_status_from_rules(&rules, "acme", "web", "", "open"),
+            "todo"
+        );
+    }
+
+    /// #144：列规则首个命中胜出，空 gh_status 返回 None。
+    #[test]
+    fn resolve_column_from_rules_first_hit_wins() {
+        let rules = vec![
+            ColumnRule {
+                col_key: "a".into(),
+                rules: vec!["需求".into()],
+            },
+            ColumnRule {
+                col_key: "b".into(),
+                rules: vec!["需求".into(), "开发中".into()],
+            },
+        ];
+        assert_eq!(
+            resolve_column_from_rules(&rules, "开发中"),
+            Some("b".to_string())
+        );
+        assert_eq!(resolve_column_from_rules(&rules, "需求"), Some("a".to_string()));
+        assert_eq!(resolve_column_from_rules(&rules, ""), None);
+        assert_eq!(resolve_column_from_rules(&rules, "未知"), None);
+    }
 }
