@@ -2,11 +2,16 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.52 (2026-09-08) — Settings-panel freeze fix (#167)**
+
+  - **#167 UI freezes when opening settings during sync/diagnosis**: `diagnose_project_status`, `test_pat`, `test_account_pat`, `save_pat`, `add_account` and `update_account` were synchronous commands containing GitHub network I/O; running them on the Tauri main thread blocked the event loop → macOS beachball. All six were converted to `async + spawn_blocking` (same pattern as `sync_now` in v0.3.7), moving network work to a worker-thread pool while the main thread only fetches DB data quickly and returns. Pure-SQL config commands are unaffected; sync uses a separate connection and WAL so readers are never blocked. Zero API change, zero frontend change. See [docs/issue-167-async-net-commands.md](./issue-167-async-net-commands.md).
+
 - **v0.3.51 (2026-09-08) — Frontend fix trio (#159 #160 #161)**
 
   - **#159 Custom-column mode falls back to project columns when empty**: Selecting "Custom columns" for an account with no columns configured no longer misleadingly falls back to the four-state columns; it now falls back to the project.status columns. See [docs/issue-159-160-161-frontend-bugs.md](./issue-159-160-161-frontend-bugs.md).
   - **#160 In-app confirm dialog replaces window.confirm**: Tauri WebView has no native `window.confirm` (silently returns false), so the second-step confirmation for "Clear all logs" and "Delete account" now uses an in-app ConfirmDialog, fixing the click-does-nothing issue. See [docs/issue-159-160-161-frontend-bugs.md](./issue-159-160-161-frontend-bugs.md).
   - **#161 Sync-log error messages are expandable**: Error cells are single-line truncated by default, show the full text on hover, and expand/collapse on click. See [docs/issue-159-160-161-frontend-bugs.md](./issue-159-160-161-frontend-bugs.md).
+  - **#163 Frontend tests added**: 3 new test files with 18 cases (21 total), zero new dependencies, covering the #159/#160/#161 fixes; extracted 4 pure functions (e.g. `resolveBoardView`) for testability. See [docs/issue-163-frontend-tests.md](./issue-163-frontend-tests.md).
   - **#165 Unmapped-value hint in custom view**: The "Unlabeled" column now shows unmapped `project_status` values (deduplicated with counts, full list on hover) so missing/mismatched custom columns are easy to spot. See [docs/issue-165-unmapped-hint.md](./issue-165-unmapped-hint.md).
 
 - **v0.3.50 (2026-09-08) — tasks table physical rebuild (#155)**
