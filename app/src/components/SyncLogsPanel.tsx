@@ -3,12 +3,13 @@ import { api } from "../api";
 import { useI18n } from "../i18n";
 import type { SyncLog } from "../types";
 
-/** v0.3.49+：同步触发类型映射。 */
-const TRIGGER_LABELS: Record<string, string> = {
-  auto: "自动",
-  manual: "手动",
-  startup: "启动",
-};
+/** v0.3.49 (#148)：同步触发类型走 i18n（此前硬编码中文）。 */
+function triggerLabel(t: (key: string) => string, triggerType: string): string {
+  if (triggerType === "auto") return t("syncLogs.trigger.auto");
+  if (triggerType === "manual") return t("syncLogs.trigger.manual");
+  if (triggerType === "startup") return t("syncLogs.trigger.startup");
+  return triggerType;
+}
 
 interface Props {
   onClose: () => void;
@@ -31,15 +32,15 @@ function duration(start: number, end: number): string {
   return `${mins}m ${rem}s`;
 }
 
-/** 状态徽章。 */
-function StatusBadge({ status }: { status: string }) {
+/** 状态徽章（文案走 i18n）。 */
+function StatusBadge({ status, t }: { status: string; t: (key: string) => string }) {
   if (status === "success") {
-    return <span className="badge success">✓ 成功</span>;
+    return <span className="badge success">✓ {t("syncLogs.status.success")}</span>;
   }
   if (status === "failed") {
-    return <span className="badge error">✗ 失败</span>;
+    return <span className="badge error">✗ {t("syncLogs.status.failed")}</span>;
   }
-  return <span className="badge muted">⏳ 进行中</span>;
+  return <span className="badge muted">⏳ {t("syncLogs.status.running")}</span>;
 }
 
 /** v0.3.23+ 同步日志弹窗：展示最近的同步历史与错误。 */
@@ -96,44 +97,59 @@ export default function SyncLogsPanel({ onClose }: Props) {
     }
   }, [loadLogs]);
 
+  // v0.3.49 (#150)：Esc 关闭 + dialog 语义。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal sync-logs-modal" onClick={(e) => e.stopPropagation()}>
-        <h3 className="modal-title">同步日志</h3>
+      <div
+        className="modal sync-logs-modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("syncLogs.title")}
+      >
+        <h3 className="modal-title">{t("syncLogs.title")}</h3>
 
         <div className="sync-logs-body">
           {error ? (
             <div className="banner error">{error}</div>
           ) : loading ? (
             <div className="muted small" style={{ padding: "12px 0" }}>
-              加载中...
+              {t("syncLogs.loading")}
             </div>
           ) : logs.length === 0 ? (
             <div className="muted small" style={{ padding: "12px 0" }}>
-              暂无同步日志
+              {t("syncLogs.empty")}
             </div>
           ) : (
             <div className="sync-logs-table-wrap">
               <table className="sync-logs-table">
                 <thead>
                   <tr>
-                    <th>时间</th>
-                    <th>触发</th>
-                    <th>耗时</th>
-                    <th>状态</th>
-                    <th>新增</th>
-                    <th>更新</th>
-                    <th>移除</th>
-                    <th>错误</th>
+                    <th>{t("syncLogs.headers.time")}</th>
+                    <th>{t("syncLogs.headers.trigger")}</th>
+                    <th>{t("syncLogs.headers.duration")}</th>
+                    <th>{t("syncLogs.headers.status")}</th>
+                    <th>{t("syncLogs.headers.added")}</th>
+                    <th>{t("syncLogs.headers.updated")}</th>
+                    <th>{t("syncLogs.headers.removed")}</th>
+                    <th>{t("syncLogs.headers.error")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {logs.map((log) => (
                     <tr key={log.id}>
                       <td className="nowrap">{formatTime(log.createdAt)}</td>
-                      <td>{TRIGGER_LABELS[log.triggerType] ?? log.triggerType}</td>
+                      <td>{triggerLabel(t, log.triggerType)}</td>
                       <td>{duration(log.startedAt, log.finishedAt)}</td>
-                      <td><StatusBadge status={log.status} /></td>
+                      <td><StatusBadge status={log.status} t={t} /></td>
                       <td>{log.added}</td>
                       <td>{log.updated}</td>
                       <td>{log.removed}</td>
@@ -157,7 +173,7 @@ export default function SyncLogsPanel({ onClose }: Props) {
             onClick={handlePrune}
             disabled={pruning}
           >
-            {pruning ? "清理中..." : t("syncLogs.pruneExpired")}
+            {pruning ? t("syncLogs.pruning") : t("syncLogs.pruneExpired")}
           </button>
           <button
             className="btn ghost"
@@ -168,7 +184,7 @@ export default function SyncLogsPanel({ onClose }: Props) {
             }}
             disabled={clearing}
           >
-            {clearing ? "清理中..." : t("syncLogs.clearAll")}
+            {clearing ? t("syncLogs.pruning") : t("syncLogs.clearAll")}
           </button>
         </div>
       </div>

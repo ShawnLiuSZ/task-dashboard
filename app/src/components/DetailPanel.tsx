@@ -114,7 +114,15 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
   };
 
   return (
-    <aside className="detail">
+    <aside
+      className="detail"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${task.repo}#${task.number}`}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+    >
       <div className="detail-head">
         <div>
           <span className="repo">{task.repo}</span>
