@@ -146,7 +146,6 @@
   "settings.boardModeTitle": "看板列模式",
   "settings.boardModeLabel": "看板模式",
   "settings.boardModeDesc": "为每个账号独立配置看板列展示方式：切换账号后按该账号配置展示，顶栏不再提供切换。",
-
   "settings.loading": "加载中…",
   "settings.boardModeProject": "Project 状态列",
   "settings.boardModeCustom": "自定义列（按账号配置映射规则）",
@@ -242,5 +241,6 @@
   "notes.exported": "已导出 {count} 条记事 → {path}",
   "notes.imported": "导入完成：新增 {imported} 条，跳过重复 {skipped} 条",
   "notes.noImportable": "文件中没有可导入的记事",
-  "notes.badFormat": "无法识别的格式：应为 notes-backup 导出文件"
+  "notes.badFormat": "无法识别的格式：应为 notes-backup 导出文件",
+  "board.unmappedHint": "未映射"
 }

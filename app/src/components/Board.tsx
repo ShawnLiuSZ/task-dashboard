@@ -63,6 +63,18 @@ function sortProjectStatusKeys(
   });
 }
 
+/** v0.3.51 (#165)：从未匹配任务中提取未映射的 project_status 值（去重 + 计数，按首次出现顺序，空值剔除）。
+ * 供「未标注」列提示用，让用户一眼看出哪些状态值没被任何自定义列覆盖。 */
+export function extractUnmappedStatuses(tasks: Task[]): { value: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const task of tasks) {
+    const v = task.projectStatus?.trim();
+    if (!v) continue;
+    counts.set(v, (counts.get(v) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([value, count]) => ({ value, count }));
+}
+
 // v0.3.49 (#145)：memo + 全量 useMemo。tasks 数组引用不变时整板跳过重渲染；
 // 分组/排序/颜色映射均为单遍计算，不再每列扫全量。
 function Board({
@@ -218,6 +230,19 @@ function Board({
               <span className="column-title">{t("detail.unlabeled")}</span>
               <span className="count">{unmatched.length}</span>
             </div>
+            {(() => {
+              // v0.3.51 (#165)：提示未映射的 project_status 值，帮助用户定位漏配/错配的列
+              const unmapped = extractUnmappedStatuses(unmatched);
+              if (unmapped.length === 0) return null;
+              const all = unmapped.map((u) => `${u.value}(${u.count})`).join("、");
+              const shown = unmapped.slice(0, 3).map((u) => `${u.value}(${u.count})`).join("、");
+              return (
+                <div className="unmapped-hint" title={all} aria-label={all}>
+                  {t("board.unmappedHint")}: {shown}
+                  {unmapped.length > 3 ? ` +${unmapped.length - 3}` : ""}
+                </div>
+              );
+            })()}
             <div className="column-body" role="list">
               {unmatched.map((task) => (
                 <TaskCard

@@ -146,7 +146,6 @@
   "settings.boardModeTitle": "Board Column Mode",
   "settings.boardModeLabel": "Board mode",
   "settings.boardModeDesc": "Per-account board column mode: the board follows each account's mode when switching accounts; the top-bar switch is removed.",
-
   "settings.loading": "Loading…",
   "settings.boardModeProject": "Project Status Columns",
   "settings.boardModeCustom": "Custom Columns (per-account mapping rules)",
@@ -242,5 +241,6 @@
   "notes.exported": "Exported {count} notes → {path}",
   "notes.imported": "Import done: {imported} added, {skipped} duplicates skipped",
   "notes.noImportable": "No importable notes in file",
-  "notes.badFormat": "Unrecognized format: expected a notes-backup export"
+  "notes.badFormat": "Unrecognized format: expected a notes-backup export",
+  "board.unmappedHint": "Unmapped"
 }
