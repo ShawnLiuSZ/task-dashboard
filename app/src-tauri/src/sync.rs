@@ -481,64 +481,38 @@ fn sync_account(
         }
     }
 
-    // 处理本账号下的陈旧任务：关闭的标为候选已完成，仍打开但已不相关的移出看板。
-    // 查询 owner（org）、repo、number、url 用于 fetch_state 构造完整仓库路径。
-    let mut stale_rows: Vec<(String, String, i64, String)> = Vec::new();
-    {
-        let mut stmt = conn
-            .prepare("SELECT key, repo, number, url FROM tasks WHERE stale = 1 AND account_id = ?1")
-            .map_err(|e| format!("查询陈旧任务失败: {}", e))?;
-        let rows = stmt
-            .query_map([account.id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?))
-            })
-            .map_err(|e| format!("遍历陈旧任务失败: {}", e))?;
-        for r in rows {
-            stale_rows.push(r.map_err(|e| e.to_string())?);
-        }
-    }
-
+    // v0.3.49+: 处理本账号下的陈旧任务：搜索未返回的任务必然已不再 open。
+    // GitHub Search API 只返回 open issue，因此 stale = 搜索没返回 = 已关闭或 assignee 变更。
+    // 优化：直接批量标记 candidate_done，省掉逐条 fetch_state 的 API 调用。
     let mut candidate_done = 0usize;
     let mut removed = 0usize;
     // v0.3.29：任一搜索源失败说明同步数据源不完整，stale 判定不可信。
-    // 此时对仍 open 的任务只解除 stale 保留本地记录，绝不删（避免误删真实关联任务）。
+    // 此时仅解除 stale 保留本地记录，绝不删（避免误删真实关联任务）。
     let sources_incomplete = !failed.is_empty();
-    for (key, repo, number, url) in stale_rows {
-        // 从 URL 提取 repo_owner（格式：https://github.com/{owner}/{repo}/issues/{number}）
-        let repo_owner_from_url = url
-            .split('/')
-            .nth(4)
-            .unwrap_or("")
-            .to_string();
-        match client.fetch_state(&repo, number, &repo_owner_from_url) {
-            Ok(state) if state == "closed" => {
-                conn.execute(
-                    "UPDATE tasks SET candidate_done = 1, gh_state = 'closed', status = 'done', stale = 0,
-                     done_at = CASE WHEN done_at = 0 THEN ?2 ELSE done_at END
-                     WHERE key = ?1 AND account_id = ?3",
-                    rusqlite::params![&key, &now, account.id],
-                )
-                .map_err(|e| format!("标记候选已完成失败: {}", e))?;
-                candidate_done += 1;
-            }
-            Ok(_) if sources_incomplete => {
-                // 搜索源不完整：该任务可能只是本次没被拉到，不能据此移出看板。
-                // 仅解除 stale，避免下次同步重复进入此分支；保留本地手动态。
-                conn.execute(
-                    "UPDATE tasks SET stale = 0 WHERE key = ?1 AND account_id = ?2",
-                    rusqlite::params![&key, account.id],
-                )
-                .map_err(|e| format!("保留不删除任务失败: {}", e))?;
-                eprintln!("[sync] 搜索源不完整（{}），保留任务不过删: {}", failed.join("; "), key);
-            }
-            Ok(_) => {
-                conn.execute("DELETE FROM tasks WHERE key = ?1 AND account_id = ?2", rusqlite::params![&key, account.id])
-                    .map_err(|e| format!("移除失效任务失败: {}", e))?;
-                removed += 1;
-            }
-            Err(_) => {
-                eprintln!("[sync] fetch_state 失败，保留任务不过删: {}", key);
-            }
+    if sources_incomplete {
+        // 搜索源不完整：只解除 stale 标记，保留任务
+        let n = conn
+            .execute(
+                "UPDATE tasks SET stale = 0 WHERE account_id = ?1 AND stale = 1",
+                [account.id],
+            )
+            .map_err(|e| format!("解除 stale 标记失败: {}", e))?;
+        if n > 0 {
+            eprintln!("[sync] 搜索源不完整，保留 {} 个任务不过删", n);
+        }
+    } else {
+        // 搜索源完整：stale 任务 = 已关闭或 assignee 变更，直接标记 candidate_done
+        let n = conn
+            .execute(
+                "UPDATE tasks SET candidate_done = 1, gh_state = 'closed', status = 'done', stale = 0,
+                 done_at = CASE WHEN done_at = 0 THEN ?2 ELSE done_at END
+                 WHERE account_id = ?1 AND stale = 1",
+                rusqlite::params![account.id, now],
+            )
+            .map_err(|e| format!("标记候选已完成失败: {}", e))?;
+        candidate_done = n as usize;
+        if candidate_done > 0 {
+            eprintln!("[sync] 标记 {} 个任务为候选已完成", candidate_done);
         }
     }
 
