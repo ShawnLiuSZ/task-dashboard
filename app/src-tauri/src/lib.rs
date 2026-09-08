@@ -170,7 +170,8 @@ fn open_sync_conn(app: &AppHandle) -> Result<Connection, String> {
 }
 
 /// 执行一次同步，并刷新菜单栏角标、通知前端刷新列表。
-pub fn run_sync(app: &AppHandle) -> Option<sync::SyncResult> {
+/// `trigger_type`: "startup" | "auto" | "manual" — 用于同步日志记录触发来源。
+pub fn run_sync(app: &AppHandle, trigger_type: &str) -> Option<sync::SyncResult> {
     // 并发去重。已有同步在跑（Tray/启动/定时/前端按钮并发触发）时直接跳过本次，
     // 避免背靠背跑多次全量同步：既放大 GitHub 限流又阻塞编辑。
     let state = app.state::<AppState>();
@@ -200,7 +201,7 @@ pub fn run_sync(app: &AppHandle) -> Option<sync::SyncResult> {
         );
         return None;
     }
-    let result = match sync::run(&conn) {
+    let result = match sync::run(&conn, trigger_type) {
         Ok(r) => {
             // 成功同步：清掉旧错误信息，banner 自动消失。
             let _ = db::set_setting(&conn, "last_sync_error", "");
@@ -257,7 +258,7 @@ pub fn run() {
                     "sync" => {
                         let h = app.clone();
                         thread::spawn(move || {
-                            run_sync(&h);
+                            run_sync(&h, "manual");
                         });
                     }
                     "quit" => app.exit(0),
@@ -282,14 +283,14 @@ pub fn run() {
             let h_startup = handle.clone();
             thread::spawn(move || {
                 thread::sleep(Duration::from_secs(2));
-                run_sync(&h_startup);
+                run_sync(&h_startup, "startup");
             });
 
             let h_tick = handle.clone();
             thread::spawn(move || loop {
                 let mins = schedule_minutes(&h_tick);
                 thread::sleep(Duration::from_secs(mins * 60));
-                run_sync(&h_tick);
+                run_sync(&h_tick, "auto");
             });
 
             Ok(())
