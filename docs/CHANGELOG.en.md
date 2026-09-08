@@ -2,6 +2,12 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.51 (2026-09-08) — Frontend fix trio (#159 #160 #161)**
+
+  - **#159 Custom-column mode falls back to project columns when empty**: Selecting "Custom columns" for an account with no columns configured no longer misleadingly falls back to the four-state columns; it now falls back to the project.status columns. See [docs/issue-159-160-161-frontend-bugs.md](./issue-159-160-161-frontend-bugs.md).
+  - **#160 In-app confirm dialog replaces window.confirm**: Tauri WebView has no native `window.confirm` (silently returns false), so the second-step confirmation for "Clear all logs" and "Delete account" now uses an in-app ConfirmDialog, fixing the click-does-nothing issue. See [docs/issue-159-160-161-frontend-bugs.md](./issue-159-160-161-frontend-bugs.md).
+  - **#161 Sync-log error messages are expandable**: Error cells are single-line truncated by default, show the full text on hover, and expand/collapse on click. See [docs/issue-159-160-161-frontend-bugs.md](./issue-159-160-161-frontend-bugs.md).
+
 - **v0.3.50 (2026-09-08) — tasks table physical rebuild (#155)**
   - **#155 tasks table physical rebuild**: Field naming fully clarified — `key→issue_key` (business reference, added), auto-increment `id` primary key + `UNIQUE(repo, number, account_id)` fixing multi-account overwrites, `gh_state→issue_state`, `gh_status→project_status` (semantic separation from the local four-state `status`), and `updated_at` normalized from TEXT to INTEGER seconds. Versioned migration based on `PRAGMA user_version` plus idempotent `key`-column detection; legacy DBs rebuild automatically with full data migration. See [docs/issue-155-tasks-schema-rebuild.md](./issue-155-tasks-schema-rebuild.md).
 
