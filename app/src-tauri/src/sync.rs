@@ -180,20 +180,20 @@ fn sync_account(
         Ok(projects) => {
             let github_ids: Vec<String> = projects.iter().map(|p| p.0.clone()).collect();
             if let Err(e) = crate::db::upsert_projects(conn, account.id, &projects, now) {
-                eprintln!("[sync] 存储项目列表失败: {}", e);
+                crate::tlog!("[sync] 存储项目列表失败: {}", e);
             }
             // 清理已不存在的项目
             if let Err(e) = crate::db::prune_projects(conn, account.id, &github_ids) {
-                eprintln!("[sync] 清理旧项目失败: {}", e);
+                crate::tlog!("[sync] 清理旧项目失败: {}", e);
             }
             // 旧项目状态选项先清空，后面并行拉到后再批量写入。
             if let Err(e) = crate::db::clear_project_statuses(conn, account.id) {
-                eprintln!("[sync] 清空旧项目状态失败: {}", e);
+                crate::tlog!("[sync] 清空旧项目状态失败: {}", e);
             }
             github_ids
         }
         Err(e) => {
-            eprintln!("[sync] 拉取项目列表失败（跳过 Status 联动）: {}", e);
+            crate::tlog!("[sync] 拉取项目列表失败（跳过 Status 联动）: {}", e);
             Vec::new()
         }
     };
@@ -218,7 +218,7 @@ fn sync_account(
                     let opts = match client.fetch_project_status_options(&gid) {
                         Ok(o) => o,
                         Err(e) => {
-                            eprintln!("[sync] 拉取项目 {gid} 状态选项失败: {e}");
+                            crate::tlog!("[sync] 拉取项目 {gid} 状态选项失败: {e}");
                             Vec::new()
                         }
                     };
@@ -226,7 +226,7 @@ fn sync_account(
                         match client.fetch_project_issues(&gid, org) {
                             Ok(v) => v,
                             Err(e) => {
-                                eprintln!("[sync] 拉取项目 {gid} 状态/issue 失败: {e}");
+                                crate::tlog!("[sync] 拉取项目 {gid} 状态/issue 失败: {e}");
                                 (std::collections::HashMap::new(), Vec::new())
                             }
                         };
@@ -258,10 +258,10 @@ fn sync_account(
         if !opts.is_empty() {
             if let Err(e) = crate::db::upsert_project_statuses(conn, account.id, &gid, &opts, now)
             {
-                eprintln!("[sync] 存储项目 {gid} 状态选项失败: {e}");
+                crate::tlog!("[sync] 存储项目 {gid} 状态选项失败: {e}");
             }
         }
-        eprintln!(
+        crate::tlog!(
             "[sync] project {gid}: status_map={} issues={}",
             status_map.len(),
             issues.len()
@@ -270,7 +270,7 @@ fn sync_account(
         project_issues.extend(issues);
     }
     if project_status.is_empty() && !project_ids.is_empty() {
-        eprintln!("[sync] 警告：所有项目的 Status 映射均为空（可能没有 Status 字段）");
+        crate::tlog!("[sync] 警告：所有项目的 Status 映射均为空（可能没有 Status 字段）");
     }
 
     // 多源合并：以多个稳定查询（assignee/author/mentions/commenter）覆盖 `involves:`
@@ -314,7 +314,7 @@ fn sync_account(
             }
             Err(e) => {
                 failed.push(format!("{}: {}", name, e));
-                eprintln!("[sync] 数据源 {} 拉取失败，已跳过: {}", name, e);
+                crate::tlog!("[sync] 数据源 {} 拉取失败，已跳过: {}", name, e);
             }
         }
     }
@@ -347,7 +347,7 @@ fn sync_account(
     let (prs, pr_fetch_ok) = match client.fetch_prs(&pr_repos) {
         Ok(p) => (p, true),
         Err(e) => {
-            eprintln!("[sync] 拉取 PR 列表失败，跳过 PR 关联: {}", e);
+            crate::tlog!("[sync] 拉取 PR 列表失败，跳过 PR 关联: {}", e);
             (Vec::new(), false)
         }
     };
@@ -373,7 +373,7 @@ fn sync_account(
         }
     }
     if merged_from_project > 0 {
-        eprintln!(
+        crate::tlog!(
             "[sync] 从项目中补充了 {} 个搜索源未覆盖的 issue",
             merged_from_project
         );
@@ -487,7 +487,7 @@ fn sync_account(
                         (t.comments as i64, existing_comment_url.to_string())
                     }
                     Err(e) => {
-                        eprintln!("[sync] 拉取评论失败，跳过: {}#{}: {}", t.repo, t.number, e);
+                        crate::tlog!("[sync] 拉取评论失败，跳过: {}#{}: {}", t.repo, t.number, e);
                         (existing_comments, existing_comment_url.to_string())
                     }
                 }
@@ -617,7 +617,7 @@ fn sync_account(
             )
             .map_err(|e| format!("解除 stale 标记失败: {}", e))?;
         if n > 0 {
-            eprintln!("[sync] 搜索源不完整，保留 {} 个任务不过删", n);
+            crate::tlog!("[sync] 搜索源不完整，保留 {} 个任务不过删", n);
         }
     } else {
         // 搜索源完整：stale 任务 = 已关闭或 assignee 变更，直接标记 candidate_done
@@ -631,7 +631,7 @@ fn sync_account(
             .map_err(|e| format!("标记候选已完成失败: {}", e))?;
         candidate_done = n as usize;
         if candidate_done > 0 {
-            eprintln!("[sync] 标记 {} 个任务为候选已完成", candidate_done);
+            crate::tlog!("[sync] 标记 {} 个任务为候选已完成", candidate_done);
         }
     }
 
@@ -822,14 +822,14 @@ mod tests {
             )
             .expect("VACUUM INTO 快照失败");
         }
-        eprintln!("[test] 已快照生产库到临时文件（不影响生产数据）：{}", tmp.display());
+        crate::tlog!("[test] 已快照生产库到临时文件（不影响生产数据）：{}", tmp.display());
         let conn = Connection::open(&tmp).expect("打开临时库");
         // 快照经 open_db 统一补 schema/迁移（与 App 打开路径一致）。
         let conn = db::open_db(&tmp).expect("open_db 快照库");
 
-        eprintln!("[test] 开始真实同步（关注 PR 关联）…");
+        crate::tlog!("[test] 开始真实同步（关注 PR 关联）…");
         let res = run(&conn, "manual").expect("同步应成功");
-        eprintln!(
+        crate::tlog!(
             "[test] 同步完成：total={} added={} updated={} removed={} candidate_done={} pruned={}",
             res.total, res.added, res.updated, res.removed, res.candidate_done, res.pruned
         );
@@ -844,7 +844,7 @@ mod tests {
         let diag_fetched = db::get_setting(&conn, "diag_pr_fetched");
         let diag_map = db::get_setting(&conn, "diag_pr_map_size");
         let diag_matched = db::get_setting(&conn, "diag_pr_matched");
-        eprintln!(
+        crate::tlog!(
             "[test] PR 关联命中：{}/{}  | diag_fetch_ok={} diag_fetched={} diag_map_size={} diag_matched={}",
             pr_gt0, total, diag_fetch_ok, diag_fetched, diag_map, diag_matched
         );

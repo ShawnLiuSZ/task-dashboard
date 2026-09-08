@@ -3,8 +3,46 @@
 //! `commands.rs`（Tauri 命令）与 `mcp.rs`（MCP stdio）曾各写一遍状态校验、
 //! session/handoff SQL，逻辑已分叉。本模块是唯一权威实现，两边只做薄包装
 //! （参数形态与“任务不存在”时的报错策略保留各自原有行为）。
+//!
+//! v0.3.49（#149）：追加日志门控与浏览器外链白名单。
 
 use rusqlite::Connection;
+
+/// 检查是否启用详细日志（TASKBOARD_LOG=1 或 TASKBOARD_LOG=debug）。
+/// MCP 调用时默认静默，仅在排障时显式开启。
+/// （自 `db.rs::verbose_enabled` 迁移至此，全仓统一入口。）
+pub fn verbose_enabled() -> bool {
+    std::env::var("TASKBOARD_LOG")
+        .map(|v| matches!(v.as_str(), "1" | "debug" | "verbose" | "true"))
+        .unwrap_or(false)
+}
+
+/// 门控日志：默认静默（release / MCP stdio 不刷屏），`TASKBOARD_LOG=1` 时输出。
+/// 诊断类 `eprintln!` 一律走本宏；真正的错误走结构化通道
+/// （同步结果 warning、MCP JSON-RPC 错误、`lib.rs` 的启动/同步失败日志）。
+#[macro_export]
+macro_rules! tlog {
+    ($($arg:tt)*) => {
+        if $crate::common::verbose_enabled() {
+            eprintln!($($arg)*)
+        }
+    };
+}
+
+/// 浏览器外链白名单校验：仅放行 `https://github.com/` 与企业版 `*.ghe.com`。
+/// 返回 trim 后的 URL。零新依赖，手写最小解析（只取 scheme + host）。
+pub fn validate_browser_url(url: &str) -> Result<String, String> {
+    let u = url.trim().to_string();
+    let rest = u
+        .strip_prefix("https://")
+        .ok_or_else(|| format!("仅允许打开 https 外链: {u}"))?;
+    let host = rest.split('/').next().unwrap_or("");
+    if host.eq_ignore_ascii_case("github.com") || host.to_lowercase().ends_with(".ghe.com") {
+        Ok(u)
+    } else {
+        Err(format!("仅允许打开 GitHub 链接: {u}"))
+    }
+}
 
 /// 中英四态归一化。返回 `None` 表示非四态（调用方再按自定义列校验）。
 pub fn normalize_status(s: &str) -> Option<String> {
@@ -141,5 +179,23 @@ mod tests {
         assert_eq!(normalize_note_label(Some("  ")).unwrap(), "low");
         assert_eq!(normalize_note_label(Some("HIGH")).unwrap(), "high");
         assert!(normalize_note_label(Some("bogus")).is_err());
+    }
+
+    #[test]
+    fn validate_browser_url_allows_github_only() {
+        assert_eq!(
+            validate_browser_url("https://github.com/o/r/issues/1").unwrap(),
+            "https://github.com/o/r/issues/1"
+        );
+        // 首尾空白容忍
+        assert!(validate_browser_url("  https://github.com/o/r  ").is_ok());
+        // 非 https 拒绝
+        assert!(validate_browser_url("http://github.com/o/r").is_err());
+        // 非 GitHub 域拒绝
+        assert!(validate_browser_url("https://evil.com/github.com/x").is_err());
+        assert!(validate_browser_url("https://github.com.evil.com/x").is_err());
+        // 企业版放行
+        assert!(validate_browser_url("https://acme.ghe.com/o/r").is_ok());
+        assert!(validate_browser_url("").is_err());
     }
 }

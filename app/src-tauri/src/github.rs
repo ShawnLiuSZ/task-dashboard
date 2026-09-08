@@ -371,7 +371,7 @@ impl GitHubClient {
                 format!("{} {}", repo_qualifiers, base_query)
             }
             _ => {
-                eprintln!("[sync] 无可访问仓库或获取失败，回退到全可见范围搜索: {}", base_query);
+                crate::tlog!("[sync] 无可访问仓库或获取失败，回退到全可见范围搜索: {}", base_query);
                 base_query.to_string()
             }
         }
@@ -459,18 +459,18 @@ impl GitHubClient {
                         .filter_map(|item| match RawPr::from_item(item) {
                             Ok(p) => Some(p),
                             Err(e) => {
-                                eprintln!("[sync] {}/PR item 解析失败，跳过: {}", repo, e);
+                                crate::tlog!("[sync] {}/PR item 解析失败，跳过: {}", repo, e);
                                 None
                             }
                         })
                         .collect(),
                     None => {
-                        eprintln!("[sync] {}/PR 第 {} 页响应非数组，跳过", repo, page);
+                        crate::tlog!("[sync] {}/PR 第 {} 页响应非数组，跳过", repo, page);
                         Vec::new()
                     }
                 },
                 Err(e) => {
-                    eprintln!("[sync] {}/PR 第 {} 页拉取失败，跳过: {}", repo, page, e);
+                    crate::tlog!("[sync] {}/PR 第 {} 页拉取失败，跳过: {}", repo, page, e);
                     Vec::new()
                 }
             };
@@ -596,7 +596,7 @@ impl GitHubClient {
         for pid in project_ids {
             match self.fetch_project_items(pid) {
                 Ok(m) => map.extend(m),
-                Err(e) => eprintln!("[gh] 拉取 project {} 条目失败: {}", pid, e),
+                Err(e) => crate::tlog!("[gh] 拉取 project {} 条目失败: {}", pid, e),
             }
         }
         Ok(map)
@@ -634,7 +634,7 @@ impl GitHubClient {
                     (name, i as i64)
                 }).collect();
                 if !result.is_empty() {
-                    eprintln!("[gh] project {} field '{}' options={:?}", project_id, fname, result.iter().map(|(n,_)| n).collect::<Vec<_>>());
+                    crate::tlog!("[gh] project {} field '{}' options={:?}", project_id, fname, result.iter().map(|(n,_)| n).collect::<Vec<_>>());
                     return Ok(result);
                 }
             }
@@ -697,7 +697,7 @@ impl GitHubClient {
                             for fv in fvs {
                                 let fn_ = fv["field"]["name"].as_str().unwrap_or("?");
                                 let vn_ = fv["name"].as_str().unwrap_or("?");
-                                eprintln!("[gh] project item field='{}' value='{}'", fn_, vn_);
+                                crate::tlog!("[gh] project item field='{}' value='{}'", fn_, vn_);
                             }
                         }
                     }
@@ -889,7 +889,7 @@ impl GitHubClient {
                     .or_else(|| self.seconds_until_reset(resp.headers()))
                     .unwrap_or(10);
                 let wait_ms = (retry_after * 1000).min(MAX_BACKOFF_MS);
-                eprintln!(
+                crate::tlog!(
                     "[gh] 限流（{}），等待 {}ms 后重试（第 {} 次）",
                     status.as_u16(),
                     wait_ms,
@@ -922,7 +922,7 @@ impl GitHubClient {
                         .seconds_until_reset(resp.headers())
                         .map(|s| (s * 1000).min(MAX_BACKOFF_MS))
                         .unwrap_or(5000);
-                    eprintln!(
+                    crate::tlog!(
                         "[gh] 配额剩余 {}，等待 {}ms 回补",
                         r, wait_ms
                     );
@@ -957,7 +957,7 @@ impl GitHubClient {
 
             if status.as_u16() == 422 {
                 let body = resp.text().unwrap_or_default();
-                eprintln!("[sync] Search API 422: {} - {}", q, body.chars().take(120).collect::<String>());
+                crate::tlog!("[sync] Search API 422: {} - {}", q, body.chars().take(120).collect::<String>());
                 // v0.3.29：422 是对整个 query 无效（限定的 repo 引用不可访问资源），
                 // 该源应视为「失败」而非「成功但无结果」，返回 Err 交由调用方计入 failed，
                 // 否则会被误当空结果，进而把真实关联任务标记陈旧后移出看板。
@@ -972,13 +972,13 @@ impl GitHubClient {
                     .or_else(|| self.seconds_until_reset(resp.headers()))
                     .unwrap_or(10);
                 let wait_ms = (retry_after * 1000).min(MAX_BACKOFF_MS);
-                eprintln!("[gh] 限流（{}），等待 {}ms 后重试", status.as_u16(), wait_ms);
+                crate::tlog!("[gh] 限流（{}），等待 {}ms 后重试", status.as_u16(), wait_ms);
                 std::thread::sleep(Duration::from_millis(wait_ms));
                 let resp2 = self.http_get(&url)?;
                 let status2 = resp2.status();
                 if status2.as_u16() == 422 || !status2.is_success() {
                     let body = resp2.text().unwrap_or_default();
-                    eprintln!("[sync] Search API 重试失败 ({}): {}", status2.as_u16(), body.chars().take(120).collect::<String>());
+                    crate::tlog!("[sync] Search API 重试失败 ({}): {}", status2.as_u16(), body.chars().take(120).collect::<String>());
                     // v0.3.29：重试后仍失败（含 422/非 2xx），视为该源失败，避免被当空结果误删任务。
                     return Err(format!("Search API 重试失败 ({}): {}", status2.as_u16(), body.chars().take(120).collect::<String>()));
                 }
@@ -1134,7 +1134,7 @@ mod tests {
         let prs = client
             .fetch_prs(&repos)
             .expect("fetch_prs 不应报错");
-        eprintln!(
+        crate::tlog!(
             "[test] 隔离 fetch_prs 拉到 {} 个 PR，耗时 {:.1}s",
             prs.len(),
             t0.elapsed().as_secs_f64()
