@@ -32,7 +32,7 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// 返回给 agent 的列（与 `commands.rs::Task` 顺序兼容的子集）。
 const SELECT_COLS: &str =
-    "key, repo, number, title, status, ownership, assignees, session_id, session_agent, handoff, updated_at";
+    "issue_key, repo, number, title, status, ownership, assignees, session_id, session_agent, handoff, updated_at";
 
 fn db_path_for_mcp() -> Result<std::path::PathBuf, String> {
     if let Ok(p) = std::env::var("TASKBOARD_DB") {
@@ -89,7 +89,7 @@ fn parse_issue_ref(ref_: &str) -> Result<String, String> {
 
 fn row_to_value(r: &rusqlite::Row) -> rusqlite::Result<Value> {
     let mut m = Map::new();
-    m.insert("key".into(), Value::String(r.get::<_, String>(0)?));
+    m.insert("issue_key".into(), Value::String(r.get::<_, String>(0)?));
     m.insert("repo".into(), Value::String(r.get::<_, String>(1)?));
     m.insert("number".into(), Value::Number(r.get::<_, i64>(2)?.into()));
     m.insert("title".into(), Value::String(r.get::<_, String>(3)?));
@@ -109,8 +109,8 @@ fn row_to_value(r: &rusqlite::Row) -> rusqlite::Result<Value> {
     m.insert("handoff".into(), Value::String(r.get::<_, String>(9)?));
     m.insert(
         "updated_at".into(),
-        match r.get::<_, Option<String>>(10)? {
-            Some(s) => Value::String(s),
+        match r.get::<_, Option<i64>>(10)? {
+            Some(s) => Value::Number(s.into()),
             None => Value::Null,
         },
     );
@@ -157,7 +157,7 @@ fn tool_list(
 fn tool_get(conn: &Connection, issue: &str) -> Result<Value, String> {
     let key = parse_issue_ref(issue)?;
     let mut stmt = conn
-        .prepare(&format!("SELECT {SELECT_COLS} FROM tasks WHERE key = ?1"))
+        .prepare(&format!("SELECT {SELECT_COLS} FROM tasks WHERE issue_key = ?1"))
         .map_err(|e| e.to_string())?;
     let mut rows = stmt
         .query_map([key.clone()], row_to_value)
@@ -169,11 +169,11 @@ fn tool_get(conn: &Connection, issue: &str) -> Result<Value, String> {
                 _ => Map::new(),
             };
             m.insert("found".into(), Value::Bool(true));
-            m.insert("key".into(), Value::String(key));
+            m.insert("issue_key".into(), Value::String(key));
             Ok(Value::Object(m))
         }
         Some(Err(e)) => Err(e.to_string()),
-        None => Ok(json!({ "found": false, "key": key })),
+        None => Ok(json!({ "found": false, "issue_key": key })),
     }
 }
 
@@ -189,7 +189,7 @@ fn tool_update(conn: &Connection, issue: &str, status: &str) -> Result<Value, St
     if n == 0 {
         return Err(format!("任务不存在: {key}"));
     }
-    Ok(json!({ "ok": true, "key": key, "status": sk }))
+    Ok(json!({ "ok": true, "issue_key": key, "status": sk }))
 }
 
 fn tool_record_session(
@@ -210,7 +210,7 @@ fn tool_record_session(
     if n == 0 {
         return Err(format!("任务不存在: {key}"));
     }
-    Ok(json!({ "ok": true, "key": key }))
+    Ok(json!({ "ok": true, "issue_key": key }))
 }
 
 fn tool_record_handoff(conn: &Connection, issue: &str, text: &str) -> Result<Value, String> {
@@ -220,7 +220,7 @@ fn tool_record_handoff(conn: &Connection, issue: &str, text: &str) -> Result<Val
     if n == 0 {
         return Err(format!("任务不存在: {key}"));
     }
-    Ok(json!({ "ok": true, "key": key, "handoff_len": text.len() }))
+    Ok(json!({ "ok": true, "issue_key": key, "handoff_len": text.len() }))
 }
 
 fn tool_clear_session(conn: &Connection, issue: &str) -> Result<Value, String> {
@@ -230,7 +230,7 @@ fn tool_clear_session(conn: &Connection, issue: &str) -> Result<Value, String> {
     if n == 0 {
         return Err(format!("任务不存在: {key}"));
     }
-    Ok(json!({ "ok": true, "key": key }))
+    Ok(json!({ "ok": true, "issue_key": key }))
 }
 
 // ============================================================================

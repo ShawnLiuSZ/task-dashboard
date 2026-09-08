@@ -24,12 +24,12 @@ function groupByProjectStatus(tasks: Task[]): Map<string, Task[]> {
   map.set("unclassified", []);
 
   for (const task of tasks) {
-    if (task.ghState === "closed") {
+    if (task.issueState === "closed") {
       map.get("done")?.push(task);
       continue;
     }
-    if (task.ghStatus && task.ghStatus.trim()) {
-      const key = task.ghStatus.trim();
+    if (task.projectStatus && task.projectStatus.trim()) {
+      const key = task.projectStatus.trim();
       if (!map.has(key)) map.set(key, []);
       map.get(key)?.push(task);
     } else {
@@ -158,10 +158,10 @@ function Board({
                 {items.length === 0 && <div className="empty">{title}</div>}
                 {items.map((task) => (
                   <TaskCard
-                    key={task.key}
+                    key={task.issueKey}
                     task={task}
                     {...cardProps(task)}
-                    active={task.key === selected}
+                    active={task.issueKey === selected}
                     onSelectKey={onSelect}
                   />
                 ))}
@@ -191,10 +191,10 @@ function Board({
                 {items.length === 0 && <div className="empty">{col.colName}</div>}
                 {items.map((task) => (
                   <TaskCard
-                    key={task.key}
+                    key={task.issueKey}
                     task={task}
                     {...cardProps(task)}
-                    active={task.key === selected}
+                    active={task.issueKey === selected}
                     onSelectKey={onSelect}
                     showGhStatus
                   />
@@ -214,10 +214,10 @@ function Board({
             <div className="column-body" role="list">
               {unmatched.map((task) => (
                 <TaskCard
-                  key={task.key}
+                  key={task.issueKey}
                   task={task}
                   {...cardProps(task)}
-                  active={task.key === selected}
+                  active={task.issueKey === selected}
                   onSelectKey={onSelect}
                   showGhStatus
                 />
@@ -245,10 +245,10 @@ function Board({
               {items.length === 0 && <div className="empty">{t(`hint.${col.key}`)}</div>}
               {items.map((task) => (
                 <TaskCard
-                  key={task.key}
+                  key={task.issueKey}
                   task={task}
                   {...cardProps(task)}
-                  active={task.key === selected}
+                  active={task.issueKey === selected}
                   onSelectKey={onSelect}
                   showGhStatus={boardMode === "custom"}
                 />

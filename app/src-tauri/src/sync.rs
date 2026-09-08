@@ -151,7 +151,7 @@ struct PendingUpsert {
     pr_number: i64,
     pr_url: String,
     branch: String,
-    updated_at: String,
+    updated_at: i64,
     exists: bool,
 }
 
@@ -514,7 +514,7 @@ fn sync_account(
             pr_number,
             pr_url,
             branch,
-            updated_at: t.updated_at.clone(),
+            updated_at: crate::common::iso8601_to_secs(&t.updated_at),
             exists,
         });
     }
@@ -533,21 +533,21 @@ fn sync_account(
         for row in &pending {
             tx.execute(
                 "INSERT INTO tasks
-                   (key, owner, repo, number, title, url, gh_state, ownership,
-                    status, gh_status, assignees, labels, done_at, mentioned, comments_count,
+                   (issue_key, owner, repo, number, title, url, issue_state, ownership,
+                    status, project_status, assignees, labels, done_at, mentioned, comments_count,
                     latest_comment_url, pr_number, pr_url, branch, candidate_done, stale, updated_at, synced_at,
                     account_id)
                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 0, 0, ?20, ?21, ?22)
-                  ON CONFLICT(key) DO UPDATE SET
+                  ON CONFLICT(repo, number, account_id) DO UPDATE SET
                     title = excluded.title,
                     repo = excluded.repo,
-                    gh_state = excluded.gh_state,
+                    issue_state = excluded.issue_state,
                     ownership = excluded.ownership,
                     updated_at = excluded.updated_at,
                     synced_at = excluded.synced_at,
                     candidate_done = 0,
                     stale = 0,
-                    gh_status = excluded.gh_status,
+                    project_status = excluded.project_status,
                     assignees = excluded.assignees,
                     labels = excluded.labels,
                     status = excluded.status,
@@ -623,7 +623,7 @@ fn sync_account(
         // 搜索源完整：stale 任务 = 已关闭或 assignee 变更，直接标记 candidate_done
         let n = conn
             .execute(
-                "UPDATE tasks SET candidate_done = 1, gh_state = 'closed', status = 'done', stale = 0,
+                "UPDATE tasks SET candidate_done = 1, issue_state = 'closed', status = 'done', stale = 0,
                  done_at = CASE WHEN done_at = 0 THEN ?2 ELSE done_at END
                  WHERE account_id = ?1 AND stale = 1",
                 rusqlite::params![account.id, now],

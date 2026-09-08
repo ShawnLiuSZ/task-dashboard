@@ -18,7 +18,7 @@ interface Props {
 }
 
 // 稳定哈希 gh_status → 0-19，复用 repo-N 色系，同状态保持一致颜色。
-function ghStatusColor(s: string): number {
+function projectStatusColor(s: string): number {
   let h = 7;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 997;
   return h % 20;
@@ -45,7 +45,7 @@ function TaskCard({ task, accountLabel, active, onSelectKey, repoIndex, showGhSt
       className={`card${active ? " active" : ""}${
         task.candidateDone ? " candidate" : ""
       }${task.ownership === "notassignee" ? " unassigned" : ""}${mine ? " mine" : ""}`}
-      onClick={() => onSelectKey(task.key)}
+      onClick={() => onSelectKey(task.issueKey)}
       role="button"
       tabIndex={0}
       aria-pressed={active}
@@ -53,7 +53,7 @@ function TaskCard({ task, accountLabel, active, onSelectKey, repoIndex, showGhSt
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onSelectKey(task.key);
+          onSelectKey(task.issueKey);
         }
       }}
     >
@@ -79,18 +79,18 @@ function TaskCard({ task, accountLabel, active, onSelectKey, repoIndex, showGhSt
           </span>
         )}
 {/* GitHub Issue 状态：仅 closed 显示 */}
-        {task.ghState === "closed" && (
+        {task.issueState === "closed" && (
           <span className="gh-state gh-state-closed" title={t("card.ghState.closed")}>
             {t("card.ghState.closed")}
           </span>
         )}
         {/* v0.3.43+：自定义列视图下显示 project.status 真实值徽章 */}
-        {showGhStatus && task.ghStatus && task.ghStatus.trim() !== "" && (
+        {showGhStatus && task.projectStatus && task.projectStatus.trim() !== "" && (
           <span
-            className={`gh-status repo repo-${ghStatusColor(task.ghStatus)}`}
+            className={`gh-status repo repo-${projectStatusColor(task.projectStatus)}`}
             title={t("card.ghStatusTitle")}
           >
-            {task.ghStatus}
+            {task.projectStatus}
           </span>
         )}
       </div>
@@ -132,7 +132,9 @@ function TaskCard({ task, accountLabel, active, onSelectKey, repoIndex, showGhSt
           </span>
         ) : (
           <span className="muted small">
-            {task.updatedAt ? task.updatedAt.slice(0, 10) : ""}
+            {task.updatedAt
+              ? new Date(task.updatedAt * 1000).toISOString().slice(0, 10)
+              : ""}
           </span>
         )}
         {task.latestCommentUrl && (
