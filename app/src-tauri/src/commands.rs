@@ -734,6 +734,16 @@ pub struct CheckUpdate {
     pub error: String,
 }
 
+/// v0.3.49 (#148)：检查更新用的仓库地址（单点常量 + 单测断言，防拼写漂移）。
+pub fn update_check_api_url() -> &'static str {
+    "https://api.github.com/repos/ShawnLiuSZ/task-dashboard/releases/latest"
+}
+
+/// 检查更新失败时的回退 release 页面。
+pub fn update_check_fallback_url() -> &'static str {
+    "https://github.com/ShawnLiuSZ/task-dashboard/releases"
+}
+
 /// 轻量检查更新：调用 GitHub Releases API `releases/latest`，对比最新/当前版本。
 /// 只读公开数据仓库，无需 PAT；用 `spawn_blocking` 避免阻塞主线程（reqwest 为 blocking）。
 #[tauri::command]
@@ -746,7 +756,7 @@ pub async fn check_latest_release() -> Result<CheckUpdate, String> {
             .build()
             .map_err(|e| format!("构造 HTTP 客户端失败: {e}"))?;
         let resp: serde_json::Value = client
-            .get("https://api.github.com/repos/ShawnLiuSZ/task-dashborad/releases/latest")
+            .get(update_check_api_url())
             .send()
             .map_err(|e| format!("检查更新失败（网络）：{e}"))?
             .error_for_status()
@@ -762,7 +772,7 @@ pub async fn check_latest_release() -> Result<CheckUpdate, String> {
         let url = resp
             .get("html_url")
             .and_then(|v| v.as_str())
-            .unwrap_or("https://github.com/ShawnLiuSZ/task-dashborad/releases")
+            .unwrap_or(update_check_fallback_url())
             .to_string();
         let up_to_date = !latest.is_empty() && latest == current;
         Ok(CheckUpdate {
@@ -1200,6 +1210,27 @@ mod tests {
     }
 
     // 导出文件名的时间戳：epoch 0、近期典型值。
+    // v0.3.49 (#148)：检查更新 URL 单点常量，防 `task-dashborad` 拼写漂移。
+    #[test]
+    fn update_check_urls_point_at_real_repo() {
+        assert!(
+            super::update_check_api_url().contains("task-dashboard"),
+            "API 地址应指向真实仓库"
+        );
+        assert!(
+            !super::update_check_api_url().contains("dashborad"),
+            "API 地址含拼写错误"
+        );
+        assert!(
+            super::update_check_fallback_url().contains("task-dashboard"),
+            "回退地址应指向真实仓库"
+        );
+        assert!(
+            !super::update_check_fallback_url().contains("dashborad"),
+            "回退地址含拼写错误"
+        );
+    }
+
     #[test]
     fn time_str_formats_epoch_and_boundaries() {
         assert_eq!(super::time_str(0, "%Y%m%d"), "19700101");

@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import { memo, type MouseEvent } from "react";
 import type { Task } from "../types";
 import { openExternal } from "../api";
 import { useT } from "../i18n";
@@ -6,7 +6,9 @@ import { useT } from "../i18n";
 interface Props {
   task: Task;
   active: boolean;
-  onClick: () => void;
+  /** v0.3.49 (#145)：稳定回调（父组件直接传 setState 类稳定引用），卡片内再绑定 key，
+      配合 memo 避免每轮重渲染。 */
+  onSelectKey: (key: string) => void;
   /** v0.3.16+：账号标签（来自 accounts.label）。undefined/空时不显示徽章。 */
   accountLabel?: string;
   /** v0.3.22+：仓库颜色索引（0-19），用于仓库名标签配色。 */
@@ -29,7 +31,9 @@ function openLink(url: string, e: MouseEvent) {
   openExternal(url);
 }
 
-export default function TaskCard({ task, accountLabel, active, onClick, repoIndex, showGhStatus }: Props) {
+// v0.3.49 (#145+#150)：memo 包裹（props 全为稳定引用/原始值时跳过重渲染）
+// + 键盘可达（role=button/tabIndex/Enter-Space）+ 可访问名称。
+function TaskCard({ task, accountLabel, active, onSelectKey, repoIndex, showGhStatus }: Props) {
   const t = useT();
   const mine = task.ownership === "assigned";
   const assigneeNames = task.assignees
@@ -41,7 +45,17 @@ export default function TaskCard({ task, accountLabel, active, onClick, repoInde
       className={`card${active ? " active" : ""}${
         task.candidateDone ? " candidate" : ""
       }${task.ownership === "notassignee" ? " unassigned" : ""}${mine ? " mine" : ""}`}
-      onClick={onClick}
+      onClick={() => onSelectKey(task.key)}
+      role="button"
+      tabIndex={0}
+      aria-pressed={active}
+      aria-label={`${task.repo}#${task.number} ${task.title}`}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelectKey(task.key);
+        }
+      }}
     >
       {/* v0.3.17+：账号徽章独占卡片最顶行（repo#编号 行的上一行）。 */}
       {accountLabel && (
@@ -146,3 +160,5 @@ export default function TaskCard({ task, accountLabel, active, onClick, repoInde
     </article>
   );
 }
+
+export default memo(TaskCard);

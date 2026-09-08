@@ -1,19 +1,36 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { api } from "../api";
+import { useT } from "../i18n";
 import type { Note } from "../types";
 
 type NoteLabel = Note["label"];
 
-const LABELS: { value: NoteLabel; label: string; color: string }[] = [
-  { value: "low", label: "低", color: "#9a9aa0" },
-  { value: "medium", label: "中", color: "#0a6cff" },
-  { value: "high", label: "高", color: "#f59e0b" },
-  { value: "urgent", label: "紧急", color: "#e11d48" },
+// v0.3.49 (#148)：标签名走 i18n；颜色保持不变。
+const LABEL_DEFS: { value: NoteLabel; color: string }[] = [
+  { value: "low", color: "#9a9aa0" },
+  { value: "medium", color: "#0a6cff" },
+  { value: "high", color: "#f59e0b" },
+  { value: "urgent", color: "#e11d48" },
 ];
 
-function labelOf(value: NoteLabel) {
-  return LABELS.find((l) => l.value === value) ?? LABELS[0];
+function useLabels(): { value: NoteLabel; label: string; color: string }[] {
+  const t = useT();
+  return useMemo(
+    () =>
+      LABEL_DEFS.map((l) => ({
+        ...l,
+        label: t(`notes.priority.${l.value}`),
+      })),
+    [t],
+  );
+}
+
+function labelOf(
+  labels: { value: NoteLabel; label: string; color: string }[],
+  value: NoteLabel,
+) {
+  return labels.find((l) => l.value === value) ?? labels[0];
 }
 
 /* ---------- 图标（内联 SVG，避免 emoji 跨平台渲染差异） ---------- */
@@ -53,17 +70,17 @@ const ICON = {
 /** 收起状态持久化键（本地偏好，不入数据库）。 */
 const COLLAPSED_KEY = "notes.collapsed";
 
-/* ---------- 时间格式化 ---------- */
+/* ---------- 时间格式化（v0.3.49 #148：文案走 i18n） ---------- */
 
-function relTime(ts: number): string {
+function relTime(ts: number, t: (key: string, params?: Record<string, string | number>) => string): string {
   if (!ts) return "-";
   const diff = Math.floor(Date.now() / 1000) - ts;
-  if (diff < 60) return "刚刚";
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
-  if (diff < 7 * 86400) return `${Math.floor(diff / 86400)} 天前`;
+  if (diff < 60) return t("notes.time.justNow");
+  if (diff < 3600) return t("notes.time.minutesAgo", { n: Math.floor(diff / 60) });
+  if (diff < 86400) return t("notes.time.hoursAgo", { n: Math.floor(diff / 3600) });
+  if (diff < 7 * 86400) return t("notes.time.daysAgo", { n: Math.floor(diff / 86400) });
   const d = new Date(ts * 1000);
-  return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+  return t("notes.time.monthDay", { m: d.getMonth() + 1, d: d.getDate() });
 }
 
 function fullTime(ts: number): string {
@@ -99,16 +116,18 @@ function LabelPicker({
   onChange: (l: NoteLabel) => void;
   size?: "sm" | "md";
 }) {
+  const t = useT();
+  const labels = useLabels();
   return (
-    <div className={`label-picker ${size === "sm" ? "sm" : ""}`} role="group">
-      {LABELS.map((l) => (
+    <div className={`label-picker ${size === "sm" ? "sm" : ""}`} role="group" aria-label={t("notes.labelGroup")}>
+      {labels.map((l) => (
         <button
           key={l.value}
           type="button"
           className={`label-chip${l.value === value ? " active" : ""}`}
           style={{ "--chip": l.color } as CSSProperties}
           onClick={() => onChange(l.value)}
-          title={`标记为「${l.label}」`}
+          title={t("notes.markAs", { label: l.label })}
         >
           {l.label}
         </button>
@@ -121,6 +140,8 @@ function LabelPicker({
 
 /** v0.3.24+ 记事本面板：快速记录任务相关的临时笔记。 */
 export default function NotesPanel() {
+  const t = useT();
+  const labels = useLabels();
   const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState("");
@@ -153,11 +174,11 @@ export default function NotesPanel() {
       setError(null);
     } catch (e) {
       console.error("加载记事失败:", e);
-      setError(`加载记事失败：${errText(e)}`);
+      setError(t("notes.loadFailed", { error: errText(e) }));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void loadNotes();
@@ -175,11 +196,11 @@ export default function NotesPanel() {
       await loadNotes();
     } catch (e) {
       console.error("添加记事失败:", e);
-      setError(`添加失败：${errText(e)}`);
+      setError(t("notes.addFailed", { error: errText(e) }));
     } finally {
       setAdding(false);
     }
-  }, [draft, draftLabel, loadNotes]);
+  }, [draft, draftLabel, loadNotes, t]);
 
   const handleSave = useCallback(async () => {
     if (editingId === null) return;
@@ -194,11 +215,11 @@ export default function NotesPanel() {
       await loadNotes();
     } catch (e) {
       console.error("更新记事失败:", e);
-      setError(`保存失败：${errText(e)}`);
+      setError(t("notes.saveFailed", { error: errText(e) }));
     } finally {
       setSaving(false);
     }
-  }, [editingId, editDraft, loadNotes]);
+  }, [editingId, editDraft, loadNotes, t]);
 
   const handleDelete = useCallback(
     async (id: number) => {
@@ -209,10 +230,10 @@ export default function NotesPanel() {
         await loadNotes();
       } catch (e) {
         console.error("删除记事失败:", e);
-        setError(`删除失败：${errText(e)}`);
+        setError(t("notes.deleteFailed", { error: errText(e) }));
       }
     },
-    [loadNotes],
+    [loadNotes, t],
   );
 
   const handleLabelChange = useCallback(
@@ -223,10 +244,10 @@ export default function NotesPanel() {
         await loadNotes();
       } catch (e) {
         console.error("更新标签失败:", e);
-        setError(`更新标签失败：${errText(e)}`);
+        setError(t("notes.labelFailed", { error: errText(e) }));
       }
     },
-    [loadNotes],
+    [loadNotes, t],
   );
 
   // v0.3.27+：导出全部记事为 JSON 文件（v0.3.45+ 默认写入系统下载目录，展示完整路径）。
@@ -238,17 +259,17 @@ export default function NotesPanel() {
     try {
       const res = await api.exportNotes();
       if (res.count === 0) {
-        setNotice("当前没有记事可导出");
+        setNotice(t("notes.exportEmpty"));
       } else {
-        setNotice(`已导出 ${res.count} 条记事 → ${res.path}`);
+        setNotice(t("notes.exported", { count: res.count, path: res.path }));
       }
     } catch (e) {
       console.error("导出记事失败:", e);
-      setError(`导出失败：${errText(e)}`);
+      setError(t("notes.exportFailed", { error: errText(e) }));
     } finally {
       setBusy(null);
     }
-  }, [busy]);
+  }, [busy, t]);
 
   // v0.3.27+：从 JSON 文件导入记事（按内容去重，不覆盖已有数据）。
   const handleImport = useCallback(
@@ -261,27 +282,27 @@ export default function NotesPanel() {
         const text = await file.text();
         const parsed = JSON.parse(text) as { notes?: { content?: string }[] };
         if (!Array.isArray(parsed.notes) || parsed.notes.length === 0) {
-          throw new Error("文件中没有可导入的记事");
+          throw new Error(t("notes.noImportable"));
         }
         // 校验格式：至少第一条含 content 字段
         if (!parsed.notes.some((n) => typeof n.content === "string")) {
-          throw new Error("无法识别的格式：应为 notes-backup 导出文件");
+          throw new Error(t("notes.badFormat"));
         }
         // 前端读文件内容传给后端解析（Tauri 2 不暴露 file.path），后端按 content 去重
         const res = await api.importNotes(text);
         setNotice(
-          `导入完成：新增 ${res.imported} 条，跳过重复 ${res.skipped} 条`,
+          t("notes.imported", { imported: res.imported, skipped: res.skipped }),
         );
         await loadNotes();
       } catch (e) {
         console.error("导入记事失败:", e);
-        setError(`导入失败：${errText(e)}`);
+        setError(t("notes.importFailed", { error: errText(e) }));
       } finally {
         setBusy(null);
         if (fileInputRef.current) fileInputRef.current.value = "";
       }
     },
-    [busy, loadNotes],
+    [busy, loadNotes, t],
   );
 
   // 收起态：只留一条竖向导轨，列表内容完全不渲染。
@@ -292,10 +313,10 @@ export default function NotesPanel() {
           type="button"
           className="notes-rail"
           onClick={() => setCollapsed(false)}
-          title="展开记事本"
+          title={t("notes.expandTitle")}
         >
           <Icon d={ICON.expand} size={14} />
-          <span className="notes-rail-text">记事本</span>
+          <span className="notes-rail-text">{t("notes.title")}</span>
           {notes.length > 0 && (
             <span className="notes-rail-count">{notes.length}</span>
           )}
@@ -310,13 +331,13 @@ export default function NotesPanel() {
         <span className="notes-head-icon">
           <Icon d={ICON.notebook} size={15} />
         </span>
-        <span className="notes-title">记事本</span>
+        <span className="notes-title">{t("notes.title")}</span>
         <span className="notes-count">{notes.length}</span>
         <div className="notes-tools">
           <button
             type="button"
             className="note-tool"
-            title="导出全部记事为 JSON 备份"
+            title={t("notes.exportTitle")}
             onClick={() => void handleExport()}
             disabled={busy !== null}
           >
@@ -325,7 +346,7 @@ export default function NotesPanel() {
           <button
             type="button"
             className="note-tool"
-            title="从 JSON 备份导入记事（按内容去重）"
+            title={t("notes.importTitle")}
             onClick={() => fileInputRef.current?.click()}
             disabled={busy !== null}
           >
@@ -341,7 +362,7 @@ export default function NotesPanel() {
           <button
             type="button"
             className="note-tool"
-            title="收起记事本（内容不再显示）"
+            title={t("notes.collapseTitle")}
             onClick={() => setCollapsed(true)}
           >
             <Icon d={ICON.collapse} size={13} />
@@ -353,95 +374,95 @@ export default function NotesPanel() {
         {notice && (
           <div className="note-notice" role="status">
             <span>{notice}</span>
-            <button
-              type="button"
-              className="note-tool"
-              title="关闭"
-              onClick={() => setNotice(null)}
-            >
-              <Icon d={ICON.close} size={12} />
-            </button>
-          </div>
-        )}
-        {error && (
-          <div className="note-error" role="alert">
-            <span>{error}</span>
-            <button
-              type="button"
-              className="note-tool"
-              title="关闭"
-              onClick={() => setError(null)}
-            >
-              <Icon d={ICON.close} size={12} />
-            </button>
-          </div>
-        )}
-
-        {/* 新建 */}
-        <div className="note-composer">
-          <textarea
-            ref={draftRef}
-            className="note-textarea"
-            placeholder="记点什么…（⌘/Ctrl + Enter 添加）"
-            value={draft}
-            rows={1}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !adding && draft.trim()) {
-                e.preventDefault();
-                void handleAdd();
-              }
-            }}
-          />
-          <div className="note-composer-foot">
-            <LabelPicker value={draftLabel} onChange={setDraftLabel} />
-            <button
-              type="button"
-              className="btn primary"
-              onClick={() => void handleAdd()}
-              disabled={adding || !draft.trim()}
-            >
-              {!adding && <Icon d={ICON.plus} size={13} />}
-              {adding ? "添加中…" : "添加"}
-            </button>
-          </div>
+          <button
+            type="button"
+            className="note-tool"
+            title={t("notes.closeTitle")}
+            onClick={() => setNotice(null)}
+          >
+            <Icon d={ICON.close} size={12} />
+          </button>
         </div>
+      )}
+      {error && (
+        <div className="note-error" role="alert">
+          <span>{error}</span>
+          <button
+            type="button"
+            className="note-tool"
+            title={t("notes.closeTitle")}
+            onClick={() => setError(null)}
+          >
+            <Icon d={ICON.close} size={12} />
+          </button>
+        </div>
+      )}
 
-        {/* 列表 */}
-        <div className="notes-list">
-          {loading ? (
-            <div className="notes-placeholder">加载中…</div>
-          ) : notes.length === 0 ? (
-            <div className="notes-empty">
-              <span className="notes-empty-icon">
-                <Icon d={ICON.notebook} size={22} />
-              </span>
-              <p>还没有记事</p>
-              <span>在上面输入框随手记一条</span>
-            </div>
-          ) : (
-            notes.map((note) => {
-              const opt = labelOf(note.label);
+      {/* 新建 */}
+      <div className="note-composer">
+        <textarea
+          ref={draftRef}
+          className="note-textarea"
+          placeholder={t("notes.composer.placeholder")}
+          value={draft}
+          rows={1}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !adding && draft.trim()) {
+              e.preventDefault();
+              void handleAdd();
+            }
+          }}
+        />
+        <div className="note-composer-foot">
+          <LabelPicker value={draftLabel} onChange={setDraftLabel} />
+          <button
+            type="button"
+            className="btn primary"
+            onClick={() => void handleAdd()}
+            disabled={adding || !draft.trim()}
+          >
+            {!adding && <Icon d={ICON.plus} size={13} />}
+            {adding ? t("notes.adding") : t("notes.add")}
+          </button>
+        </div>
+      </div>
+
+      {/* 列表 */}
+      <div className="notes-list">
+        {loading ? (
+          <div className="notes-placeholder">{t("notes.loading")}</div>
+        ) : notes.length === 0 ? (
+          <div className="notes-empty">
+            <span className="notes-empty-icon">
+              <Icon d={ICON.notebook} size={22} />
+            </span>
+            <p>{t("notes.emptyTitle")}</p>
+            <span>{t("notes.emptySub")}</span>
+          </div>
+        ) : (
+          notes.map((note) => {
+            const opt = labelOf(labels, note.label);
               const accent = { "--note-accent": opt.color } as CSSProperties;
 
               if (confirmId === note.id) {
                 return (
                   <article key={note.id} className="note-card confirming" style={accent}>
-                    <p className="note-confirm-text">删除这条记事？</p>
+                    <p className="note-confirm-text">{t("notes.deleteConfirm")}</p>
                     <div className="note-confirm-actions">
                       <button
                         type="button"
                         className="btn small danger"
                         onClick={() => void handleDelete(note.id)}
                       >
-                        删除
+                        {t("btn.delete")}
                       </button>
                       <button
                         type="button"
                         className="btn small ghost"
                         onClick={() => setConfirmId(null)}
                       >
-                        取消
+                        {t("btn.cancel")}
                       </button>
                     </div>
                   </article>
@@ -471,7 +492,7 @@ export default function NotesPanel() {
                       }}
                     />
                     <div className="note-edit-foot">
-                      <span className="note-hint">⌘/Ctrl + Enter 保存 · Esc 取消</span>
+                      <span className="note-hint">{t("notes.editHint")}</span>
                       <div className="note-edit-actions">
                         <button
                           type="button"
@@ -482,7 +503,7 @@ export default function NotesPanel() {
                           }}
                           disabled={saving}
                         >
-                          取消
+                          {t("btn.cancel")}
                         </button>
                         <button
                           type="button"
@@ -490,7 +511,7 @@ export default function NotesPanel() {
                           onClick={() => void handleSave()}
                           disabled={saving || !editDraft.trim()}
                         >
-                          {saving ? "保存中…" : "保存"}
+                          {saving ? t("notes.saving") : t("btn.save")}
                         </button>
                       </div>
                     </div>
@@ -505,10 +526,10 @@ export default function NotesPanel() {
                     <button
                       type="button"
                       className="note-tag"
-                      title="点击切换标签"
+                      title={t("notes.toggleTag")}
                       onClick={() => {
-                        const idx = LABELS.findIndex((l) => l.value === note.label);
-                        const next = LABELS[(idx + 1) % LABELS.length];
+                        const idx = labels.findIndex((l) => l.value === note.label);
+                        const next = labels[(idx + 1) % labels.length];
                         void handleLabelChange(note.id, next.value);
                       }}
                     >
@@ -516,14 +537,14 @@ export default function NotesPanel() {
                       {opt.label}
                     </button>
                     <time className="note-time" title={fullTime(note.createdAt)}>
-                      {relTime(note.createdAt)}
-                      {note.updatedAt > note.createdAt && " · 已编辑"}
+                      {relTime(note.createdAt, t)}
+                      {note.updatedAt > note.createdAt && t("notes.editedSuffix")}
                     </time>
                     <div className="note-tools">
                       <button
                         type="button"
                         className="note-tool"
-                        title="编辑"
+                        title={t("notes.editTitle")}
                         onClick={() => {
                           setEditingId(note.id);
                           setEditDraft(note.content);
@@ -534,7 +555,7 @@ export default function NotesPanel() {
                       <button
                         type="button"
                         className="note-tool danger"
-                        title="删除"
+                        title={t("notes.deleteTitle")}
                         onClick={() => setConfirmId(note.id)}
                       >
                         <Icon d={ICON.trash} size={13} />

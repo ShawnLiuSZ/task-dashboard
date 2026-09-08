@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { api, onSynced, TASKBOARD_ERROR_EVENT } from "./api";
 import { fmtTime, I18nProvider, useI18n } from "./i18n";
 import Board from "./components/Board";
@@ -81,12 +81,21 @@ function BoardApp() {
 
       // viewMode="all" 时聚合所有账号的 project_statuses，按字母序合并去重
       // （聚合视图下每个账号可能属于不同项目，无法用单一 order_index）
+      // v0.3.49 (#145)：并行拉取 + 单账号失败隔离（该账号列缺失不断整板）。
       if (settings.viewMode === "all") {
         const accounts = settings.accounts ?? [];
+        const results = await Promise.all(
+          accounts
+            .filter((a) => a.id)
+            .map((a) =>
+              api.listProjectStatuses(a.id).catch((e) => {
+                console.warn(`加载账号 @${a.login} 的项目状态失败:`, e);
+                return [] as ProjectStatus[];
+              }),
+            ),
+        );
         const merged = new Map<string, ProjectStatus>();
-        for (const a of accounts) {
-          if (!a.id) continue;
-          const list = await api.listProjectStatuses(a.id);
+        for (const list of results) {
           for (const ps of list) {
             // 去重：同名状态只保留第一个（按首次出现顺序）
             if (!merged.has(ps.name)) merged.set(ps.name, ps);
@@ -130,11 +139,18 @@ function BoardApp() {
 
       if (settings.viewMode === "all") {
         // 聚合视图：合并所有账号的自定义列（按 col_key 去重）
-        const accounts = settings.accounts ?? [];
+        // v0.3.49 (#145)：并行拉取 + 单账号失败隔离。
+        const accounts = (settings.accounts ?? []).filter((a) => a.id);
+        const results = await Promise.all(
+          accounts.map((a) =>
+            api.listAccountColumns(a.id).catch((e) => {
+              console.warn(`加载账号 @${a.login} 的自定义列失败:`, e);
+              return [] as AccountColumn[];
+            }),
+          ),
+        );
         const merged = new Map<string, AccountColumn>();
-        for (const a of accounts) {
-          if (!a.id) continue;
-          const list = await api.listAccountColumns(a.id);
+        for (const list of results) {
           for (const col of list) {
             if (!merged.has(col.colKey)) merged.set(col.colKey, col);
           }
@@ -213,15 +229,17 @@ function BoardApp() {
   }, [settings, accountMap]);
 
   // 前端实时过滤：归属由后端 list_tasks 已筛；此处叠加 仓库 + 关键词（仓库/编号/标题）。
+  // v0.3.49 (#145)：搜索输入经 useDeferredValue 防抖，快速按键不再每键全板重排。
+  const deferredQuery = useDeferredValue(query);
   const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = deferredQuery.trim().toLowerCase();
     return tasks.filter((t) => {
       if (repo && t.repo !== repo) return false;
       if (!q) return true;
       const hay = `${t.repo}#${t.number} ${t.title}`.toLowerCase();
       return hay.includes(q);
     });
-  }, [tasks, repo, query]);
+  }, [tasks, repo, deferredQuery]);
 
   const doSync = async () => {
     setSyncing(true);
@@ -233,8 +251,8 @@ function BoardApp() {
       setLastResult(
         `${t("sync.result", { added: r.added, updated: r.updated, done: r.candidateDone })}${prune}${warn}`,
       );
-      await load();
-      await loadSettings();
+      // v0.3.49 (#145)：两路加载无依赖，并行。
+      await Promise.all([load(), loadSettings()]);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -247,14 +265,17 @@ function BoardApp() {
     setError(null);
     try {
       await api.setActiveAccount(id);
-      await loadSettings();
-      await load();
+      // v0.3.49 (#145)：两路加载无依赖，并行。
+      await Promise.all([loadSettings(), load()]);
     } catch (e) {
       setError(String(e));
     }
   };
 
-  const selectedTask = tasks.find((t) => t.key === selected) ?? null;
+  const selectedTask = useMemo(
+    () => tasks.find((t) => t.key === selected) ?? null,
+    [tasks, selected],
+  );
 
   return (
     <div className="app">

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { useI18n, type LangMode } from "../i18n";
-import type { Account, AccountColumn, BoardMode, Settings } from "../types";
+import type { Account, AccountColumn, BoardMode, Project, Settings } from "../types";
 
 interface Props {
   settings: Settings;
@@ -63,7 +63,7 @@ export default function SettingsPanel({
   const [diagAccountId, setDiagAccountId] = useState<number | null>(
     settings.accounts.find((a) => a.isDefault)?.id ?? settings.accounts[0]?.id ?? null,
   );
-  const [projects, setProjects] = useState<any[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
 
   // v0.3.48+：每个账号独立的编辑状态
   const [accountStates, setAccountStates] = useState<Record<number, AccountEditState>>({});
@@ -72,37 +72,51 @@ export default function SettingsPanel({
   const [tab, setTab] = useState<SettingsTab>("base");
 
   // 初始化：加载所有账号的列配置
+  // v0.3.49 (#145)：按账号并行（每账号内两路再并行），N 账号由 2N RTT 降为 ~2 RTT。
   useEffect(() => {
+    let cancelled = false;
     const init = async () => {
-      const states: Record<number, AccountEditState> = {};
-      for (const acct of settings.accounts) {
-        try {
-          const cols = await api.listAccountColumns(acct.id);
-          const statuses = await api.listProjectStatuses(acct.id);
-          states[acct.id] = {
-            columns: cols.sort((a, b) => a.orderIndex - b.orderIndex),
-            editingCol: null,
-            ruleChips: [],
-            ruleInput: "",
-            availableStatuses: [...new Set(statuses.map((p) => p.name).filter(Boolean))],
-            saving: false,
-            msg: null,
-          };
-        } catch {
-          states[acct.id] = {
-            columns: [],
-            editingCol: null,
-            ruleChips: [],
-            ruleInput: "",
-            availableStatuses: [],
-            saving: false,
-            msg: null,
-          };
-        }
-      }
-      setAccountStates(states);
+      const entries = await Promise.all(
+        settings.accounts.map(async (acct) => {
+          try {
+            const [cols, statuses] = await Promise.all([
+              api.listAccountColumns(acct.id),
+              api.listProjectStatuses(acct.id),
+            ]);
+            return [
+              acct.id,
+              {
+                columns: cols.sort((a, b) => a.orderIndex - b.orderIndex),
+                editingCol: null,
+                ruleChips: [],
+                ruleInput: "",
+                availableStatuses: [...new Set(statuses.map((p) => p.name).filter(Boolean))],
+                saving: false,
+                msg: null,
+              },
+            ] as const;
+          } catch {
+            return [
+              acct.id,
+              {
+                columns: [],
+                editingCol: null,
+                ruleChips: [],
+                ruleInput: "",
+                availableStatuses: [],
+                saving: false,
+                msg: null,
+              },
+            ] as const;
+          }
+        }),
+      );
+      if (!cancelled) setAccountStates(Object.fromEntries(entries));
     };
     void init();
+    return () => {
+      cancelled = true;
+    };
   }, [settings.accounts]);
 
   const updateAccountState = useCallback((accountId: number, patch: Partial<AccountEditState>) => {
@@ -239,8 +253,9 @@ export default function SettingsPanel({
     setDiagMsg(null);
     try {
       const res = await api.diagnoseProjectStatus(diagAccountId);
-      const projs = (res.projects ?? []) as any[];
-      const statusKeys = Object.keys(res.sample_statuses ?? {});
+      const projs = res.projects ?? [];
+      // 后端 sample_statuses 为 [key, value][] 数组，取 key 展示。
+      const statusKeys = (res.sample_statuses ?? []).map(([k]) => k);
       setDiagMsg({
         ok: true,
         text:
@@ -248,7 +263,7 @@ export default function SettingsPanel({
           "\n" +
           t("settings.diagProjects", {
             count: projs.length,
-            names: projs.map((p: any) => p.name).join("、") || t("settings.diagNone"),
+            names: projs.map((p) => p.name).join("、") || t("settings.diagNone"),
           }) +
           "\n" +
           t("settings.diagStatuses", { count: res.status_count }) +
@@ -271,7 +286,16 @@ export default function SettingsPanel({
 
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("settings.title")}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onClose();
+        }}
+      >
         <h3 className="modal-title" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
           <span>{t("settings.title")}</span>
           <button className="btn ghost small" onClick={onClose} title={t("btn.cancel")}>✕</button>
@@ -354,7 +378,7 @@ export default function SettingsPanel({
             <div className="muted small">{t("settings.projectDiagHint")}</div>
             {projects.length > 0 && (
               <div className="project-list" style={{ marginTop: 6 }}>
-                {projects.map((p: any) => (
+                {projects.map((p) => (
                   <div key={p.id} className="project-row">
                     <span className="project-name">{p.name}</span>
                     <span className="muted small">{p.numberOfItems} items · {p.ownerType}</span>
@@ -464,8 +488,8 @@ function AccountCard({
     <div className="account-config-card" style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12 }}>
       <div className="account-config-header" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
         <span style={{ fontWeight: 600 }}>{account.label}</span>
-        {account.isDefault && <span title="默认账号">★</span>}
-        <span style={{ marginLeft: "auto" }} className="muted small">看板模式:</span>
+        {account.isDefault && <span title={t("settings.defaultTitle")}>★</span>}
+        <span style={{ marginLeft: "auto" }} className="muted small">{t("settings.boardModeLabel")}:</span>
         <select className="select" value={boardMode} onChange={(e) => void handleBoardModeChange(e.target.value as BoardMode)} style={{ width: "auto" }}>
           <option value="project">{t("settings.boardModeProject")}</option>
           <option value="custom">{t("settings.boardModeCustom")}</option>
@@ -480,7 +504,7 @@ function AccountCard({
               <div className="row" style={{ gap: 6, marginBottom: 6 }}>
                 <div style={{ flex: 1 }}>
                   <label className="small">{t("settings.customColumns.colName")}</label>
-                  <input className="input" placeholder="待开发" value={state.editingCol.colName} onChange={(e) => onUpdateEditingCol({ colName: e.target.value })} />
+                  <input className="input" placeholder={t("settings.customColumns.colNamePlaceholder")} value={state.editingCol.colName} onChange={(e) => onUpdateEditingCol({ colName: e.target.value })} />
                 </div>
               </div>
               <div style={{ marginBottom: 6 }}>
@@ -528,7 +552,7 @@ function AccountCard({
             <div className="muted small">{t("settings.customColumns.empty")}</div>
           )}
           {state.columns.map((col, idx) => (
-            <div key={idx} className="col-row" style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid var(--border)" }}>
+            <div key={col.colKey} className="col-row" style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid var(--border)" }}>
               <span className="chip" style={{ minWidth: 24, textAlign: "center" }}>{idx}</span>
               <span style={{ flex: 1, fontWeight: 500 }}>{col.colName}</span>
               <span className="muted small" style={{ flex: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
