@@ -26,8 +26,8 @@ jobs:
           - platform: macos-latest
             bundles: app,dmg
             target: aarch64-apple-darwin
-          # macOS x64 (Intel)
-          - platform: macos-13
+          # macOS x64 (Intel) — 在 Apple Silicon runner 上交叉编译（macos-13 runner 资源紧张易排队）
+          - platform: macos-latest
             bundles: app,dmg
             target: x86_64-apple-darwin
           # Windows x64
