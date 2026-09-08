@@ -2,6 +2,9 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.50 (2026-09-08) — tasks table physical rebuild (#155)**
+  - **#155 tasks table physical rebuild**: Field naming fully clarified — `key→issue_key` (business reference, added), auto-increment `id` primary key + `UNIQUE(repo, number, account_id)` fixing multi-account overwrites, `gh_state→issue_state`, `gh_status→project_status` (semantic separation from the local four-state `status`), and `updated_at` normalized from TEXT to INTEGER seconds. Versioned migration based on `PRAGMA user_version` plus idempotent `key`-column detection; legacy DBs rebuild automatically with full data migration. See [docs/issue-155-tasks-schema-rebuild.md](./issue-155-tasks-schema-rebuild.md).
+
 - **v0.3.48 (2026-09-07) — Expanded platform support & CI optimization (#118 #119 #120 #121 #122)**
   - **#118 Expanded platform support**: Added macOS ARM/x64 and Windows ARM64 dual-architecture build support to GitHub Actions release workflow. See [docs/issue-118-expand-platform-support.md](./issue-118-expand-platform-support.md).
   - **#119 Expanded Release build matrix**: Added arm64 support for all platforms, rpm format, and portable zip format. macOS/Windows/Linux all support dual architectures with new zip/msi/rpm formats. See [docs/issue-119-expand-release-matrix.md](./issue-119-expand-release-matrix.md).

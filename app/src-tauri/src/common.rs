@@ -44,6 +44,43 @@ pub fn validate_browser_url(url: &str) -> Result<String, String> {
     }
 }
 
+/// RFC3339 "YYYY-MM-DDTHH:MM:SSZ" → Unix 秒；空/解析失败返回 0。
+/// v0.3.50 (#155)：`tasks.updated_at` 由 TEXT 改为 INTEGER 秒后，同步写入前用此函数换算。
+pub fn iso8601_to_secs(s: &str) -> i64 {
+    let s = s.trim();
+    if s.len() < 19 {
+        return 0;
+    }
+    let mut parts = s.split(&['T', 'Z']);
+    let date = parts.next().unwrap_or("");
+    let time = parts.next().unwrap_or("");
+    let mut date_parts = date.split('-');
+    let y = date_parts.next().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+    let m = date_parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+    let d = date_parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+    let mut time_parts = time.split(':');
+    let h = time_parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+    let mi = time_parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+    let sec = time_parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+    if y < 1970 || m < 1 || m > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || sec > 59 {
+        return 0;
+    }
+    // 1970-01-01 起算的天数（Gregorian，无历法库依赖）
+    const DAYS_BEFORE_MONTH: [i64; 12] = [
+        0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334,
+    ];
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let month_adjust = if leap && m > 2 { 1 } else { 0 };
+    let days = (y - 1970) as i64 * 365
+        + ((y - 1) / 4 - 1970 / 4) as i64
+        - ((y - 1) / 100 - 1970 / 100) as i64
+        + ((y - 1) / 400 - 1970 / 400) as i64
+        + DAYS_BEFORE_MONTH[(m - 1) as usize]
+        + month_adjust
+        + (d as i64 - 1);
+    days * 86400 + h as i64 * 3600 + mi as i64 * 60 + sec as i64
+}
+
 /// 中英四态归一化。返回 `None` 表示非四态（调用方再按自定义列校验）。
 pub fn normalize_status(s: &str) -> Option<String> {
     match s.trim() {
@@ -65,7 +102,7 @@ pub fn validate_task_status(conn: &Connection, key: &str, status: &str) -> Resul
     }
     let account_id: Option<i64> = conn
         .query_row(
-            "SELECT account_id FROM tasks WHERE key = ?1 LIMIT 1",
+            "SELECT account_id FROM tasks WHERE issue_key = ?1 LIMIT 1",
             rusqlite::params![key],
             |r| r.get(0),
         )
@@ -92,7 +129,7 @@ pub fn set_task_status(conn: &Connection, key: &str, status: &str) -> Result<usi
     validate_task_status(conn, key, status)?;
     let n = conn
         .execute(
-            "UPDATE tasks SET status = ?1 WHERE key = ?2",
+            "UPDATE tasks SET status = ?1 WHERE issue_key = ?2",
             rusqlite::params![status, key],
         )
         .map_err(|e| e.to_string())?;
@@ -109,7 +146,7 @@ pub fn touch_session(
 ) -> Result<usize, String> {
     let n = conn
         .execute(
-            "UPDATE tasks SET session_id = ?1, session_agent = ?2, session_at = ?3 WHERE key = ?4",
+            "UPDATE tasks SET session_id = ?1, session_agent = ?2, session_at = ?3 WHERE issue_key = ?4",
             rusqlite::params![session_id, agent.unwrap_or_default(), now, key],
         )
         .map_err(|e| e.to_string())?;
@@ -120,7 +157,7 @@ pub fn touch_session(
 pub fn clear_task_session(conn: &Connection, key: &str) -> Result<usize, String> {
     let n = conn
         .execute(
-            "UPDATE tasks SET session_id = NULL, session_agent = NULL WHERE key = ?1",
+            "UPDATE tasks SET session_id = NULL, session_agent = NULL WHERE issue_key = ?1",
             [key],
         )
         .map_err(|e| e.to_string())?;
@@ -131,7 +168,7 @@ pub fn clear_task_session(conn: &Connection, key: &str) -> Result<usize, String>
 pub fn record_task_handoff(conn: &Connection, key: &str, text: &str) -> Result<usize, String> {
     let n = conn
         .execute(
-            "UPDATE tasks SET handoff = ?1 WHERE key = ?2",
+            "UPDATE tasks SET handoff = ?1 WHERE issue_key = ?2",
             rusqlite::params![text, key],
         )
         .map_err(|e| e.to_string())?;

@@ -10,16 +10,16 @@ use crate::AppState;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Task {
-    pub key: String,
+    pub issue_key: String,
     pub owner: String,
     pub repo: String,
     pub number: i64,
     pub title: String,
     pub url: String,
-    pub gh_state: String,
+    pub issue_state: String,
     pub ownership: String,
     pub status: String,
-    pub gh_status: String,
+    pub project_status: String,
     pub assignees: String,
     pub mentioned: bool,
     pub latest_comment_url: String,
@@ -31,7 +31,7 @@ pub struct Task {
     pub session_at: Option<i64>,
     pub candidate_done: bool,
     pub handoff: String,
-    pub updated_at: Option<String>,
+    pub updated_at: Option<i64>,
     /// v0.3.16：归属账号 id（指向 accounts.id），用于多账号视图过滤。
     pub account_id: i64,
 }
@@ -89,7 +89,7 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
     let (sql, use_ownership_filter) = match ownership {
         Some(_) => (
             format!(
-                "SELECT key, owner, repo, number, title, url, gh_state, ownership, status, gh_status,
+                "SELECT issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status,
                         assignees, mentioned, latest_comment_url, pr_number, pr_url, branch,
                         session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id
                  FROM tasks WHERE ownership = ?{where_extra}
@@ -99,7 +99,7 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
         ),
         None => (
             format!(
-                "SELECT key, owner, repo, number, title, url, gh_state, ownership, status, gh_status,
+                "SELECT issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status,
                         assignees, mentioned, latest_comment_url, pr_number, pr_url, branch,
                         session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id
                  FROM tasks WHERE 1=1{where_extra}
@@ -112,16 +112,16 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let mapper = |r: &rusqlite::Row| {
         Ok(Task {
-            key: r.get(0)?,
+            issue_key: r.get(0)?,
             owner: r.get(1)?,
             repo: r.get(2)?,
             number: r.get(3)?,
             title: r.get(4)?,
             url: r.get(5)?,
-            gh_state: r.get(6)?,
+            issue_state: r.get(6)?,
             ownership: r.get(7)?,
             status: r.get(8)?,
-            gh_status: r.get(9)?,
+            project_status: r.get(9)?,
             assignees: r.get(10)?,
             mentioned: r.get::<_, i64>(11).unwrap_or(0) != 0,
             latest_comment_url: r.get(12)?,
@@ -1311,7 +1311,7 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO tasks (key, owner, repo, number, title, url, gh_state, ownership, synced_at, account_id)
+            "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state, ownership, synced_at, account_id)
              VALUES ('a#1', 'a', 'a', 1, 't', 'u', 'open', 'mine', 0, 77)",
             [],
         )

@@ -6,6 +6,10 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.50（2026-09-08）— tasks 表物理重建（#155）**
+
+  - **#155 tasks 表物理重建**：字段命名彻底理清——`key→issue_key`（业务引用，新增）、自增 `id` 主键 + `UNIQUE(repo, number, account_id)` 解决多账号互相覆盖、`gh_state→issue_state`、`gh_status→project_status`（与本地四态 `status` 语义分离）、`updated_at` 由 TEXT 统一为 INTEGER 秒。基于 `PRAGMA user_version` 版本化迁移 + `key` 列幂等判定，老库自动重建、数据完整迁移。详见 [docs/issue-155-tasks-schema-rebuild.md](./issue-155-tasks-schema-rebuild.md)。
+
 - **v0.3.48（2026-09-07）— 扩展平台支持与 CI 优化（#118 #119 #120 #121 #122）**
 
   - **#118 扩展平台支持**：GitHub Actions release 工作流新增 macOS ARM/x64、Windows ARM64 双架构构建支持。详见 [docs/issue-118-expand-platform-support.md](./issue-118-expand-platform-support.md)。

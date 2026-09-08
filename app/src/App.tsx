@@ -273,7 +273,7 @@ function BoardApp() {
   };
 
   const selectedTask = useMemo(
-    () => tasks.find((t) => t.key === selected) ?? null,
+    () => tasks.find((t) => t.issueKey === selected) ?? null,
     [tasks, selected],
   );
 
@@ -415,7 +415,7 @@ function BoardApp() {
             title={t("detail.clickBackdropClose")}
           />
           <DetailPanel
-            key={selectedTask.key}
+            key={selectedTask.issueKey}
             task={selectedTask}
             onClose={() => setSelected(null)}
             onChanged={() => {

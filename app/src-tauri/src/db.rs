@@ -21,14 +21,20 @@ CREATE TABLE IF NOT EXISTS accounts (
   created_at  INTEGER NOT NULL
 );
 
+-- v0.3.50 (#155)：tasks 表物理重建。
+-- - 自增 id 主键 + 复合唯一键 UNIQUE(repo, number, account_id)：多账号不再互相覆盖。
+-- - issue_key 为稳定业务引用（值 = repo#number），供 MCP / 前端 React key 使用。
+-- - gh_state → issue_state、gh_status → project_status：三态语义分清（status 为本地看板四态）。
+-- - updated_at 统一为 INTEGER 秒（与 synced_at / done_at / session_at 一致）。
 CREATE TABLE IF NOT EXISTS tasks (
-  key            TEXT PRIMARY KEY,
+  id             INTEGER PRIMARY KEY,
+  issue_key      TEXT NOT NULL,
   owner          TEXT NOT NULL,
   repo           TEXT NOT NULL,
   number         INTEGER NOT NULL,
   title          TEXT NOT NULL,
   url            TEXT NOT NULL,
-  gh_state       TEXT NOT NULL,
+  issue_state    TEXT NOT NULL,
   ownership      TEXT NOT NULL,
   status         TEXT NOT NULL DEFAULT 'todo',
   session_id     TEXT,
@@ -36,7 +42,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   session_at     INTEGER,
   candidate_done INTEGER NOT NULL DEFAULT 0,
   stale          INTEGER NOT NULL DEFAULT 0,
-  gh_status      TEXT NOT NULL DEFAULT '',
+  project_status TEXT NOT NULL DEFAULT '',
   assignees      TEXT NOT NULL DEFAULT '',
   labels         TEXT NOT NULL DEFAULT '',
   done_at        INTEGER NOT NULL DEFAULT 0,
@@ -45,19 +51,23 @@ CREATE TABLE IF NOT EXISTS tasks (
   latest_comment_url TEXT NOT NULL DEFAULT '',
   pr_number      INTEGER NOT NULL DEFAULT 0,
   pr_url         TEXT NOT NULL DEFAULT '',
-  -- v0.3.10：关联 PR 的分支（head.ref）。v0.3.28+ 同时写入 SCHEMA，
-  -- 避免任何只执行 SCHEMA 的建库路径漏掉 ALTER 迁移导致缺列。
+  -- 关联 PR 的分支（head.ref）。
   branch         TEXT NOT NULL DEFAULT '',
-  -- v0.3.10：agent 写入的交接任务详情。
+  -- agent 写入的交接任务详情。
   handoff        TEXT NOT NULL DEFAULT '',
-  updated_at     TEXT,
+  updated_at     INTEGER,
   synced_at      INTEGER NOT NULL,
-  -- v0.3.16：任务归属账号（来自 accounts.id）。v0.3.15 之前的数据迁移后默认 1。
-  account_id     INTEGER NOT NULL DEFAULT 1
+  -- 任务归属账号（来自 accounts.id）。
+  account_id     INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(repo, number, account_id)
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_ownership ON tasks(ownership);
 CREATE INDEX IF NOT EXISTS idx_tasks_account ON tasks(account_id);
+
+-- v0.3.50 (#155)：idx_tasks_issue_key 不在 SCHEMA 顶层定义——老库（含 key 列旧布局）
+-- 执行本 SCHEMA 时 issue_key 列尚不存在，顶层 CREATE INDEX 会导致 batch 失败。
+-- 该索引由 open_db 末尾的幂等创建 + v2 重建函数负责（见下）。
 
 CREATE TABLE IF NOT EXISTS label_mappings (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -241,8 +251,15 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
     // version ≥ 1 的热路径跳过（SCHEMA 已是 IF NOT EXISTS 幂等）。
     if schema_ver < 1 {
         migrate_legacy_alters(&conn);
-        // 补齐成功即记版本（best-effort，失败下次重跑补齐，无害）。
-        let _ = conn.pragma_update(None, "user_version", 1);
+    }
+    // v0.3.50 (#155)：tasks 物理重建。以「tasks 是否仍含旧 key 列」为判定，
+    // 兼容 user_version 丢值/旧库直接建的场景——重建后 key 列消失，幂等不重复执行。
+    // 顺序依赖：migrate_legacy_alters 必须先跑，保证老表已补齐 gh_status/assignees
+    // 等列，重建的 INSERT..SELECT 才能读到。
+    if tasks_uses_legacy_key(&conn) && migrate_tasks_v2_rebuild(&conn).is_ok() {
+        let _ = conn.pragma_update(None, "user_version", 2);
+    } else if schema_ver < 1 {
+        let _ = conn.pragma_update(None, "user_version", 2);
     }
     // 以下默认设置与各版本表级迁移（每次建连都跑，全部幂等；列补齐已由上面的版本门控处理）。
     for (k, v) in DEFAULT_SETTINGS {
@@ -288,6 +305,16 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
             crate::tlog!("[db] v0.3.15 → v0.3.16 迁移失败（已保留兜底字段）: {}", e);
         }
     }
+    // v0.3.50 (#155)：新库（SCHEMA 顶层无此索引）与重建后均由此处幂等补齐 issue_key 索引。
+    if let Err(e) = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_issue_key ON tasks(issue_key)",
+        [],
+    ) {
+        // best-effort：tasks 表异常时忽略，下次建连重试。
+        if crate::common::verbose_enabled() {
+            crate::tlog!("[db] idx_tasks_issue_key 创建跳过: {}", e);
+        }
+    }
     Ok(conn)
 }
 
@@ -318,6 +345,89 @@ fn migrate_legacy_alters(conn: &Connection) {
             }
         }
     }
+}
+
+/// v0.3.50 (#155)：判定 tasks 表是否仍是旧的 `key` 主键布局（含 `key` 列）。
+/// 新库由 SCHEMA 直接建新布局（无 key 列）；老库保留旧布局，据此触发物理重建。
+/// 重建一次后 key 列消失，即便 user_version 丢值也不会二次重建（幂等）。
+fn tasks_uses_legacy_key(conn: &Connection) -> bool {
+    conn.prepare("SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'key'")
+        .map(|mut stmt| stmt.exists([]).unwrap_or(false))
+        .unwrap_or(false)
+}
+
+/// v0.3.50 (#155)：tasks 表物理重建（单事务，幂等）。
+///
+/// 建新表 tasks_new → INSERT..SELECT 迁移数据 → DROP 老表 → RENAME → 重建索引。
+/// 列变更：key→(id, issue_key)、gh_state→issue_state、gh_status→project_status、
+/// updated_at TEXT→INTEGER 秒（RFC3339 用 strftime('%s') 转换，与 synced_at/done_at 单位一致）。
+///
+/// 老表 key 为全局主键，因此 (repo, number) 全局唯一，INSERT..SELECT 不会撞
+/// UNIQUE(repo, number, account_id)。DROP 连同老表上的索引一起删除，
+/// 故 RENAME 后需重建 tasks 的全部索引（含 SCHEMA 末尾的 board/status_done_at 复合索引）。
+fn migrate_tasks_v2_rebuild(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE tasks_new (
+          id             INTEGER PRIMARY KEY,
+          issue_key      TEXT NOT NULL,
+          owner          TEXT NOT NULL,
+          repo           TEXT NOT NULL,
+          number         INTEGER NOT NULL,
+          title          TEXT NOT NULL,
+          url            TEXT NOT NULL,
+          issue_state    TEXT NOT NULL,
+          ownership      TEXT NOT NULL,
+          status         TEXT NOT NULL DEFAULT 'todo',
+          session_id     TEXT,
+          session_agent  TEXT,
+          session_at     INTEGER,
+          candidate_done INTEGER NOT NULL DEFAULT 0,
+          stale          INTEGER NOT NULL DEFAULT 0,
+          project_status TEXT NOT NULL DEFAULT '',
+          assignees      TEXT NOT NULL DEFAULT '',
+          labels         TEXT NOT NULL DEFAULT '',
+          done_at        INTEGER NOT NULL DEFAULT 0,
+          mentioned      INTEGER NOT NULL DEFAULT 0,
+          comments_count INTEGER NOT NULL DEFAULT 0,
+          latest_comment_url TEXT NOT NULL DEFAULT '',
+          pr_number      INTEGER NOT NULL DEFAULT 0,
+          pr_url         TEXT NOT NULL DEFAULT '',
+          branch         TEXT NOT NULL DEFAULT '',
+          handoff        TEXT NOT NULL DEFAULT '',
+          updated_at     INTEGER,
+          synced_at      INTEGER NOT NULL,
+          account_id     INTEGER NOT NULL DEFAULT 1,
+          UNIQUE(repo, number, account_id)
+        );
+        INSERT INTO tasks_new
+          (issue_key, owner, repo, number, title, url, issue_state, ownership, status,
+           session_id, session_agent, session_at, candidate_done, stale, project_status,
+           assignees, labels, done_at, mentioned, comments_count, latest_comment_url,
+           pr_number, pr_url, branch, handoff, updated_at, synced_at, account_id)
+        SELECT
+           key, owner, repo, number, title, url, gh_state, ownership, status,
+           session_id, session_agent, session_at, candidate_done, stale, gh_status,
+           assignees, labels, done_at, mentioned, comments_count, latest_comment_url,
+           pr_number, pr_url, branch, handoff,
+           COALESCE(CAST(strftime('%s', NULLIF(TRIM(updated_at), '')) AS INTEGER), 0),
+           synced_at, account_id
+        FROM tasks;
+        DROP TABLE tasks;
+        ALTER TABLE tasks_new RENAME TO tasks;
+        CREATE INDEX IF NOT EXISTS idx_tasks_issue_key ON tasks(issue_key);
+        CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+        CREATE INDEX IF NOT EXISTS idx_tasks_ownership ON tasks(ownership);
+        CREATE INDEX IF NOT EXISTS idx_tasks_account ON tasks(account_id);
+        CREATE INDEX IF NOT EXISTS idx_tasks_board ON tasks(account_id, candidate_done, status, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_tasks_status_done_at ON tasks(status, done_at);
+        "#,
+    )
+    .map_err(|e| format!("tasks 表重建失败: {}", e))?;
+    if crate::common::verbose_enabled() {
+        crate::tlog!("[db] tasks 表 v0.3.50 物理重建完成（id + issue_key + 复合唯一键 + updated_at INTEGER）");
+    }
+    Ok(())
 }
 
 /// 把 v0.3.15 写在 `meta.pat_token` 的 PAT 自动迁到 `accounts` 表第一条记录。
@@ -1167,7 +1277,7 @@ pub fn load_existing_tasks(
 ) -> Result<HashMap<String, ExistingTask>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT key, status, comments_count, mentioned, pr_number, pr_url,
+            "SELECT issue_key, status, comments_count, mentioned, pr_number, pr_url,
                     latest_comment_url, branch
              FROM tasks WHERE account_id = ?1",
         )

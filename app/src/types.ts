@@ -40,16 +40,16 @@ export interface ProjectStatus {
 }
 
 export interface Task {
-  key: string;
+  issueKey: string;
   owner: string;
   repo: string;
   number: number;
   title: string;
   url: string;
-  ghState: string;
+  issueState: string;
   ownership: Ownership;
   status: StatusKey;
-  ghStatus: string;
+  projectStatus: string;
   assignees: string;
   mentioned: boolean;
   latestCommentUrl: string;
@@ -61,7 +61,7 @@ export interface Task {
   sessionAt: number | null;
   candidateDone: boolean;
   handoff: string;
-  updatedAt: string | null;
+  updatedAt: number | null;
   /** v0.3.16+：归属账号 id（指向 accounts.id）。 */
   accountId: number;
 }
