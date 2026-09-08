@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { useI18n } from "../i18n";
+import ConfirmDialog from "./ConfirmDialog";
 import type { SyncLog } from "../types";
 
 /** v0.3.49 (#148)：同步触发类型走 i18n（此前硬编码中文）。 */
@@ -50,6 +51,8 @@ export default function SyncLogsPanel({ onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [pruning, setPruning] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadLogs = useCallback(async () => {
@@ -154,7 +157,21 @@ export default function SyncLogsPanel({ onClose }: Props) {
                       <td>{log.updated}</td>
                       <td>{log.removed}</td>
                       <td className="error-cell">
-                        {log.errorMessage || log.failedSources || "-"}
+                        {log.errorMessage || log.failedSources ? (
+                          <button
+                            type="button"
+                            className={`error-toggle${expandedId === log.id ? " expanded" : ""}`}
+                            title={log.errorMessage || log.failedSources}
+                            aria-label={t("syncLogs.errorExpandHint")}
+                            onClick={() =>
+                              setExpandedId(expandedId === log.id ? null : log.id)
+                            }
+                          >
+                            {log.errorMessage || log.failedSources}
+                          </button>
+                        ) : (
+                          "-"
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -177,16 +194,23 @@ export default function SyncLogsPanel({ onClose }: Props) {
           </button>
           <button
             className="btn ghost"
-            onClick={() => {
-              if (window.confirm(t("syncLogs.clearAllConfirm"))) {
-                void handleClear();
-              }
-            }}
+            onClick={() => setConfirming(true)}
             disabled={clearing}
           >
             {clearing ? t("syncLogs.pruning") : t("syncLogs.clearAll")}
           </button>
         </div>
+
+        {confirming && (
+          <ConfirmDialog
+            message={t("syncLogs.clearAllConfirm")}
+            onCancel={() => setConfirming(false)}
+            onConfirm={() => {
+              setConfirming(false);
+              void handleClear();
+            }}
+          />
+        )}
       </div>
     </div>
   );

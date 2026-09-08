@@ -137,7 +137,13 @@ function Board({
   });
 
   // v0.3.43+: "status" (legacy) gracefully degrades to "project"
-  if (boardMode === "project" || boardMode === "status") {
+  // v0.3.51 (#159): custom 模式未配置自定义列时回退到 project 列，避免误导性的四态列
+  const hasCustomColumns = !!accountColumns && accountColumns.length > 0;
+  if (
+    boardMode === "project" ||
+    boardMode === "status" ||
+    (boardMode === "custom" && !hasCustomColumns)
+  ) {
     // GitHub Project Status 列视图
     return (
       <div className="board">
@@ -173,12 +179,13 @@ function Board({
     );
   }
 
-  if (boardMode === "custom" && accountColumns && accountColumns.length > 0) {
-    // 自定义列视图（按账号配置渲染）
+  if (boardMode === "custom") {
+    // 自定义列视图（按账号配置渲染）；此处 hasCustomColumns 为 true，accountColumns 非空
     const { groups, unmatched } = customGroups;
+    const cols = accountColumns ?? [];
     return (
       <div className="board">
-        {accountColumns.map((col, idx) => {
+        {cols.map((col, idx) => {
           const items = groups.get(col.colKey) ?? [];
           return (
             <section key={col.colKey} aria-label={col.colName} className={`column column-status-${idx % 20}`}>
