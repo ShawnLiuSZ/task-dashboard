@@ -127,6 +127,34 @@ struct AccountSyncResult {
     failed_sources: Vec<String>,
 }
 
+/// v0.3.49 (#144)：计算阶段产出的单任务写行。
+///
+/// 计算（含评论回源等网络 I/O）与写入分离：循环只产出行、不写库；
+/// 写入阶段包在一个事务里一次提交，且写事务不横跨网络 I/O
+/// （避免长持写锁阻塞 UI 独立连接的读写）。
+struct PendingUpsert {
+    key: String,
+    repo: String,
+    number: i64,
+    title: String,
+    url: String,
+    state: String,
+    ownership: String,
+    final_status: String,
+    gh_status_raw: String,
+    assignees_csv: String,
+    labels_csv: String,
+    done_at_val: i64,
+    mentioned_val: i64,
+    comments_count: i64,
+    latest_comment_url: String,
+    pr_number: i64,
+    pr_url: String,
+    branch: String,
+    updated_at: String,
+    exists: bool,
+}
+
 /// v0.3.16+：单账号同步核心逻辑。返回该账号的 added / updated / 等。
 ///
 /// 设计要点：
@@ -297,12 +325,19 @@ fn sync_account(
         );
     }
 
-    // 仅本账号的任务标记陈旧（避免「全部账号视图」下另一账号的同步误标本账号任务为陈旧）。
-    conn.execute("UPDATE tasks SET stale = 1 WHERE account_id = ?1", [account.id])
-        .map_err(|e| format!("标记陈旧任务失败: {}", e))?;
+    // v0.3.49 (#144)：循环外一次预加载，循环内 O(1) 查，消灭逐任务 N+1 查询
+    // （2 次 SELECT + 2×labels 点查 + 全表列加载 + match_rules 重复解析）。
+    // 预加载失败则整账号同步失败，绝不用空快照继续——否则既有 status 会被
+    // 默认 "todo" 覆盖，造成本地手动态批量丢失。
+    let label_rules = crate::db::load_label_rules(conn)
+        .map_err(|e| format!("预加载 label 映射失败: {e}"))?;
+    let column_rules = crate::db::load_column_rules(conn, account.id)
+        .map_err(|e| format!("预加载自定义列失败: {e}"))?;
+    let existing_map = crate::db::load_existing_tasks(conn, account.id)
+        .map_err(|e| format!("预加载既有任务失败: {e}"))?;
 
-    let mut added = 0usize;
-    let mut updated = 0usize;
+    // 计算阶段：网络回源 + 纯内存匹配，只产出行，不写库。
+    let mut pending: Vec<PendingUpsert> = Vec::with_capacity(raw.len());
     let mut comment_budget: usize = 12;
     for t in &raw {
         if t.is_pr {
@@ -311,37 +346,24 @@ fn sync_account(
         let key = format!("{}#{}", t.repo, t.number);
         let ownership: &str = classify(&t.assignees, &account.login);
 
-        // 读取既有状态与富化字段缓存：用于"不在项目中"时维持本地手动态。
+        // 既有快照：用于"不在项目中"时维持本地手动态。
         // v0.3.16：既有记录必须是同一 account_id 的（避免跨账号状态污染）。
-        let row: (String, i64, i64, i64, String, String, String) = conn
-            .query_row(
-                "SELECT status, comments_count, mentioned, pr_number, pr_url, latest_comment_url, branch
-                 FROM tasks WHERE key = ?1 AND account_id = ?2",
-                rusqlite::params![&key, account.id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
-            )
-            .unwrap_or_else(|_| ("todo".to_string(), 0, 0, 0, String::new(), String::new(), String::new()));
-        let existing_status = row.0;
-        let existing_comments = row.1;
-        let existing_mentioned = row.2;
-        let existing_pr_number = row.3;
-        let existing_pr_url = row.4;
-        let existing_comment_url = row.5;
-        let existing_branch = row.6;
-        let exists = conn
-            .query_row(
-                "SELECT 1 FROM tasks WHERE key = ?1 AND account_id = ?2",
-                rusqlite::params![&key, account.id],
-                |_| Ok(()),
-            )
-            .is_ok();
+        let existing = existing_map.get(&key);
+        let existing_status = existing.map(|e| e.status.as_str()).unwrap_or("todo");
+        let existing_comments = existing.map(|e| e.comments).unwrap_or(0);
+        let existing_mentioned = existing.map(|e| e.mentioned).unwrap_or(0);
+        let existing_pr_number = existing.map(|e| e.pr_number).unwrap_or(0);
+        let existing_pr_url = existing.map(|e| e.pr_url.as_str()).unwrap_or("");
+        let existing_comment_url = existing.map(|e| e.comment_url.as_str()).unwrap_or("");
+        let existing_branch = existing.map(|e| e.branch.as_str()).unwrap_or("");
+        let exists = existing.is_some();
 
         // 决定看板状态：closed→已完成；自定义列 gh_status 匹配→列 key；label 映射→映射状态；Project Status→映射；不在项目中→维持本地手动态。
         let gh_status_raw = project_status.get(&key).cloned().unwrap_or_default();
         let labels_csv = t.labels.join(",");
         // 先用 label 映射解析（优先级：repo > org > 全局默认 > state 兜底）
-        let mapped_status = crate::db::resolve_status_from_labels(
-            conn,
+        let mapped_status = crate::db::resolve_status_from_rules(
+            &label_rules,
             &account.org,
             &t.repo,
             &labels_csv,
@@ -350,7 +372,7 @@ fn sync_account(
         // v0.3.28+：检查自定义列映射（按账号的 account_columns 匹配 gh_status）。
         // 仅当看板模式为 custom 时才生效，否则四态/Project 视图下任务会因 status 变成 col_key 而消失。
         let column_status = if board_mode == "custom" && !gh_status_raw.is_empty() {
-            crate::db::resolve_column_from_gh_status(conn, account.id, &gh_status_raw)
+            crate::db::resolve_column_from_rules(&column_rules, &gh_status_raw)
         } else {
             None
         };
@@ -368,7 +390,7 @@ fn sync_account(
                 .unwrap_or(&existing_status)
                 .to_string()
         } else {
-            existing_status
+            existing_status.to_string()
         };
 
         let assignees_csv = t.assignees.join(",");
@@ -390,7 +412,11 @@ fn sync_account(
                 None => (0, String::new(), String::new()),
             }
         } else {
-            (existing_pr_number, existing_pr_url, existing_branch)
+            (
+                existing_pr_number,
+                existing_pr_url.to_string(),
+                existing_branch.to_string(),
+            )
         };
 
         // 新评论链接：仅当评论数较上次增加且预算充足时回源拉取（控制 API 调用量）。
@@ -404,81 +430,120 @@ fn sync_account(
                     }
                     Ok(None) => {
                         comment_budget -= 1;
-                        (t.comments as i64, existing_comment_url)
+                        (t.comments as i64, existing_comment_url.to_string())
                     }
                     Err(e) => {
                         eprintln!("[sync] 拉取评论失败，跳过: {}#{}: {}", t.repo, t.number, e);
-                        (existing_comments, existing_comment_url)
+                        (existing_comments, existing_comment_url.to_string())
                     }
                 }
             } else {
-                (existing_comments, existing_comment_url)
+                (existing_comments, existing_comment_url.to_string())
             };
 
-        conn.execute(
-            "INSERT INTO tasks
-               (key, owner, repo, number, title, url, gh_state, ownership,
-                status, gh_status, assignees, labels, done_at, mentioned, comments_count,
-                latest_comment_url, pr_number, pr_url, branch, candidate_done, stale, updated_at, synced_at,
-                account_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 0, 0, ?20, ?21, ?22)
-             ON CONFLICT(key) DO UPDATE SET
-               title = excluded.title,
-               repo = excluded.repo,
-               gh_state = excluded.gh_state,
-               ownership = excluded.ownership,
-               updated_at = excluded.updated_at,
-               synced_at = excluded.synced_at,
-               candidate_done = 0,
-               stale = 0,
-               gh_status = excluded.gh_status,
-               assignees = excluded.assignees,
-               labels = excluded.labels,
-               status = excluded.status,
-               done_at = CASE
-                 WHEN excluded.status = 'done' AND done_at = 0 THEN ?20
-                 WHEN excluded.status <> 'done' THEN 0
-                 ELSE done_at
-               END,
-               mentioned = excluded.mentioned,
-               comments_count = excluded.comments_count,
-               latest_comment_url = excluded.latest_comment_url,
-               pr_number = excluded.pr_number,
-               pr_url = excluded.pr_url,
-               branch = excluded.branch,
-               account_id = excluded.account_id",
-            rusqlite::params![
-                key,
-                account.org,
-                t.repo,
-                t.number,
-                t.title,
-                t.url,
-                t.state,
-                ownership,
-                final_status,
-                gh_status_raw,
-                assignees_csv,
-                labels_csv,
-                done_at_val,
-                mentioned_val,
-                comments_count,
-                latest_comment_url,
-                pr_number,
-                pr_url,
-                branch,
-                t.updated_at,
-                now,
-                account.id,
-            ],
-        )
-        .map_err(|e| format!("写入任务失败: {}", e))?;
+        pending.push(PendingUpsert {
+            key,
+            repo: t.repo.clone(),
+            number: t.number,
+            title: t.title.clone(),
+            url: t.url.clone(),
+            state: t.state.clone(),
+            ownership: ownership.to_string(),
+            final_status,
+            gh_status_raw,
+            assignees_csv,
+            labels_csv,
+            done_at_val,
+            mentioned_val,
+            comments_count,
+            latest_comment_url,
+            pr_number,
+            pr_url,
+            branch,
+            updated_at: t.updated_at.clone(),
+            exists,
+        });
+    }
 
-        if exists {
-            updated += 1;
-        } else {
-            added += 1;
+    // 写入阶段：stale 标记 + 全部 upsert 包在一个事务里一次提交。
+    // 原来每任务 1 次 autocommit（N 次 WAL fsync），现在 1 次 commit。
+    let mut added = 0usize;
+    let mut updated = 0usize;
+    {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("开启同步写入事务失败: {e}"))?;
+        // 仅本账号的任务标记陈旧（避免「全部账号视图」下另一账号的同步误标本账号任务为陈旧）。
+        tx.execute("UPDATE tasks SET stale = 1 WHERE account_id = ?1", [account.id])
+            .map_err(|e| format!("标记陈旧任务失败: {e}"))?;
+        for row in &pending {
+            tx.execute(
+                "INSERT INTO tasks
+                   (key, owner, repo, number, title, url, gh_state, ownership,
+                    status, gh_status, assignees, labels, done_at, mentioned, comments_count,
+                    latest_comment_url, pr_number, pr_url, branch, candidate_done, stale, updated_at, synced_at,
+                    account_id)
+                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 0, 0, ?20, ?21, ?22)
+                  ON CONFLICT(key) DO UPDATE SET
+                    title = excluded.title,
+                    repo = excluded.repo,
+                    gh_state = excluded.gh_state,
+                    ownership = excluded.ownership,
+                    updated_at = excluded.updated_at,
+                    synced_at = excluded.synced_at,
+                    candidate_done = 0,
+                    stale = 0,
+                    gh_status = excluded.gh_status,
+                    assignees = excluded.assignees,
+                    labels = excluded.labels,
+                    status = excluded.status,
+                    done_at = CASE
+                      WHEN excluded.status = 'done' AND done_at = 0 THEN ?20
+                      WHEN excluded.status <> 'done' THEN 0
+                      ELSE done_at
+                    END,
+                    mentioned = excluded.mentioned,
+                    comments_count = excluded.comments_count,
+                    latest_comment_url = excluded.latest_comment_url,
+                    pr_number = excluded.pr_number,
+                    pr_url = excluded.pr_url,
+                    branch = excluded.branch,
+                    account_id = excluded.account_id",
+                rusqlite::params![
+                    row.key,
+                    account.org,
+                    row.repo,
+                    row.number,
+                    row.title,
+                    row.url,
+                    row.state,
+                    row.ownership,
+                    row.final_status,
+                    row.gh_status_raw,
+                    row.assignees_csv,
+                    row.labels_csv,
+                    row.done_at_val,
+                    row.mentioned_val,
+                    row.comments_count,
+                    row.latest_comment_url,
+                    row.pr_number,
+                    row.pr_url,
+                    row.branch,
+                    row.updated_at,
+                    now,
+                    account.id,
+                ],
+            )
+            .map_err(|e| format!("写入任务失败: {e}"))?;
+
+            if row.exists {
+                updated += 1;
+            } else {
+                added += 1;
+            }
         }
+        tx.commit()
+            .map_err(|e| format!("提交同步写入事务失败: {e}"))?;
     }
 
     // v0.3.49+: 处理本账号下的陈旧任务：搜索未返回的任务必然已不再 open。
@@ -709,7 +774,7 @@ mod tests {
         let conn = db::open_db(&tmp).expect("open_db 快照库");
 
         eprintln!("[test] 开始真实同步（关注 PR 关联）…");
-        let res = run(&conn).expect("同步应成功");
+        let res = run(&conn, "manual").expect("同步应成功");
         eprintln!(
             "[test] 同步完成：total={} added={} updated={} removed={} candidate_done={} pruned={}",
             res.total, res.added, res.updated, res.removed, res.candidate_done, res.pruned
