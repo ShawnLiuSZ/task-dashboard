@@ -553,3 +553,42 @@ fn tasks_allow_same_repo_number_across_accounts() {
     );
     assert!(dup.is_err(), "同账号重复 (repo,number) 应触发唯一键冲突");
 }
+
+#[test]
+fn open_db_backfills_work_branch_on_v2_db_without_it() {
+    // #175 回归：`work_branch` 的 ALTER 原本只写在 migrate_legacy_alters（仅 user_version<1），
+    // 对 user_version=2（#155 已 v2 重建、无旧 key 列、不会二次重建）的库永不补列，
+    // 导致 SELECT_COLS（含 work_branch）一查就 `no such column`。热路径幂等 ALTER 必须兜住。
+    let dir = tempdir();
+    let path = dir.join("taskboard.db");
+    db::open_db(&path).unwrap(); // 正常建库（含 work_branch），user_version 置为 2
+
+    // 模拟「#155 时代重建过、之后未再迁移」的老库：把 work_branch 列摘掉。
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute("ALTER TABLE tasks DROP COLUMN work_branch", [])
+            .expect("前置：应能移除 work_branch 列");
+        let has = conn
+            .prepare("SELECT 1 FROM pragma_table_info('tasks') WHERE name='work_branch'")
+            .unwrap()
+            .exists([])
+            .unwrap();
+        assert!(!has, "前置：work_branch 列应已不存在");
+        drop(conn);
+    }
+
+    // 再次 open_db：热路径必须幂等补回 work_branch。
+    let conn = db::open_db(&path).unwrap();
+    let has = conn
+        .prepare("SELECT 1 FROM pragma_table_info('tasks') WHERE name='work_branch'")
+        .unwrap()
+        .exists([])
+        .unwrap();
+    assert!(has, "#175 修复后：work_branch 列应被热路径补齐");
+
+    // 且可正常读写（模拟 SELECT_COLS 不再报 no such column）。
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name='work_branch'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1);
+}

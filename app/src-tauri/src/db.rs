@@ -307,6 +307,19 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
             crate::tlog!("[db] v0.3.15 → v0.3.16 迁移失败（已保留兜底字段）: {}", e);
         }
     }
+    // v0.3.53 (#171) 迁移补漏：`work_branch` 的 ALTER 原本只写在 `migrate_legacy_alters`
+    // （仅 user_version<1 的老库触发）。对 user_version=2 的库（#155 已 v2 重建、无旧 key 列）
+    // 会跳过该补齐，又不会二次重建 → `work_branch` 永不补上，SELECT_COLS 一查就报
+    // `no such column`。这里把它提升到每次建连都跑的幂等热路径（已存在则忽略，
+    // 与 notes.label 迁移同款），对所有 user_version 一致生效。详见 docs/issue-175-*.md。
+    if let Err(e) = conn.execute(
+        "ALTER TABLE tasks ADD COLUMN work_branch TEXT NOT NULL DEFAULT ''",
+        [],
+    ) {
+        if crate::common::verbose_enabled() {
+            crate::tlog!("[db] work_branch 列迁移跳过（已存在）: {}", e);
+        }
+    }
     // v0.3.50 (#155)：新库（SCHEMA 顶层无此索引）与重建后均由此处幂等补齐 issue_key 索引。
     if let Err(e) = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_tasks_issue_key ON tasks(issue_key)",

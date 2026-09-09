@@ -10,7 +10,8 @@
 
   - **#173 `row_to_value` 位置索引未同步 24 列 `SELECT_COLS`**：#155 重建 `tasks` 表并插入 `url` / `issue_state` / `project_status` / `pr_number` 等列、#169/#171 把 `SELECT_COLS` 扩成 24 列后，`mcp.rs::row_to_value` 仍按老的精简列序用位置 `get(0..10)` 取值，导致内置 MCP 的 `list_my_tasks` / `get_task_status` 返回字段**几乎全部错位**（`repo` 填 owner、`number` 填 repo 字符串、`status` 填 title……）。`check-mcp-columns.py` 只比两侧 `SELECT_COLS` 字符串、管不了「位置 → 列名」映射，故 CI 一直绿而功能坏。现已重写 `row_to_value` 严格按 24 列顺序逐一映射（含 `work_branch` / `updated_at` 等），语义与 Python 侧 `dict(row)` 对齐。
   - **#173 回归测试**：新增 2 个 Rust 单测（`list_my_tasks_returns_correct_column_values` / `get_task_status_returns_correct_column_values`），在内存库建含全部被选列的 `tasks` 表、每列填可辨识值，逐字段断言返回正确。lib 测试 34→36 例。
-  - **无 schema 变更、零接口变更**。详见 [docs/issue-173-mcp-read-row-to-value.md](./issue-173-mcp-read-row-to-value.md)。
+  - **#175 `work_branch` 迁移补漏**：`work_branch` 的 ALTER 只挂在 `migrate_legacy_alters`（user_version<1），使 `user_version=2`（#155 已 v2 重建）的旧库永不补列、`SELECT_COLS` 一查就 `no such column`。现将该 ALTER 提升到 `open_db` 每次建连都跑的幂等热路径（已存在则忽略），对所有 user_version 一致生效。新增 db_test（18→19）验证。
+  - **无 schema 变更（仅数据迁移补齐）、零接口变更**。详见 [docs/issue-173-mcp-read-row-to-value.md](./issue-173-mcp-read-row-to-value.md) 与 [docs/issue-175-work-branch-migration-gap.md](./issue-175-work-branch-migration-gap.md)。
 
 - **v0.3.53（2026-09-09）— Python MCP 与列名重构脱节修复（#169）+ record_session 记录工作分支（#171）**
 
