@@ -2,6 +2,12 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.54 (2026-09-09) — Rust built-in MCP read path column mix-up fix (#173)**
+
+  - **#173 `row_to_value` positional indices didn't follow the 24-column `SELECT_COLS`**: after #155 rebuilt the `tasks` table and inserted columns such as `url`, `issue_state`, `project_status`, `pr_number`, and #169/#171 grew `SELECT_COLS` to 24 columns, `mcp.rs::row_to_value` still read positions `get(0..10)` using an older, slim column order. As a result, the built-in MCP's `list_my_tasks` / `get_task_status` returned almost all fields misaligned (`repo` held the owner, `number` held the repo string, `status` held the title…). `check-mcp-columns.py` only diffs the `SELECT_COLS` strings on both sides — it can't cover the "position → column" mapping — so CI stayed green while the feature was broken. `row_to_value` is now rewritten to map strictly against the 24-column order (including `work_branch` / `updated_at`), matching the Python side's `dict(row)`.
+  - **#173 Regression tests**: 2 new Rust unit tests (`list_my_tasks_returns_correct_column_values` / `get_task_status_returns_correct_column_values`) build an in-memory `tasks` table with all selected columns, fill each with a distinct recognizable value, and assert every field maps to the right value. lib tests 34 → 36.
+  - **No schema change, zero interface change**. See [docs/issue-173-mcp-read-row-to-value.md](./issue-173-mcp-read-row-to-value.md).
+
 - **v0.3.53 (2026-09-09) — Python MCP out of sync with column rename (#169) + record_session records working branch (#171)**
 
   - **#169 Python MCP read path fixed**: #155 renamed `tasks.key` to `issue_key` and `mcp_server/server.py` never followed — `SELECT_COLS` and `tool_get_task_status` still used `key`, so `list_my_tasks` / `get_task_status` always failed with `no such column: key`. Both sides now share one `SELECT_COLS` (23 columns, adding `url`, `issue_state`, `project_status`, `pr_number` and other post-#155 fields), and the returned field is `issue_key` instead of `key`. See [docs/issue-169-mcp-server-schema-sync.md](./issue-169-mcp-server-schema-sync.md).
