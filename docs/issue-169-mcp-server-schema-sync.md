@@ -79,6 +79,7 @@ handoff, candidate_done, account_id, updated_at
 | `mcp_server/server.py` | `get_task_status` / `record_handoff` 返回 `issue_key`（原 `key`） | 破坏性，但这两处原本报错不可用 |
 | `mcp_server/server.py` | 连接改自动提交 | 行为修正 |
 | `app/src-tauri/src/mcp.rs` | `SELECT_COLS` 扩容至与 Python 侧完全一致（23 列） | 增量加列，向前兼容 |
+| `mcp_server/server.py` | `update_task_status` 非四态时查该任务账号的自定义列（对标 `common.rs::validate_task_status`），命中放行 | 增量放行，原报错路径不受影响 |
 | `scripts/check-mcp-columns.py` | 新增 | — |
 | `.github/workflows/mcp-schema-check.yml` | 新增 | — |
 
@@ -95,7 +96,9 @@ handoff, candidate_done, account_id, updated_at
 - 真实数据冒烟 ✅：把本机 `taskboard.db` 备份到临时副本后直连调用，
   `list_my_tasks` 返回 493 条、六个任务工具全部通过；**另起一个独立连接复读**，
   确认 `update_task_status` / `record_session` / `record_handoff` / `clear_session` 的写入已落盘
-- `cargo check` / `cargo test` ✅
+- `cargo check` / `cargo test` ✅（34+18 通过；`github.rs:527 fetch_state` 未使用警告为既有，与本次无关）
+- 自定义状态对齐 ✅：四态 / 中文四态 / 自定义列 `col_*` 放行，非法值与不存在任务仍报错（与 Rust 侧同行为）
+- 真 stdio（NDJSON）端到端 ✅：`tools/list` 11 个工具，六个任务工具逐个调用全 ok，进程干净退出；另起连接复读确认写入落盘（`status/session/handoff` 一致）
 
 > 冒烟脚本未入库（一次性验证），操作对象是 `/tmp` 里的 DB 副本，未触碰用户真实数据库。
 

@@ -151,6 +151,24 @@ def rows_to_dicts(rows):
     return [dict(r) for r in rows]
 
 
+def _is_custom_column(key, status):
+    """该任务所属账号是否有名为 status 的自定义列（对标 Rust 侧校验）。
+
+    老库可能没有 account_columns 表 → 视为无自定义列，不抛错。"""
+    try:
+        row = conn().execute(
+            "SELECT account_id FROM tasks WHERE issue_key=?", (key,)
+        ).fetchone()
+        if not row or row[0] is None:
+            return False
+        cols = conn().execute(
+            "SELECT col_key FROM account_columns WHERE account_id=?", (row[0],)
+        ).fetchall()
+        return any(r[0] == status for r in cols)
+    except sqlite3.OperationalError:
+        return False
+
+
 # --------------------------------------------------------------------------- #
 # 工具实现
 # --------------------------------------------------------------------------- #
@@ -186,8 +204,18 @@ def tool_get_task_status(issue):
 def tool_update_task_status(issue, status):
     key = parse_issue_ref(issue)
     sk = resolve_status(status)
-    if not sk:
-        raise ValueError(f"非法状态: {status}（应为 todo/doing/processed/done 或中文四态）")
+    if sk is None:
+        # v0.3.53 (#169)：与 Rust `common.rs::validate_task_status` 对齐——四态之外，
+        # 该任务所属账号的自定义列 col_key 也合法（custom 看板模式）。此前 Python 侧
+        # 直接报错，导致同一参数 Rust 能写、Python 写不了。
+        s = (status or "").strip()
+        if s and _is_custom_column(key, s):
+            sk = s
+        else:
+            raise ValueError(
+                f"非法状态: {status}（应为 todo/doing/processed/done、中文四态"
+                f"或该任务账号的自定义列）"
+            )
     cur = conn().execute("UPDATE tasks SET status=? WHERE issue_key=?", (sk, key))
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
