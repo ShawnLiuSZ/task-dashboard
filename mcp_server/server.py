@@ -53,10 +53,20 @@ STATUS_CN = {
     "已完成": "done",
 }
 
-# 列名（与 Tauri 后端 db.rs / commands.rs 保持一致）
+# 列名（与 Tauri 后端 db.rs::SCHEMA 的 tasks 表保持一致）
+#
+# v0.3.53 (#169)：#155 把 tasks.key 改名为 issue_key 后这里没跟上，Python MCP 的
+# 读路径（`list_my_tasks` / `get_task_status`）直接报 "no such column: key" 而整体
+# 失效。此清单现由 CI 兜底：`scripts/check-mcp-columns.py` 会拿它与 db.rs 的真实
+# schema 比对，列名写错在 PR 阶段就失败。
+#
+# 同一份列清单必须与 Rust 侧 `app/src-tauri/src/mcp.rs::SELECT_COLS` 完全一致，
+# 否则两个 MCP 实现返回给 agent 的字段会不一样。
 SELECT_COLS = (
-    "key, repo, number, title, status, ownership, assignees, "
-    "session_id, session_agent, handoff, updated_at"
+    "issue_key, owner, repo, number, title, url, issue_state, ownership, "
+    "status, project_status, assignees, mentioned, latest_comment_url, "
+    "pr_number, pr_url, branch, session_id, session_agent, session_at, "
+    "handoff, candidate_done, account_id, updated_at"
 )
 
 
@@ -73,7 +83,7 @@ def resolve_status(s):
 
 
 def parse_issue_ref(ref):
-    """把多种 issue 引用归一化为 DB 主键 `repo#number`。"""
+    """把多种 issue 引用归一化为本库的任务业务引用 `issue_key`（`repo#number`）。"""
     ref = (ref or "").strip()
     if not ref:
         raise ValueError("issue 引用为空")
@@ -123,7 +133,13 @@ def conn():
             raise RuntimeError(
                 f"TaskBoard 数据库未找到: {DB_PATH}（请先运行一次 TaskBoard App 生成）"
             )
-        c = sqlite3.connect(DB_PATH, timeout=10, check_same_thread=False)
+        # v0.3.53 (#169)：isolation_level=None → 自动提交。
+        # 原来用 python 默认事务模式，而 4 个写任务工具都没调 commit()，
+        # 长连接期间看着成功、进程一退出就回滚，写入全丢。
+        # 自动提交比在 11 个工具出口各写一次 commit() 更难漏。
+        c = sqlite3.connect(
+            DB_PATH, timeout=10, check_same_thread=False, isolation_level=None
+        )
         c.execute("PRAGMA busy_timeout=5000")
         c.row_factory = sqlite3.Row
         ensure_schema(c)
@@ -133,6 +149,24 @@ def conn():
 
 def rows_to_dicts(rows):
     return [dict(r) for r in rows]
+
+
+def _is_custom_column(key, status):
+    """该任务所属账号是否有名为 status 的自定义列（对标 Rust 侧校验）。
+
+    老库可能没有 account_columns 表 → 视为无自定义列，不抛错。"""
+    try:
+        row = conn().execute(
+            "SELECT account_id FROM tasks WHERE issue_key=?", (key,)
+        ).fetchone()
+        if not row or row[0] is None:
+            return False
+        cols = conn().execute(
+            "SELECT col_key FROM account_columns WHERE account_id=?", (row[0],)
+        ).fetchall()
+        return any(r[0] == status for r in cols)
+    except sqlite3.OperationalError:
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -159,18 +193,29 @@ def tool_list_my_tasks(status=None, ownership=None):
 def tool_get_task_status(issue):
     key = parse_issue_ref(issue)
     row = conn().execute(
-        f"SELECT {SELECT_COLS} FROM tasks WHERE key=?", (key,)
+        f"SELECT {SELECT_COLS} FROM tasks WHERE issue_key=?", (key,)
     ).fetchone()
     if not row:
-        return {"found": False, "key": key}
-    return {"found": True, "key": key, **dict(row)}
+        # v0.3.53 (#169)：返回字段由 `key` 改为 `issue_key`，与 Rust MCP 一致。
+        return {"found": False, "issue_key": key}
+    return {"found": True, "issue_key": key, **dict(row)}
 
 
 def tool_update_task_status(issue, status):
     key = parse_issue_ref(issue)
     sk = resolve_status(status)
-    if not sk:
-        raise ValueError(f"非法状态: {status}（应为 todo/doing/processed/done 或中文四态）")
+    if sk is None:
+        # v0.3.53 (#169)：与 Rust `common.rs::validate_task_status` 对齐——四态之外，
+        # 该任务所属账号的自定义列 col_key 也合法（custom 看板模式）。此前 Python 侧
+        # 直接报错，导致同一参数 Rust 能写、Python 写不了。
+        s = (status or "").strip()
+        if s and _is_custom_column(key, s):
+            sk = s
+        else:
+            raise ValueError(
+                f"非法状态: {status}（应为 todo/doing/processed/done、中文四态"
+                f"或该任务账号的自定义列）"
+            )
     cur = conn().execute("UPDATE tasks SET status=? WHERE issue_key=?", (sk, key))
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
@@ -194,10 +239,12 @@ def tool_record_session(issue, session_id, agent=None):
 def tool_record_handoff(issue, text):
     key = parse_issue_ref(issue)
     text = text or ""
-    cur = conn().execute("UPDATE tasks SET handoff=? WHERE key=?", (text, key))
+    # v0.3.53 (#169)：原为 `WHERE key=?`，#155 改名后必然报 "no such column: key"。
+    cur = conn().execute("UPDATE tasks SET handoff=? WHERE issue_key=?", (text, key))
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
-    return {"ok": True, "key": key, "handoff_len": len(text)}
+    # 返回字段同 Rust MCP 用 issue_key。
+    return {"ok": True, "issue_key": key, "handoff_len": len(text)}
 
 
 def tool_clear_session(issue):
