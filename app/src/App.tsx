@@ -1,5 +1,5 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
-import { api, onSynced, TASKBOARD_ERROR_EVENT } from "./api";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { api, onSynced, onTaskChanged, TASKBOARD_ERROR_EVENT } from "./api";
 import { fmtTime, I18nProvider, useI18n } from "./i18n";
 import Board from "./components/Board";
 import DetailPanel from "./components/DetailPanel";
@@ -9,6 +9,13 @@ import AccountsPanel from "./components/AccountsPanel";
 import SyncLogsPanel from "./components/SyncLogsPanel";
 import NotesPanel from "./components/NotesPanel";
 import type { Account, AccountColumn, BoardMode, ProjectStatus, Settings as SettingsT, Task } from "./types";
+
+/**
+ * v0.3.53+ (#114 P1)：跨进程变更轮询间隔（毫秒）。
+ * MCP（`taskboard mcp`）是独立进程，`app.emit` 投递不过来，只能靠轮询 DB 里的
+ * 写时间戳。3s 兼顾「MCP 改完立刻想看到」与 SQLite 读开销（一次 meta 单行查询）。
+ */
+const WRITE_TS_POLL_MS = 3000;
 
 export default function App() {
   return (
@@ -56,9 +63,20 @@ function BoardApp() {
     return settings.viewMode === "all" ? 0 : settings.activeAccountId;
   }, [settings]);
 
+  // v0.3.53+ (#114 P1)：最近一次看到的「任务写时间戳」。在 load() 里同步刷新，
+  // 使 GUI 自身的写操作不会在下一次轮询时被误判成「外部变更」而重复刷新。
+  const lastWriteTsRef = useRef(0);
+
   const load = useCallback(async () => {
     try {
-      setTasks(await api.listTasks(ownership || undefined, accountFilter));
+      // 列表与写时间戳并行取：两者无依赖，且必须同一次取回，
+      // 否则「取列表后、取时间戳前」发生的外部写入会被漏掉。
+      const [list, ts] = await Promise.all([
+        api.listTasks(ownership || undefined, accountFilter),
+        api.getTaskWriteTs(),
+      ]);
+      lastWriteTsRef.current = ts;
+      setTasks(list);
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -197,6 +215,50 @@ function BoardApp() {
       unlisten?.();
     };
   }, [load, loadSettings, t]);
+
+  // v0.3.53+ (#114 P0)：GUI 内改任务 → 同进程事件 → 立即刷新列表。
+  // 事件只带 { action, key }，不携带数据，仍走 load() 拉全量（与 onSynced 同款）。
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    void onTaskChanged(() => {
+      void load();
+    }).then((f) => {
+      if (cancelled) {
+        f();
+        return;
+      }
+      unlisten = f;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [load]);
+
+  // v0.3.53+ (#114 P1)：MCP（独立进程）改任务 → 轮询 meta.last_task_write_ts。
+  // 只在时间戳变化时才 load()：无条件定时刷新会让看板在用户拖拽/输入时跳动。
+  // 窗口不可见时跳过轮询（托盘态没必要刷），可见性恢复/窗口聚焦时立刻补查一次。
+  useEffect(() => {
+    const check = async () => {
+      if (document.hidden) return;
+      try {
+        const ts = await api.getTaskWriteTs();
+        if (ts !== lastWriteTsRef.current) void load();
+      } catch {
+        // 轮询失败静默：DB 被独占等瞬时错误下次 tick 自愈，不打扰用户。
+      }
+    };
+    const timer = window.setInterval(() => void check(), WRITE_TS_POLL_MS);
+    const onWake = () => void check();
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+    };
+  }, [load]);
 
   // settings 就绪（activeAccountId / viewMode / accounts 任一变化）后拉取项目 Status 选项和自定义列
   useEffect(() => {

@@ -18,6 +18,28 @@ export interface Account {
   createdAt: number;
 }
 
+/**
+ * v0.3.53+ (#114)：任务变更动作。与后端 `commands.rs::emit_task_changed` 的
+ * `action` 字面量一一对应。
+ */
+export type TaskChangeAction =
+  | "update_status"
+  | "record_session"
+  | "clear_session"
+  | "record_handoff";
+
+/**
+ * v0.3.53+ (#114 P0)：任务级变更事件负载。
+ *
+ * 事件只是「请刷新」信号，不携带任务数据——真实数据仍以 `listTasks` 为准，
+ * 避免出现「事件里一份、列表里一份」的不一致。
+ */
+export interface TaskChangedEvent {
+  action: TaskChangeAction;
+  /** 被改动任务的 `issueKey`（`repo#number`）。 */
+  key: string;
+}
+
 /** v0.3.22+：GitHub Project v2 记录（sync 时自动发现并存入 projects 表）。 */
 export interface Project {
   id: number;

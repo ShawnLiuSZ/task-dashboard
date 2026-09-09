@@ -81,6 +81,41 @@ pub fn iso8601_to_secs(s: &str) -> i64 {
     days * 86400 + h as i64 * 3600 + mi as i64 * 60 + sec as i64
 }
 
+// ============================================================================
+// v0.3.53 (#114 P1)：跨进程任务写入标记
+// ============================================================================
+
+/// `meta` 表中记录「最后一次任务写操作」的 key（毫秒时间戳）。
+pub const LAST_TASK_WRITE_TS_KEY: &str = "last_task_write_ts";
+
+/// 当前时间（毫秒）。用毫秒而非秒：MCP 批量改多个任务可能落在同一秒内，
+/// 秒级精度会让 GUI 轮询漏掉后一次变更。
+pub fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// 读取最后一次任务写操作时间戳；未写过返回 0。
+pub fn last_task_write_ts(conn: &Connection) -> i64 {
+    crate::db::get_setting(conn, LAST_TASK_WRITE_TS_KEY)
+        .parse::<i64>()
+        .unwrap_or(0)
+}
+
+/// Bump「最后一次任务写操作」时间戳。
+///
+/// 放在公共模块而非 `commands.rs`：MCP（`mcp.rs`）与 GUI 走的是同一批写函数，
+/// 只有写在这里才能保证两个进程的写入都被记录，GUI 轮询才能感知 MCP 的改动。
+/// 失败只记门控日志——标记写入失败不应让业务写操作回滚。
+fn bump_task_write_ts(conn: &Connection) {
+    let ts = now_millis().to_string();
+    if let Err(e) = crate::db::set_setting(conn, LAST_TASK_WRITE_TS_KEY, &ts) {
+        tlog!("[#114] 写入 {LAST_TASK_WRITE_TS_KEY} 失败: {e}");
+    }
+}
+
 /// 中英四态归一化。返回 `None` 表示非四态（调用方再按自定义列校验）。
 pub fn normalize_status(s: &str) -> Option<String> {
     match s.trim() {
@@ -133,6 +168,9 @@ pub fn set_task_status(conn: &Connection, key: &str, status: &str) -> Result<usi
             rusqlite::params![status, key],
         )
         .map_err(|e| e.to_string())?;
+    if n > 0 {
+        bump_task_write_ts(conn);
+    }
     Ok(n)
 }
 
@@ -150,6 +188,9 @@ pub fn touch_session(
             rusqlite::params![session_id, agent.unwrap_or_default(), now, key],
         )
         .map_err(|e| e.to_string())?;
+    if n > 0 {
+        bump_task_write_ts(conn);
+    }
     Ok(n)
 }
 
@@ -161,6 +202,9 @@ pub fn clear_task_session(conn: &Connection, key: &str) -> Result<usize, String>
             [key],
         )
         .map_err(|e| e.to_string())?;
+    if n > 0 {
+        bump_task_write_ts(conn);
+    }
     Ok(n)
 }
 
@@ -172,6 +216,9 @@ pub fn record_task_handoff(conn: &Connection, key: &str, text: &str) -> Result<u
             rusqlite::params![text, key],
         )
         .map_err(|e| e.to_string())?;
+    if n > 0 {
+        bump_task_write_ts(conn);
+    }
     Ok(n)
 }
 
@@ -208,6 +255,50 @@ mod tests {
         assert_eq!(normalize_status("  doing  "), Some("doing".to_string()));
         assert_eq!(normalize_status("col_1"), None);
         assert_eq!(normalize_status(""), None);
+    }
+
+    /// 最小可用内存库：只建 `meta` + `tasks` 两张表，够覆盖写路径的 bump 逻辑。
+    fn mem_db() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE tasks (
+               issue_key TEXT PRIMARY KEY,
+               status TEXT, session_id TEXT, session_agent TEXT,
+               handoff TEXT, account_id INTEGER
+             );
+             INSERT INTO tasks (issue_key, status, account_id) VALUES ('repo#1', 'todo', 1);",
+        )
+        .unwrap();
+        c
+    }
+
+    #[test]
+    fn now_millis_is_unix_epoch_millis() {
+        // 2026-09 的量级约 1.78e12；只断言落在合理区间，避免时钟被墙时误报。
+        let ms = now_millis();
+        assert!(ms > 1_700_000_000_000, "毫秒时间戳过小: {ms}");
+        assert!(ms < 4_000_000_000_000, "毫秒时间戳过大: {ms}");
+    }
+
+    #[test]
+    fn task_writes_bump_last_task_write_ts() {
+        let conn = mem_db();
+        assert_eq!(last_task_write_ts(&conn), 0, "从未写过时应为 0");
+
+        assert_eq!(set_task_status(&conn, "repo#1", "doing").unwrap(), 1);
+        let ts1 = last_task_write_ts(&conn);
+        assert!(ts1 > 0, "写成功后必须 bump，GUI 轮询才能感知");
+
+        // 0 行更新（key 不存在）不应 bump：没有任何数据变化，避免前端空刷新。
+        assert_eq!(record_task_handoff(&conn, "repo#404", "x").unwrap(), 0);
+        assert_eq!(last_task_write_ts(&conn), ts1, "0 行更新不应 bump");
+
+        assert_eq!(clear_task_session(&conn, "repo#1").unwrap(), 1);
+        assert!(
+            last_task_write_ts(&conn) >= ts1,
+            "再次写入后时间戳不应回退"
+        );
     }
 
     #[test]

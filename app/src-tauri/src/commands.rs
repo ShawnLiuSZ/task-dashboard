@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use serde::Serialize;
 use std::time::Duration;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::{Account, AccountColumn, LabelMapping, LabelMappingInput};
 use crate::sync::SyncResult;
@@ -34,6 +34,29 @@ pub struct Task {
     pub updated_at: Option<i64>,
     /// v0.3.16：归属账号 id（指向 accounts.id），用于多账号视图过滤。
     pub account_id: i64,
+}
+
+/// #114 P0：任务级变更事件负载。
+///
+/// 只带 `action` + `key`，不带完整 Task：事件是「请刷新」信号而非数据载体，
+/// 真实数据仍以 `list_tasks` 为准（避免事件与列表两套数据不一致）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskChanged {
+    /// `update_status` | `record_session` | `clear_session` | `record_handoff`
+    pub action: &'static str,
+    /// 被改动任务的 `issue_key`（`repo#number`）
+    pub key: String,
+}
+
+/// #114 P0：命令写库成功后向当前 GUI 进程投递任务变更事件。
+///
+/// 失败只记录不回传：`emit` 失败（如窗口已销毁）不影响命令本身的成功语义。
+fn emit_task_changed(app: &AppHandle, action: &'static str, key: String) {
+    crate::tlog!("[#114] emit task-changed action={action} key={key}");
+    if let Err(e) = app.emit(crate::TASK_CHANGED_EVENT, TaskChanged { action, key }) {
+        eprintln!("[#114] 投递任务变更事件失败: {e}");
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -196,6 +219,7 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncResult, String> {
 
 #[tauri::command]
 pub fn update_task_status(
+    app: AppHandle,
     state: State<'_, AppState>,
     key: String,
     status: String,
@@ -207,29 +231,40 @@ pub fn update_task_status(
     }
     // v0.3.49 (#147)：归一化 + 校验 + 写入走公共模块（与 mcp.rs 同一实现）。
     let normalized = crate::common::normalize_status(t).unwrap_or_else(|| t.to_string());
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    crate::common::set_task_status(&conn, &key, &normalized)?;
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        crate::common::set_task_status(&conn, &key, &normalized)?;
+    }
+    // #114 P0：写成功后才 emit，失败路径不投递（避免前端刷新出「没变」的列表）。
+    emit_task_changed(&app, "update_status", key);
     Ok(())
 }
 
 #[tauri::command]
 pub fn record_session(
+    app: AppHandle,
     state: State<'_, AppState>,
     key: String,
     session_id: String,
     agent: Option<String>,
 ) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let now = crate::sync::now_secs();
-    // v0.3.49 (#147)：SQL 走公共模块（与 mcp.rs 同一实现）；0 行也静默 Ok（原有行为）。
-    crate::common::touch_session(&conn, &key, &session_id, agent.as_deref(), now)?;
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let now = crate::sync::now_secs();
+        // v0.3.49 (#147)：SQL 走公共模块（与 mcp.rs 同一实现）；0 行也静默 Ok（原有行为）。
+        crate::common::touch_session(&conn, &key, &session_id, agent.as_deref(), now)?;
+    }
+    emit_task_changed(&app, "record_session", key);
     Ok(())
 }
 
 #[tauri::command]
-pub fn clear_session(state: State<'_, AppState>, key: String) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    crate::common::clear_task_session(&conn, &key)?;
+pub fn clear_session(app: AppHandle, state: State<'_, AppState>, key: String) -> Result<(), String> {
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        crate::common::clear_task_session(&conn, &key)?;
+    }
+    emit_task_changed(&app, "clear_session", key);
     Ok(())
 }
 
@@ -237,14 +272,28 @@ pub fn clear_session(state: State<'_, AppState>, key: String) -> Result<(), Stri
 /// 把交接上下文写入该 issue 卡片的 handoff 字段，供后续接手者直接在详情页查看。
 #[tauri::command]
 pub fn record_handoff(
+    app: AppHandle,
     state: State<'_, AppState>,
     key: String,
     text: String,
 ) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    // v0.3.49 (#147)：SQL 走公共模块（与 mcp.rs 同一实现）。
-    crate::common::record_task_handoff(&conn, &key, &text)?;
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        // v0.3.49 (#147)：SQL 走公共模块（与 mcp.rs 同一实现）。
+        crate::common::record_task_handoff(&conn, &key, &text)?;
+    }
+    emit_task_changed(&app, "record_handoff", key);
     Ok(())
+}
+
+/// #114 P1：返回「任务写操作时间戳」(毫秒)。
+///
+/// MCP（`taskboard mcp`）与 GUI 是两个进程，`app.emit` 跨不过去。双方统一在公共写
+/// 路径 bump `meta.last_task_write_ts`，GUI 侧轮询此命令，值变化才重新拉列表。
+#[tauri::command]
+pub fn get_task_write_ts(state: State<'_, AppState>) -> Result<i64, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    Ok(crate::common::last_task_write_ts(&conn))
 }
 
 #[tauri::command]

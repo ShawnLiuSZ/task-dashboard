@@ -2,6 +2,11 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.53 (2026-09-09) — Local realtime push for task changes (#114)**
+
+  - **#114 P0 same-process task-changed event**: `update_task_status`, `record_session`, `clear_session` and `record_handoff` now emit a new `taskboard://task-changed` event (`{ action, key }`) after a successful write; the frontend subscribes and refreshes the list immediately instead of waiting for a manual "Sync now". See [docs/issue-114-task-change-push.md](./issue-114-task-change-push.md).
+  - **#114 P1 cross-process (MCP) awareness**: MCP (`taskboard mcp`) runs as a separate process, so `app.emit` cannot reach it. The shared write helpers in `common.rs` now bump `meta.last_task_write_ts` (milliseconds), and a new `get_task_write_ts` command lets the frontend poll every 3s and refresh only when the value changes; polling pauses while the window is hidden and re-checks on focus. No new tables, no new dependencies; `mcp_server/server.py` implements the same bump. See [docs/issue-114-task-change-push.md](./issue-114-task-change-push.md).
+
 - **v0.3.52 (2026-09-08) — Settings-panel freeze fix (#167)**
 
   - **#167 UI freezes when opening settings during sync/diagnosis**: `diagnose_project_status`, `test_pat`, `test_account_pat`, `save_pat`, `add_account` and `update_account` were synchronous commands containing GitHub network I/O; running them on the Tauri main thread blocked the event loop → macOS beachball. All six were converted to `async + spawn_blocking` (same pattern as `sync_now` in v0.3.7), moving network work to a worker-thread pool while the main thread only fetches DB data quickly and returns. Pure-SQL config commands are unaffected; sync uses a separate connection and WAL so readers are never blocked. Zero API change, zero frontend change. See [docs/issue-167-async-net-commands.md](./issue-167-async-net-commands.md).

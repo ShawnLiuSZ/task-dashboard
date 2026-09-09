@@ -18,10 +18,13 @@ import type {
   SyncLog,
   SyncResult,
   Task,
+  TaskChangedEvent,
   ViewMode,
 } from "./types";
 
 export const SYNCED_EVENT = "taskboard://synced";
+/** v0.3.53+ (#114 P0)：任务级变更事件（GUI 同进程推送）。 */
+export const TASK_CHANGED_EVENT = "taskboard://task-changed";
 
 export const api = {
   listTasks: (ownership?: string, accountId?: number | null) =>
@@ -121,9 +124,21 @@ export const api = {
     invoke<AccountColumn[]>("list_account_columns", { accountId }),
   saveAccountColumns: (accountId: number, columns: AccountColumn[]) =>
     invoke<void>("save_account_columns", { accountId, columns }),
+  // v0.3.53+ (#114 P1)：任务写操作时间戳（毫秒），用于跨进程感知 MCP 的改动。
+  getTaskWriteTs: () => invoke<number>("get_task_write_ts"),
 };
 export function onSynced(cb: (r: SyncResult) => void) {
   return listen<SyncResult>(SYNCED_EVENT, (e) => cb(e.payload));
+}
+
+/**
+ * v0.3.53+ (#114 P0)：订阅任务级变更事件。
+ *
+ * 覆盖 GUI 内改任务（DetailPanel 的状态/session/handoff）与任何走 Tauri 命令的写入；
+ * MCP 独立进程的写入收不到此事件，由 P1 的时间戳轮询兜底。
+ */
+export function onTaskChanged(cb: (e: TaskChangedEvent) => void) {
+  return listen<TaskChangedEvent>(TASK_CHANGED_EVENT, (e) => cb(e.payload));
 }
 
 /**

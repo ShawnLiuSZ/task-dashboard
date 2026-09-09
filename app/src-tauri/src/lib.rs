@@ -80,6 +80,14 @@ pub struct AppState {
 const TRAY_ID: &str = "main";
 pub const SYNCED_EVENT: &str = "taskboard://synced";
 
+/// #114 P0：任务级变更事件（GUI 同进程）。
+///
+/// 与 `SYNCED_EVENT`（整表同步结果）区分：本事件只表示「某个任务的某个字段被改了」，
+/// payload 为 `TaskChanged { action, key }`，前端据此刷新而不必等下一次定时同步。
+/// 注意 `app.emit` 只在当前进程内投递——MCP（`taskboard mcp` 是独立进程）写库时
+/// 收不到，跨进程场景由 P1 的 `meta.last_task_write_ts` 轮询兜底。
+pub const TASK_CHANGED_EVENT: &str = "taskboard://task-changed";
+
 fn schedule_minutes(app: &AppHandle) -> u64 {
     let state = app.state::<AppState>();
     let mins = match state.db.lock() {
@@ -353,6 +361,8 @@ pub fn run() {
             // v0.3.28+：自定义列映射（按账号配置看板列）。
             commands::list_account_columns,
             commands::save_account_columns,
+            // v0.3.53+ (#114)：任务变更实时推送（P0 事件 + P1 跨进程轮询）。
+            commands::get_task_write_ts,
         ])
         .run(tauri::generate_context!())
         .expect("TaskBoard 启动失败");

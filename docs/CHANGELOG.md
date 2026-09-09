@@ -6,6 +6,11 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.53（2026-09-09）— 任务变更本地实时推送（#114）**
+
+  - **#114 P0 GUI 同进程任务变更事件**：`update_task_status` / `record_session` / `clear_session` / `record_handoff` 四个命令写库成功后 emit 新的 `taskboard://task-changed` 事件（payload `{ action, key }`），前端订阅后立即刷新列表，不再依赖手动点「立即同步」。详见 [docs/issue-114-task-change-push.md](./issue-114-task-change-push.md)。
+  - **#114 P1 MCP 跨进程变更感知**：MCP（`taskboard mcp`）是独立进程，`app.emit` 投递不过来。改为在 `common.rs` 公共写路径统一 bump `meta.last_task_write_ts`（毫秒），新增 `get_task_write_ts` 命令供前端 3 秒轮询比对，变化才刷新；窗口隐藏时暂停、回到前台立即补查。零新表、零新依赖，`mcp_server/server.py` 同步实现。详见 [docs/issue-114-task-change-push.md](./issue-114-task-change-push.md)。
+
 - **v0.3.52（2026-09-08）— 设置面板假死修复（#167）**
 
   - **#167 同步/诊断期间点击设置假死**：`diagnose_project_status` / `test_pat` / `test_account_pat` / `save_pat` / `add_account` / `update_account` 六个命令原为同步命令，内含 GitHub 网络 I/O，在 Tauri 主线程执行期间阻塞事件循环 → macOS beachball 假死。统一改为 `async + spawn_blocking`（与 v0.3.7 `sync_now` 同款模式），网络重活放工作线程池，主线程仅快速取 DB 数据后立即返回。纯 SQL 配置命令不受影响，同步用独立连接 + WAL 不阻塞读者。零接口变更、零前端改动。详见 [docs/issue-167-async-net-commands.md](./issue-167-async-net-commands.md)。

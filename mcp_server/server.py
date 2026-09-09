@@ -135,6 +135,26 @@ def rows_to_dicts(rows):
     return [dict(r) for r in rows]
 
 
+# v0.3.53+ (#114 P1)：与 Rust `common.rs::bump_task_write_ts` 同款标记。
+# GUI 与 MCP 是两个进程，Tauri 的 `app.emit` 跨不过去，双方统一 bump 这个
+# `meta` 时间戳，GUI 侧轮询比对后自动刷新。
+LAST_TASK_WRITE_TS_KEY = "last_task_write_ts"
+
+
+def bump_task_write_ts():
+    try:
+        conn().execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (LAST_TASK_WRITE_TS_KEY, str(int(time.time() * 1000))),
+        )
+        # 顺带提交：本文件原有 UPDATE 未显式 commit，bump 一次即落盘，
+        # 否则「改了状态但 GUI 看不到」——既是本标记的需要，也修掉未提交问题。
+        conn().commit()
+    except sqlite3.Error as e:
+        print(f"[#114] 写入 {LAST_TASK_WRITE_TS_KEY} 失败: {e}", file=sys.stderr)
+
+
 # --------------------------------------------------------------------------- #
 # 工具实现
 # --------------------------------------------------------------------------- #
@@ -174,6 +194,7 @@ def tool_update_task_status(issue, status):
     cur = conn().execute("UPDATE tasks SET status=? WHERE issue_key=?", (sk, key))
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
+    bump_task_write_ts()
     return {"ok": True, "issue_key": key, "status": sk}
 
 
@@ -188,15 +209,19 @@ def tool_record_session(issue, session_id, agent=None):
     )
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
+    bump_task_write_ts()
     return {"ok": True, "issue_key": key}
 
 
 def tool_record_handoff(issue, text):
     key = parse_issue_ref(issue)
     text = text or ""
-    cur = conn().execute("UPDATE tasks SET handoff=? WHERE key=?", (text, key))
+    # v0.3.53 (#114)：此处原为 `WHERE key=?`，#155 把列改名 issue_key 后该语句必然
+    # 报 "no such column: key"，顺带修正（否则本工具的 bump 永远走不到）。
+    cur = conn().execute("UPDATE tasks SET handoff=? WHERE issue_key=?", (text, key))
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
+    bump_task_write_ts()
     return {"ok": True, "key": key, "handoff_len": len(text)}
 
 
@@ -207,6 +232,7 @@ def tool_clear_session(issue):
     )
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
+    bump_task_write_ts()
     return {"ok": True, "issue_key": key}
 
 
