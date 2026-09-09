@@ -30,9 +30,13 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 // 由 Cargo 包版本注入，与发版路径（package.json / Cargo.toml / tauri.conf.json）保持单点一致，
 // 避免手改字符串导致 serverInfo 版本落后。
 
-/// 返回给 agent 的列（与 `commands.rs::Task` 顺序兼容的子集）。
-const SELECT_COLS: &str =
-    "issue_key, repo, number, title, status, ownership, assignees, session_id, session_agent, handoff, work_branch, updated_at";
+/// 返回给 agent 的列。
+///
+/// v0.3.53 (#169)：与 Python 侧 `mcp_server/server.py::SELECT_COLS` 必须逐字一致，
+/// 否则同一个工具在两个 MCP 实现里返回给 agent 的字段不一样。CI 由
+/// `scripts/check-mcp-columns.py` 双向比对（含与本 crate `db.rs::SCHEMA` 的列名校验）。
+/// #171：`work_branch` 为 agent 记录的工作分支，与同步的 PR `branch` 分离。
+const SELECT_COLS: &str = "issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status, assignees, mentioned, latest_comment_url, pr_number, pr_url, branch, work_branch, session_id, session_agent, session_at, handoff, candidate_done, account_id, updated_at";
 
 fn db_path_for_mcp() -> Result<std::path::PathBuf, String> {
     if let Ok(p) = std::env::var("TASKBOARD_DB") {

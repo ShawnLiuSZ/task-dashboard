@@ -1,0 +1,25 @@
+# MCP 列名一致性校验（Issue #169）：PR 与 push 到 develop / main 时检查
+# `mcp_server/server.py` 与 `app/src-tauri/src/mcp.rs` 的 SELECT_COLS 是否如实反映
+# `db.rs::SCHEMA` 里 tasks 表的真实列名。
+#
+# 存在的理由：#155 把 tasks.key 改名为 issue_key 后 Python MCP 没跟上，读路径整体
+# 失效却无任何 CI 能发现（Python MCP 不参与 Tauri 构建）。本检查补上那层防回归。
+name: mcp-schema-check
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: 校验 MCP 列清单与 tasks 表 schema 一致
+        run: python3 scripts/check-mcp-columns.py

@@ -122,6 +122,18 @@ npx tsc --noEmit               # TS 严格检查
 cargo check --manifest-path app/src-tauri/Cargo.toml  # Rust 检查
 ```
 
+仓库根目录还有两个零依赖检查（各自有独立 CI workflow）：
+
+```bash
+python3 scripts/check-mcp-columns.py   # MCP 列名一致性（#169）
+```
+
+⚠️ **改 `tasks` 表 schema 后必跑** `scripts/check-mcp-columns.py`：它校验
+`mcp_server/server.py` 与 `app/src-tauri/src/mcp.rs` 的 `SELECT_COLS` 是否如实反映
+`db.rs::SCHEMA` 的真实列名，并比对两侧列清单是否逐列一致。
+#155 把 `tasks.key` 改名 `issue_key` 时漏改 Python 侧，读路径静默失效了几个版本无人发现
+（Python MCP 不参与 Tauri 构建，CI 兜不住），详见 [`docs/issue-169-mcp-server-schema-sync.md`](./docs/issue-169-mcp-server-schema-sync.md)。
+
 CI：`/.github/workflows/i18n-check.yml` 在 PR 时自动校验 i18n 一致性。
 
 ### 4.3 发版流程
@@ -254,7 +266,7 @@ CI：`/.github/workflows/i18n-check.yml` 在 PR 时自动校验 i18n 一致性�
 3. **不擅自创建新分支**——按第 6 节规则；无 issue 时**必须先询问**。
 4. **完成的代码改动必须同步产出 `docs/` 知识库文档**（PR 时至少 stub）。
 5. **PR 描述里必须附 KB 文档路径或 stub 链接**。
-6. **跨文件改动保持一致性**——例如新增 MCP 工具必须同时改 `mcp.rs` 与 `server.py`。
+6. **跨文件改动保持一致性**——例如新增 MCP 工具必须同时改 `mcp.rs` 与 `server.py`；改动 `tasks` 表列名/结构时必须同步两侧的 `SELECT_COLS` 并跑 `scripts/check-mcp-columns.py`（见 §4.2）。
 7. **遇到指令冲突**：本文件 > agent 入口文件（CLAUDE.md / copilot.instruction.md） > 用户口头指示。
 
 ---

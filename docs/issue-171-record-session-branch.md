@@ -48,9 +48,9 @@ record_session(issue=<repo#num>, session_id=<...>, agent=<...>, branch=<当前�
 - 有 PR 时仍由 `Some((n, u, b))` 覆盖 → 仓库 `head.ref` 权威。
 - `work_branch` 不在同步的 INSERT / ON CONFLICT 列中 → 同步完全不碰它。
 
-### Python MCP 读路径修复（#155 遗留）
+### 与 #169 的分工（Python MCP 列清单）
 
-`mcp_server/server.py` 的部分列引用仍用 #155 重建前的 `key` 列（读路径 `get_task_status`、写 `record_handoff`、`SELECT_COLS`），在重建后的库（真实列为 `issue_key`）上会静默失败。本次将这三处 `key` 修正为 `issue_key`，并使两侧 `SELECT_COLS` 都补上 `work_branch`，保持 Rust/Python 一致。
+`server.py` 的 `key→issue_key` 列引用修复、`SELECT_COLS` 完整化、写入 autocommit、`scripts/check-mcp-columns.py` 一致性 CI 均由 [#169](./issue-169-mcp-server-schema-sync.md) 处理。本 PR 在其基础上，仅将新增的 `work_branch` 补入 Rust/Python 两侧 `SELECT_COLS`（各 24 列），保持两侧逐列一致（由 #169 引入的 CI 兜底校验）。
 
 ### `AGENT_INSTRUCTIONS.md`（中 / 英）
 
