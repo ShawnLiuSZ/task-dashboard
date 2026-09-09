@@ -2,6 +2,14 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.53 (2026-09-09) — MCP records working branch, separated from the PR branch (#171)**
+
+  - **#171 `record_session` accepts an optional `branch` parameter**: record the current working branch (into a separate **`work_branch`** column, only when non-empty) as soon as work on an issue begins. Reuses `common::touch_session` (Rust) and `server.py` (Python) with a conditional update; both behave identically.
+  - **`branch` reverts to PR-dedicated**: `sync.rs` still clears `branch` when an issue has no associated PR (the PR head.ref semantics don't regress); `work_branch` is not in the sync upsert columns, so **sync never overwrites the agent's working branch**.
+  - **Earlier trigger**: `AGENT_INSTRUCTIONS.md` now says to call `record_session` (with `git branch --show-current`) right when work starts.
+  - **Schema change**: `tasks` gains `work_branch TEXT NOT NULL DEFAULT ''` (new-db SCHEMA + legacy ALTER + v2 rebuild migration). Also fixes leftover `key→issue_key` column refs in `server.py` (a #155 legacy read-path bug).
+  - **Verification**: `cargo test` (lib 34 + db_test 18), `cargo check` pass. See [docs/issue-171-record-session-branch.md](./issue-171-record-session-branch.md).
+
 - **v0.3.52 (2026-09-08) — Settings-panel freeze fix (#167)**
 
   - **#167 UI freezes when opening settings during sync/diagnosis**: `diagnose_project_status`, `test_pat`, `test_account_pat`, `save_pat`, `add_account` and `update_account` were synchronous commands containing GitHub network I/O; running them on the Tauri main thread blocked the event loop → macOS beachball. All six were converted to `async + spawn_blocking` (same pattern as `sync_now` in v0.3.7), moving network work to a worker-thread pool while the main thread only fetches DB data quickly and returns. Pure-SQL config commands are unaffected; sync uses a separate connection and WAL so readers are never blocked. Zero API change, zero frontend change. See [docs/issue-167-async-net-commands.md](./issue-167-async-net-commands.md).

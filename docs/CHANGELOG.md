@@ -6,6 +6,14 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.53（2026-09-09）— MCP 记录工作分支，与 PR 分支分离（#171）**
+
+  - **#171 `record_session` 新增 `branch` 参数**：开始处理 issue 时即可一并记录当前工作分支，写入独立 **`work_branch`** 列（非空才写）。复用公共 `common::touch_session`（Rust）与 `server.py`（Python）条件更新，两侧行为一致。
+  - **`branch` 回归 PR 专用**：`sync.rs` 中该 issue 无关联 PR 时仍清空 `branch`（PR head.ref 原逻辑不回归）；`work_branch` 不在同步 upsert 列中，**同步不覆盖 Agent 工作分支**，两者职责分离。
+  - **触发时机提前**：`AGENT_INSTRUCTIONS.md` 明确「开始处理」即 `record_session`（含 `git branch --show-current` 取的分支）。
+  - **schema 变更**：`tasks` 新增 `work_branch TEXT NOT NULL DEFAULT ''`（新库 SCHEMA + 老库 ALTER + v2 重建同步迁移）。顺带修复 `server.py` 残留的 `key→issue_key` 列引用（#155 遗留读路径）。
+  - **验证**：`cargo test`（lib 34 例 + db_test 18 例）、`cargo check` 通过。详见 [docs/issue-171-record-session-branch.md](./issue-171-record-session-branch.md)。
+
 - **v0.3.52（2026-09-08）— 设置面板假死修复（#167）**
 
   - **#167 同步/诊断期间点击设置假死**：`diagnose_project_status` / `test_pat` / `test_account_pat` / `save_pat` / `add_account` / `update_account` 六个命令原为同步命令，内含 GitHub 网络 I/O，在 Tauri 主线程执行期间阻塞事件循环 → macOS beachball 假死。统一改为 `async + spawn_blocking`（与 v0.3.7 `sync_now` 同款模式），网络重活放工作线程池，主线程仅快速取 DB 数据后立即返回。纯 SQL 配置命令不受影响，同步用独立连接 + WAL 不阻塞读者。零接口变更、零前端改动。详见 [docs/issue-167-async-net-commands.md](./issue-167-async-net-commands.md)。

@@ -55,8 +55,8 @@ STATUS_CN = {
 
 # 列名（与 Tauri 后端 db.rs / commands.rs 保持一致）
 SELECT_COLS = (
-    "key, repo, number, title, status, ownership, assignees, "
-    "session_id, session_agent, handoff, updated_at"
+    "issue_key, repo, number, title, status, ownership, assignees, "
+    "session_id, session_agent, handoff, work_branch, updated_at"
 )
 
 
@@ -159,7 +159,7 @@ def tool_list_my_tasks(status=None, ownership=None):
 def tool_get_task_status(issue):
     key = parse_issue_ref(issue)
     row = conn().execute(
-        f"SELECT {SELECT_COLS} FROM tasks WHERE key=?", (key,)
+        f"SELECT {SELECT_COLS} FROM tasks WHERE issue_key=?", (key,)
     ).fetchone()
     if not row:
         return {"found": False, "key": key}
@@ -177,15 +177,22 @@ def tool_update_task_status(issue, status):
     return {"ok": True, "issue_key": key, "status": sk}
 
 
-def tool_record_session(issue, session_id, agent=None):
+def tool_record_session(issue, session_id, agent=None, branch=None):
     key = parse_issue_ref(issue)
     sid = (session_id or "").strip()
     if not sid:
         raise ValueError("session_id 不能为空")
-    cur = conn().execute(
-        "UPDATE tasks SET session_id=?, session_agent=?, session_at=? WHERE issue_key=?",
-        (sid, (agent or "").strip(), int(time.time()), key),
-    )
+    br = (branch or "").strip()
+    if br:
+        cur = conn().execute(
+            "UPDATE tasks SET session_id=?, session_agent=?, session_at=?, work_branch=? WHERE issue_key=?",
+            (sid, (agent or "").strip(), int(time.time()), br, key),
+        )
+    else:
+        cur = conn().execute(
+            "UPDATE tasks SET session_id=?, session_agent=?, session_at=? WHERE issue_key=?",
+            (sid, (agent or "").strip(), int(time.time()), key),
+        )
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
     return {"ok": True, "issue_key": key}
@@ -194,7 +201,7 @@ def tool_record_session(issue, session_id, agent=None):
 def tool_record_handoff(issue, text):
     key = parse_issue_ref(issue)
     text = text or ""
-    cur = conn().execute("UPDATE tasks SET handoff=? WHERE key=?", (text, key))
+    cur = conn().execute("UPDATE tasks SET handoff=? WHERE issue_key=?", (text, key))
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
     return {"ok": True, "key": key, "handoff_len": len(text)}
@@ -340,7 +347,7 @@ TOOLS = [
     },
     {
         "name": "record_session",
-        "description": "记录中断会话的 session id 到该任务卡片（session_id / session_agent / session_at）。"
+        "description": "记录中断会话的 session id 到该任务卡片（session_id / session_agent / session_at；branch 非空则一并记录工作分支到 work_branch，与同步的 PR branch 分离）。"
         "只写本地 SQLite，不碰 GitHub。",
         "inputSchema": {
             "type": "object",
@@ -350,6 +357,10 @@ TOOLS = [
                 "agent": {
                     "type": "string",
                     "description": "可选，来源 agent：claude-code / codex / opencode / zcode / workbuddy …",
+                },
+                "branch": {
+                    "type": "string",
+                    "description": "可选，当前工作分支（如 git branch --show-current），非空才写入 work_branch 列",
                 },
             },
             "required": ["issue", "session_id"],

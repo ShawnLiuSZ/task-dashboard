@@ -460,6 +460,8 @@ fn sync_account(
         let mentioned_val: i64 = if mentioned { 1 } else { 0 };
 
         // PR 关联：仅在 PR 列表拉取成功时更新（失败则保留既有值，避免误清空）。
+        // `branch` 为 PR 专用（head.ref），无关联 PR 时清空（#171 起 agent 工作分支
+        // 单独存 `work_branch`，同步完全不碰 work_branch）。
         let (pr_number, pr_url, branch): (i64, String, String) = if pr_fetch_ok {
             match pr_map.get(&key) {
                 Some((n, u, b)) => (*n, u.clone(), b.clone()),

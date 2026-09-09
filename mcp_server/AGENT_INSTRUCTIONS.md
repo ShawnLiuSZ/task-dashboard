@@ -40,7 +40,7 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 | `list_my_tasks` | `status?` / `ownership?` | 列出看板任务（可按四态 / 归属过滤） |
 | `get_task_status` | `issue` | 查某任务当前状态 + 已记录的 session / handoff |
 | `update_task_status` | `issue`, `status` | 改本地看板状态 |
-| `record_session` | `issue`, `session_id`, `agent?` | 记录中断会话 id |
+| `record_session` | `issue`, `session_id`, `agent?`, `branch?` | 记录中断会话 id；`branch` 非空则一并记录当前工作分支（写 `work_branch`，与同步的 PR `branch` 分离） |
 | `record_handoff` | `issue`, `text` | 记录「交接任务」详情 |
 | `clear_session` | `issue` | 任务完成后清空 session 字段（保留审计） |
 
@@ -59,18 +59,21 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 
 | 时机 | 动作 |
 |---|---|
-| **开始处理**某个 issue（用户派活 / 你认领 / 你开始改它） | `update_task_status(issue, "处理中")` |
+| **开始处理**某个 issue（用户派活 / 你认领 / 你开始改它） | `update_task_status(issue, "处理中")` + `record_session(issue, <当前会话 id>, "<agent 名>", branch=<当前工作分支>)` |
 | **中途停止 / 会话中断 / 你要切到别的任务** | `record_session(issue, <当前会话 id>, "<你的 agent 名>")` |
 | 用户说「**生成交接任务**」「交接一下」「handoff」之类 | `record_handoff(issue, "<已做/未做/卡点/如何恢复>")`；如需保留可恢复会话，同时 `record_session` |
 | **任务完成**（你确认做完、要收尾） | `update_task_status(issue, "已完成")` + `clear_session(issue)` |
 | 想了解某任务现状 / 恢复上下文 | `get_task_status(issue)` |
 | 想看任务清单（如只看「无人认领」） | `list_my_tasks(ownership="notassignee")` |
 
-### 会话 id 来源（重要）
+### 会话 id / 分支来源（重要）
 `session_id` **由调用方自行提供**，无统一来源（多 agent 并行时单一来源会失效）：
 - claude-code：可用当前会话标识 / tmux 会话 / 工作分支名等可恢复标识
 - codex / opencode / zcode / helix：各自取本会话的可恢复 id
 - **务必带 `agent` 参数**（`claude-code` / `codex` / `opencode` / `zcode` / `helix` …），便于多进程区分谁记的
+
+`branch` **也由调用方提供**：用 `git -C <该 issue 对应项目目录> branch --show-current` 取当前工作分支，
+**取不到就传空**（没在 git 仓库 / 无分支时不要硬塞脏数据）。写入独立 `work_branch` 列，与同步自动拉的 PR `branch` 分离——同步不会覆盖它。
 
 ### 中断时状态如何保持
 中断后**保持「处理中」**（不要回退到「待处理」）——回退会丢失「该任务已有半成品」的信号，而这正是 session id 存在的意义；下次恢复时显式再转「处理中」即可。
@@ -82,6 +85,7 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 ```
 # 1) 接到任务，开始处理
 update_task_status(issue="fad-backend#1247", status="处理中")
+record_session(issue="fad-backend#1247", session_id="tmux:work-1247", agent="claude-code", branch="$(git -C /path/to/fad-backend branch --show-current)")
 
 # 2) 中途要切去别的事，先记录会话
 record_session(issue="fad-backend#1247", session_id="tmux:work-1247", agent="claude-code")
