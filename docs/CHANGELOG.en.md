@@ -2,11 +2,16 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **v0.3.53 (2026-09-09) — Python MCP out of sync with column rename (#169)**
+- **v0.3.53 (2026-09-09) — Python MCP out of sync with column rename (#169) + record_session records working branch (#171)**
 
   - **#169 Python MCP read path fixed**: #155 renamed `tasks.key` to `issue_key` and `mcp_server/server.py` never followed — `SELECT_COLS` and `tool_get_task_status` still used `key`, so `list_my_tasks` / `get_task_status` always failed with `no such column: key`. Both sides now share one `SELECT_COLS` (23 columns, adding `url`, `issue_state`, `project_status`, `pr_number` and other post-#155 fields), and the returned field is `issue_key` instead of `key`. See [docs/issue-169-mcp-server-schema-sync.md](./issue-169-mcp-server-schema-sync.md).
   - **#169 Writes were silently lost**: None of the four task write tools called `commit()`, so under sqlite3's default transaction mode everything rolled back when the process exited. The connection now uses `isolation_level=None` (autocommit) — harder to miss than remembering `commit()` at 11 tool exits. See [docs/issue-169-mcp-server-schema-sync.md](./issue-169-mcp-server-schema-sync.md).
-  - **#169 Column-name regression guard**: Added a zero-dependency `scripts/check-mcp-columns.py` plus a `mcp-schema-check` CI job. Treating `db.rs::SCHEMA` as the single source of truth, it verifies that the columns used by `server.py` and `mcp.rs` really exist and match each other line for line. No CI job could previously catch this class of dual-implementation drift. See [docs/issue-169-mcp-server-schema-sync.md](./issue-169-mcp-server-schema-sync.md).
+  - **#169 Column-name regression guard**: Added a zero-dependency `scripts/check-mcp-columns.py` plus a `mcp-schema-check` CI job. Treating `db.rs::SCHEMA` as the single source of truth, it verifies that the columns used by `server.py` and `mcp.rs` really exist and match each other line for line. See [docs/issue-169-mcp-server-schema-sync.md](./issue-169-mcp-server-schema-sync.md).
+  - **#171 `record_session` accepts an optional `branch` parameter**: record the current working branch (into a separate **`work_branch`** column, only when non-empty) as soon as work on an issue begins. Reuses `common::touch_session` (Rust) and `server.py` (Python) with a conditional update; both sides add `work_branch` to `SELECT_COLS` (24 columns).
+  - **#171 `branch` reverts to PR-dedicated**: `sync.rs` still clears `branch` when an issue has no associated PR (the PR head.ref semantics don't regress); `work_branch` is not in the sync upsert columns, so **sync never overwrites the agent's working branch**.
+  - **#171 Earlier trigger**: `AGENT_INSTRUCTIONS.md` now says to call `record_session` (with `git branch --show-current`) right when work starts.
+  - **#171 Schema change**: `tasks` gains `work_branch TEXT NOT NULL DEFAULT ''` (new-db SCHEMA + legacy ALTER + v2 rebuild migration).
+  - **Verification**: `cargo test` (lib 34 + db_test 18), `cargo check` pass. See [docs/issue-171-record-session-branch.md](./issue-171-record-session-branch.md).
 
 - **v0.3.52 (2026-09-08) — Settings-panel freeze fix (#167)**
 

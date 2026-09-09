@@ -62,11 +62,12 @@ STATUS_CN = {
 #
 # 同一份列清单必须与 Rust 侧 `app/src-tauri/src/mcp.rs::SELECT_COLS` 完全一致，
 # 否则两个 MCP 实现返回给 agent 的字段会不一样。
+# v0.3.53 (#169)：完整列出 db.rs::SCHEMA 真实列；#171：work_branch 为 agent 工作分支。
 SELECT_COLS = (
     "issue_key, owner, repo, number, title, url, issue_state, ownership, "
     "status, project_status, assignees, mentioned, latest_comment_url, "
-    "pr_number, pr_url, branch, session_id, session_agent, session_at, "
-    "handoff, candidate_done, account_id, updated_at"
+    "pr_number, pr_url, branch, work_branch, session_id, session_agent, "
+    "session_at, handoff, candidate_done, account_id, updated_at"
 )
 
 
@@ -222,15 +223,22 @@ def tool_update_task_status(issue, status):
     return {"ok": True, "issue_key": key, "status": sk}
 
 
-def tool_record_session(issue, session_id, agent=None):
+def tool_record_session(issue, session_id, agent=None, branch=None):
     key = parse_issue_ref(issue)
     sid = (session_id or "").strip()
     if not sid:
         raise ValueError("session_id 不能为空")
-    cur = conn().execute(
-        "UPDATE tasks SET session_id=?, session_agent=?, session_at=? WHERE issue_key=?",
-        (sid, (agent or "").strip(), int(time.time()), key),
-    )
+    br = (branch or "").strip()
+    if br:
+        cur = conn().execute(
+            "UPDATE tasks SET session_id=?, session_agent=?, session_at=?, work_branch=? WHERE issue_key=?",
+            (sid, (agent or "").strip(), int(time.time()), br, key),
+        )
+    else:
+        cur = conn().execute(
+            "UPDATE tasks SET session_id=?, session_agent=?, session_at=? WHERE issue_key=?",
+            (sid, (agent or "").strip(), int(time.time()), key),
+        )
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
     return {"ok": True, "issue_key": key}
@@ -387,7 +395,7 @@ TOOLS = [
     },
     {
         "name": "record_session",
-        "description": "记录中断会话的 session id 到该任务卡片（session_id / session_agent / session_at）。"
+        "description": "记录中断会话的 session id 到该任务卡片（session_id / session_agent / session_at；branch 非空则一并记录工作分支到 work_branch，与同步的 PR branch 分离）。"
         "只写本地 SQLite，不碰 GitHub。",
         "inputSchema": {
             "type": "object",
@@ -397,6 +405,10 @@ TOOLS = [
                 "agent": {
                     "type": "string",
                     "description": "可选，来源 agent：claude-code / codex / opencode / zcode / workbuddy …",
+                },
+                "branch": {
+                    "type": "string",
+                    "description": "可选，当前工作分支（如 git branch --show-current），非空才写入 work_branch 列",
                 },
             },
             "required": ["issue", "session_id"],

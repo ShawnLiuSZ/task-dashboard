@@ -51,8 +51,10 @@ CREATE TABLE IF NOT EXISTS tasks (
   latest_comment_url TEXT NOT NULL DEFAULT '',
   pr_number      INTEGER NOT NULL DEFAULT 0,
   pr_url         TEXT NOT NULL DEFAULT '',
-  -- 关联 PR 的分支（head.ref）。
+  -- 关联 PR 的分支（head.ref），由同步自动拉取；无关联 PR 时会被清空（PR 专用）。
   branch         TEXT NOT NULL DEFAULT '',
+  -- agent 通过 record_session 写入的工作分支；同步不碰（#171）。
+  work_branch    TEXT NOT NULL DEFAULT '',
   -- agent 写入的交接任务详情。
   handoff        TEXT NOT NULL DEFAULT '',
   updated_at     INTEGER,
@@ -331,8 +333,10 @@ fn migrate_legacy_alters(conn: &Connection) {
         "ALTER TABLE tasks ADD COLUMN latest_comment_url TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE tasks ADD COLUMN pr_number INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE tasks ADD COLUMN pr_url TEXT NOT NULL DEFAULT ''",
-        // v0.3.10：关联 PR 的分支（head.ref），以及 agent 写入的交接任务详情。
+        // v0.3.10：关联 PR 的分支（head.ref）。
         "ALTER TABLE tasks ADD COLUMN branch TEXT NOT NULL DEFAULT ''",
+        // v0.3.53 (#171)：agent 通过 record_session 写入的工作分支（同步不碰）。
+        "ALTER TABLE tasks ADD COLUMN work_branch TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE tasks ADD COLUMN handoff TEXT NOT NULL DEFAULT ''",
         // v0.3.16：任务归属账号；旧库默认 1（迁移会先插一条 accounts，再保证该 id 命中）。
         "ALTER TABLE tasks ADD COLUMN account_id INTEGER NOT NULL DEFAULT 1",
@@ -394,6 +398,7 @@ fn migrate_tasks_v2_rebuild(conn: &Connection) -> Result<(), String> {
           pr_number      INTEGER NOT NULL DEFAULT 0,
           pr_url         TEXT NOT NULL DEFAULT '',
           branch         TEXT NOT NULL DEFAULT '',
+          work_branch    TEXT NOT NULL DEFAULT '',
           handoff        TEXT NOT NULL DEFAULT '',
           updated_at     INTEGER,
           synced_at      INTEGER NOT NULL,
@@ -404,12 +409,12 @@ fn migrate_tasks_v2_rebuild(conn: &Connection) -> Result<(), String> {
           (issue_key, owner, repo, number, title, url, issue_state, ownership, status,
            session_id, session_agent, session_at, candidate_done, stale, project_status,
            assignees, labels, done_at, mentioned, comments_count, latest_comment_url,
-           pr_number, pr_url, branch, handoff, updated_at, synced_at, account_id)
+           pr_number, pr_url, branch, work_branch, handoff, updated_at, synced_at, account_id)
         SELECT
            key, owner, repo, number, title, url, gh_state, ownership, status,
            session_id, session_agent, session_at, candidate_done, stale, gh_status,
            assignees, labels, done_at, mentioned, comments_count, latest_comment_url,
-           pr_number, pr_url, branch, handoff,
+           pr_number, pr_url, branch, work_branch, handoff,
            COALESCE(CAST(strftime('%s', NULLIF(TRIM(updated_at), '')) AS INTEGER), 0),
            synced_at, account_id
         FROM tasks;

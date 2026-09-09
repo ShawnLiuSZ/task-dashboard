@@ -136,20 +136,31 @@ pub fn set_task_status(conn: &Connection, key: &str, status: &str) -> Result<usi
     Ok(n)
 }
 
-/// 写入 session 记录。返回实际更新行数（调用方自定“任务不存在”策略）。
+/// 写入 session 记录。`branch` 非空才同时写入 `work_branch` 列（agent 工作分支，
+/// 与同步自动拉的 PR `branch` 列分离，同步不碰 work_branch）。空则不写。
+/// 返回实际更新行数（调用方自定“任务不存在”策略）。
 pub fn touch_session(
     conn: &Connection,
     key: &str,
     session_id: &str,
     agent: Option<&str>,
     now: i64,
+    branch: Option<&str>,
 ) -> Result<usize, String> {
-    let n = conn
-        .execute(
+    let br = branch.map(str::trim).unwrap_or("").to_string();
+    let n = if br.is_empty() {
+        conn.execute(
             "UPDATE tasks SET session_id = ?1, session_agent = ?2, session_at = ?3 WHERE issue_key = ?4",
             rusqlite::params![session_id, agent.unwrap_or_default(), now, key],
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+    } else {
+        conn.execute(
+            "UPDATE tasks SET session_id = ?1, session_agent = ?2, session_at = ?3, work_branch = ?5 WHERE issue_key = ?4",
+            rusqlite::params![session_id, agent.unwrap_or_default(), now, key, br],
+        )
+        .map_err(|e| e.to_string())?
+    };
     Ok(n)
 }
 

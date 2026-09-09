@@ -35,7 +35,8 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 /// v0.3.53 (#169)：与 Python 侧 `mcp_server/server.py::SELECT_COLS` 必须逐字一致，
 /// 否则同一个工具在两个 MCP 实现里返回给 agent 的字段不一样。CI 由
 /// `scripts/check-mcp-columns.py` 双向比对（含与本 crate `db.rs::SCHEMA` 的列名校验）。
-const SELECT_COLS: &str = "issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status, assignees, mentioned, latest_comment_url, pr_number, pr_url, branch, session_id, session_agent, session_at, handoff, candidate_done, account_id, updated_at";
+/// #171：`work_branch` 为 agent 记录的工作分支，与同步的 PR `branch` 分离。
+const SELECT_COLS: &str = "issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status, assignees, mentioned, latest_comment_url, pr_number, pr_url, branch, work_branch, session_id, session_agent, session_at, handoff, candidate_done, account_id, updated_at";
 
 fn db_path_for_mcp() -> Result<std::path::PathBuf, String> {
     if let Ok(p) = std::env::var("TASKBOARD_DB") {
@@ -200,6 +201,7 @@ fn tool_record_session(
     issue: &str,
     session_id: &str,
     agent: Option<&str>,
+    branch: Option<&str>,
 ) -> Result<Value, String> {
     let key = parse_issue_ref(issue)?;
     let sid = session_id.trim();
@@ -208,8 +210,8 @@ fn tool_record_session(
     }
     let agent = agent.unwrap_or_default().trim().to_string();
     let now = crate::sync::now_secs();
-    // v0.3.49 (#147)：SQL 走公共模块（与 commands.rs 同一实现）。
-    let n = crate::common::touch_session(conn, &key, sid, Some(&agent), now)?;
+    // v0.3.49 (#147)：SQL 走公共模块（与 commands.rs 同一实现）；branch 非空才写。
+    let n = crate::common::touch_session(conn, &key, sid, Some(&agent), now, branch)?;
     if n == 0 {
         return Err(format!("任务不存在: {key}"));
     }
@@ -329,7 +331,7 @@ fn call_tool(conn: &Connection, name: &str, args: &Map<String, Value>) -> Result
         "record_session" => {
             let issue = get("issue").ok_or("缺少 issue 参数")?;
             let sid = get("session_id").ok_or("缺少 session_id 参数")?;
-            tool_record_session(conn, &issue, &sid, get("agent").as_deref())
+            tool_record_session(conn, &issue, &sid, get("agent").as_deref(), get("branch").as_deref())
         }
         "record_handoff" => {
             let issue = get("issue").ok_or("缺少 issue 参数")?;
@@ -402,13 +404,14 @@ fn tools_list() -> Value {
         },
         {
             "name": "record_session",
-            "description": "记录中断会话的 session id 到该任务卡片（session_id / session_agent / session_at）。只写本地 SQLite，不碰 GitHub。",
+            "description": "记录中断会话的 session id 到该任务卡片（session_id / session_agent / session_at；branch 非空则一并记录工作分支到 work_branch，与同步的 PR branch 分离）。只写本地 SQLite，不碰 GitHub。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "issue": { "type": "string", "description": "issue 引用" },
                     "session_id": { "type": "string", "description": "会话 id（如 claude-code / codex 的会话标识）" },
-                    "agent": { "type": "string", "description": "可选，来源 agent：claude-code / codex / opencode / zcode / workbuddy …" }
+                    "agent": { "type": "string", "description": "可选，来源 agent：claude-code / codex / opencode / zcode / workbuddy …" },
+                    "branch": { "type": "string", "description": "可选，当前工作分支（如 git branch --show-current），非空才写入 work_branch 列" }
                 },
                 "required": ["issue", "session_id"]
             }

@@ -222,7 +222,7 @@ pub fn record_session(
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let now = crate::sync::now_secs();
     // v0.3.49 (#147)：SQL 走公共模块（与 mcp.rs 同一实现）；0 行也静默 Ok（原有行为）。
-    crate::common::touch_session(&conn, &key, &session_id, agent.as_deref(), now)?;
+    crate::common::touch_session(&conn, &key, &session_id, agent.as_deref(), now, None)?;
     Ok(())
 }
 

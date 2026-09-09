@@ -6,11 +6,16 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **v0.3.53（2026-09-09）— Python MCP 与列名重构脱节修复（#169）**
+- **v0.3.53（2026-09-09）— Python MCP 与列名重构脱节修复（#169）+ record_session 记录工作分支（#171）**
 
   - **#169 Python MCP 读路径修复**：#155 把 `tasks.key` 改名 `issue_key` 后 `mcp_server/server.py` 没跟上，`SELECT_COLS` 与 `tool_get_task_status` 仍写 `key`，`list_my_tasks` / `get_task_status` 必然报 `no such column: key`。现已统一两侧 `SELECT_COLS`（补齐 `url` / `issue_state` / `project_status` / `pr_number` 等 #155 后的新列，共 23 列），返回字段 `key` → `issue_key`。详见 [docs/issue-169-mcp-server-schema-sync.md](./issue-169-mcp-server-schema-sync.md)。
   - **#169 写入丢失修复**：四个写任务工具没有 `commit()`，sqlite3 默认事务下进程退出即回滚，写入全丢。连接改为 `isolation_level=None` 自动提交——比在 11 个工具出口各写一次 commit 更难漏。详见 [docs/issue-169-mcp-server-schema-sync.md](./issue-169-mcp-server-schema-sync.md)。
-  - **#169 列名一致性防回归**：新增零依赖 `scripts/check-mcp-columns.py` + CI `mcp-schema-check`，以 `db.rs::SCHEMA` 为唯一事实来源，校验 `server.py` 与 `mcp.rs` 的列名真实存在且逐列一致。这类「双实现脱节」此前无任何 CI 能发现。详见 [docs/issue-169-mcp-server-schema-sync.md](./issue-169-mcp-server-schema-sync.md)。
+  - **#169 列名一致性防回归**：新增零依赖 `scripts/check-mcp-columns.py` + CI `mcp-schema-check`，以 `db.rs::SCHEMA` 为唯一事实来源，校验 `server.py` 与 `mcp.rs` 的列名真实存在且逐列一致。详见 [docs/issue-169-mcp-server-schema-sync.md](./issue-169-mcp-server-schema-sync.md)。
+  - **#171 `record_session` 新增 `branch` 参数**：开始处理 issue 时即可一并记录当前工作分支，写入独立 **`work_branch`** 列（非空才写）。复用公共 `common::touch_session`（Rust）与 `server.py`（Python）条件更新，两侧行为一致；`SELECT_COLS` 同步补入 `work_branch`（共 24 列）。
+  - **#171 `branch` 回归 PR 专用**：`sync.rs` 中该 issue 无关联 PR 时仍清空 `branch`（PR head.ref 原逻辑不回归）；`work_branch` 不在同步 upsert 列中，**同步不覆盖 Agent 工作分支**，两者职责分离。
+  - **#171 触发时机提前**：`AGENT_INSTRUCTIONS.md` 明确「开始处理」即 `record_session`（含 `git branch --show-current` 取的分支）。
+  - **#171 schema 变更**：`tasks` 新增 `work_branch TEXT NOT NULL DEFAULT ''`（新库 SCHEMA + 老库 ALTER + v2 重建同步迁移）。
+  - **验证**：`cargo test`（lib 34 例 + db_test 18 例）、`cargo check` 通过。详见 [docs/issue-171-record-session-branch.md](./issue-171-record-session-branch.md)。
 
 - **v0.3.52（2026-09-08）— 设置面板假死修复（#167）**
 
