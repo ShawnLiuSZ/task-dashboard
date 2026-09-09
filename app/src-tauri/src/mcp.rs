@@ -12,7 +12,7 @@
 //! - list_my_tasks(status?, ownership?)
 //! - get_task_status(issue)
 //! - update_task_status(issue, status)
-//! - record_session(issue, session_id, agent?)
+//! - record_session(issue, session_id, agent?, branch?)
 //! - record_handoff(issue, text)
 //! - clear_session(issue)
 //! - list_notes()
@@ -30,9 +30,13 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 // 由 Cargo 包版本注入，与发版路径（package.json / Cargo.toml / tauri.conf.json）保持单点一致，
 // 避免手改字符串导致 serverInfo 版本落后。
 
-/// 返回给 agent 的列（与 `commands.rs::Task` 顺序兼容的子集）。
-const SELECT_COLS: &str =
-    "issue_key, repo, number, title, status, ownership, assignees, session_id, session_agent, handoff, updated_at";
+/// 返回给 agent 的列。
+///
+/// v0.3.53 (#169)：与 Python 侧 `mcp_server/server.py::SELECT_COLS` 必须逐字一致，
+/// 否则同一个工具在两个 MCP 实现里返回给 agent 的字段不一样。CI 由
+/// `scripts/check-mcp-columns.py` 双向比对（含与本 crate `db.rs::SCHEMA` 的列名校验）。
+/// #171：`work_branch` 为 agent 记录的工作分支，与同步的 PR `branch` 分离。
+const SELECT_COLS: &str = "issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status, assignees, mentioned, latest_comment_url, pr_number, pr_url, branch, work_branch, session_id, session_agent, session_at, handoff, candidate_done, account_id, updated_at";
 
 fn db_path_for_mcp() -> Result<std::path::PathBuf, String> {
     if let Ok(p) = std::env::var("TASKBOARD_DB") {
@@ -87,29 +91,66 @@ fn parse_issue_ref(ref_: &str) -> Result<String, String> {
     Err(format!("无法解析 issue 引用: {ref_}"))
 }
 
+/// 把一行 tasks 记录序列化为返回给 agent 的 JSON 对象。
+///
+/// 位置索引必须与 [`SELECT_COLS`] 的列顺序**严格逐一对应**。历史 bug（#173）：
+/// #155 重建 tasks 表并往里插入 `url` / `issue_state` / `project_status` / `pr_number`
+/// 等列后，SELECT_COLS 被 #169/#171 扩成 24 列、列序大变，但这里仍按老的精简列序用
+/// 位置 `get(0..10)` 取值，导致 `list_my_tasks` / `get_task_status` 返回字段几乎全部
+/// 错位（`repo` 填 owner、`number` 填 repo 字符串……），CI 测不到是因为
+/// `check-mcp-columns.py` 只比 SELECT_COLS 字符串、管不了「位置映射」。
+/// 现逐列对齐，语义与 Python 侧 `server.py` 的 `dict(row)` 保持一致。
 fn row_to_value(r: &rusqlite::Row) -> rusqlite::Result<Value> {
     let mut m = Map::new();
-    m.insert("issue_key".into(), Value::String(r.get::<_, String>(0)?));
-    m.insert("repo".into(), Value::String(r.get::<_, String>(1)?));
-    m.insert("number".into(), Value::Number(r.get::<_, i64>(2)?.into()));
-    m.insert("title".into(), Value::String(r.get::<_, String>(3)?));
-    m.insert("status".into(), Value::String(r.get::<_, String>(4)?));
-    m.insert("ownership".into(), Value::String(r.get::<_, String>(5)?));
-    m.insert("assignees".into(), Value::String(r.get::<_, String>(6)?));
-    let sid: Option<String> = r.get(7)?;
+    m.insert("issue_key".into(), Value::String(r.get::<_, String>(0)?)); // 0
+    m.insert("owner".into(), Value::String(r.get::<_, String>(1)?)); // 1
+    m.insert("repo".into(), Value::String(r.get::<_, String>(2)?)); // 2
+    m.insert("number".into(), Value::Number(r.get::<_, i64>(3)?.into())); // 3
+    m.insert("title".into(), Value::String(r.get::<_, String>(4)?)); // 4
+    m.insert("url".into(), Value::String(r.get::<_, String>(5)?)); // 5
+    m.insert("issue_state".into(), Value::String(r.get::<_, String>(6)?)); // 6
+    m.insert("ownership".into(), Value::String(r.get::<_, String>(7)?)); // 7
+    m.insert("status".into(), Value::String(r.get::<_, String>(8)?)); // 8
+    m.insert("project_status".into(), Value::String(r.get::<_, String>(9)?)); // 9
+    m.insert("assignees".into(), Value::String(r.get::<_, String>(10)?)); // 10
+    m.insert("mentioned".into(), Value::Number(r.get::<_, i64>(11)?.into())); // 11
+    m.insert(
+        "latest_comment_url".into(),
+        Value::String(r.get::<_, String>(12)?), // 12
+    );
+    m.insert("pr_number".into(), Value::Number(r.get::<_, i64>(13)?.into())); // 13
+    m.insert("pr_url".into(), Value::String(r.get::<_, String>(14)?)); // 14
+    m.insert("branch".into(), Value::String(r.get::<_, String>(15)?)); // 15
+    m.insert("work_branch".into(), Value::String(r.get::<_, String>(16)?)); // 16
+    let sid: Option<String> = r.get(17)?; // 17 可空
     m.insert(
         "session_id".into(),
         sid.map(Value::String).unwrap_or(Value::Null),
     );
-    let sag: Option<String> = r.get(8)?;
+    let sag: Option<String> = r.get(18)?; // 18 可空
     m.insert(
         "session_agent".into(),
         sag.map(Value::String).unwrap_or(Value::Null),
     );
-    m.insert("handoff".into(), Value::String(r.get::<_, String>(9)?));
+    m.insert(
+        "session_at".into(),
+        match r.get::<_, Option<i64>>(19)? {
+            Some(s) => Value::Number(s.into()),
+            None => Value::Null,
+        },
+    );
+    m.insert("handoff".into(), Value::String(r.get::<_, String>(20)?)); // 20
+    m.insert(
+        "candidate_done".into(),
+        Value::Number(r.get::<_, i64>(21)?.into()), // 21
+    );
+    m.insert(
+        "account_id".into(),
+        Value::Number(r.get::<_, i64>(22)?.into()), // 22
+    );
     m.insert(
         "updated_at".into(),
-        match r.get::<_, Option<i64>>(10)? {
+        match r.get::<_, Option<i64>>(23)? {
             Some(s) => Value::Number(s.into()),
             None => Value::Null,
         },
@@ -197,6 +238,7 @@ fn tool_record_session(
     issue: &str,
     session_id: &str,
     agent: Option<&str>,
+    branch: Option<&str>,
 ) -> Result<Value, String> {
     let key = parse_issue_ref(issue)?;
     let sid = session_id.trim();
@@ -205,8 +247,8 @@ fn tool_record_session(
     }
     let agent = agent.unwrap_or_default().trim().to_string();
     let now = crate::sync::now_secs();
-    // v0.3.49 (#147)：SQL 走公共模块（与 commands.rs 同一实现）。
-    let n = crate::common::touch_session(conn, &key, sid, Some(&agent), now)?;
+    // v0.3.49 (#147)：SQL 走公共模块（与 commands.rs 同一实现）；branch 非空才写。
+    let n = crate::common::touch_session(conn, &key, sid, Some(&agent), now, branch)?;
     if n == 0 {
         return Err(format!("任务不存在: {key}"));
     }
@@ -326,7 +368,7 @@ fn call_tool(conn: &Connection, name: &str, args: &Map<String, Value>) -> Result
         "record_session" => {
             let issue = get("issue").ok_or("缺少 issue 参数")?;
             let sid = get("session_id").ok_or("缺少 session_id 参数")?;
-            tool_record_session(conn, &issue, &sid, get("agent").as_deref())
+            tool_record_session(conn, &issue, &sid, get("agent").as_deref(), get("branch").as_deref())
         }
         "record_handoff" => {
             let issue = get("issue").ok_or("缺少 issue 参数")?;
@@ -399,13 +441,14 @@ fn tools_list() -> Value {
         },
         {
             "name": "record_session",
-            "description": "记录中断会话的 session id 到该任务卡片（session_id / session_agent / session_at）。只写本地 SQLite，不碰 GitHub。",
+            "description": "记录中断会话的 session id 到该任务卡片（session_id / session_agent / session_at；branch 非空则一并记录工作分支到 work_branch，与同步的 PR branch 分离）。只写本地 SQLite，不碰 GitHub。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "issue": { "type": "string", "description": "issue 引用" },
                     "session_id": { "type": "string", "description": "会话 id（如 claude-code / codex 的会话标识）" },
-                    "agent": { "type": "string", "description": "可选，来源 agent：claude-code / codex / opencode / zcode / workbuddy …" }
+                    "agent": { "type": "string", "description": "可选，来源 agent：claude-code / codex / opencode / zcode / workbuddy …" },
+                    "branch": { "type": "string", "description": "可选，当前工作分支（如 git branch --show-current），非空才写入 work_branch 列" }
                 },
                 "required": ["issue", "session_id"]
             }
@@ -698,5 +741,119 @@ pub fn run() {
         crate::tlog!(
             "[taskboard-mcp] 未收到任何有效 JSON-RPC 消息即断开——请检查客户端分帧格式"
         );
+    }
+}
+
+// ============================================================================
+// 读路径回归测试（#173）。
+//
+// 为什么测：`row_to_value` 用位置索引取值，必须与 `SELECT_COLS` 的列顺序严格一致。
+// #155 表重建改列序、#169/#171 扩列后这里曾整体错位，且 `check-mcp-columns.py` 只比
+// SELECT_COLS 字符串、管不了「位置映射」，CI 测不到。这里在内存库建一张含全部被选列
+// 的 tasks 表，每列填可辨识的值，断言 `list_my_tasks` / `get_task_status` 返回的每个
+// 字段都能对上「字段名 → 正确值」，杜绝错位回归。
+// ============================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    /// 建一张覆盖 SELECT_COLS 全部 24 列的最小 tasks 表（内存库）。
+    fn test_conn() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE tasks (
+                issue_key TEXT, owner TEXT, repo TEXT, number INTEGER, title TEXT,
+                url TEXT, issue_state TEXT, ownership TEXT, status TEXT, project_status TEXT,
+                assignees TEXT, mentioned INTEGER, latest_comment_url TEXT, pr_number INTEGER,
+                pr_url TEXT, branch TEXT, work_branch TEXT, session_id TEXT, session_agent TEXT,
+                session_at INTEGER, handoff TEXT, candidate_done INTEGER, account_id INTEGER,
+                updated_at INTEGER
+            );",
+        )
+        .unwrap();
+        c
+    }
+
+    /// 插入一行每列值都互不相同、可辨识的样例数据。
+    fn insert_sample(conn: &Connection) {
+        conn.execute(
+            "INSERT INTO tasks (
+                issue_key, owner, repo, number, title, url, issue_state, ownership, status,
+                project_status, assignees, mentioned, latest_comment_url, pr_number, pr_url,
+                branch, work_branch, session_id, session_agent, session_at, handoff,
+                candidate_done, account_id, updated_at
+            ) VALUES (
+                'fad-backend#1247', 'FoodsUp-Inc', 'fad-backend', 1247, '修复支付回调',
+                'https://github.com/FoodsUp-Inc/fad-backend/issues/1247', 'open', 'notassignee',
+                'doing', 'In Progress', 'alice', 1, 'www.comment', 42, 'www.pr',
+                'main', 'feature/pay', 'sess-1', 'claude-code', 1700000000, 'handoff-1',
+                0, 1, 1700000100
+            );",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn list_my_tasks_returns_correct_column_values() {
+        let c = test_conn();
+        insert_sample(&c);
+        let out = tool_list(&c, None, None).unwrap();
+        let arr = out.as_array().expect("list_my_tasks 应返回数组");
+        assert_eq!(arr.len(), 1);
+        let obj = arr[0].as_object().expect("元素应为 object");
+
+        assert_eq!(obj["issue_key"].as_str(), Some("fad-backend#1247"));
+        assert_eq!(obj["owner"].as_str(), Some("FoodsUp-Inc"));
+        assert_eq!(obj["repo"].as_str(), Some("fad-backend"));
+        assert_eq!(obj["number"].as_i64(), Some(1247));
+        assert_eq!(obj["title"].as_str(), Some("修复支付回调"));
+        assert_eq!(
+            obj["url"].as_str(),
+            Some("https://github.com/FoodsUp-Inc/fad-backend/issues/1247")
+        );
+        assert_eq!(obj["issue_state"].as_str(), Some("open"));
+        assert_eq!(obj["ownership"].as_str(), Some("notassignee"));
+        assert_eq!(obj["status"].as_str(), Some("doing"));
+        assert_eq!(obj["project_status"].as_str(), Some("In Progress"));
+        assert_eq!(obj["assignees"].as_str(), Some("alice"));
+        assert_eq!(obj["mentioned"].as_i64(), Some(1));
+        assert_eq!(obj["latest_comment_url"].as_str(), Some("www.comment"));
+        assert_eq!(obj["pr_number"].as_i64(), Some(42));
+        assert_eq!(obj["pr_url"].as_str(), Some("www.pr"));
+        assert_eq!(obj["branch"].as_str(), Some("main"));
+        assert_eq!(obj["work_branch"].as_str(), Some("feature/pay"));
+        assert_eq!(obj["session_id"].as_str(), Some("sess-1"));
+        assert_eq!(obj["session_agent"].as_str(), Some("claude-code"));
+        assert_eq!(obj["session_at"].as_i64(), Some(1700000000));
+        assert_eq!(obj["handoff"].as_str(), Some("handoff-1"));
+        assert_eq!(obj["candidate_done"].as_i64(), Some(0));
+        assert_eq!(obj["account_id"].as_i64(), Some(1));
+        assert_eq!(obj["updated_at"].as_i64(), Some(1700000100));
+    }
+
+    #[test]
+    fn get_task_status_returns_correct_column_values() {
+        let c = test_conn();
+        insert_sample(&c);
+        let out = tool_get(&c, "fad-backend#1247").unwrap();
+        let obj = out.as_object().expect("get_task_status 应返回 object");
+        assert_eq!(obj["found"].as_bool(), Some(true));
+        assert_eq!(obj["issue_key"].as_str(), Some("fad-backend#1247"));
+        assert_eq!(obj["owner"].as_str(), Some("FoodsUp-Inc"));
+        assert_eq!(obj["repo"].as_str(), Some("fad-backend"));
+        assert_eq!(obj["number"].as_i64(), Some(1247));
+        assert_eq!(obj["title"].as_str(), Some("修复支付回调"));
+        assert_eq!(obj["project_status"].as_str(), Some("In Progress"));
+        assert_eq!(obj["assignees"].as_str(), Some("alice"));
+        assert_eq!(obj["work_branch"].as_str(), Some("feature/pay"));
+        assert_eq!(obj["session_id"].as_str(), Some("sess-1"));
+        assert_eq!(obj["handoff"].as_str(), Some("handoff-1"));
+        assert_eq!(obj["updated_at"].as_i64(), Some(1700000100));
+        // 用一条不存在的引用验证「未找到」分支
+        let missing = tool_get(&c, "nope#999").unwrap();
+        assert_eq!(missing["found"].as_bool(), Some(false));
+        assert_eq!(missing["issue_key"].as_str(), Some("nope#999"));
     }
 }

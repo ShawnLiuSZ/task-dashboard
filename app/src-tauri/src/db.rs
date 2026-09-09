@@ -51,8 +51,10 @@ CREATE TABLE IF NOT EXISTS tasks (
   latest_comment_url TEXT NOT NULL DEFAULT '',
   pr_number      INTEGER NOT NULL DEFAULT 0,
   pr_url         TEXT NOT NULL DEFAULT '',
-  -- 关联 PR 的分支（head.ref）。
+  -- 关联 PR 的分支（head.ref），由同步自动拉取；无关联 PR 时会被清空（PR 专用）。
   branch         TEXT NOT NULL DEFAULT '',
+  -- agent 通过 record_session 写入的工作分支；同步不碰（#171）。
+  work_branch    TEXT NOT NULL DEFAULT '',
   -- agent 写入的交接任务详情。
   handoff        TEXT NOT NULL DEFAULT '',
   updated_at     INTEGER,
@@ -305,6 +307,19 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
             crate::tlog!("[db] v0.3.15 → v0.3.16 迁移失败（已保留兜底字段）: {}", e);
         }
     }
+    // v0.3.53 (#171) 迁移补漏：`work_branch` 的 ALTER 原本只写在 `migrate_legacy_alters`
+    // （仅 user_version<1 的老库触发）。对 user_version=2 的库（#155 已 v2 重建、无旧 key 列）
+    // 会跳过该补齐，又不会二次重建 → `work_branch` 永不补上，SELECT_COLS 一查就报
+    // `no such column`。这里把它提升到每次建连都跑的幂等热路径（已存在则忽略，
+    // 与 notes.label 迁移同款），对所有 user_version 一致生效。详见 docs/issue-175-*.md。
+    if let Err(e) = conn.execute(
+        "ALTER TABLE tasks ADD COLUMN work_branch TEXT NOT NULL DEFAULT ''",
+        [],
+    ) {
+        if crate::common::verbose_enabled() {
+            crate::tlog!("[db] work_branch 列迁移跳过（已存在）: {}", e);
+        }
+    }
     // v0.3.50 (#155)：新库（SCHEMA 顶层无此索引）与重建后均由此处幂等补齐 issue_key 索引。
     if let Err(e) = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_tasks_issue_key ON tasks(issue_key)",
@@ -331,8 +346,10 @@ fn migrate_legacy_alters(conn: &Connection) {
         "ALTER TABLE tasks ADD COLUMN latest_comment_url TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE tasks ADD COLUMN pr_number INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE tasks ADD COLUMN pr_url TEXT NOT NULL DEFAULT ''",
-        // v0.3.10：关联 PR 的分支（head.ref），以及 agent 写入的交接任务详情。
+        // v0.3.10：关联 PR 的分支（head.ref）。
         "ALTER TABLE tasks ADD COLUMN branch TEXT NOT NULL DEFAULT ''",
+        // v0.3.53 (#171)：agent 通过 record_session 写入的工作分支（同步不碰）。
+        "ALTER TABLE tasks ADD COLUMN work_branch TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE tasks ADD COLUMN handoff TEXT NOT NULL DEFAULT ''",
         // v0.3.16：任务归属账号；旧库默认 1（迁移会先插一条 accounts，再保证该 id 命中）。
         "ALTER TABLE tasks ADD COLUMN account_id INTEGER NOT NULL DEFAULT 1",
@@ -394,6 +411,7 @@ fn migrate_tasks_v2_rebuild(conn: &Connection) -> Result<(), String> {
           pr_number      INTEGER NOT NULL DEFAULT 0,
           pr_url         TEXT NOT NULL DEFAULT '',
           branch         TEXT NOT NULL DEFAULT '',
+          work_branch    TEXT NOT NULL DEFAULT '',
           handoff        TEXT NOT NULL DEFAULT '',
           updated_at     INTEGER,
           synced_at      INTEGER NOT NULL,
@@ -404,12 +422,12 @@ fn migrate_tasks_v2_rebuild(conn: &Connection) -> Result<(), String> {
           (issue_key, owner, repo, number, title, url, issue_state, ownership, status,
            session_id, session_agent, session_at, candidate_done, stale, project_status,
            assignees, labels, done_at, mentioned, comments_count, latest_comment_url,
-           pr_number, pr_url, branch, handoff, updated_at, synced_at, account_id)
+           pr_number, pr_url, branch, work_branch, handoff, updated_at, synced_at, account_id)
         SELECT
            key, owner, repo, number, title, url, gh_state, ownership, status,
            session_id, session_agent, session_at, candidate_done, stale, gh_status,
            assignees, labels, done_at, mentioned, comments_count, latest_comment_url,
-           pr_number, pr_url, branch, handoff,
+           pr_number, pr_url, branch, work_branch, handoff,
            COALESCE(CAST(strftime('%s', NULLIF(TRIM(updated_at), '')) AS INTEGER), 0),
            synced_at, account_id
         FROM tasks;

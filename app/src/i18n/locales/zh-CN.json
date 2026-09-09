@@ -27,6 +27,7 @@
   "syncLogs.loading": "加载中…",
   "syncLogs.empty": "暂无同步日志",
   "syncLogs.pruning": "清理中…",
+  "syncLogs.errorExpandHint": "点击展开/收起完整错误信息",
   "syncLogs.headers.time": "时间",
   "syncLogs.headers.trigger": "触发",
   "syncLogs.headers.duration": "耗时",
@@ -45,6 +46,7 @@
   "btn.saving": "保存中…",
   "btn.revert": "还原",
   "btn.cancel": "取消",
+  "btn.confirm": "确认",
   "btn.delete": "删除",
   "btn.done": "完成",
   "sync.result": "新增 {added} · 更新 {updated} · 候选完成 {done}",
@@ -144,7 +146,6 @@
   "settings.boardModeTitle": "看板列模式",
   "settings.boardModeLabel": "看板模式",
   "settings.boardModeDesc": "为每个账号独立配置看板列展示方式：切换账号后按该账号配置展示，顶栏不再提供切换。",
-
   "settings.loading": "加载中…",
   "settings.boardModeProject": "Project 状态列",
   "settings.boardModeCustom": "自定义列（按账号配置映射规则）",
@@ -240,5 +241,6 @@
   "notes.exported": "已导出 {count} 条记事 → {path}",
   "notes.imported": "导入完成：新增 {imported} 条，跳过重复 {skipped} 条",
   "notes.noImportable": "文件中没有可导入的记事",
-  "notes.badFormat": "无法识别的格式：应为 notes-backup 导出文件"
+  "notes.badFormat": "无法识别的格式：应为 notes-backup 导出文件",
+  "board.unmappedHint": "未映射"
 }

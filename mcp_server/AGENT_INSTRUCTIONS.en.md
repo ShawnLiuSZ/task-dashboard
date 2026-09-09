@@ -40,7 +40,7 @@ The MCP Server is registered as `taskboard` in WorkBuddy's `~/.workbuddy/mcp.jso
 | `list_my_tasks` | `status?` / `ownership?` | List board tasks (filterable by four-state / ownership) |
 | `get_task_status` | `issue` | Query a task's current state + recorded session / handoff |
 | `update_task_status` | `issue`, `status` | Update the local board state |
-| `record_session` | `issue`, `session_id`, `agent?` | Record an interrupted session id |
+| `record_session` | `issue`, `session_id`, `agent?`, `branch?` | Record an interrupted session id; if `branch` is non-empty, also record the current working branch (into `work_branch`, kept separate from the synced PR `branch`) |
 | `record_handoff` | `issue`, `text` | Record "handoff task" details |
 | `clear_session` | `issue` | Clear the session field after completion (kept for audit) |
 
@@ -59,7 +59,7 @@ The MCP Server is registered as `taskboard` in WorkBuddy's `~/.workbuddy/mcp.jso
 
 | Timing | Action |
 |---|---|
-| **Start working** on an issue (assigned by the user / you claim it / you begin changing it) | `update_task_status(issue, "处理中")` |
+| **Start working** on an issue (assigned by the user / you claim it / you begin changing it) | `update_task_status(issue, "处理中")` + `record_session(issue, <current session id>, "<agent name>", branch=<current working branch>)` |
 | **Pause / session interrupted / switching to another task** | `record_session(issue, <current session id>, "<your agent name>")` |
 | The user says "**generate a handoff task**", "hand off", "handoff", etc. | `record_handoff(issue, "<done / not done / blockers / how to resume>")`; to preserve a resumable session, also call `record_session` |
 | **Task complete** (you verify it's done, wrapping up) | `update_task_status(issue, "已完成")` + `clear_session(issue)` |
@@ -72,6 +72,11 @@ The `session_id` is **supplied by the caller**; there is no single source of tru
 - codex / opencode / zcode / helix: pick a recoverable id from each one's current session
 - **always pass the `agent` argument** (`claude-code` / `codex` / `opencode` / `zcode` / `helix` …) so multiple processes can tell who recorded what
 
+`branch` is **also supplied by the caller**: take the current working branch with
+`git -C <the project dir for that issue> branch --show-current`, and **pass an empty string if it can't be resolved**
+(no git repo / no branch — don't stuff in dirty data). It's written to a separate `work_branch` column, kept apart
+from the synced PR `branch`, so sync never overwrites it.
+
 ### How state is kept when interrupting
 After an interrupt, **keep the state as "处理中"** (do not fall back to "待处理") — falling back would lose the signal that "this task already has partial work", which is exactly what a session id is for. On resume, explicitly move back to "处理中".
 
@@ -82,6 +87,7 @@ After an interrupt, **keep the state as "处理中"** (do not fall back to "待�
 ```
 # 1) Got the task; start working
 update_task_status(issue="fad-backend#1247", status="处理中")
+record_session(issue="fad-backend#1247", session_id="tmux:work-1247", agent="claude-code", branch="$(git -C /path/to/fad-backend branch --show-current)")
 
 # 2) Switching to something else mid-way; record the session first
 record_session(issue="fad-backend#1247", session_id="tmux:work-1247", agent="claude-code")

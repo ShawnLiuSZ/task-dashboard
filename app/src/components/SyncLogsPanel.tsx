@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { useI18n } from "../i18n";
+import ConfirmDialog from "./ConfirmDialog";
 import type { SyncLog } from "../types";
 
 /** v0.3.49 (#148)：同步触发类型走 i18n（此前硬编码中文）。 */
@@ -32,6 +33,18 @@ function duration(start: number, end: number): string {
   return `${mins}m ${rem}s`;
 }
 
+/** v0.3.51 (#161)：错误单元格展示文本；无错误时返回 null 渲染 "-"。 */
+export function syncLogErrorText(
+  log: Pick<SyncLog, "errorMessage" | "failedSources">,
+): string | null {
+  return log.errorMessage || log.failedSources || null;
+}
+
+/** v0.3.51 (#161)：错误单元格展开/收起切换（单展开：再次点击同一行则收起）。 */
+export function toggleExpanded(expandedId: number | null, id: number): number | null {
+  return expandedId === id ? null : id;
+}
+
 /** 状态徽章（文案走 i18n）。 */
 function StatusBadge({ status, t }: { status: string; t: (key: string) => string }) {
   if (status === "success") {
@@ -50,6 +63,8 @@ export default function SyncLogsPanel({ onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [pruning, setPruning] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadLogs = useCallback(async () => {
@@ -154,7 +169,19 @@ export default function SyncLogsPanel({ onClose }: Props) {
                       <td>{log.updated}</td>
                       <td>{log.removed}</td>
                       <td className="error-cell">
-                        {log.errorMessage || log.failedSources || "-"}
+                        {syncLogErrorText(log) ? (
+                          <button
+                            type="button"
+                            className={`error-toggle${expandedId === log.id ? " expanded" : ""}`}
+                            title={syncLogErrorText(log) ?? undefined}
+                            aria-label={t("syncLogs.errorExpandHint")}
+                            onClick={() => setExpandedId(toggleExpanded(expandedId, log.id))}
+                          >
+                            {syncLogErrorText(log)}
+                          </button>
+                        ) : (
+                          "-"
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -177,16 +204,23 @@ export default function SyncLogsPanel({ onClose }: Props) {
           </button>
           <button
             className="btn ghost"
-            onClick={() => {
-              if (window.confirm(t("syncLogs.clearAllConfirm"))) {
-                void handleClear();
-              }
-            }}
+            onClick={() => setConfirming(true)}
             disabled={clearing}
           >
             {clearing ? t("syncLogs.pruning") : t("syncLogs.clearAll")}
           </button>
         </div>
+
+        {confirming && (
+          <ConfirmDialog
+            message={t("syncLogs.clearAllConfirm")}
+            onCancel={() => setConfirming(false)}
+            onConfirm={() => {
+              setConfirming(false);
+              void handleClear();
+            }}
+          />
+        )}
       </div>
     </div>
   );

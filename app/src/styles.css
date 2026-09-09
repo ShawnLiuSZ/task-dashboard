@@ -266,6 +266,21 @@ body {
 .column-head .count {
   margin-left: auto;
 }
+/* v0.3.51 (#165)：未匹配列提示（未映射的 project_status 值） */
+.unmapped-hint {
+  margin: 0 8px 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-2, #6b7280);
+  background: rgba(255, 165, 0, 0.08);
+  border: 1px dashed rgba(255, 165, 0, 0.45);
+  border-radius: 6px;
+  cursor: default;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .column-title {
   font-weight: 500;
@@ -978,6 +993,31 @@ body {
   margin-top: 4px;
 }
 
+/* ===== v0.3.51+ 应用内确认弹窗（替代 Tauri 不支持的 window.confirm） ===== */
+
+.confirm-modal {
+  width: 400px;
+}
+
+.confirm-message {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.btn.primary.danger {
+  background: #c0392b;
+  border-color: #c0392b;
+  color: #fff;
+}
+
+.btn.primary.danger:hover:not(:disabled) {
+  background: #a32d2d;
+  border-color: #a32d2d;
+  color: #fff;
+}
+
 /* ===== v0.3.19+ 关于页 ============================================ */
 
 .about-modal .about-status {
@@ -1209,12 +1249,36 @@ body {
   white-space: nowrap;
 }
 
+/* v0.3.51 (#161)：错误信息默认单行截断，点击展开全文（hover 有系统 tooltip 显示原文）。 */
 .sync-logs-table .error-cell {
-  max-width: 200px;
+  max-width: 220px;
+  color: #a32d2d;
+}
+
+.sync-logs-table .error-cell .error-toggle {
+  display: block;
+  width: 100%;
+  max-width: 220px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #a32d2d;
+}
+
+.sync-logs-table .error-cell .error-toggle:hover {
+  text-decoration: underline;
+}
+
+.sync-logs-table .error-cell .error-toggle.expanded {
+  max-width: 360px;
+  white-space: normal;
+  word-break: break-all;
 }
 
 .badge {

@@ -222,7 +222,7 @@ pub fn record_session(
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let now = crate::sync::now_secs();
     // v0.3.49 (#147)：SQL 走公共模块（与 mcp.rs 同一实现）；0 行也静默 Ok（原有行为）。
-    crate::common::touch_session(&conn, &key, &session_id, agent.as_deref(), now)?;
+    crate::common::touch_session(&conn, &key, &session_id, agent.as_deref(), now, None)?;
     Ok(())
 }
 
@@ -290,7 +290,7 @@ pub struct PatStatus {
 /// 便于前端展示「当前账号」且不必泄漏 PAT 本体。
 #[allow(dead_code)] // 由 `lib.rs::invoke_handler` 反射注册使用，编译期无可达调用
 #[tauri::command]
-pub fn save_pat(
+pub async fn save_pat(
     app: AppHandle,
     state: State<'_, AppState>,
     pat: String,
@@ -304,11 +304,17 @@ pub fn save_pat(
         crate::db::set_setting(&conn, "last_sync_error", "")?;
         return Ok(PatStatus { login: String::new(), has_pat: false });
     }
-    // 先在锁外构造客户端（避免构造时阻塞 db 锁）；构造仅作 PAT 形式校验，
-    // 真实 login 探测走 test_connection（v0.3.16 起构造不再自动探测）。
-    let client = crate::github::GitHubClient::new(trimmed.clone(), String::new(), String::new())
-        .map_err(|e| format!("PAT 验证失败: {}", e))?;
-    let login = client.test_connection()?.login;
+    // 网络重活（构造客户端 + test_connection 探测真实 login）放 blocking 池，
+    // 避免同步命令占住 Tauri 主线程（macOS beachball、UI 假死）。与 sync_now 同款处理。
+    let net_pat = trimmed.clone();
+    let login = tauri::async_runtime::spawn_blocking(move || {
+        let client = crate::github::GitHubClient::new(net_pat, String::new(), String::new())
+            .map_err(|e| format!("PAT 验证失败: {}", e))?;
+        let login = client.test_connection()?.login;
+        Ok::<String, String>(login)
+    })
+    .await
+    .map_err(|e| format!("PAT 探测线程异常: {}", e))??;
     {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         crate::db::set_setting(&conn, "pat_token", &trimmed)?;
@@ -324,16 +330,23 @@ pub fn save_pat(
 /// 给设置面板「测试连接」按钮专用。
 #[allow(dead_code)]
 #[tauri::command]
-pub fn test_pat(state: State<'_, AppState>) -> Result<PatStatus, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let pat = crate::db::get_setting(&conn, "pat_token");
-    if pat.is_empty() {
-        return Err("未配置 PAT，请先在设置面板粘贴".to_string());
-    }
-    // 取锁外构造（reqwest 的网络 IO 与 db 锁解耦）；构造后探测真实 login。
-    drop(conn);
-    let client = crate::github::GitHubClient::new(pat, String::new(), String::new())?;
-    let probe = client.test_connection()?.login;
+pub async fn test_pat(state: State<'_, AppState>) -> Result<PatStatus, String> {
+    let pat = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let pat = crate::db::get_setting(&conn, "pat_token");
+        if pat.is_empty() {
+            return Err("未配置 PAT，请先在设置面板粘贴".to_string());
+        }
+        pat
+    };
+    // 网络探测（test_connection）放 blocking 池，避免占住主线程假死。
+    let probe = tauri::async_runtime::spawn_blocking(move || {
+        let client = crate::github::GitHubClient::new(pat, String::new(), String::new())?;
+        let login = client.test_connection()?.login;
+        Ok::<String, String>(login)
+    })
+    .await
+    .map_err(|e| format!("PAT 测试线程异常: {}", e))??;
     Ok(PatStatus { login: probe, has_pat: true })
 }
 
@@ -550,7 +563,7 @@ pub fn list_accounts(state: State<'_, AppState>) -> Result<Vec<Account>, String>
 /// 是权威；但同时把探测到的 login 回写到 DB 字段，确保 sync 时不会用错。
 #[allow(dead_code)]
 #[tauri::command]
-pub fn add_account(
+pub async fn add_account(
     state: State<'_, AppState>,
     label: String,
     login: String,
@@ -561,23 +574,34 @@ pub fn add_account(
     if pat.is_empty() {
         return Err("PAT 不能为空".to_string());
     }
-    // 锁外探测（避免阻塞 db 锁做网络 IO）；构造 + 探测真实 login + org。
-    let probe_client = crate::github::GitHubClient::new(pat.clone(), String::new(), String::new())?;
-    let probe_login = probe_client
-        .test_connection()
-        .map(|r| r.login)
-        .map_err(|e| format!("PAT 验证失败: {}", e))?;
-    // 用探测到的真实 login 作权威；用户输入的 login 仅作 hint。
-    let final_login = if probe_login.is_empty() {
-        login.trim().to_string()
-    } else {
-        probe_login
-    };
-    // 若调用方未指定 org，自动从 GitHub API 获取用户所属的第一个组织。
-    let final_org = if org.trim().is_empty() {
-        probe_client.fetch_user_org().unwrap_or_default()
-    } else {
-        org.trim().to_string()
+    // 网络重活（构造 + 探测真实 login + 自动取 org）放 blocking 池，避免占住主线程假死。
+    let (final_login, final_org) = {
+        let net_pat = pat.clone();
+        let login_hint = login.clone();
+        let org_hint = org.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let probe_client =
+                crate::github::GitHubClient::new(net_pat, String::new(), String::new())?;
+            let probe_login = probe_client
+                .test_connection()
+                .map(|r| r.login)
+                .map_err(|e| format!("PAT 验证失败: {}", e))?;
+            // 用探测到的真实 login 作权威；用户输入的 login 仅作 hint。
+            let final_login = if probe_login.is_empty() {
+                login_hint.trim().to_string()
+            } else {
+                probe_login
+            };
+            // 若调用方未指定 org，自动从 GitHub API 获取用户所属的第一个组织。
+            let final_org = if org_hint.trim().is_empty() {
+                probe_client.fetch_user_org().unwrap_or_default()
+            } else {
+                org_hint.trim().to_string()
+            };
+            Ok::<(String, String), String>((final_login, final_org))
+        })
+        .await
+        .map_err(|e| format!("账号探测线程异常: {}", e))??
     };
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let id = crate::db::insert_account(&conn, &label, &final_login, &final_org, &pat)?;
@@ -601,7 +625,7 @@ pub fn add_account(
 /// 若更新了 PAT，先在锁外探测验证，避免坏 token 入库。
 #[allow(dead_code)]
 #[tauri::command]
-pub fn update_account(
+pub async fn update_account(
     state: State<'_, AppState>,
     id: i64,
     label: Option<String>,
@@ -612,11 +636,17 @@ pub fn update_account(
     if let Some(p) = pat.as_ref() {
         let p = p.trim();
         if !p.is_empty() {
-            // 锁外探测（构造 + test_connection 校验 PAT 有效）
-            let probe = crate::github::GitHubClient::new(p.to_string(), String::new(), String::new())
-                .and_then(|c| c.test_connection())
-                .map_err(|e| format!("新 PAT 验证失败: {}", e))?;
-            let _ = probe;
+            // 网络重活（构造 + test_connection 校验 PAT 有效）放 blocking 池，避免占住主线程假死。
+            let net_pat = p.to_string();
+            tauri::async_runtime::spawn_blocking(move || {
+                let _probe =
+                    crate::github::GitHubClient::new(net_pat, String::new(), String::new())
+                        .and_then(|c| c.test_connection())
+                        .map_err(|e| format!("新 PAT 验证失败: {}", e))?;
+                Ok::<(), String>(())
+            })
+            .await
+            .map_err(|e| format!("PAT 验证线程异常: {}", e))??;
         }
     }
     let conn = state.db.lock().map_err(|e| e.to_string())?;
@@ -658,18 +688,25 @@ pub fn delete_account(state: State<'_, AppState>, id: i64) -> Result<(), String>
 /// 测试某账号的 PAT 是否仍有效；返回账号信息。
 #[allow(dead_code)]
 #[tauri::command]
-pub fn test_account_pat(
+pub async fn test_account_pat(
     state: State<'_, AppState>,
     id: i64,
 ) -> Result<PatStatus, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let (login, org, pat) = crate::db::get_account_pat(&conn, id)?;
-    drop(conn);
+    let (login, org, pat) = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        crate::db::get_account_pat(&conn, id)?
+    };
     if pat.is_empty() {
         return Err(format!("账号 #{id} ({login} / {org}) 未配置 PAT"));
     }
-    let client = crate::github::GitHubClient::new(pat, String::new(), String::new())?;
-    let probe = client.test_connection()?.login;
+    // 网络探测（test_connection）放 blocking 池，避免占住主线程假死。
+    let probe = tauri::async_runtime::spawn_blocking(move || {
+        let client = crate::github::GitHubClient::new(pat, String::new(), String::new())?;
+        let login = client.test_connection()?.login;
+        Ok::<String, String>(login)
+    })
+    .await
+    .map_err(|e| format!("PAT 测试线程异常: {}", e))??;
     Ok(PatStatus { login: probe, has_pat: true })
 }
 
@@ -874,18 +911,23 @@ pub fn get_label_columns_for_account(
 
 /// 诊断：测试当前账号的 Project Status 拉取（用于排查 "未标注" 问题）。
 #[tauri::command]
-pub fn diagnose_project_status(
-    state: State<'_, AppState>,
+pub async fn diagnose_project_status(
+    app: AppHandle,
     account_id: i64,
 ) -> Result<serde_json::Value, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let (login, org, pat) = crate::db::get_account_pat(&conn, account_id)?;
-    drop(conn);
+    // 读 PAT：快速锁共享连接读取后立即释放，不跨 await 持有。
+    let (login, org, pat) = {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        crate::db::get_account_pat(&conn, account_id)?
+    };
 
     if pat.is_empty() {
         return Err("账号未配置 PAT".to_string());
     }
-    let client = crate::github::GitHubClient::new(pat, login.clone(), org.clone())?;
+    // 网络重活放 blocking 池，避免占住主线程/事件循环（与 sync_now 同款处理）。
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = crate::github::GitHubClient::new(pat, login.clone(), org.clone())?;
 
     // 1. 拉取全部 project
     let all_projects = client.fetch_all_projects()?;
@@ -917,13 +959,16 @@ pub fn diagnose_project_status(
         }));
     }
 
-    Ok(serde_json::json!({
-        "org": org,
-        "login": login,
-        "projects": projects_info,
-        "status_count": status_map.len(),
-        "sample_statuses": status_map.iter().take(10).collect::<Vec<_>>(),
-    }))
+        Ok(serde_json::json!({
+            "org": org,
+            "login": login,
+            "projects": projects_info,
+            "status_count": status_map.len(),
+            "sample_statuses": status_map.iter().take(10).collect::<Vec<_>>(),
+        }))
+    })
+    .await
+    .map_err(|e| format!("诊断线程异常: {}", e))?
 }
 
 /// 列出某账号下已存储的项目（来自 projects 表）。

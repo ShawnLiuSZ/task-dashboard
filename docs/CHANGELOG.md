@@ -6,6 +6,36 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.54（2026-09-09）— Rust 内置 MCP 读路径字段错位修复（#173）**
+
+  - **#173 `row_to_value` 位置索引未同步 24 列 `SELECT_COLS`**：#155 重建 `tasks` 表并插入 `url` / `issue_state` / `project_status` / `pr_number` 等列、#169/#171 把 `SELECT_COLS` 扩成 24 列后，`mcp.rs::row_to_value` 仍按老的精简列序用位置 `get(0..10)` 取值，导致内置 MCP 的 `list_my_tasks` / `get_task_status` 返回字段**几乎全部错位**（`repo` 填 owner、`number` 填 repo 字符串、`status` 填 title……）。`check-mcp-columns.py` 只比两侧 `SELECT_COLS` 字符串、管不了「位置 → 列名」映射，故 CI 一直绿而功能坏。现已重写 `row_to_value` 严格按 24 列顺序逐一映射（含 `work_branch` / `updated_at` 等），语义与 Python 侧 `dict(row)` 对齐。
+  - **#173 回归测试**：新增 2 个 Rust 单测（`list_my_tasks_returns_correct_column_values` / `get_task_status_returns_correct_column_values`），在内存库建含全部被选列的 `tasks` 表、每列填可辨识值，逐字段断言返回正确。lib 测试 34→36 例。
+  - **#175 `work_branch` 迁移补漏**：`work_branch` 的 ALTER 只挂在 `migrate_legacy_alters`（user_version<1），使 `user_version=2`（#155 已 v2 重建）的旧库永不补列、`SELECT_COLS` 一查就 `no such column`。现将该 ALTER 提升到 `open_db` 每次建连都跑的幂等热路径（已存在则忽略），对所有 user_version 一致生效。新增 db_test（18→19）验证。
+  - **无 schema 变更（仅数据迁移补齐）、零接口变更**。详见 [docs/issue-173-mcp-read-row-to-value.md](./issue-173-mcp-read-row-to-value.md) 与 [docs/issue-175-work-branch-migration-gap.md](./issue-175-work-branch-migration-gap.md)。
+
+- **v0.3.53（2026-09-09）— Python MCP 与列名重构脱节修复（#169）+ record_session 记录工作分支（#171）**
+
+  - **#169 Python MCP 读路径修复**：#155 把 `tasks.key` 改名 `issue_key` 后 `mcp_server/server.py` 没跟上，`SELECT_COLS` 与 `tool_get_task_status` 仍写 `key`，`list_my_tasks` / `get_task_status` 必然报 `no such column: key`。现已统一两侧 `SELECT_COLS`（补齐 `url` / `issue_state` / `project_status` / `pr_number` 等 #155 后的新列，共 23 列），返回字段 `key` → `issue_key`。详见 [docs/issue-169-mcp-server-schema-sync.md](./issue-169-mcp-server-schema-sync.md)。
+  - **#169 写入丢失修复**：四个写任务工具没有 `commit()`，sqlite3 默认事务下进程退出即回滚，写入全丢。连接改为 `isolation_level=None` 自动提交——比在 11 个工具出口各写一次 commit 更难漏。详见 [docs/issue-169-mcp-server-schema-sync.md](./issue-169-mcp-server-schema-sync.md)。
+  - **#169 列名一致性防回归**：新增零依赖 `scripts/check-mcp-columns.py` + CI `mcp-schema-check`，以 `db.rs::SCHEMA` 为唯一事实来源，校验 `server.py` 与 `mcp.rs` 的列名真实存在且逐列一致。详见 [docs/issue-169-mcp-server-schema-sync.md](./issue-169-mcp-server-schema-sync.md)。
+  - **#171 `record_session` 新增 `branch` 参数**：开始处理 issue 时即可一并记录当前工作分支，写入独立 **`work_branch`** 列（非空才写）。复用公共 `common::touch_session`（Rust）与 `server.py`（Python）条件更新，两侧行为一致；`SELECT_COLS` 同步补入 `work_branch`（共 24 列）。
+  - **#171 `branch` 回归 PR 专用**：`sync.rs` 中该 issue 无关联 PR 时仍清空 `branch`（PR head.ref 原逻辑不回归）；`work_branch` 不在同步 upsert 列中，**同步不覆盖 Agent 工作分支**，两者职责分离。
+  - **#171 触发时机提前**：`AGENT_INSTRUCTIONS.md` 明确「开始处理」即 `record_session`（含 `git branch --show-current` 取的分支）。
+  - **#171 schema 变更**：`tasks` 新增 `work_branch TEXT NOT NULL DEFAULT ''`（新库 SCHEMA + 老库 ALTER + v2 重建同步迁移）。
+  - **验证**：`cargo test`（lib 34 例 + db_test 18 例）、`cargo check` 通过。详见 [docs/issue-171-record-session-branch.md](./issue-171-record-session-branch.md)。
+
+- **v0.3.52（2026-09-08）— 设置面板假死修复（#167）**
+
+  - **#167 同步/诊断期间点击设置假死**：`diagnose_project_status` / `test_pat` / `test_account_pat` / `save_pat` / `add_account` / `update_account` 六个命令原为同步命令，内含 GitHub 网络 I/O，在 Tauri 主线程执行期间阻塞事件循环 → macOS beachball 假死。统一改为 `async + spawn_blocking`（与 v0.3.7 `sync_now` 同款模式），网络重活放工作线程池，主线程仅快速取 DB 数据后立即返回。纯 SQL 配置命令不受影响，同步用独立连接 + WAL 不阻塞读者。零接口变更、零前端改动。详见 [docs/issue-167-async-net-commands.md](./issue-167-async-net-commands.md)。
+
+- **v0.3.51（2026-09-08）— 前端修复三连（#159 #160 #161）**
+
+  - **#159 自定义列空配置回退 project 列**：账号未配置自定义列时选择「自定义列」展示，不再误导性回退到四态列，改为回退到 project.status 状态列。详见 [docs/issue-159-160-161-frontend-bugs.md](./issue-159-160-161-frontend-bugs.md)。
+  - **#160 应用内确认弹窗替代 window.confirm**：Tauri WebView 原生不支持 `window.confirm`（静默返回 false），「清理全部日志」「删除账号」的二次确认改为应用内 ConfirmDialog 弹窗，根治点了没反应。详见 [docs/issue-159-160-161-frontend-bugs.md](./issue-159-160-161-frontend-bugs.md)。
+  - **#161 同步日志错误信息可展开**：错误单元格默认单行截断，hover 有全文 tooltip，点击展开/收起完整错误信息。详见 [docs/issue-159-160-161-frontend-bugs.md](./issue-159-160-161-frontend-bugs.md)。
+  - **#163 前端测试补充**：新增 3 个测试文件 18 个用例（合计 21 例），零依赖覆盖 #159/#160/#161 修复逻辑，为可测性抽出 `resolveBoardView` 等 4 个纯函数。详见 [docs/issue-163-frontend-tests.md](./issue-163-frontend-tests.md)。
+  - **#165 custom 视图未匹配值提示**：未标注列展示未映射的 `project_status` 值（去重 + 计数，hover 看全），帮助用户快速定位漏配/错配的自定义列。详见 [docs/issue-165-unmapped-hint.md](./issue-165-unmapped-hint.md)。
+
 - **v0.3.50（2026-09-08）— tasks 表物理重建（#155）**
 
   - **#155 tasks 表物理重建**：字段命名彻底理清——`key→issue_key`（业务引用，新增）、自增 `id` 主键 + `UNIQUE(repo, number, account_id)` 解决多账号互相覆盖、`gh_state→issue_state`、`gh_status→project_status`（与本地四态 `status` 语义分离）、`updated_at` 由 TEXT 统一为 INTEGER 秒。基于 `PRAGMA user_version` 版本化迁移 + `key` 列幂等判定，老库自动重建、数据完整迁移。详见 [docs/issue-155-tasks-schema-rebuild.md](./issue-155-tasks-schema-rebuild.md)。

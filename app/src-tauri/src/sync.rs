@@ -460,6 +460,8 @@ fn sync_account(
         let mentioned_val: i64 = if mentioned { 1 } else { 0 };
 
         // PR 关联：仅在 PR 列表拉取成功时更新（失败则保留既有值，避免误清空）。
+        // `branch` 为 PR 专用（head.ref），无关联 PR 时清空（#171 起 agent 工作分支
+        // 单独存 `work_branch`，同步完全不碰 work_branch）。
         let (pr_number, pr_url, branch): (i64, String, String) = if pr_fetch_ok {
             match pr_map.get(&key) {
                 Some((n, u, b)) => (*n, u.clone(), b.clone()),
@@ -604,7 +606,7 @@ fn sync_account(
     // GitHub Search API 只返回 open issue，因此 stale = 搜索没返回 = 已关闭或 assignee 变更。
     // 优化：直接批量标记 candidate_done，省掉逐条 fetch_state 的 API 调用。
     let mut candidate_done = 0usize;
-    let mut removed = 0usize;
+    let removed = 0usize;
     // v0.3.29：任一搜索源失败说明同步数据源不完整，stale 判定不可信。
     // 此时仅解除 stale 保留本地记录，绝不删（避免误删真实关联任务）。
     let sources_incomplete = !failed.is_empty();
