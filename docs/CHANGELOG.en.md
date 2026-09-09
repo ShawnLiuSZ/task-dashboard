@@ -2,6 +2,12 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.53 (2026-09-09) — Python MCP out of sync with column rename (#169)**
+
+  - **#169 Python MCP read path fixed**: #155 renamed `tasks.key` to `issue_key` and `mcp_server/server.py` never followed — `SELECT_COLS` and `tool_get_task_status` still used `key`, so `list_my_tasks` / `get_task_status` always failed with `no such column: key`. Both sides now share one `SELECT_COLS` (23 columns, adding `url`, `issue_state`, `project_status`, `pr_number` and other post-#155 fields), and the returned field is `issue_key` instead of `key`. See [docs/issue-169-mcp-server-schema-sync.md](./issue-169-mcp-server-schema-sync.md).
+  - **#169 Writes were silently lost**: None of the four task write tools called `commit()`, so under sqlite3's default transaction mode everything rolled back when the process exited. The connection now uses `isolation_level=None` (autocommit) — harder to miss than remembering `commit()` at 11 tool exits. See [docs/issue-169-mcp-server-schema-sync.md](./issue-169-mcp-server-schema-sync.md).
+  - **#169 Column-name regression guard**: Added a zero-dependency `scripts/check-mcp-columns.py` plus a `mcp-schema-check` CI job. Treating `db.rs::SCHEMA` as the single source of truth, it verifies that the columns used by `server.py` and `mcp.rs` really exist and match each other line for line. No CI job could previously catch this class of dual-implementation drift. See [docs/issue-169-mcp-server-schema-sync.md](./issue-169-mcp-server-schema-sync.md).
+
 - **v0.3.52 (2026-09-08) — Settings-panel freeze fix (#167)**
 
   - **#167 UI freezes when opening settings during sync/diagnosis**: `diagnose_project_status`, `test_pat`, `test_account_pat`, `save_pat`, `add_account` and `update_account` were synchronous commands containing GitHub network I/O; running them on the Tauri main thread blocked the event loop → macOS beachball. All six were converted to `async + spawn_blocking` (same pattern as `sync_now` in v0.3.7), moving network work to a worker-thread pool while the main thread only fetches DB data quickly and returns. Pure-SQL config commands are unaffected; sync uses a separate connection and WAL so readers are never blocked. Zero API change, zero frontend change. See [docs/issue-167-async-net-commands.md](./issue-167-async-net-commands.md).
