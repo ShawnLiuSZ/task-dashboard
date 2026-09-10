@@ -183,7 +183,7 @@
   - New "About" page (opened via the top-bar "About" button):
     - Shows the current version (read from the Rust package version on the backend, not hard-coded in the frontend)
     - "Check for Updates" button: calls the GitHub Releases API `releases/latest`, compares current/latest, and shows "You are up to date" or "New version available" with a one-click link to download
-    - The repository name is now a clickable link that opens `https://github.com/ShawnLiuSZ/task-dashborad` in the system browser
+    - The repository name is now a clickable link that opens `https://github.com/ShawnLiuSZ/task-dashboard` in the system browser
     - Built-in bilingual support (i18n keys `about.*` / `btn.about`)
 
   - Technical notes: `check_latest_release` only reads the public repo (no PAT needed); it uses `spawn_blocking` so the blocking-reqwest request does not stall the main thread.

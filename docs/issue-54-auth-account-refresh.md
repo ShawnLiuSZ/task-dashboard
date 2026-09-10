@@ -2,7 +2,7 @@
 
 ## 背景 / 动机
 
-对应 Issue：[#54](https://github.com/ShawnLiuSZ/task-dashborad/issues/54)
+对应 Issue：[#54](https://github.com/ShawnLiuSZ/task-dashboard/issues/54)
 
 在「账号」modal 中完成 GitHub 设备授权登录后，账号列表不会自动刷新，新授权的账号不显示；必须手动关闭再重开 modal 才会出现。
 
@@ -44,7 +44,7 @@ useEffect(() => {
 
 ## 相关链接
 
-- Issue：[#54](https://github.com/ShawnLiuSZ/task-dashborad/issues/54)
+- Issue：[#54](https://github.com/ShawnLiuSZ/task-dashboard/issues/54)
 - 分支：`feature/issue-54-auth-account-refresh`
 - Commit：`4d94473`
 - 版本：v0.3.26（[`docs/CHANGELOG.md`](./CHANGELOG.md)）

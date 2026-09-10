@@ -307,7 +307,7 @@
 
     - 「检查更新」按钮：调用 GitHub Releases API `releases/latest`，对比当前/最新版本，显示「已是最新」或「发现新版本」并提供跳转下载
 
-    - 应用仓库名改为可点击链接，经系统浏览器打开 `https://github.com/ShawnLiuSZ/task-dashborad`
+    - 应用仓库名改为可点击链接，经系统浏览器打开 `https://github.com/ShawnLiuSZ/task-dashboard`
 
     - 内置中英文（i18n 新增 `about.*` / `btn.about` 键）
 

@@ -2,7 +2,7 @@
 
 ## 背景 / 动机
 
-通过 MCP 调用 `taskboard` 二进制（如 `taskboard update-status "ShawnLiuSZ/task-dashborad#38" "处理中"`）时，终端/agent 会话里会刷出大量与调用无关的数据库迁移日志：
+通过 MCP 调用 `taskboard` 二进制（如 `taskboard update-status "ShawnLiuSZ/task-dashboard#38" "处理中"`）时，终端/agent 会话里会刷出大量与调用无关的数据库迁移日志：
 
 ```
 [db] 列迁移跳过（已存在或 schema 不兼容）: duplicate column name: gh_status | sql=ALTER TABLE tasks ADD COLUMN gh_status TEXT NOT NULL DEFAULT ''
@@ -31,5 +31,5 @@
 
 ## 相关链接
 
-- Issue: https://github.com/ShawnLiuSZ/task-dashborad/issues/41
-- PR: https://github.com/ShawnLiuSZ/task-dashborad/pull/45
+- Issue: https://github.com/ShawnLiuSZ/task-dashboard/issues/41
+- PR: https://github.com/ShawnLiuSZ/task-dashboard/pull/45
