@@ -47,7 +47,7 @@ opencode 的两套项目级机制正好对应 Claude 侧设计：
 仓库根的 `.claude/` 只解决"在本仓库干活"的 agent；用户在其他仓库（如 fad-backend）干活时，agent 读的是**那个仓库**的配置。因此 App 内置安装器（`app/src-tauri/src/hooks.rs`，模板 `include_str!` 内嵌、单一来源）：
 
 - 项目级：写 `<repo>/.claude/**`（hooks/commands + `settings.json` 合并）与 `<repo>/.opencode/**`（插件/commands + `opencode.json` 的 `mcp.taskboard` 合并，command 指向本 app 二进制 `mcp` 子命令——任意仓库可用，不依赖相对路径的 `server.py`）。
-- 全局：写 `~/.claude/**` 与 `~/.config/opencode/{plugins,commands}/`；opencode 全局 MCP 因 jsonc 含注释**只检测不自动合并**，缺失时给出手动步骤。
+- 全局：写 `~/.claude/**` 与 `~/.config/opencode/{plugins,commands}/`；opencode 全局 MCP 安装时因 jsonc 含注释**只检测不自动合并**（给手动步骤），卸载时文本级摘除 ours 条目（注释感知扫描 + 改动前备份 + 外来指向保留）。
 - 合并语义：保留用户既有配置，去重后追加（去重键：hook 命令后缀 / MCP 命令 basename——dev 与正式版二进制路径不同，原位更新）；卸载只删内容与模板一致的文件，改动配置文件前留 `.taskboard-bak`（仅首份）。
 
 ### 全局安装与参考实现（clawd-on-desk）
@@ -87,6 +87,7 @@ opencode 的两套项目级机制正好对应 Claude 侧设计：
 - 前端：`npx tsc --noEmit` 通过；`npm test` 25 通过；`npm run i18n:check` 通过（266 key/边）。
 - `scripts/check-mcp-columns.py` 通过（24 列一致；本次未改 schema）。
 - 真机全局自测（本机，`tauri dev` 启动自动注册触发）：`~/.claude/settings.json` 原有 clawd hooks 全保留、ours 追加（SessionStart/UserPromptSubmit 各 +1）；`~/.config/opencode/{plugins,commands}/` 落盘；`opencode.jsonc` 注释原样保留且仅收到手动注册 MCP 的 notice。
+- Agent 接入页分组展示：打开页签自动查询全部 39 个 agent，按“已接入 / 可接入 / 未安装 / 手动配置”分组（后端 `AgentStatus.host_present` 区分后两者），每行直接安装/卸载，另有“安装全部可接入”；项目级下仅 claude-code/opencode 可一键（其余归手动组）。
 
 ### session 下拉全量接入（5 家一键 + 其余手动指引）
 

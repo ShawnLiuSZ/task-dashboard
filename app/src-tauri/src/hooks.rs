@@ -454,7 +454,8 @@ fn merge_opencode_mcp(repo: &Path, mcp_file: &str, exe: &str) -> Result<(bool, O
 }
 
 /// 全局 opencode 的 MCP 注册只检测不自动合并（jsonc 含注释，自动改写会丢注释）。
-/// 返回 None 表示已注册；Some 为手动步骤提示。
+/// 返回 None 表示已注册；Some 为手动步骤提示。dev 构建下额外提醒换正式版路径
+/// （target 下的二进制重编即变，仅开发期有效）。
 fn global_opencode_mcp_notice(home: &Path, exe: &str) -> Option<String> {
     let dir = home.join(".config").join("opencode");
     for name in ["config.json", "opencode.json", "opencode.jsonc"] {
@@ -464,9 +465,205 @@ fn global_opencode_mcp_notice(home: &Path, exe: &str) -> Option<String> {
             }
         }
     }
-    Some(format!(
+    let mut tip = format!(
         "全局 opencode 未注册 taskboard MCP（jsonc 不自动合并，请手动在全局配置的 mcp 中加：\"taskboard\": {{\"type\": \"local\", \"command\": [\"{exe}\", \"mcp\"], \"enabled\": true}}）"
-    ))
+    );
+    if exe.contains("/target/") {
+        tip.push_str("注意：当前 App 运行的是开发版，该路径重编即失效；正式使用请换成安装版二进制（如 macOS 的 /Applications/TaskBoard.app/Contents/MacOS/taskboard）");
+    }
+    Some(tip)
+}
+
+/// JSONC 感知的字符串跳过：返回字符串结束引号之后的位置（处理 `\"` 转义）。
+fn skip_json_string(b: &[u8], start: usize) -> usize {
+    let mut i = start + 1;
+    while i < b.len() {
+        if b[i] == b'\\' {
+            i += 2;
+            continue;
+        }
+        if b[i] == b'"' {
+            return i + 1;
+        }
+        i += 1;
+    }
+    b.len()
+}
+
+/// 从 `{`（含）起找配对 `}` 之**后**的位置；字符串/注释内的括号不计数。
+/// 找不到返回 None。
+fn match_json_brace(b: &[u8], open: usize) -> Option<usize> {
+    if b.get(open) != Some(&b'{') {
+        return None;
+    }
+    let mut depth = 0;
+    let mut i = open;
+    while i < b.len() {
+        match b[i] {
+            b'"' => i = skip_json_string(b, i),
+            b'/' if i + 1 < b.len() && b[i + 1] == b'/' => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if i + 1 < b.len() && b[i + 1] == b'*' => {
+                i += 2;
+                while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') {
+                    i += 1;
+                }
+                i += 2;
+            }
+            b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                i += 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// 在 JSONC 文本中定位 `"taskboard"` MCP 条目（键起始..值结束 `}` 之后）。
+/// 字符串/注释内的命中会被跳过；值不是 `{` 对象时继续向后找。找不到返回 None。
+fn find_taskboard_entry_span(text: &str) -> Option<(usize, usize)> {
+    let b = text.as_bytes();
+    let n = b.len();
+    let key = b"\"taskboard\"";
+    let mut i = 0;
+    while i < n {
+        match b[i] {
+            b'"' => {
+                if text[i..].starts_with("\"taskboard\"") {
+                    let key_start = i;
+                    let mut j = i + key.len();
+                    while j < n && (b[j] as char).is_whitespace() {
+                        j += 1;
+                    }
+                    if j < n && b[j] == b':' {
+                        j += 1;
+                        while j < n && (b[j] as char).is_whitespace() {
+                            j += 1;
+                        }
+                        if j < n && b[j] == b'{' {
+                            if let Some(end) = match_json_brace(b, j) {
+                                return Some((key_start, end));
+                            }
+                        }
+                    }
+                    i = (j + 1).max(key_start + 1);
+                    continue;
+                }
+                i = skip_json_string(b, i);
+            }
+            b'/' if i + 1 < n && b[i + 1] == b'/' => {
+                while i < n && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if i + 1 < n && b[i + 1] == b'*' => {
+                i += 2;
+                while i + 1 < n && !(b[i] == b'*' && b[i + 1] == b'/') {
+                    i += 1;
+                }
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// 条目值是否指向 ours（安装版/dev taskboard 二进制，或 server.py 兜底）。
+/// 只看带路径分隔符的片段，避免键名本身 `"taskboard"` 恒成立。
+fn taskboard_entry_is_ours(span: &str, exe: &str) -> bool {
+    if span.contains(exe) {
+        return true;
+    }
+    for seg in span.split('"') {
+        if !seg.contains('/') && !seg.contains('\\') {
+            continue;
+        }
+        let base = seg.replace('\\', "/").rsplit('/').next().unwrap_or("").trim().to_string();
+        if base == "taskboard"
+            || base == "taskboard.exe"
+            || seg.contains("mcp_server/server.py")
+            || seg.contains("mcp_server\\server.py")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// 删除条目 span（含相邻一个逗号：优先吃后逗号，否则吃前逗号）。
+fn remove_entry_span(text: &str, start: usize, end: usize) -> String {
+    let b = text.as_bytes();
+    let n = text.len();
+    let mut e = end;
+    while e < n && (b[e] as char).is_whitespace() {
+        e += 1;
+    }
+    if e < n && b[e] == b',' {
+        return text[..start].to_string() + &text[e + 1..];
+    }
+    let mut s = start;
+    while s > 0 && (b[s - 1] as char).is_whitespace() {
+        s -= 1;
+    }
+    if s > 0 && b[s - 1] == b',' {
+        s -= 1;
+        return text[..s].to_string() + &text[end..];
+    }
+    text[..start].to_string() + &text[end..]
+}
+
+/// 全局 opencode 配置的文本级摘除：遍历 config.json/opencode.json/opencode.jsonc，
+/// 删掉指向 ours 的 taskboard MCP 条目（注释原样保留，改动前备份）。
+/// 返回 (removed_display, backups, notices)。
+fn strip_global_opencode_mcp(
+    home: &Path,
+    exe: &str,
+) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let dir = home.join(".config").join("opencode");
+    let mut removed = Vec::new();
+    let mut backups = Vec::new();
+    let mut notices = Vec::new();
+    for name in ["config.json", "opencode.json", "opencode.jsonc"] {
+        let path = dir.join(name);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some((s, e)) = find_taskboard_entry_span(&text) else {
+            continue;
+        };
+        if !taskboard_entry_is_ours(&text[s..e], exe) {
+            notices.push(format!("{name} 的 taskboard MCP 指向别处，已保留"));
+            continue;
+        }
+        let next = remove_entry_span(&text, s, e);
+        if next == text {
+            continue;
+        }
+        match backup_once(&path) {
+            Ok(b) => backups.extend(b),
+            Err(e) => {
+                notices.push(format!("{name} 备份失败未改动：{e}"));
+                continue;
+            }
+        }
+        match std::fs::write(&path, next) {
+            Ok(()) => removed.push(format!("~/.config/opencode/{name}（MCP 条目）")),
+            Err(e) => notices.push(format!("{name} 回写失败：{e}")),
+        }
+    }
+    (removed, backups, notices)
 }
 
 /// 安装结果（camelCase 供前端直接展示）。
@@ -694,26 +891,37 @@ fn uninstall_one(
                 res.settings_cleaned = true;
             }
         }
-    } else if project.is_some() && spec.mcp_file.is_some() {
-        let proj = project.expect("checked some");
-        let mcp_file = spec.mcp_file.unwrap_or("opencode.json");
-        let (changed, deleted, notice) = strip_opencode_mcp(proj, mcp_file, exe)?;
-        if changed {
-            res.settings_cleaned = true;
-            if deleted {
-                res.files_removed.push(mcp_file.to_string());
-            } else if let Some(b) = backup_once(&proj.join(mcp_file))? {
-                res.backups.push(b);
+    } else if spec.mcp_file.is_some() {
+        if let Some(proj) = project {
+            let mcp_file = spec.mcp_file.unwrap_or("opencode.json");
+            let (changed, deleted, notice) = strip_opencode_mcp(proj, mcp_file, exe)?;
+            if changed {
+                res.settings_cleaned = true;
+                if deleted {
+                    res.files_removed.push(mcp_file.to_string());
+                } else if let Some(b) = backup_once(&proj.join(mcp_file))? {
+                    res.backups.push(b);
+                }
             }
-        }
-        if let Some(n) = notice {
-            res.notices.push(n);
+            if let Some(n) = notice {
+                res.notices.push(n);
+            }
+        } else {
+            // 全局：jsonc 文本级摘除 ours 条目（注释保留，改动前备份）
+            let (files, backups, notes) = strip_global_opencode_mcp(home, exe);
+            if !files.is_empty() {
+                res.settings_cleaned = true;
+                res.files_removed.extend(files);
+                res.backups.extend(backups);
+            }
+            res.notices.extend(notes);
         }
     }
     Ok(())
 }
 
-/// 单 agent 安装状态（供 UI 打勾）。
+/// 单 agent 安装状态（供 UI 分组展示：installed=已接入；
+/// host_present&&!installed=可接入；!host_present=未安装）。
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentStatus {
@@ -722,6 +930,8 @@ pub struct AgentStatus {
     pub hooks_ok: bool,
     pub commands_ok: bool,
     pub settings_ok: bool,
+    /// host 是否装过该 agent（全局下配置根可解析；项目级恒 true）。
+    pub host_present: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -746,15 +956,21 @@ fn opencode_mcp_present_text(home: &Path, project: Option<&Path>, mcp_file: &str
 }
 
 fn status_one(home: &Path, project: Option<&Path>, agent_id: &str) -> AgentStatus {
-    let bad = AgentStatus {
+    let bad = |host_present: bool| AgentStatus {
         agent: agent_id.to_string(),
         installed: false,
         hooks_ok: false,
         commands_ok: false,
         settings_ok: false,
+        host_present,
     };
-    let Some(spec) = spec_of(agent_id) else { return bad };
-    let Some(root) = config_root(home, project, spec) else { return bad };
+    let Some(spec) = spec_of(agent_id) else { return bad(false) };
+    // 项目级：target 目录已校验，host 恒视为 present；全局：配置根可解析才算装过
+    let root = match config_root(home, project, spec) {
+        Some(r) => r,
+        None => return bad(false),
+    };
+    let host_present = project.is_some() || root.is_dir();
     let has = |rel: &str| root.join(rel).is_file();
     // 无 commands 机制的 agent：commands_ok 恒 true（只考核 hooks + settings）
     let expects_commands = agent_id == "claude-code" || agent_id == "opencode";
@@ -785,6 +1001,7 @@ fn status_one(home: &Path, project: Option<&Path>, agent_id: &str) -> AgentStatu
         hooks_ok,
         commands_ok,
         settings_ok,
+        host_present,
     }
 }
 
@@ -1192,6 +1409,119 @@ mod tests {
         let bad = std::env::temp_dir().join("tb_hooks_no_such_dir_xyz");
         let _ = std::fs::remove_dir_all(&bad);
         assert!(resolve_target(bad.to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn global_mcp_notice_warns_on_dev_binary() {
+        let home = fake_home("mcp-notice");
+        // 空配置目录：三个候选文件都不存在 → 给出手动步骤
+        std::fs::create_dir_all(home.join(".config").join("opencode")).unwrap();
+        let n = global_opencode_mcp_notice(&home, "/tmp/build/target/debug/taskboard").unwrap();
+        assert!(n.contains("手动") && n.contains("开发版"));
+        let n2 = global_opencode_mcp_notice(&home, "/Applications/TaskBoard.app/Contents/MacOS/taskboard").unwrap();
+        assert!(!n2.contains("开发版"));
+        // 已注册则无 notice
+        std::fs::write(
+            home.join(".config/opencode/opencode.jsonc"),
+            "{\"mcp\": {\"taskboard\": {}}}",
+        )
+        .unwrap();
+        assert!(global_opencode_mcp_notice(&home, "/bin/taskboard").is_none());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn global_jsonc_strip_keeps_comments() {
+        // 注释里含花括号 + taskboard 字样也不得误伤
+        let src = "// \"taskboard\": { broken\n{\n  // comment { with brace\n  \"mcp\": {\n    \"taskboard\": {\n      \"type\": \"local\",\n      \"command\": [\"/Applications/TaskBoard.app/Contents/MacOS/taskboard\", \"mcp\"],\n      \"enabled\": true\n    },\n    \"other\": {\"type\": \"remote\", \"url\": \"https://x\"}\n  },\n  \"model\": \"y\" // trailing { \n}\n";
+        let (s, e) = find_taskboard_entry_span(src).expect("应定位到真正的条目");
+        assert!(src[s..e].contains("/Applications/TaskBoard.app"));
+        let out = remove_entry_span(src, s, e);
+        assert!(!out.contains("/Applications/TaskBoard.app"), "条目应被删掉");
+        assert!(out.contains("// \"taskboard\": { broken"), "注释必须保留");
+        assert!(out.contains("\"other\""), "兄弟条目保留");
+        assert!(out.contains("\"model\": \"y\""), "其他顶层键保留");
+        // 删后仍是合法 JSON（本例无其他注释干扰结构）
+        let v: serde_json::Value = serde_json::from_str(&out.replace("// \"taskboard\": { broken\n", "").replace("// comment { with brace\n", "").replace("// trailing { \n", "")).unwrap();
+        assert!(v["mcp"].get("taskboard").is_none());
+        assert_eq!(v["mcp"]["other"]["type"], "remote");
+    }
+
+    #[test]
+    fn global_jsonc_strip_last_and_only_child() {
+        // 末条目：吃前逗号
+        let src = "{\"mcp\": {\"a\": 1, \"taskboard\": {\"command\": [\"/bin/taskboard\", \"mcp\"]}}}";
+        let (s, e) = find_taskboard_entry_span(src).unwrap();
+        let out = remove_entry_span(src, s, e);
+        assert_eq!(out, "{\"mcp\": {\"a\": 1}}");
+        // 唯一子条目：mcp 变空对象（无害，后续 status 即判未安装）
+        let src2 = "{\"mcp\": {\"taskboard\": {\"command\": [\"/bin/taskboard\", \"mcp\"]}}}";
+        let (s2, e2) = find_taskboard_entry_span(src2).unwrap();
+        assert_eq!(remove_entry_span(src2, s2, e2), "{\"mcp\": {}}");
+        // 值不是对象时不匹配
+        assert!(find_taskboard_entry_span("{\"taskboard\": \"nope\"}").is_none());
+    }
+
+    #[test]
+    fn entry_ours_detection() {
+        let exe = "/Applications/TaskBoard.app/Contents/MacOS/taskboard";
+        assert!(taskboard_entry_is_ours("\"taskboard\": {\"command\": [\"/Applications/TaskBoard.app/Contents/MacOS/taskboard\", \"mcp\"]}", exe));
+        assert!(taskboard_entry_is_ours("\"taskboard\": {\"command\": [\"python3\", \"mcp_server/server.py\"]}", exe));
+        assert!(taskboard_entry_is_ours("\"taskboard\": {\"command\": [\"C:\\\\Program Files\\\\TaskBoard\\\\taskboard.exe\", \"mcp\"]}", exe));
+        assert!(!taskboard_entry_is_ours("\"taskboard\": {\"command\": [\"/usr/local/bin/myboard\", \"serve\"]}", exe));
+    }
+
+    #[test]
+    fn global_uninstall_strips_jsonc_with_backup() {
+        let home = fake_home("gstrip");
+        let cfg = home.join(".config").join("opencode");
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::write(
+            cfg.join("opencode.jsonc"),
+            "// keep me\n{\"mcp\": {\"taskboard\": {\"command\": [\"/bin/taskboard\", \"mcp\"]}, \"o\": 1}}\n",
+        )
+        .unwrap();
+        // 先装上插件文件，使卸载流程完整
+        install_global(&home, &["opencode"]);
+        let exe = "/bin/taskboard";
+        let mut u = UninstallResult::empty("global", "x");
+        uninstall_one(&home, None, "opencode", exe, &mut u).unwrap();
+        let after = std::fs::read_to_string(cfg.join("opencode.jsonc")).unwrap();
+        assert!(!after.contains("/bin/taskboard"), "MCP 条目应被摘除");
+        assert!(after.contains("// keep me"), "注释保留");
+        assert!(after.contains("\"o\": 1"), "兄弟键保留");
+        assert!(u.backups.iter().any(|b| b.contains("taskboard-bak")), "应留备份");
+        assert!(!status_one(&home, None, "opencode").installed);
+        // 外来条目：保留 + notice
+        std::fs::write(
+            cfg.join("opencode.jsonc"),
+            "{\"mcp\": {\"taskboard\": {\"command\": [\"/usr/local/bin/myboard\", \"serve\"]}}}",
+        )
+        .unwrap();
+        let mut u2 = UninstallResult::empty("global", "x");
+        uninstall_one(&home, None, "opencode", exe, &mut u2).unwrap();
+        let kept = std::fs::read_to_string(cfg.join("opencode.jsonc")).unwrap();
+        assert!(kept.contains("myboard"), "外来条目保留");
+        assert!(u2.notices.iter().any(|n| n.contains("保留")));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn status_distinguishes_missing_host() {
+        // 全局 + host 不存在 → host_present=false（“未安装”组）
+        let home = fake_home("host-flag");
+        let st = status_one(&home, None, "codebuddy");
+        assert!(!st.installed && !st.host_present);
+        // host 存在但 ours 缺失 → host_present=true（“可接入”组）
+        std::fs::create_dir_all(home.join(".codebuddy")).unwrap();
+        let st2 = status_one(&home, None, "codebuddy");
+        assert!(!st2.installed && st2.host_present);
+        // 项目级：有项目支持的恒视为 present；无项目支持的不可装（手动组）
+        let repo = tmp("host-flag-proj");
+        assert!(status_one(&home, Some(&repo), "claude-code").host_present);
+        assert!(!status_one(&home, Some(&repo), "codebuddy").host_present);
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     #[test]

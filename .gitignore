@@ -24,6 +24,8 @@ CLAUDE.local.md
 # --- Override global ~/.gitignore_global §38 (AGENTS.*) ---
 # Global rule wrongly ignores our canonical AGENTS.md. Re-include it locally.
 !AGENTS.md
+# 同一条全局规则还会吞掉前端共享模块 app/src/agents.ts，一并收回。
+!app/src/agents.ts
 
 # --- Override global §37/§40 (.opencode/*, opencode.json) (#177) ---
 # TaskBoard agent hooks are project source (shared with team), not personal config.
