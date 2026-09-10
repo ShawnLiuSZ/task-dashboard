@@ -1,5 +1,6 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
-import { api, onSynced, TASKBOARD_ERROR_EVENT } from "./api";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { api, onSynced, onTasksChanged, TASKBOARD_ERROR_EVENT } from "./api";
+import { taskListSignature } from "./utils/taskSig";
 import { countHiddenChanged, snapshotTasks } from "./utils/syncHint";
 import { fmtTime, I18nProvider, useI18n } from "./i18n";
 import Board from "./components/Board";
@@ -59,14 +60,30 @@ function BoardApp() {
     return settings.viewMode === "all" ? 0 : settings.activeAccountId;
   }, [settings]);
 
+  // #181：无变化跳过 setState。本地写入不更新 updated_at，
+  // 指纹覆盖 status / session / handoff 等字段（见 utils/taskSig）。
+  const tasksSig = useRef("");
+  const loadingRef = useRef(false);
+  const applyTasks = useCallback((fresh: Task[]) => {
+    const sig = taskListSignature(fresh);
+    if (sig === tasksSig.current) return;
+    tasksSig.current = sig;
+    setTasks(fresh);
+  }, []);
+
   const load = useCallback(async () => {
+    // #181：轮询/聚焦/多事件并发时防重入（本地 SQLite 查询快，跳过一次无影响）。
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     try {
-      setTasks(await api.listTasks(ownership || undefined, accountFilter));
+      applyTasks(await api.listTasks(ownership || undefined, accountFilter));
       setError(null);
     } catch (e) {
       setError(String(e));
+    } finally {
+      loadingRef.current = false;
     }
-  }, [ownership, accountFilter]);
+  }, [ownership, accountFilter, applyTasks]);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -195,11 +212,40 @@ function BoardApp() {
       }
       unlisten = f;
     });
+    // #181：App 内写入（他窗口的详情页改状态等）即时跟进，无变化时 load 内部跳过。
+    let unlistenTasks: (() => void) | null = null;
+    void onTasksChanged(() => {
+      void load();
+    }).then((f) => {
+      if (cancelled) {
+        f();
+        return;
+      }
+      unlistenTasks = f;
+    });
     return () => {
       cancelled = true;
       unlisten?.();
+      unlistenTasks?.();
     };
   }, [load, loadSettings, t]);
+
+  // #181：外部写入（MCP 独立进程直写 SQLite，发不出事件）靠这个跟进：
+  // 窗口聚焦 / 可见性恢复即时重查 + 20s 轮询兜底；后台隐藏时跳过，不占资源。
+  useEffect(() => {
+    const refresh = () => {
+      if (!document.hidden) void load();
+    };
+    const onFocus = () => void load();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", refresh);
+    const timer = window.setInterval(refresh, 20000);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", refresh);
+      window.clearInterval(timer);
+    };
+  }, [load]);
 
   // settings 就绪（activeAccountId / viewMode / accounts 任一变化）后拉取项目 Status 选项和自定义列
   useEffect(() => {
@@ -263,7 +309,7 @@ function BoardApp() {
         `${t("sync.result", { added: r.added, updated: r.updated, done: r.candidateDone })}${prune}${warn}`,
       );
       const fresh = await api.listTasks(ownership || undefined, accountFilter);
-      setTasks(fresh);
+      applyTasks(fresh);
       await loadSettings();
       const pool = needPool
         ? await api.listTasks(undefined, accountFilter).catch(() => fresh)
@@ -283,7 +329,7 @@ function BoardApp() {
     setOwnership("");
     setHiddenAfterSync(0);
     try {
-      setTasks(await api.listTasks(undefined, accountFilter));
+      applyTasks(await api.listTasks(undefined, accountFilter));
       setError(null);
     } catch (e) {
       setError(String(e));
