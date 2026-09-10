@@ -1,69 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { api, openExternal } from "../api";
+import { AGENTS, agentLabel } from "../agents";
 import { COLUMNS, type StatusKey, type Task } from "../types";
 import { fmtTime, useI18n } from "../i18n";
-
-// 主流 coding agent 列表：供「中断会话」记录时标注来源。可按需增删。
-// value 为规范化 slug（与 MCP/agent 自报名一致，便于存储与展示统一），
-// label 为默认展示名；部分国内 agent 的 label 含中文，经 i18nKey 接入 i18n 随界面语言切换。
-type AgentOption = { value: string; label: string; i18nKey?: string };
-const AGENTS: AgentOption[] = [
-  { value: "amazon-q", label: "Amazon Q" },
-  { value: "augment", label: "Augment Code" },
-  { value: "bolt", label: "Bolt.new" },
-  { value: "chatgpt", label: "ChatGPT" },
-  { value: "claude-code", label: "Claude Code" },
-  { value: "cline", label: "Cline" },
-  { value: "codebuddy", label: "CodeBuddy" },
-  { value: "codeium", label: "Codeium" },
-  { value: "codex", label: "Codex (OpenAI)" },
-  { value: "codestral", label: "Codestral" },
-  { value: "cody", label: "Sourcegraph Cody" },
-  { value: "continue", label: "Continue" },
-  { value: "copilot", label: "GitHub Copilot" },
-  { value: "cursor", label: "Cursor" },
-  { value: "deepseek", label: "DeepSeek" },
-  { value: "devin", label: "Devin" },
-  { value: "doubao", label: "豆包 (Doubao)", i18nKey: "agents.doubao" },
-  { value: "factory", label: "Factory Droid" },
-  { value: "gemini-cli", label: "Gemini CLI" },
-  { value: "glm", label: "智谱 GLM", i18nKey: "agents.glm" },
-  { value: "goose", label: "Goose" },
-  { value: "grok", label: "Grok (xAI)" },
-  { value: "helix", label: "Helix CLI" },
-  { value: "kimi", label: "Kimi" },
-  { value: "llama", label: "Llama (Meta)" },
-  { value: "opencode", label: "OpenCode" },
-  { value: "openhands", label: "OpenHands" },
-  { value: "phind", label: "Phind" },
-  { value: "qwen-code", label: "Qwen Code" },
-  { value: "replit", label: "Replit Agent" },
-  { value: "roo-code", label: "Roo Code" },
-  { value: "tabnine", label: "Tabnine" },
-  { value: "tongyi", label: "通义灵码", i18nKey: "agents.tongyi" },
-  { value: "trae", label: "Trae" },
-  { value: "v0", label: "Vercel v0" },
-  { value: "windsurf", label: "Windsurf" },
-  { value: "workbuddy", label: "WorkBuddy" },
-  { value: "zcode", label: "ZCode" },
-  { value: "aider", label: "Aider" },
-];
 
 interface Props {
   task: Task;
   onClose: () => void;
   onChanged: () => void;
 }
-
-// 取 agent 的显示名：带 i18nKey 的走 i18n，其余用默认 label；未知 slug 原样返回。
-const agentLabel = (
-  value: string,
-  t: (k: string, p?: Record<string, string | number>) => string,
-): string => {
-  const a = AGENTS.find((x) => x.value === value);
-  if (!a) return value;
-  return a.i18nKey ? t(a.i18nKey) : a.label;
-};
 
 export default function DetailPanel({ task, onClose, onChanged }: Props) {
   const { t, lang } = useI18n();

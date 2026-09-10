@@ -145,11 +145,18 @@ PRD §6 planned a "MCP Server + Skill" so AI agents automatically maintain the b
 
 ### Making agents actually hook in (trigger logic)
 
-The MCP Server only provides tools. To make agents call them **automatically** on "start / interrupt / say 'create handoff task' / complete", you need a set of **trigger rules** loaded by the agent. This repo ships them in:
+The MCP Server only provides tools (the **capability layer**). To make agents call them **automatically** on "start / interrupt / say 'create handoff task' / complete", you also need **trigger rules** loaded by the agent (the **trigger layer**). Both are required: without MCP, hooks have nothing to call; without trigger logic, tools sit idle. This repo ships them in:
 
 - **`mcp_server/AGENT_INSTRUCTIONS.md`** — a cross-agent instruction spec: trigger timing → exact MCP tool calls, issue reference format, state enums, session-id source conventions. You can feed the whole file to claude-code / codex / opencode / zcode / helix / cursor / doubao.
 - **`CLAUDE.md`** (repo root) — the auto-loaded entry for claude-code, pointing to the instruction file above with quick-reference rules; it takes effect automatically when running claude-code in this repo.
-- Other agents: merge the contents of `AGENT_INSTRUCTIONS.md` into their system prompt / project instructions (codex's `AGENTS.md`, helix's skills/system prompt, cursor's `.cursorrules`, etc.).
+- **`.claude/`** (#177, deterministic triggers for claude-code) — `settings.json` registers `SessionStart` (injects `$TASKBOARD_SESSION_ID` / `${CLAUDE_SESSION_ID}` + board rules) and `UserPromptSubmit` (nudges only when an issue is mentioned) hooks (bash + python3 only, never write to DB); `commands/task-start|task-done|task-handoff.md` provide explicit one-shot commands. Run `/task-start <repo#num>` when starting, `/task-done` when finished.
+- **`.opencode/`** (#177, deterministic triggers for opencode) — `opencode.json` registers the `taskboard` MCP (`python3 mcp_server/server.py`, cross-platform, no app install needed); `plugins/taskboard.js` (zero deps) auto-fills `session_id` / `agent` / `branch` for `record_session` in `tool.execute.before`; `commands/task-start|task-done|task-handoff.md` mirror the claude side (branch auto-injected via backtick `git branch --show-current`). Same `/task-start` → `/task-done` flow.
+- **App Settings → Agent Hooks** (#177, one-click install/uninstall, modeled on clawd-on-desk's Settings → Agents) — all 39 agents from the task detail session dropdown are selectable:
+  - **One-click install** (hook mechanism verified one by one): `claude-code` / `opencode` / `workbuddy` / `codebuddy` / `trae`;
+  - **The other 34**: selecting them returns manual setup guidance (including known config paths for codex / cursor / copilot / gemini / qwen / kimi / zcode), never a faked success;
+  - **Two scopes**: global (user dirs like `~/.claude` and `~/.config/opencode`, effective in all repos, auto-completed at startup) and single repo;
+  - Merge on install, remove-only-ours on uninstall (`.taskboard-bak` backup before touching configs); agents never installed are skipped automatically.
+- Other agents (no hook mechanism): merge the contents of `AGENT_INSTRUCTIONS.md` into their system prompt / project instructions (codex's `AGENTS.md`, helix's skills/system prompt, cursor's `.cursorrules`, etc.).
 
 > This completes PRD D5's "MCP first, Skill later": MCP is the capability layer (in place), the instruction files are the "Skill" equivalent (reusable across agents), and each agent orchestrates calls by intent.
 
@@ -160,4 +167,4 @@ The MCP Server only provides tools. To make agents call them **automatically** o
 - [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — per-version update & fix log (v0.3.1 → v0.3.15)
 - [`docs/v0.3.15-pat-auth.md`](./docs/v0.3.15-pat-auth.md) — v0.3.15 PAT auth & visual polish design doc (gh replacement, card colors, multi-account plan)
 
-> Version v0.3.48 · Local cross-platform app (Windows / macOS / Linux), 2026-09-07
+> Version v0.3.54 · Local cross-platform app (Windows / macOS / Linux), 2026-09-09
