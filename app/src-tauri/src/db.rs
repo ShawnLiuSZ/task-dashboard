@@ -1,4 +1,5 @@
 use rusqlite::{Connection, Result};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
@@ -6,13 +7,8 @@ use tauri::{AppHandle, Manager};
 /// 同时用于推导无 GUI 运行时的本地数据目录（MCP 子命令等）。
 pub const APP_IDENTIFIER: &str = "com.shawnliu.taskboard";
 
-/// 检查是否启用详细日志（TASKBOARD_LOG=1 或 TASKBOARD_LOG=debug）。
-/// MCP 调用时默认静默，仅在排障时显式开启。
-fn verbose_enabled() -> bool {
-    std::env::var("TASKBOARD_LOG")
-        .map(|v| matches!(v.as_str(), "1" | "debug" | "verbose" | "true"))
-        .unwrap_or(false)
-}
+// v0.3.49 (#149)：详细日志门控已迁移至 `crate::common::verbose_enabled`，
+// 诊断输出一律走 `crate::tlog!`；此处不再保留私有版本。
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS accounts (
@@ -25,14 +21,20 @@ CREATE TABLE IF NOT EXISTS accounts (
   created_at  INTEGER NOT NULL
 );
 
+-- v0.3.50 (#155)：tasks 表物理重建。
+-- - 自增 id 主键 + 复合唯一键 UNIQUE(repo, number, account_id)：多账号不再互相覆盖。
+-- - issue_key 为稳定业务引用（值 = repo#number），供 MCP / 前端 React key 使用。
+-- - gh_state → issue_state、gh_status → project_status：三态语义分清（status 为本地看板四态）。
+-- - updated_at 统一为 INTEGER 秒（与 synced_at / done_at / session_at 一致）。
 CREATE TABLE IF NOT EXISTS tasks (
-  key            TEXT PRIMARY KEY,
+  id             INTEGER PRIMARY KEY,
+  issue_key      TEXT NOT NULL,
   owner          TEXT NOT NULL,
   repo           TEXT NOT NULL,
   number         INTEGER NOT NULL,
   title          TEXT NOT NULL,
   url            TEXT NOT NULL,
-  gh_state       TEXT NOT NULL,
+  issue_state    TEXT NOT NULL,
   ownership      TEXT NOT NULL,
   status         TEXT NOT NULL DEFAULT 'todo',
   session_id     TEXT,
@@ -40,7 +42,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   session_at     INTEGER,
   candidate_done INTEGER NOT NULL DEFAULT 0,
   stale          INTEGER NOT NULL DEFAULT 0,
-  gh_status      TEXT NOT NULL DEFAULT '',
+  project_status TEXT NOT NULL DEFAULT '',
   assignees      TEXT NOT NULL DEFAULT '',
   labels         TEXT NOT NULL DEFAULT '',
   done_at        INTEGER NOT NULL DEFAULT 0,
@@ -49,14 +51,25 @@ CREATE TABLE IF NOT EXISTS tasks (
   latest_comment_url TEXT NOT NULL DEFAULT '',
   pr_number      INTEGER NOT NULL DEFAULT 0,
   pr_url         TEXT NOT NULL DEFAULT '',
-  updated_at     TEXT,
+  -- 关联 PR 的分支（head.ref），由同步自动拉取；无关联 PR 时会被清空（PR 专用）。
+  branch         TEXT NOT NULL DEFAULT '',
+  -- agent 通过 record_session 写入的工作分支；同步不碰（#171）。
+  work_branch    TEXT NOT NULL DEFAULT '',
+  -- agent 写入的交接任务详情。
+  handoff        TEXT NOT NULL DEFAULT '',
+  updated_at     INTEGER,
   synced_at      INTEGER NOT NULL,
-  -- v0.3.16：任务归属账号（来自 accounts.id）。v0.3.15 之前的数据迁移后默认 1。
-  account_id     INTEGER NOT NULL DEFAULT 1
+  -- 任务归属账号（来自 accounts.id）。
+  account_id     INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(repo, number, account_id)
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_ownership ON tasks(ownership);
 CREATE INDEX IF NOT EXISTS idx_tasks_account ON tasks(account_id);
+
+-- v0.3.50 (#155)：idx_tasks_issue_key 不在 SCHEMA 顶层定义——老库（含 key 列旧布局）
+-- 执行本 SCHEMA 时 issue_key 列尚不存在，顶层 CREATE INDEX 会导致 batch 失败。
+-- 该索引由 open_db 末尾的幂等创建 + v2 重建函数负责（见下）。
 
 CREATE TABLE IF NOT EXISTS label_mappings (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,13 +132,31 @@ CREATE INDEX IF NOT EXISTS idx_sync_logs_account ON sync_logs(account_id);
 CREATE INDEX IF NOT EXISTS idx_sync_logs_created ON sync_logs(created_at);
 
 CREATE TABLE IF NOT EXISTS notes (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  content    TEXT NOT NULL,
-  label      TEXT NOT NULL DEFAULT 'low',
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-"#;
+	  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	  content    TEXT NOT NULL,
+	  label      TEXT NOT NULL DEFAULT 'low',
+	  created_at INTEGER NOT NULL,
+	  updated_at INTEGER NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS account_columns (
+	  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	  account_id  INTEGER NOT NULL,
+	  col_key     TEXT NOT NULL,
+	  col_name    TEXT NOT NULL,
+	  match_rules TEXT NOT NULL DEFAULT '[]',
+	  order_index INTEGER NOT NULL DEFAULT 0,
+	  UNIQUE(account_id, col_key)
+	);
+ 	CREATE INDEX IF NOT EXISTS idx_account_columns_account ON account_columns(account_id);
+
+-- v0.3.49：热查询复合/覆盖索引（#146）。execute_batch 每次 open_db 都跑，
+-- IF NOT EXISTS 保证老库幂等补齐、新库直接建好。
+CREATE INDEX IF NOT EXISTS idx_label_mappings_org_repo_label ON label_mappings(org, repo, label);
+CREATE INDEX IF NOT EXISTS idx_tasks_board ON tasks(account_id, candidate_done, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tasks_status_done_at ON tasks(status, done_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notes_content ON notes(content);
+	"#;
 
 pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     ("schedule_minutes", "60"),
@@ -158,7 +189,9 @@ pub fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 /// 无 AppHandle 时的数据目录（与 Tauri `app_data_dir` 解析一致）：
-/// `~/Library/Application Support/com.shawnliu.taskboard`
+/// - macOS: `~/Library/Application Support/com.shawnliu.taskboard`
+/// - Windows: `%APPDATA%\com.shawnliu.taskboard`
+/// - Linux: `$XDG_CONFIG_HOME/com.shawnliu.taskboard`（缺省 `~/.config`）
 pub fn data_dir() -> Result<PathBuf, String> {
     let base = dirs::data_dir().ok_or_else(|| "无法定位用户数据目录".to_string())?;
     Ok(base.join(APP_IDENTIFIER))
@@ -182,39 +215,55 @@ pub fn db_path_default() -> Result<PathBuf, String> {
 /// WAL 与 DELETE 共存时不冲突——已有的 `-journal` 文件如果存在，SQLite 会自动 forward-rollback。
 pub fn open_db(path: &Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| format!("打开数据库失败: {}", e))?;
+    // v0.3.49 (#149)：库文件含 PAT 明文，Unix 下收紧为仅所有者可读写。
+    // best-effort：权限设置失败不阻断打开（多用户共享机器上的纵深防御）。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(md) = std::fs::metadata(path) {
+            let mut perm = md.permissions();
+            if perm.mode() & 0o777 != 0o600 {
+                perm.set_mode(0o600);
+                let _ = std::fs::set_permissions(path, perm);
+            }
+        }
+    }
     // v0.3.16+: WAL 模式 + NORMAL 同步。WAL 文件保留部分未 checkpoint 数据，崩溃后仍可读。
     // 必须先设（再做任何事务），否则后续 BEGIN/COMMIT 仍走 DELETE 路径。
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
     let _ = conn.pragma_update(None, "synchronous", "NORMAL");
     let _ = conn.pragma_update(None, "busy_timeout", 5000);
+    // v0.3.49 (#146)：notes.content 即将加唯一索引，老库若有重复 content 会导致
+    // 下面的 execute_batch 直接失败、整个库打不开。先去重（保留最早 id），
+    // best-effort：首建库时 notes 表尚不存在，报错忽略即可。
+    let _ = conn.execute(
+        "DELETE FROM notes WHERE id NOT IN (SELECT MIN(id) FROM notes GROUP BY content)",
+        [],
+    );
+    // v0.3.49 (#147)：schema 版本（PRAGMA user_version）。0 = 未版本化老库，
+    // 建连成功后记为 1；后续每次 schema 变更加版本号并在此分步迁移，
+    // 热路径（version ≥ 1）跳过下面的 ALTER 补齐循环。
+    let schema_ver: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap_or(0);
     // schema 初始化（WAL 模式下多个连接可并发读，但写仍互斥）。
     conn.execute_batch(SCHEMA)
         .map_err(|e| format!("初始化表结构失败: {}", e))?;
-    // 迁移：兼容已存在的旧库，缺列则补（列已存在时 ALTER 会报错，忽略即可）。
-    for col_sql in [
-        "ALTER TABLE tasks ADD COLUMN gh_status TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN assignees TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN labels TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN done_at INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE tasks ADD COLUMN mentioned INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE tasks ADD COLUMN comments_count INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE tasks ADD COLUMN latest_comment_url TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN pr_number INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE tasks ADD COLUMN pr_url TEXT NOT NULL DEFAULT ''",
-        // v0.3.10：关联 PR 的分支（head.ref），以及 agent 写入的交接任务详情。
-        "ALTER TABLE tasks ADD COLUMN branch TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN handoff TEXT NOT NULL DEFAULT ''",
-        // v0.3.16：任务归属账号；旧库默认 1（迁移会先插一条 accounts，再保证该 id 命中）。
-        "ALTER TABLE tasks ADD COLUMN account_id INTEGER NOT NULL DEFAULT 1",
-    ] {
-        if let Err(e) = conn.execute(col_sql, []) {
-            // **不再吞掉**：v0.3.16 之前是 `let _ = ...`，导致脏 DB 被静默接受，下次 sync
-            // 触发 panic。默认静默（MCP 调用时不刷屏），仅 TASKBOARD_LOG=1 时输出。
-            if verbose_enabled() {
-                eprintln!("[db] 列迁移跳过（已存在或 schema 不兼容）: {} | sql={}", e, col_sql);
-            }
-        }
+    // v0.3.49 (#147)：仅未版本化老库（version 0）跑下面的 ALTER 补齐；
+    // version ≥ 1 的热路径跳过（SCHEMA 已是 IF NOT EXISTS 幂等）。
+    if schema_ver < 1 {
+        migrate_legacy_alters(&conn);
     }
+    // v0.3.50 (#155)：tasks 物理重建。以「tasks 是否仍含旧 key 列」为判定，
+    // 兼容 user_version 丢值/旧库直接建的场景——重建后 key 列消失，幂等不重复执行。
+    // 顺序依赖：migrate_legacy_alters 必须先跑，保证老表已补齐 gh_status/assignees
+    // 等列，重建的 INSERT..SELECT 才能读到。
+    if tasks_uses_legacy_key(&conn) && migrate_tasks_v2_rebuild(&conn).is_ok() {
+        let _ = conn.pragma_update(None, "user_version", 2);
+    } else if schema_ver < 1 {
+        let _ = conn.pragma_update(None, "user_version", 2);
+    }
+    // 以下默认设置与各版本表级迁移（每次建连都跑，全部幂等；列补齐已由上面的版本门控处理）。
     for (k, v) in DEFAULT_SETTINGS {
         conn.execute(
             "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO NOTHING",
@@ -229,15 +278,15 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
         "CREATE INDEX IF NOT EXISTS idx_label_mappings_repo ON label_mappings(repo)",
     ] {
         if let Err(e) = conn.execute(idx_sql, []) {
-            if verbose_enabled() {
-                eprintln!("[db] label_mappings 索引创建跳过: {}", e);
+            if crate::common::verbose_enabled() {
+                crate::tlog!("[db] label_mappings 索引创建跳过: {}", e);
             }
         }
     }
     // v0.3.21：label_mappings 增加 order_index 列（用于 Label 列视图排序）。
     if let Err(e) = conn.execute("ALTER TABLE label_mappings ADD COLUMN order_index INTEGER NOT NULL DEFAULT 0", []) {
-        if verbose_enabled() {
-            eprintln!("[db] label_mappings order_index 列迁移跳过: {}", e);
+        if crate::common::verbose_enabled() {
+            crate::tlog!("[db] label_mappings order_index 列迁移跳过: {}", e);
         }
     }
     // v0.3.24：notes 表补 label 列。早期无标签版本的库里 notes 只有 4 列，
@@ -247,18 +296,156 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
         "ALTER TABLE notes ADD COLUMN label TEXT NOT NULL DEFAULT 'low'",
         [],
     ) {
-        if verbose_enabled() {
-            eprintln!("[db] notes label 列迁移跳过（已存在）: {}", e);
+        if crate::common::verbose_enabled() {
+            crate::tlog!("[db] notes label 列迁移跳过（已存在）: {}", e);
         }
     }
     // v0.3.15 → v0.3.16 自动迁移：把 v0.3.15 写在 meta.pat_token 的单账号 PAT
     // 迁到 accounts 表（首条默认账号）。原 meta 字段保留作兼容兜底，单账号视图仍可读。
     if let Err(e) = migrate_v0315_to_accounts(&conn) {
-        if verbose_enabled() {
-            eprintln!("[db] v0.3.15 → v0.3.16 迁移失败（已保留兜底字段）: {}", e);
+        if crate::common::verbose_enabled() {
+            crate::tlog!("[db] v0.3.15 → v0.3.16 迁移失败（已保留兜底字段）: {}", e);
+        }
+    }
+    // v0.3.53 (#171) 迁移补漏：`work_branch` 的 ALTER 原本只写在 `migrate_legacy_alters`
+    // （仅 user_version<1 的老库触发）。对 user_version=2 的库（#155 已 v2 重建、无旧 key 列）
+    // 会跳过该补齐，又不会二次重建 → `work_branch` 永不补上，SELECT_COLS 一查就报
+    // `no such column`。这里把它提升到每次建连都跑的幂等热路径（已存在则忽略，
+    // 与 notes.label 迁移同款），对所有 user_version 一致生效。详见 docs/issue-175-*.md。
+    if let Err(e) = conn.execute(
+        "ALTER TABLE tasks ADD COLUMN work_branch TEXT NOT NULL DEFAULT ''",
+        [],
+    ) {
+        if crate::common::verbose_enabled() {
+            crate::tlog!("[db] work_branch 列迁移跳过（已存在）: {}", e);
+        }
+    }
+    // v0.3.50 (#155)：新库（SCHEMA 顶层无此索引）与重建后均由此处幂等补齐 issue_key 索引。
+    if let Err(e) = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_issue_key ON tasks(issue_key)",
+        [],
+    ) {
+        // best-effort：tasks 表异常时忽略，下次建连重试。
+        if crate::common::verbose_enabled() {
+            crate::tlog!("[db] idx_tasks_issue_key 创建跳过: {}", e);
         }
     }
     Ok(conn)
+}
+
+/// v0.3.49 (#147)：未版本化老库（user_version 0）的一次性列补齐。
+/// 列已存在时 ALTER 会报错，忽略即可（缺列则补上）。
+fn migrate_legacy_alters(conn: &Connection) {
+    for col_sql in [
+        "ALTER TABLE tasks ADD COLUMN gh_status TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN assignees TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN labels TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN done_at INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN mentioned INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN comments_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN latest_comment_url TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN pr_number INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN pr_url TEXT NOT NULL DEFAULT ''",
+        // v0.3.10：关联 PR 的分支（head.ref）。
+        "ALTER TABLE tasks ADD COLUMN branch TEXT NOT NULL DEFAULT ''",
+        // v0.3.53 (#171)：agent 通过 record_session 写入的工作分支（同步不碰）。
+        "ALTER TABLE tasks ADD COLUMN work_branch TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN handoff TEXT NOT NULL DEFAULT ''",
+        // v0.3.16：任务归属账号；旧库默认 1（迁移会先插一条 accounts，再保证该 id 命中）。
+        "ALTER TABLE tasks ADD COLUMN account_id INTEGER NOT NULL DEFAULT 1",
+    ] {
+        if let Err(e) = conn.execute(col_sql, []) {
+            // **不再吞掉**：v0.3.16 之前是 `let _ = ...`，导致脏 DB 被静默接受，下次 sync
+            // 触发 panic。默认静默（MCP 调用时不刷屏），仅 TASKBOARD_LOG=1 时输出。
+            if crate::common::verbose_enabled() {
+                crate::tlog!("[db] 列迁移跳过（已存在或 schema 不兼容）: {} | sql={}", e, col_sql);
+            }
+        }
+    }
+}
+
+/// v0.3.50 (#155)：判定 tasks 表是否仍是旧的 `key` 主键布局（含 `key` 列）。
+/// 新库由 SCHEMA 直接建新布局（无 key 列）；老库保留旧布局，据此触发物理重建。
+/// 重建一次后 key 列消失，即便 user_version 丢值也不会二次重建（幂等）。
+fn tasks_uses_legacy_key(conn: &Connection) -> bool {
+    conn.prepare("SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'key'")
+        .map(|mut stmt| stmt.exists([]).unwrap_or(false))
+        .unwrap_or(false)
+}
+
+/// v0.3.50 (#155)：tasks 表物理重建（单事务，幂等）。
+///
+/// 建新表 tasks_new → INSERT..SELECT 迁移数据 → DROP 老表 → RENAME → 重建索引。
+/// 列变更：key→(id, issue_key)、gh_state→issue_state、gh_status→project_status、
+/// updated_at TEXT→INTEGER 秒（RFC3339 用 strftime('%s') 转换，与 synced_at/done_at 单位一致）。
+///
+/// 老表 key 为全局主键，因此 (repo, number) 全局唯一，INSERT..SELECT 不会撞
+/// UNIQUE(repo, number, account_id)。DROP 连同老表上的索引一起删除，
+/// 故 RENAME 后需重建 tasks 的全部索引（含 SCHEMA 末尾的 board/status_done_at 复合索引）。
+fn migrate_tasks_v2_rebuild(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE tasks_new (
+          id             INTEGER PRIMARY KEY,
+          issue_key      TEXT NOT NULL,
+          owner          TEXT NOT NULL,
+          repo           TEXT NOT NULL,
+          number         INTEGER NOT NULL,
+          title          TEXT NOT NULL,
+          url            TEXT NOT NULL,
+          issue_state    TEXT NOT NULL,
+          ownership      TEXT NOT NULL,
+          status         TEXT NOT NULL DEFAULT 'todo',
+          session_id     TEXT,
+          session_agent  TEXT,
+          session_at     INTEGER,
+          candidate_done INTEGER NOT NULL DEFAULT 0,
+          stale          INTEGER NOT NULL DEFAULT 0,
+          project_status TEXT NOT NULL DEFAULT '',
+          assignees      TEXT NOT NULL DEFAULT '',
+          labels         TEXT NOT NULL DEFAULT '',
+          done_at        INTEGER NOT NULL DEFAULT 0,
+          mentioned      INTEGER NOT NULL DEFAULT 0,
+          comments_count INTEGER NOT NULL DEFAULT 0,
+          latest_comment_url TEXT NOT NULL DEFAULT '',
+          pr_number      INTEGER NOT NULL DEFAULT 0,
+          pr_url         TEXT NOT NULL DEFAULT '',
+          branch         TEXT NOT NULL DEFAULT '',
+          work_branch    TEXT NOT NULL DEFAULT '',
+          handoff        TEXT NOT NULL DEFAULT '',
+          updated_at     INTEGER,
+          synced_at      INTEGER NOT NULL,
+          account_id     INTEGER NOT NULL DEFAULT 1,
+          UNIQUE(repo, number, account_id)
+        );
+        INSERT INTO tasks_new
+          (issue_key, owner, repo, number, title, url, issue_state, ownership, status,
+           session_id, session_agent, session_at, candidate_done, stale, project_status,
+           assignees, labels, done_at, mentioned, comments_count, latest_comment_url,
+           pr_number, pr_url, branch, work_branch, handoff, updated_at, synced_at, account_id)
+        SELECT
+           key, owner, repo, number, title, url, gh_state, ownership, status,
+           session_id, session_agent, session_at, candidate_done, stale, gh_status,
+           assignees, labels, done_at, mentioned, comments_count, latest_comment_url,
+           pr_number, pr_url, branch, work_branch, handoff,
+           COALESCE(CAST(strftime('%s', NULLIF(TRIM(updated_at), '')) AS INTEGER), 0),
+           synced_at, account_id
+        FROM tasks;
+        DROP TABLE tasks;
+        ALTER TABLE tasks_new RENAME TO tasks;
+        CREATE INDEX IF NOT EXISTS idx_tasks_issue_key ON tasks(issue_key);
+        CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+        CREATE INDEX IF NOT EXISTS idx_tasks_ownership ON tasks(ownership);
+        CREATE INDEX IF NOT EXISTS idx_tasks_account ON tasks(account_id);
+        CREATE INDEX IF NOT EXISTS idx_tasks_board ON tasks(account_id, candidate_done, status, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_tasks_status_done_at ON tasks(status, done_at);
+        "#,
+    )
+    .map_err(|e| format!("tasks 表重建失败: {}", e))?;
+    if crate::common::verbose_enabled() {
+        crate::tlog!("[db] tasks 表 v0.3.50 物理重建完成（id + issue_key + 复合唯一键 + updated_at INTEGER）");
+    }
+    Ok(())
 }
 
 /// 把 v0.3.15 写在 `meta.pat_token` 的 PAT 自动迁到 `accounts` 表第一条记录。
@@ -308,8 +495,8 @@ fn migrate_v0315_to_accounts(conn: &Connection) -> Result<(), String> {
         );
     }
     set_setting(conn, "active_account_id", &new_id.to_string())?;
-    if verbose_enabled() {
-        eprintln!(
+    if crate::common::verbose_enabled() {
+        crate::tlog!(
             "[db] v0.3.15 → v0.3.16 自动迁移完成：新账号 id={} @{} (org={})",
             new_id, login, org
         );
@@ -328,7 +515,38 @@ pub struct Account {
     /// 是否已配置 PAT（不回显 token 本体，避免泄漏）。
     pub has_pat: bool,
     pub is_default: bool,
+    /// v0.3.43+：该账号的看板列展示方式（status/project/custom），存于 meta 的 `board_mode:<id>`。
+    /// 未配置时默认 project。
+    pub board_mode: String,
     pub created_at: i64,
+}
+
+/// meta 表里按账号存储看板列展示方式的 key。
+pub fn account_board_mode_key(account_id: i64) -> String {
+    format!("board_mode:{}", account_id)
+}
+
+/// 读取某账号的看板列展示方式；未配置默认 project。
+pub fn get_account_board_mode(conn: &Connection, account_id: i64) -> String {
+    let v = get_setting(conn, &account_board_mode_key(account_id));
+    if v.is_empty() {
+        "project".to_string()
+    } else {
+        v
+    }
+}
+
+/// 校验看板列展示方式是否合法（status/project/custom）。
+pub fn is_valid_board_mode(mode: &str) -> bool {
+    matches!(mode, "status" | "project" | "custom")
+}
+
+/// 写入某账号的看板列展示方式（仅接受合法值）。
+pub fn set_account_board_mode(conn: &Connection, account_id: i64, mode: &str) -> Result<(), String> {
+    if !is_valid_board_mode(mode) {
+        return Err(format!("非法的看板列展示方式: {mode}"));
+    }
+    set_setting(conn, &account_board_mode_key(account_id), mode)
 }
 
 /// 列出全部账号，按 id 升序。
@@ -350,6 +568,7 @@ pub fn list_accounts(conn: &Connection) -> Result<Vec<Account>, String> {
                 org: r.get(3)?,
                 has_pat: !pat.is_empty(),
                 is_default: is_default != 0,
+                board_mode: get_account_board_mode(conn, r.get(0)?),
                 created_at: r.get(6)?,
             })
         })
@@ -522,38 +741,33 @@ pub fn delete_account(conn: &Connection, id: i64) -> Result<(), String> {
     if exists == 0 {
         return Err(format!("账号 #{id} 不存在"));
     }
-    // 在同一事务中原子删除所有关联数据
-    conn.execute_batch("BEGIN IMMEDIATE")
+    // 在同一事务中原子删除所有关联数据。
+    // v0.3.49 (#147)：改用 RAII 事务（与他处 unchecked_transaction 一致）；
+    // 中间失败或 panic 时自动回滚，不再残留手写 BEGIN 锁。
+    let tx = conn
+        .unchecked_transaction()
         .map_err(|e| format!("开启事务失败: {e}"))?;
-    let result = (|| {
-        // 1. 删除 tasks
-        conn.execute("DELETE FROM tasks WHERE account_id = ?1", [id])
-            .map_err(|e| format!("删除 tasks 失败: {e}"))?;
-        // 2. 删除 projects
-        conn.execute("DELETE FROM projects WHERE account_id = ?1", [id])
-            .map_err(|e| format!("删除 projects 失败: {e}"))?;
-        // 3. 删除 project_statuses
-        conn.execute("DELETE FROM project_statuses WHERE account_id = ?1", [id])
-            .map_err(|e| format!("删除 project_statuses 失败: {e}"))?;
-        // 4. 删除 sync_logs
-        conn.execute("DELETE FROM sync_logs WHERE account_id = ?1", [id])
-            .map_err(|e| format!("删除 sync_logs 失败: {e}"))?;
-        // 5. 删除账号本身
-        conn.execute("DELETE FROM accounts WHERE id = ?1", [id])
-            .map_err(|e| format!("删除账号失败: {e}"))?;
-        Ok(())
-    })();
-    match result {
-        Ok(()) => {
-            conn.execute_batch("COMMIT")
-                .map_err(|e| format!("提交事务失败: {e}"))?;
-            Ok(())
-        }
-        Err(e) => {
-            let _ = conn.execute_batch("ROLLBACK");
-            Err(e)
-        }
-    }
+    // 1. 删除 tasks
+    tx.execute("DELETE FROM tasks WHERE account_id = ?1", [id])
+        .map_err(|e| format!("删除 tasks 失败: {e}"))?;
+    // 2. 删除 projects
+    tx.execute("DELETE FROM projects WHERE account_id = ?1", [id])
+        .map_err(|e| format!("删除 projects 失败: {e}"))?;
+    // 3. 删除 project_statuses
+    tx.execute("DELETE FROM project_statuses WHERE account_id = ?1", [id])
+        .map_err(|e| format!("删除 project_statuses 失败: {e}"))?;
+    // 4. 删除 sync_logs
+    tx.execute("DELETE FROM sync_logs WHERE account_id = ?1", [id])
+        .map_err(|e| format!("删除 sync_logs 失败: {e}"))?;
+    // 5. 删除 account_columns（v0.3.28+）
+    tx.execute("DELETE FROM account_columns WHERE account_id = ?1", [id])
+        .map_err(|e| format!("删除 account_columns 失败: {e}"))?;
+    // 6. 删除账号本身
+    tx.execute("DELETE FROM accounts WHERE id = ?1", [id])
+        .map_err(|e| format!("删除账号失败: {e}"))?;
+    tx.commit()
+        .map_err(|e| format!("提交事务失败: {e}"))?;
+    Ok(())
 }
 
 /// 项目记录（与 projects 表一一对应；前端用）。
@@ -879,6 +1093,9 @@ pub fn delete_label_mapping(conn: &Connection, id: i64) -> Result<(), String> {
 
 /// 根据 org/repo/labels 解析状态（优先级：repo 映射 > org 映射 > 全局默认 > 兜底 state）。
 /// labels 为逗号分隔的字符串。
+///
+/// v0.3.49 (#144)：逻辑已下沉到纯内存的 [`resolve_status_from_rules`]，
+/// 本函数仅做一次全量加载后委托（调用方应优先用预加载版本，避免任务循环内 N+1 查询）。
 pub fn resolve_status_from_labels(
     conn: &Connection,
     org: &str,
@@ -886,38 +1103,10 @@ pub fn resolve_status_from_labels(
     labels_csv: &str,
     fallback_state: &str,
 ) -> String {
-    // 解析 labels
-    let labels: Vec<&str> = labels_csv
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-    if labels.is_empty() {
-        return fallback_state_from_gh_state(fallback_state);
+    match load_label_rules(conn) {
+        Ok(rules) => resolve_status_from_rules(&rules, org, repo, labels_csv, fallback_state),
+        Err(_) => fallback_state_from_gh_state(fallback_state),
     }
-
-    // 先尝试 repo 级映射（精确匹配 org+repo+label）
-    for label in &labels {
-        if let Ok(mapped) = conn.query_row(
-            "SELECT status FROM label_mappings WHERE org = ?1 AND repo = ?2 AND label = ?3",
-            rusqlite::params![org, repo, label],
-            |r| r.get::<_, String>(0),
-        ) {
-            return mapped;
-        }
-    }
-    // 再尝试 org 级映射（repo 为空字符串）
-    for label in &labels {
-        if let Ok(mapped) = conn.query_row(
-            "SELECT status FROM label_mappings WHERE org = ?1 AND repo = '' AND label = ?2",
-            rusqlite::params![org, label],
-            |r| r.get::<_, String>(0),
-        ) {
-            return mapped;
-        }
-    }
-    // 最后回退到 state 逻辑
-    fallback_state_from_gh_state(fallback_state)
 }
 
 /// 为 Label 列视图获取某账号的列配置：返回该账号 org 下的 label 映射（按 order_index 排序）。
@@ -970,6 +1159,169 @@ fn fallback_state_from_gh_state(gh_state: &str) -> String {
     } else {
         "todo".to_string() // open 默认待处理，实际同步时会被 Project Status 覆盖
     }
+}
+
+// ============================================================================
+// v0.3.49 (#144)：同步热路径预加载 — 任务循环外一次加载、循环内 O(1) 查。
+// 语义与逐条查询版本完全一致（repo 级 > org 级；列按 order_index 先命中者胜）。
+// ============================================================================
+
+/// 预加载的 label 映射规则（`label_mappings` 全量快照）。
+#[derive(Debug, Clone)]
+pub struct LabelRule {
+    pub org: String,
+    pub repo: String,
+    pub label: String,
+    pub status: String,
+}
+
+/// 一次加载全部 label 映射规则（同步任务循环外调用一次）。
+pub fn load_label_rules(conn: &Connection) -> Result<Vec<LabelRule>, String> {
+    let mut stmt = conn
+        .prepare("SELECT org, repo, label, status FROM label_mappings")
+        .map_err(|e| format!("预加载 label 映射失败: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(LabelRule {
+                org: r.get(0)?,
+                repo: r.get(1)?,
+                label: r.get(2)?,
+                status: r.get(3)?,
+            })
+        })
+        .map_err(|e| format!("遍历 label 映射失败: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取 label 映射行失败: {e}"))?);
+    }
+    Ok(out)
+}
+
+/// 纯内存解析 label → 状态。优先级与旧逐条查询版本一致：
+/// 先按 labels 出现顺序查 repo 级（org+repo+label），再按同样顺序查 org 级（repo=''）。
+pub fn resolve_status_from_rules(
+    rules: &[LabelRule],
+    org: &str,
+    repo: &str,
+    labels_csv: &str,
+    fallback_state: &str,
+) -> String {
+    let labels: Vec<&str> = labels_csv
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if labels.is_empty() {
+        return fallback_state_from_gh_state(fallback_state);
+    }
+    for label in &labels {
+        if let Some(rule) = rules
+            .iter()
+            .find(|r| r.org == org && r.repo == repo && r.label == *label)
+        {
+            return rule.status.clone();
+        }
+    }
+    for label in &labels {
+        if let Some(rule) = rules
+            .iter()
+            .find(|r| r.org == org && r.repo.is_empty() && r.label == *label)
+        {
+            return rule.status.clone();
+        }
+    }
+    fallback_state_from_gh_state(fallback_state)
+}
+
+/// 预加载的自定义列规则（`match_rules` JSON 已解析一次，顺序即 order_index 升序）。
+#[derive(Debug, Clone)]
+pub struct ColumnRule {
+    pub col_key: String,
+    pub rules: Vec<String>,
+}
+
+/// 一次加载某账号的自定义列规则（`match_rules` 解析一次；非法 JSON 的列跳过）。
+pub fn load_column_rules(conn: &Connection, account_id: i64) -> Result<Vec<ColumnRule>, String> {
+    let columns = list_account_columns(conn, account_id)?;
+    let mut out = Vec::new();
+    for col in &columns {
+        match serde_json::from_str::<Vec<String>>(&col.match_rules) {
+            Ok(rules) => out.push(ColumnRule {
+                col_key: col.col_key.clone(),
+                rules,
+            }),
+            Err(e) => {
+                if crate::common::verbose_enabled() {
+                    crate::tlog!(
+                        "[db] 自定义列 {} 的 match_rules 非法，已跳过: {}",
+                        col.col_key, e
+                    );
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// 纯内存解析 gh_status → 列 key（首个命中的列胜出，与旧循环顺序一致）。
+pub fn resolve_column_from_rules(rules: &[ColumnRule], gh_status: &str) -> Option<String> {
+    if gh_status.is_empty() {
+        return None;
+    }
+    for col in rules {
+        if col.rules.iter().any(|r| r == gh_status) {
+            return Some(col.col_key.clone());
+        }
+    }
+    None
+}
+
+/// 同步循环外一次加载的既有任务快照（同一 `account_id`）。
+#[derive(Debug, Clone, Default)]
+pub struct ExistingTask {
+    pub status: String,
+    pub comments: i64,
+    pub mentioned: i64,
+    pub pr_number: i64,
+    pub pr_url: String,
+    pub comment_url: String,
+    pub branch: String,
+}
+
+/// 一次加载某账号下全部任务的既有快照，key 为 `repo#number`。
+pub fn load_existing_tasks(
+    conn: &Connection,
+    account_id: i64,
+) -> Result<HashMap<String, ExistingTask>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT issue_key, status, comments_count, mentioned, pr_number, pr_url,
+                    latest_comment_url, branch
+             FROM tasks WHERE account_id = ?1",
+        )
+        .map_err(|e| format!("预加载既有任务失败: {e}"))?;
+    let rows = stmt
+        .query_map([account_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                ExistingTask {
+                    status: r.get(1)?,
+                    comments: r.get(2)?,
+                    mentioned: r.get(3)?,
+                    pr_number: r.get(4)?,
+                    pr_url: r.get(5)?,
+                    comment_url: r.get(6)?,
+                    branch: r.get(7)?,
+                },
+            ))
+        })
+        .map_err(|e| format!("遍历既有任务失败: {e}"))?;
+    let mut out = HashMap::new();
+    for r in rows {
+        let (k, v) = r.map_err(|e| format!("读取既有任务行失败: {e}"))?;
+        out.insert(k, v);
+    }
+    Ok(out)
 }
 
 // ============================================================================
@@ -1078,15 +1430,23 @@ pub fn list_sync_logs(conn: &Connection, limit: i64) -> Result<Vec<SyncLog>, Str
     Ok(out)
 }
 
-/// 清理超过 7 天的同步日志（保留策略）。
+/// 清理超过 30 天的同步日志（保留策略）。
 pub fn prune_sync_logs(conn: &Connection, now: i64) -> Result<usize, String> {
-    let seven_days_secs = 7 * 24 * 60 * 60;
+    let thirty_days_secs = 30 * 24 * 60 * 60;
     let n = conn
         .execute(
             "DELETE FROM sync_logs WHERE ?1 - created_at > ?2",
-            [now, seven_days_secs],
+            [now, thirty_days_secs],
         )
         .map_err(|e| format!("清理过期同步日志失败: {e}"))?;
+    Ok(n)
+}
+
+/// 清空全部同步日志（不可恢复）。
+pub fn clear_sync_logs(conn: &Connection) -> Result<usize, String> {
+    let n = conn
+        .execute("DELETE FROM sync_logs", [])
+        .map_err(|e| format!("清空同步日志失败: {e}"))?;
     Ok(n)
 }
 
@@ -1210,6 +1570,100 @@ pub fn delete_note(conn: &Connection, id: i64) -> Result<(), String> {
     Ok(())
 }
 
+// ============================================================================
+// v0.3.28+：自定义列映射（按账号配置看板列）
+// ============================================================================
+
+/// 自定义列记录（与 account_columns 表一一对应；前端用）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountColumn {
+    pub id: i64,
+    pub account_id: i64,
+    pub col_key: String,
+    pub col_name: String,
+    /// JSON 数组，每个元素是一个 gh_status 匹配值，如 `["待开发","需求","规划"]`
+    pub match_rules: String,
+    pub order_index: i64,
+}
+
+/// 列出某账号下所有自定义列，按 order_index 升序。
+pub fn list_account_columns(conn: &Connection, account_id: i64) -> Result<Vec<AccountColumn>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, account_id, col_key, col_name, match_rules, order_index
+             FROM account_columns WHERE account_id = ?1
+             ORDER BY order_index ASC",
+        )
+        .map_err(|e| format!("查询自定义列失败: {}", e))?;
+    let rows = stmt
+        .query_map([account_id], |r| {
+            Ok(AccountColumn {
+                id: r.get(0)?,
+                account_id: r.get(1)?,
+                col_key: r.get(2)?,
+                col_name: r.get(3)?,
+                match_rules: r.get(4)?,
+                order_index: r.get(5)?,
+            })
+        })
+        .map_err(|e| format!("遍历自定义列失败: {}", e))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取自定义列行失败: {}", e))?);
+    }
+    Ok(out)
+}
+
+/// 保存某账号的列配置（全量替换：先删后插，原子事务）。
+/// `columns` 为待保存的列列表，order_index 由调用方决定。
+/// 若列配置非空，自动将账号的 boardMode 设为 "custom"（确保同步时启用列映射）。
+pub fn save_account_columns(
+    conn: &Connection,
+    account_id: i64,
+    columns: &[AccountColumn],
+) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // 先删旧配置
+    tx.execute("DELETE FROM account_columns WHERE account_id = ?1", [account_id])
+        .map_err(|e| format!("清空旧列配置失败: {e}"))?;
+    // 再插入新配置
+    for col in columns {
+        let match_rules = if col.match_rules.is_empty() { "[]" } else { &col.match_rules };
+        tx.execute(
+            "INSERT INTO account_columns (account_id, col_key, col_name, match_rules, order_index)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![account_id, col.col_key, col.col_name, match_rules, col.order_index],
+        )
+        .map_err(|e| format!("插入列配置失败: {e}"))?;
+    }
+    // v0.3.48+: 有列配置时自动启用 custom 模式（同步时才会写入 col_key）
+    if !columns.is_empty() {
+        let current = get_account_board_mode(&tx, account_id);
+        if current != "custom" {
+            set_account_board_mode(&tx, account_id, "custom")
+                .map_err(|e| format!("设置自定义列模式失败: {e}"))?;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 根据账号的列映射规则，解析 gh_status 对应的列 key。
+/// 遍历所有列，逐一检查 match_rules JSON 数组是否包含该 gh_status。
+/// 若命中，返回该列的 col_key；否则返回 None（由 sync 回退到默认逻辑）。
+///
+/// v0.3.49 (#144)：逻辑已下沉到纯内存的 [`resolve_column_from_rules`]，
+/// 本函数仅做一次加载后委托（调用方应优先用预加载版本）。
+pub fn resolve_column_from_gh_status(
+    conn: &Connection,
+    account_id: i64,
+    gh_status: &str,
+) -> Option<String> {
+    let rules = load_column_rules(conn, account_id).ok()?;
+    resolve_column_from_rules(&rules, gh_status)
+}
+
 /// v0.3.27+：导入记事。按内容 `content` 去重，已存在则跳过；保留导入文件的
 /// 创建/更新时间。返回是否真正插入（`true`=新插入，`false`=重复跳过）。
 pub fn import_note(
@@ -1235,4 +1689,156 @@ pub fn import_note(
     )
     .map_err(|e| format!("导入记事失败: {e}"))?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp_db(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "taskboard_db_test_{}_{}",
+            name,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("taskboard.db")
+    }
+
+    /// #146：热查询索引必须存在（新库建出、老库幂等补齐）。
+    #[test]
+    fn perf_indexes_exist_after_open() {
+        let path = tmp_db("indexes");
+        let conn = open_db(&path).unwrap();
+        for idx in [
+            "idx_label_mappings_org_repo_label",
+            "idx_tasks_board",
+            "idx_tasks_status_done_at",
+            "idx_notes_content",
+        ] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                    [idx],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "索引 {idx} 应存在");
+        }
+        // 幂等：重复 open 不报错。
+        drop(conn);
+        let _ = open_db(&path).unwrap();
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #149：库文件含 PAT 明文，Unix 下 open 后应为 0600。
+    #[cfg(unix)]
+    #[test]
+    fn db_file_permissions_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = tmp_db("perms");
+        let _ = open_db(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "库文件应为 0600，实际 {mode:o}");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #146：老库 notes 有重复 content 时 open_db 不炸，且去重保留最早 id。
+    #[test]
+    fn notes_dedup_before_unique_index() {
+        let path = tmp_db("dedup");
+        {
+            let conn = open_db(&path).unwrap();
+            conn.execute(
+                "INSERT INTO notes (content, label, created_at, updated_at) VALUES ('dup', 'low', 1, 1)",
+                [],
+            )
+            .unwrap();
+            // 先删索引再插脏数据，模拟老库在唯一索引建成前的重复行。
+            conn.execute("DROP INDEX idx_notes_content", []).unwrap();
+            conn.execute(
+                "INSERT INTO notes (content, label, created_at, updated_at) VALUES ('dup', 'high', 2, 2)",
+                [],
+            )
+            .unwrap();
+        }
+        // 重开：去重生效 + 唯一索引重建，不报错。
+        let conn = open_db(&path).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM notes WHERE content = 'dup'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(n, 1, "重复 content 应只剩 1 条");
+        let label: String = conn
+            .query_row("SELECT label FROM notes WHERE content = 'dup'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(label, "low", "应保留最早 id 的记录");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #144：纯内存解析与旧逐条查询语义一致（repo 级 > org 级 > 兜底）。
+    #[test]
+    fn resolve_status_from_rules_matches_priority() {
+        let rules = vec![
+            LabelRule {
+                org: "acme".into(),
+                repo: "".into(),
+                label: "bug".into(),
+                status: "doing".into(),
+            },
+            LabelRule {
+                org: "acme".into(),
+                repo: "web".into(),
+                label: "bug".into(),
+                status: "processed".into(),
+            },
+        ];
+        // repo 级优先于 org 级。
+        assert_eq!(
+            resolve_status_from_rules(&rules, "acme", "web", "bug", "open"),
+            "processed"
+        );
+        // 无 repo 映射时回退 org 级。
+        assert_eq!(
+            resolve_status_from_rules(&rules, "acme", "api", "bug", "open"),
+            "doing"
+        );
+        // 无命中回退 state 兜底。
+        assert_eq!(
+            resolve_status_from_rules(&rules, "acme", "web", "chore", "closed"),
+            "done"
+        );
+        assert_eq!(
+            resolve_status_from_rules(&rules, "acme", "web", "", "open"),
+            "todo"
+        );
+    }
+
+    /// #144：列规则首个命中胜出，空 gh_status 返回 None。
+    #[test]
+    fn resolve_column_from_rules_first_hit_wins() {
+        let rules = vec![
+            ColumnRule {
+                col_key: "a".into(),
+                rules: vec!["需求".into()],
+            },
+            ColumnRule {
+                col_key: "b".into(),
+                rules: vec!["需求".into(), "开发中".into()],
+            },
+        ];
+        assert_eq!(
+            resolve_column_from_rules(&rules, "开发中"),
+            Some("b".to_string())
+        );
+        assert_eq!(resolve_column_from_rules(&rules, "需求"), Some("a".to_string()));
+        assert_eq!(resolve_column_from_rules(&rules, ""), None);
+        assert_eq!(resolve_column_from_rules(&rules, "未知"), None);
+    }
 }

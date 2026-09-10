@@ -3,7 +3,7 @@ export type Ownership = "assigned" | "notassignee" | "assigned-others";
 /** v0.3.16+：视图模式。`single`=仅显示激活账号任务；`all`=显示所有账号任务。 */
 export type ViewMode = "single" | "all";
 /** v0.3.21+：看板列模式。`status`=四态列；`project`=GitHub Project Status 列。 */
-export type BoardMode = "status" | "project";
+export type BoardMode = "status" | "project" | "custom";
 
 export interface Account {
   id: number;
@@ -13,6 +13,8 @@ export interface Account {
   /** 是否已配置 PAT（不回显 token 本体）。 */
   hasPat: boolean;
   isDefault: boolean;
+  /** v0.3.43+：该账号的看板列展示方式（status/project/custom），未配置默认 project。 */
+  boardMode: BoardMode;
   createdAt: number;
 }
 
@@ -38,16 +40,16 @@ export interface ProjectStatus {
 }
 
 export interface Task {
-  key: string;
+  issueKey: string;
   owner: string;
   repo: string;
   number: number;
   title: string;
   url: string;
-  ghState: string;
+  issueState: string;
   ownership: Ownership;
   status: StatusKey;
-  ghStatus: string;
+  projectStatus: string;
   assignees: string;
   mentioned: boolean;
   latestCommentUrl: string;
@@ -59,7 +61,7 @@ export interface Task {
   sessionAt: number | null;
   candidateDone: boolean;
   handoff: string;
-  updatedAt: string | null;
+  updatedAt: number | null;
   /** v0.3.16+：归属账号 id（指向 accounts.id）。 */
   accountId: number;
 }
@@ -91,9 +93,7 @@ export interface Settings {
   activeAccountId: number;
   /** v0.3.16+：视图模式。 */
   viewMode: ViewMode;
-  /** v0.3.21+：看板列模式。status=四态列，project=Project 状态列。 */
-  boardMode: BoardMode;
-  /** v0.3.16+：所有账号列表（不含 PAT 本体）。 */
+  /** v0.3.16+：所有账号列表（不含 PAT 本体）。每个账号带各自的 boardMode（v0.3.43+）。 */
   accounts: Account[];
   /** v0.3.17+：GitHub OAuth Device Flow 的 client_id（注册 OAuth App 后填一次）。 */
   oauthClientId: string;
@@ -165,6 +165,25 @@ export interface LabelMappingInput {
   orderIndex: number;
 }
 
+/** v0.3.22+：Project Status 诊断返回（后端 snake_case 原样）。 */
+export interface DiagnosedProject {
+  github_id: string;
+  name: string;
+  number_of_items: number;
+  owner_type: string;
+  fields: string[];
+}
+
+/** v0.3.49 (#148)：`diagnose_project_status` 命令返回值，替代此前的 `any`。 */
+export interface DiagnoseResult {
+  org: string;
+  login: string;
+  projects: DiagnosedProject[];
+  status_count: number;
+  /** `repo#number -> Status 原文` 采样（后端为 `[key, value][]` 数组）。 */
+  sample_statuses: [string, string][] | null;
+}
+
 /** v0.3.21+：Label 列视图的列配置（含兜底「未标记」列）。 */
 export interface LabelColumnConfig {
   /** 列唯一标识：label 名称，或 "unlabeled" 表示兜底列。 */
@@ -200,6 +219,26 @@ export interface Note {
   label: "low" | "medium" | "high" | "urgent";
   createdAt: number;
   updatedAt: number;
+}
+
+/** v0.3.28+：自定义列映射（按账号配置看板列）。 */
+export interface AccountColumn {
+  id: number;
+  accountId: number;
+  colKey: string;
+  colName: string;
+  /** JSON 数组字符串，如 `["待开发","需求","规划"]` */
+  matchRules: string;
+  orderIndex: number;
+}
+
+/** v0.3.28+：自定义列配置输入（编辑时用）。 */
+export interface AccountColumnInput {
+  colKey: string;
+  colName: string;
+  /** JSON 数组字符串，如 `["待开发","需求","规划"]` */
+  matchRules: string;
+  orderIndex: number;
 }
 
 /**

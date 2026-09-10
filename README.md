@@ -34,7 +34,20 @@ npm run tauri build    # 产出当前平台的 release 安装包
 
 ### 在线自动打包
 
-发布 Release 时由 GitHub Actions 自动构建三端安装包（macOS / Windows / Linux）。发布流程、签名前提与 runner 配置详见 [`docs/design-and-release.md`](./docs/design-and-release.md)。
+发布 Release 时由 GitHub Actions 自动构建多平台安装包。发布流程、签名前提与 runner 配置详见 [`docs/design-and-release.md`](./docs/design-and-release.md)。
+
+#### 支持的平台与架构
+
+| 平台 | 架构 | 格式 | 状态 |
+|------|------|------|------|
+| macOS | ARM (Apple Silicon) | .dmg / .app | ✅ 支持 |
+| macOS | x64 (Intel) | .dmg / .app | ✅ 支持 |
+| Windows | x64 | .exe (NSIS) | ✅ 支持 |
+| Windows | ARM64 | .exe (NSIS) | ✅ 支持 |
+| Linux (Debian/Ubuntu) | amd64 | .deb | ✅ 支持 |
+| Linux (通用) | x86_64 | .AppImage | ✅ 支持 |
+
+> **⚠️ 更新提醒**：**v0.3.24 及以下版本**因仓库迁移问题，应用内「检查更新」无法获取 Release 信息，**不能自动更新**。请到 [GitHub Releases](https://github.com/ShawnLiuSZ/task-dashboard/releases) 下载最新版安装包（或查看应用内「关于」页提示的下载链接）。
 
 ### 使用
 
@@ -50,11 +63,23 @@ npm run tauri build    # 产出当前平台的 release 安装包
 | 中断会话      | 选中卡片 → 输入 session id + 选 agent（claude-code / workbuddy / doubao / opencode / codex / zcode / gemini-cli / cursor / aider / qwen-code 等）→ 记录；可复制、可清空 |
 | 交接任务      | 选中卡片 → 「交接任务」区块录入详情并保存（后续可由接入的 agent 在识别「生成交接任务」类意图时自动写入）                                                                                           |
 | **同步日志**  | 顶栏「同步日志」按钮 → 查看最近同步历史（时间、触发方式、耗时、状态、新增/更新/移除数量、错误信息）；支持手动清理过期日志，超过 7 天的日志自动清理                                                                        |
-| 本地数据      | `~/Library/Application Support/com.shawnliu.taskboard/taskboard.db`                                                                               |
+| 本地数据      | 见下方「本地数据路径」                                                                                                                               |
 
 ### 关键约束
 
-> **session id 与任务状态只存本地 SQLite，绝不写回 GitHub。** 不创建 Issue、不创建 Project、不改 Issue 标题 / label / 评论。
+> **session id 与任务状态只存本地 SQLite，绝不写回 GitHub。** 不创建 Issue、不 创建 Project、不改 Issue 标题 / label / 评论。
+
+### 本地数据路径
+
+数据库文件默认位置（由 `dirs::data_dir()` + `com.shawnliu.taskboard` 组合）：
+
+| 平台 | 默认路径 |
+|---|---|
+| macOS | `~/Library/Application Support/com.shawnliu.taskboard/taskboard.db` |
+| Windows | `%APPDATA%\com.shawnliu.taskboard\taskboard.db`（即 `C:\Users\<user>\AppData\Roaming\com.shawnliu.taskboard\taskboard.db`） |
+| Linux | `$XDG_CONFIG_HOME/com.shawnliu.taskboard/taskboard.db`（缺省 `~/.config/com.shawnliu.taskboard/taskboard.db`） |
+
+可通过环境变量 **`TASKBOARD_DB`** 覆盖为任意路径。
 
 ### 界面语言（i18n）
 
@@ -75,7 +100,7 @@ PRD §6 规划了「MCP Server + Skill」让 AI Agent 在执行任务时自动�
 **两种运行形态（同一份工具契约）**：
 
 1. **内置二进制（推荐，v0.3.12 起）**：`taskboard` 二进制新增 `mcp` 子命令——`main.rs` 在 argv 含 `mcp` 时直接进入 stdio JSON-RPC 循环，**不启动 GUI**。它复用与 App **完全相同的** `db.rs` schema 与同一份 `taskboard.db`，**零 Python 依赖、无散落文件夹、无 schema 漂移**。装了 app 即自带 MCP，mcp.json 直接指向 app 内二进制即可（见下方配置）。
-2. **独立** **`server.py`（便携 / 开发兜底）**：`mcp_server/server.py` 仍保留——**仅用 Python 标准库**（手写 JSON-RPC 2.0 + LSP 风格 `Content-Length` 分帧），无第三方依赖。适用于非 macOS / 未装 app 时让 Agent 读写同一数据库；其工具与内置二进制保持兼容。数据库路径默认 `~/Library/Application Support/com.shawnliu.taskboard/taskboard.db`（内置二进制同理），可用环境变量 `TASKBOARD_DB` 覆盖；启动时会幂等补齐 `branch` / `handoff` 两列（与 App 的 `db.rs::init` 迁移一致），故**即使 App 还没启动过也能直接用**。
+2. **独立** **`server.py`（便携 / 开发兜底）**：`mcp_server/server.py` 仍保留——**仅用 Python 标准库**（手写 JSON-RPC 2.0 + LSP 风格 `Content-Length` 分帧），无第三方依赖。适用于非 macOS / 未装 app 时让 Agent 读写同一数据库；其工具与内置二进制保持兼容。数据库路径默认同上（三平台标准位置），可用环境变量 `TASKBOARD_DB` 覆盖；启动时会幂等补齐 `branch` / `handoff` 两列（与 App 的 `db.rs::init` 迁移一致），故**即使 App 还没启动过也能直接用**。
 
 **提供的工具**（与 PRD §6.2 对齐）：
 
@@ -84,7 +109,7 @@ PRD §6 规划了「MCP Server + Skill」让 AI Agent 在执行任务时自动�
 | `list_my_tasks`      | `status?` / `ownership?`        | 列出看板任务，可按四态 / 归属过滤                       |
 | `get_task_status`    | `issue`                         | 查询某任务当前状态 + 已记录的 session / handoff       |
 | `update_task_status` | `issue`, `status`               | 改本地看板状态（todo/doing/processed/done 或中文四态） |
-| `record_session`     | `issue`, `session_id`, `agent?` | 记录中断会话 id（不碰 GitHub）                     |
+| `record_session`     | `issue`, `session_id`, `agent?`, `branch?` | 记录中断会话 id + 工作分支（`branch` 非空写 `work_branch`，不碰 GitHub） |
 | `record_handoff`     | `issue`, `text`                 | 记录「交接任务」详情（不碰 GitHub）                    |
 | `clear_session`      | `issue`                         | 任务完成后清空 session 字段（保留 session\_at 审计）    |
 
@@ -106,19 +131,37 @@ PRD §6 规划了「MCP Server + Skill」让 AI Agent 在执行任务时自动�
 }
 ```
 
-> 路径说明：上述为默认安装位置（`/Applications/TaskBoard.app/...`）。若你安装到了其他位置，把 `command` 改成实际 `TaskBoard.app/Contents/MacOS/taskboard` 的绝对路径即可。**未安装 app、改用** **`server.py`** **兜底**时，配置改为 `"command": "python3", "args": ["/path/to/mcp_server/server.py"]`。
+> **各平台 `command` 路径**：
 >
-> 注：已注册的 WorkBuddy MCP 需在其连接器页「信任」后才会激活；codex / cursor 等按各自 MCP 配置位置填入上述 `command` + `args` 即可。
+> | 平台 | 默认路径 |
+> |---|---|
+> | macOS | `/Applications/TaskBoard.app/Contents/MacOS/taskboard` |
+> | Windows | `C:\Program Files\TaskBoard\taskboard.exe` |
+> | Linux (deb) | `/usr/bin/taskboard` |
+>
+> 若安装到了非默认位置，把 `command` 改成实际 `taskboard` 二进制的绝对路径即可。**未安装 app、改用 `server.py` 兜底**时，配置改为 `"command": "python3", "args": ["/path/to/mcp_server/server.py"]`。
+>
+> WorkBuddy 已内置注册；opencode 在本仓库开箱即用（项目级 `opencode.json` 已注册）；其余 agent（codex / cursor 等）按各自 MCP 配置位置填入上述 `command` + `args` 即可。
 
 ### 让 Agent 真正自动接上（触发逻辑）
 
-MCP Server 只提供工具；要让 Agent 在「开始 / 中断 / 说『生成交接任务』/ 完成」时**自动**调用，需要一份**触发规则**被 Agent 加载。已在仓库内置：
+MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中断 / 说『生成交接任务』/ 完成」时**自动**调用，还需要一份**触发规则**被 Agent 加载（**触发层**）。两者缺一不可：没有 MCP，hooks 无处可调；没有触发逻辑，工具只能被动等人调。已在仓库内置：
 
 - **`mcp_server/AGENT_INSTRUCTIONS.md`** —— 跨 Agent 通用的指令规范：触发时机 → 精确 MCP 工具调用、issue 引用格式、状态枚举、会话 id 来源约定。可直接整体喂给 claude-code / codex / opencode / zcode / helix / cursor / doubao。
 
 - **`CLAUDE.md`**（仓库根） —— 给 claude-code 的自动加载入口，指向上述指令文件并给出速记规则；在本仓库跑 claude-code 时会自动生效。
 
-- 其他 Agent：把 `AGENT_INSTRUCTIONS.md` 的内容并入其 system prompt / 项目指令即可（codex 的 `AGENTS.md`、helix 的技能/系统提示、cursor 的 `.cursorrules` 等同理）。
+- **`.claude/`**（#177，claude-code 确定性触发） —— `settings.json` 注册 `SessionStart`（注入 `$TASKBOARD_SESSION_ID` / `${CLAUDE_SESSION_ID}` + 看板规则）与 `UserPromptSubmit`（仅提到 issue 时轻提醒）两个 hooks（`bash + python3` 零依赖，不写 DB）；`commands/task-start|task-done|task-handoff.md` 提供显式一键命令。开始处理先 `/task-start <repo#num>`，做完 `/task-done`。
+
+- **`.opencode/`**（#177，opencode 确定性触发） —— `opencode.json` 已注册 `taskboard` MCP（`python3 mcp_server/server.py`，跨平台、免装 app）；`plugins/taskboard.js`（零依赖）在 `tool.execute.before` 自动补 `record_session` 的 `session_id` / `agent` / `branch`；`commands/task-start|task-done|task-handoff.md` 同 claude 侧语义（分支用 `!`git branch --show-current`` 自动填入）。同样先 `/task-start`，做完 `/task-done`。
+
+- **App 设置 → Agent 接入**（#177，一键安装/卸载，实现参考 clawd-on-desk 的 Settings → Agents） —— 任务详情 session 下拉的 39 个 agent **全量可选**：
+  - **一键安装**（hook 机制已逐项验证）：`claude-code` / `opencode` / `workbuddy` / `codebuddy` / `trae`；
+  - **其余 34 个**：选中后返回手动配置指引（含 codex / cursor / copilot / gemini / qwen / kimi / zcode 的已知配置路径），不伪造成功；
+  - **作用域两档**：全局（`~/.claude`、`~/.config/opencode` 等用户目录，所有仓库生效，启动时自动补齐缺失项）与指定仓库；
+  - 合并安装、卸载只摘 TaskBoard 部分（改动前留 `.taskboard-bak`）；未安装过的 agent 自动跳过。
+
+- 其他（无 hook 机制的）Agent：把 `AGENT_INSTRUCTIONS.md` 的内容并入其 system prompt / 项目指令即可（codex 的 `AGENTS.md`、helix 的技能/系统提示、cursor 的 `.cursorrules` 等同理）。
 
 > 这样即完成 PRD D5 的「先 MCP，后包 Skill」：MCP 是能力层（已就位），指令文件是「Skill」等价物（跨 Agent 复用），Agent 侧按意图编排调用。
 
@@ -134,5 +177,9 @@ MCP Server 只提供工具；要让 Agent 在「开始 / 中断 / 说『生成�
 
 - [`docs/v0.3.15-pat-auth.md`](./docs/v0.3.15-pat-auth.md) — v0.3.15 PAT 认证与 visual polish 设计文档（gh 替换、卡片配色、多账号规划）
 
-> 版本 v0.3.19 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-05
+- [`docs/troubleshoot-mcp-timeout.md`](./docs/troubleshoot-mcp-timeout.md) — 排障：MCP 连接超时（30000ms）——macOS Gatekeeper / quarantine 隔离属性排查与修复
+
+- [`docs/issue-181-auto-refresh.md`](./docs/issue-181-auto-refresh.md) — 外部写入（MCP）后 App 任务界面自动刷新：聚焦/轮询/指纹跳过 + `tasks-changed` 事件
+
+> 版本 v0.3.54 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-09
 

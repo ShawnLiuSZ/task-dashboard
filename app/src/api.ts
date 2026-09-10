@@ -2,10 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   Account,
+  AccountColumn,
   BoardMode,
   CheckUpdate,
   DeviceLoginPoll,
   DeviceLoginStart,
+  DiagnoseResult,
   LabelMapping,
   LabelMappingInput,
   Note,
@@ -20,6 +22,10 @@ import type {
 } from "./types";
 
 export const SYNCED_EVENT = "taskboard://synced";
+
+// #181：App 内写入（看板状态 / session / handoff）后后端发出的通知，
+// 前端收到即重查。MCP 子进程发不出此事件，仍靠聚焦 + 轮询兜底。
+export const TASKS_CHANGED_EVENT = "taskboard://tasks-changed";
 
 export const api = {
   listTasks: (ownership?: string, accountId?: number | null) =>
@@ -83,13 +89,14 @@ export const api = {
       orderIndex: input.orderIndex,
     }),
   deleteLabelMapping: (id: number) => invoke<void>("delete_label_mapping", { id }),
-  // v0.3.21+：看板列模式切换 + Label 列视图配置。
-  setBoardMode: (mode: BoardMode) => invoke<void>("set_board_mode", { mode }),
+  // v0.3.43+：按账号设置看板列展示方式（status/project/custom），在设置面板配置。
+  setAccountBoardMode: (accountId: number, mode: BoardMode) =>
+    invoke<void>("set_account_board_mode", { accountId, mode }),
   getLabelColumnsForAccount: (accountId: number) =>
     invoke<LabelMapping[]>("get_label_columns_for_account", { accountId }),
   // v0.3.22+：Project Status 诊断。
   diagnoseProjectStatus: (accountId: number) =>
-    invoke<any>("diagnose_project_status", { accountId }),
+    invoke<DiagnoseResult>("diagnose_project_status", { accountId }),
   listProjects: (accountId: number) =>
     invoke<Project[]>("list_projects", { accountId }),
   listProjectStatuses: (accountId: number) =>
@@ -98,6 +105,7 @@ export const api = {
   listSyncLogs: (limit?: number) =>
     invoke<SyncLog[]>("list_sync_logs", { limit: limit ?? 50 }),
   pruneSyncLogs: () => invoke<number>("prune_sync_logs"),
+  clearSyncLogs: () => invoke<number>("clear_sync_logs"),
   // v0.3.24+：记事本管理。
   listNotes: () => invoke<Note[]>("list_notes"),
   addNote: (content: string, label?: string) =>
@@ -112,7 +120,70 @@ export const api = {
     invoke<{ path: string; count: number }>("export_notes"),
   importNotes: (json: string) =>
     invoke<{ imported: number; skipped: number }>("import_notes", { json }),
+  // v0.3.28+：自定义列映射（按账号配置看板列）。
+  listAccountColumns: (accountId: number) =>
+    invoke<AccountColumn[]>("list_account_columns", { accountId }),
+  saveAccountColumns: (accountId: number, columns: AccountColumn[]) =>
+    invoke<void>("save_account_columns", { accountId, columns }),
+  // #177：一键安装/卸载 agent 看板 hooks（作用域 project|global × agents）。
+  installAgentHooks: (scope: string, targetDir: string | null, agents: string[]) =>
+    invoke<{
+      scope: string;
+      target: string;
+      filesWritten: string[];
+      settingsMerged: boolean;
+      mcpConfigured: boolean;
+      notices: string[];
+    }>("install_agent_hooks", { scope, targetDir, agents }),
+  uninstallAgentHooks: (scope: string, targetDir: string | null, agents: string[]) =>
+    invoke<{
+      scope: string;
+      target: string;
+      filesRemoved: string[];
+      filesKept: string[];
+      settingsCleaned: boolean;
+      backups: string[];
+      notices: string[];
+    }>("uninstall_agent_hooks", { scope, targetDir, agents }),
+  getAgentHooksStatus: (scope: string, targetDir: string | null, agents: string[]) =>
+    invoke<{
+      scope: string;
+      target: string;
+      agents: {
+        agent: string;
+        installed: boolean;
+        hooksOk: boolean;
+        commandsOk: boolean;
+        settingsOk: boolean;
+        hostPresent: boolean;
+      }[];
+      notices: string[];
+    }>("get_agent_hooks_status", { scope, targetDir, agents }),
 };
 export function onSynced(cb: (r: SyncResult) => void) {
   return listen<SyncResult>(SYNCED_EVENT, (e) => cb(e.payload));
+}
+export function onTasksChanged(cb: () => void) {
+  return listen<string>(TASKS_CHANGED_EVENT, () => cb());
+}
+
+/**
+ * v0.3.28+：全局错误上报通道。
+ *
+ * 用途：无 UI 上下文的异步失败（典型如 openInBrowser）若只 `console.error`，
+ * 用户侧表现为「点了没反应」。统一派发该事件，由 App 监听并显示在错误 banner。
+ */
+export const TASKBOARD_ERROR_EVENT = "taskboard://error";
+
+export function reportError(e: unknown): void {
+  const msg = String(e);
+  console.error("[taskboard]", msg);
+  window.dispatchEvent(
+    new CustomEvent<string>(TASKBOARD_ERROR_EVENT, { detail: msg }),
+  );
+}
+
+/** 打开外部链接；失败时经 reportError 给出可见提示，不再静默吞掉。 */
+export function openExternal(url: string): void {
+  api.openInBrowser(url).catch(reportError);
 }

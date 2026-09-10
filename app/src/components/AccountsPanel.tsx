@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { api, openExternal } from "../api";
 import { useI18n } from "../i18n";
+import ConfirmDialog from "./ConfirmDialog";
 import { formatCountdownSeconds } from "../utils/format";
 import type { Account, DeviceLoginStart, Settings } from "../types";
 
@@ -28,6 +29,8 @@ export default function AccountsPanel({
   const [newOrg, setNewOrg] = useState("");
   const [accountMsg, setAccountMsg] = useState<string | null>(null);
   const [testingAccountId, setTestingAccountId] = useState<number | null>(null);
+  // v0.3.51 (#160)：删除账号二次确认改为应用内弹窗（window.confirm 在 Tauri WebView 静默失败）。
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const [oauthPhase, setOauthPhase] = useState<"idle" | "code" | "success">("idle");
@@ -55,7 +58,6 @@ export default function AccountsPanel({
   }, [oauthPhase, oauthStart]);
 
   const deleteAccount = async (id: number) => {
-    if (!confirm(t("settings.deleteConfirm"))) return;
     setErr(null);
     try {
       await api.deleteAccount(id);
@@ -102,7 +104,7 @@ export default function AccountsPanel({
       const st = await api.deviceLoginStart("");
       setOauthStart(st);
       setOauthPhase("code");
-      void api.openInBrowser(st.verificationUriComplete);
+      openExternal(st.verificationUriComplete);
       let interval = st.interval;
       while (oauthRunRef.current === runId) {
         await new Promise((r) => setTimeout(r, interval * 1000));
@@ -141,7 +143,16 @@ export default function AccountsPanel({
 
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("accounts.title")}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onClose();
+        }}
+      >
         <h3 className="modal-title">{t("accounts.title")}</h3>
 
         <div className="field">
@@ -190,7 +201,7 @@ export default function AccountsPanel({
                     )}
                     <button
                       className="btn small ghost"
-                      onClick={() => void deleteAccount(a.id)}
+                      onClick={() => setDeletingId(a.id)}
                       disabled={a.isDefault}
                       title={
                         a.isDefault
@@ -265,7 +276,7 @@ export default function AccountsPanel({
                   <div className="row" style={{ marginTop: 8 }}>
                     <button
                       className="btn"
-                      onClick={() => void api.openInBrowser(oauthStart.verificationUriComplete)}
+                      onClick={() => openExternal(oauthStart.verificationUriComplete)}
                     >
                       {t("settings.reopenAuth")}
                     </button>
@@ -317,6 +328,19 @@ export default function AccountsPanel({
             {t("btn.done")}
           </button>
         </div>
+
+        {deletingId !== null && (
+          <ConfirmDialog
+            message={t("settings.deleteConfirm")}
+            confirmLabel={t("btn.delete")}
+            onCancel={() => setDeletingId(null)}
+            onConfirm={() => {
+              const id = deletingId;
+              setDeletingId(null);
+              void deleteAccount(id);
+            }}
+          />
+        )}
       </div>
     </div>
   );

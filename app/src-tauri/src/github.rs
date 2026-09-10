@@ -12,11 +12,13 @@
 
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// Search API 调用的固定间隔（毫秒）。GitHub Search API 认证后严格 30 req/min，
-/// 折合 1 次/2s；为应对突发限流计数窗口的余量抖动，用 1s 间隔保守调度。
-const SEARCH_INTERVAL_MS: u64 = 1000;
+/// Search API 全局限流门间隔（毫秒）。GitHub Search API 认证后 30 req/min，
+/// 折合 1 次/2s。同一客户端实例的多线程共享此门，任意两次 search 调用间隔
+/// 不低于该值，避免并发突发触发 429（触发后的退避等待远比这更贵）。
+/// v0.3.49 (#143)：替代原来的固定每页 sleep，改为跨线程共享的精确门控。
+const SEARCH_GATE_MS: u128 = 2000;
 
 /// 单次请求主动 sleep 上限（毫秒）。某些场景下 `Retry-After` 可能给出极大值，
 /// 这里限制上限以免一次同步被挂死——超出后直接放弃本次调用。
@@ -203,6 +205,9 @@ pub struct GitHubClient {
     http: reqwest::blocking::Client,
     /// 缓存 token 可访问的仓库列表（org/repo 格式），避免重复调用 API。
     accessible_repos: std::sync::Mutex<Option<Vec<String>>>,
+    /// v0.3.49 (#143)：Search 限流门（上次 search 调用时刻）。多线程共享，
+    /// `wait_search_gate` 保证任意两次调用间隔 ≥ SEARCH_GATE_MS。
+    search_gate: std::sync::Mutex<Option<Instant>>,
 }
 
 impl GitHubClient {
@@ -221,7 +226,26 @@ impl GitHubClient {
             .connect_timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| format!("构造 HTTP 客户端失败: {}", e))?;
-        Ok(Self { pat, login, org, http, accessible_repos: std::sync::Mutex::new(None) })
+        Ok(Self { pat, login, org, http, accessible_repos: std::sync::Mutex::new(None), search_gate: std::sync::Mutex::new(None) })
+    }
+
+    /// v0.3.49 (#143)：Search 限流门。跨线程共享，调用前等待到距上次 ≥ 2s。
+    /// 锁中毒时取内部值继续（门控降级为尽力而为，不阻断同步）。
+    fn wait_search_gate(&self) {
+        let mut guard = self
+            .search_gate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        if let Some(last) = *guard {
+            let elapsed = now.duration_since(last).as_millis();
+            if elapsed < SEARCH_GATE_MS {
+                std::thread::sleep(Duration::from_millis(
+                    (SEARCH_GATE_MS - elapsed) as u64,
+                ));
+            }
+        }
+        *guard = Some(Instant::now());
     }
 
     /// 探测当前 PAT 是否有效，返回账号登录名。
@@ -347,7 +371,7 @@ impl GitHubClient {
                 format!("{} {}", repo_qualifiers, base_query)
             }
             _ => {
-                eprintln!("[sync] 无可访问仓库或获取失败，回退到全可见范围搜索: {}", base_query);
+                crate::tlog!("[sync] 无可访问仓库或获取失败，回退到全可见范围搜索: {}", base_query);
                 base_query.to_string()
             }
         }
@@ -388,66 +412,86 @@ impl GitHubClient {
     ///
     /// REST pulls 接口（核心配额 5000/h，无 Search API 的 30/min 严限）。
     /// 逐页 best-effort：单页失败仅记录日志跳过，不中断整个仓库列表。
+    ///
+    /// v0.3.49 (#143)：多仓库并行拉取（`thread::scope`，共享同一连接池）。
+    /// 核心配额充裕，并行数等于仓库数（实测仅 2 个有任务的仓库）。
     pub fn fetch_prs(&self, repos: &[String]) -> Result<Vec<RawPr>, String> {
-        let mut all: Vec<RawPr> = Vec::new();
-        for repo in repos {
-            if repo.is_empty() {
-                continue;
-            }
-            // repo 已是 "owner/name" 格式；若只是 name 则回退到 org/name
-            let full_repo = if repo.contains('/') {
-                repo.clone()
-            } else {
-                format!("{}/{}", self.org, repo)
-            };
-            for page in 1..=3 {
-                let url = format!(
-                    "https://api.github.com/repos/{}/pulls?state=all&per_page=100&page={}",
-                    full_repo, page
-                );
-                // 走核心配额，不计入 Search API 节流；且 PR 数据量可能很大（一次同步达数十 MB），
-                // 设较大超时避免大仓库拉取被中断。
-                let items: Vec<RawPr> = match self.get_with_timeout(&url, 60) {
-                    Ok(v) => match v.as_array() {
-                        Some(arr) => arr
-                            .iter()
-                            .filter_map(|item| match RawPr::from_item(item) {
-                                Ok(p) => Some(p),
-                                Err(e) => {
-                                    eprintln!("[sync] {}/PR item 解析失败，跳过: {}", repo, e);
-                                    None
-                                }
-                            })
-                            .collect(),
-                        None => {
-                            eprintln!("[sync] {}/PR 第 {} 页响应非数组，跳过", repo, page);
-                            Vec::new()
+        let per_repo: Vec<Vec<RawPr>> = std::thread::scope(|s| {
+            let handles: Vec<_> = repos
+                .iter()
+                .map(|repo| {
+                    s.spawn(|| {
+                        if repo.is_empty() {
+                            return Vec::new();
                         }
-                    },
-                    Err(e) => {
-                        eprintln!("[sync] {}/PR 第 {} 页拉取失败，跳过: {}", repo, page, e);
+                        self.fetch_prs_for_repo(repo)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or_default())
+                .collect()
+        });
+        Ok(per_repo.into_iter().flatten().collect())
+    }
+
+    /// 单仓库的 PR 拉取（`fetch_prs` 的并行单元）。失败仅记日志返回空集。
+    fn fetch_prs_for_repo(&self, repo: &str) -> Vec<RawPr> {
+        let mut out: Vec<RawPr> = Vec::new();
+        // repo 已是 "owner/name" 格式；若只是 name 则回退到 org/name
+        let full_repo = if repo.contains('/') {
+            repo.to_string()
+        } else {
+            format!("{}/{}", self.org, repo)
+        };
+        for page in 1..=3 {
+            let url = format!(
+                "https://api.github.com/repos/{}/pulls?state=all&per_page=100&page={}",
+                full_repo, page
+            );
+            // 走核心配额，不计入 Search API 节流；且 PR 数据量可能很大（一次同步达数十 MB），
+            // 设较大超时避免大仓库拉取被中断。
+            let items: Vec<RawPr> = match self.get_with_timeout(&url, 60) {
+                Ok(v) => match v.as_array() {
+                    Some(arr) => arr
+                        .iter()
+                        .filter_map(|item| match RawPr::from_item(item) {
+                            Ok(p) => Some(p),
+                            Err(e) => {
+                                crate::tlog!("[sync] {}/PR item 解析失败，跳过: {}", repo, e);
+                                None
+                            }
+                        })
+                        .collect(),
+                    None => {
+                        crate::tlog!("[sync] {}/PR 第 {} 页响应非数组，跳过", repo, page);
                         Vec::new()
                     }
+                },
+                Err(e) => {
+                    crate::tlog!("[sync] {}/PR 第 {} 页拉取失败，跳过: {}", repo, page, e);
+                    Vec::new()
+                }
+            };
+            let n = items.len();
+            for mut pr in items {
+                // repo 字段保持纯 name（与 key 的 "repo#number" 一致）；
+                // repo_owner 用于需要完整路径的场景。
+                let (owner, name) = if let Some(pos) = full_repo.find('/') {
+                    (&full_repo[..pos], &full_repo[pos + 1..])
+                } else {
+                    ("", full_repo.as_str())
                 };
-                let n = items.len();
-                for mut pr in items {
-                    // repo 字段保持纯 name（与 key 的 "repo#number" 一致）；
-                    // repo_owner 用于需要完整路径的场景。
-                    let (owner, name) = if let Some(pos) = full_repo.find('/') {
-                        (&full_repo[..pos], &full_repo[pos + 1..])
-                    } else {
-                        ("", full_repo.as_str())
-                    };
-                    pr.repo = name.to_string();
-                    pr.repo_owner = owner.to_string();
-                    all.push(pr);
-                }
-                if n < 100 {
-                    break;
-                }
+                pr.repo = name.to_string();
+                pr.repo_owner = owner.to_string();
+                out.push(pr);
+            }
+            if n < 100 {
+                break;
             }
         }
-        Ok(all)
+        out
     }
 
     /// 拉取某 issue 的全部评论，返回最新一条评论的永久链接（html_url），供卡片一键跳转。
@@ -552,7 +596,7 @@ impl GitHubClient {
         for pid in project_ids {
             match self.fetch_project_items(pid) {
                 Ok(m) => map.extend(m),
-                Err(e) => eprintln!("[gh] 拉取 project {} 条目失败: {}", pid, e),
+                Err(e) => crate::tlog!("[gh] 拉取 project {} 条目失败: {}", pid, e),
             }
         }
         Ok(map)
@@ -590,7 +634,7 @@ impl GitHubClient {
                     (name, i as i64)
                 }).collect();
                 if !result.is_empty() {
-                    eprintln!("[gh] project {} field '{}' options={:?}", project_id, fname, result.iter().map(|(n,_)| n).collect::<Vec<_>>());
+                    crate::tlog!("[gh] project {} field '{}' options={:?}", project_id, fname, result.iter().map(|(n,_)| n).collect::<Vec<_>>());
                     return Ok(result);
                 }
             }
@@ -653,7 +697,7 @@ impl GitHubClient {
                             for fv in fvs {
                                 let fn_ = fv["field"]["name"].as_str().unwrap_or("?");
                                 let vn_ = fv["name"].as_str().unwrap_or("?");
-                                eprintln!("[gh] project item field='{}' value='{}'", fn_, vn_);
+                                crate::tlog!("[gh] project item field='{}' value='{}'", fn_, vn_);
                             }
                         }
                     }
@@ -694,6 +738,7 @@ impl GitHubClient {
                   pageInfo {{ hasNextPage endCursor }}
                   nodes {{
                     content {{
+                      __typename
                       ... on Issue {{
                         number title url state
                         repository {{ name owner {{ login }} }}
@@ -723,11 +768,10 @@ impl GitHubClient {
                 .ok_or_else(|| "项目条目格式异常".to_string())?;
             for n in page_nodes {
                 let content = &n["content"];
-                // 跳过 PR
-                if content.get("pull_request").is_some()
-                    || content.get("mergedAt").is_some()
-                    || content.get("headRefOid").is_some()
-                {
+                // 跳过 PR：按 GraphQL __typename 可靠判型。
+                // 修复前尝试用 pull_request/mergedAt/headRefOid 字段判型，但查询并未选取这些字段，
+                // 判断恒为假，导致 Project V2 中的 PR 被当作 issue 上板。
+                if content["__typename"].as_str() == Some("PullRequest") {
                     continue;
                 }
                 let num = match content["number"].as_i64() {
@@ -819,11 +863,9 @@ impl GitHubClient {
     }
 
     fn get_with_timeout(&self, url: &str, timeout_secs: u64) -> Result<serde_json::Value, String> {
-        // 主动节流：Search API 严格 30 req/min。其它路径虽然走核心配额，但仍尊重响应头的
+        // v0.3.49 (#143)：删除原来 Search 每页固定 1s sleep，改为 search() 入口的
+        // 共享限流门（精确到 2s 间隔）。其余路径走核心配额，仍尊重响应头的
         // 剩余计数，避免触发 Search API 二次（突发）限流。
-        if url.contains(SEARCH_PATH) {
-            std::thread::sleep(Duration::from_millis(SEARCH_INTERVAL_MS));
-        }
 
         for attempt in 0..3 {
             let resp = self
@@ -847,7 +889,7 @@ impl GitHubClient {
                     .or_else(|| self.seconds_until_reset(resp.headers()))
                     .unwrap_or(10);
                 let wait_ms = (retry_after * 1000).min(MAX_BACKOFF_MS);
-                eprintln!(
+                crate::tlog!(
                     "[gh] 限流（{}），等待 {}ms 后重试（第 {} 次）",
                     status.as_u16(),
                     wait_ms,
@@ -880,7 +922,7 @@ impl GitHubClient {
                         .seconds_until_reset(resp.headers())
                         .map(|s| (s * 1000).min(MAX_BACKOFF_MS))
                         .unwrap_or(5000);
-                    eprintln!(
+                    crate::tlog!(
                         "[gh] 配额剩余 {}，等待 {}ms 回补",
                         r, wait_ms
                     );
@@ -904,6 +946,8 @@ impl GitHubClient {
         let mut all = Vec::new();
         // GitHub Search API：每页最多100，总计最多1000 → 最多10页
         for page in 1..=10 {
+            // v0.3.49 (#143)：每页调用前过共享限流门（多源并发时跨线程精确节流）。
+            self.wait_search_gate();
             let url = format!(
                 "https://api.github.com/{}?q={}&per_page=100&page={}",
                 SEARCH_PATH, encoded, page
@@ -913,8 +957,11 @@ impl GitHubClient {
 
             if status.as_u16() == 422 {
                 let body = resp.text().unwrap_or_default();
-                eprintln!("[sync] Search API 422: {} - {}", q, body.chars().take(120).collect::<String>());
-                break;
+                crate::tlog!("[sync] Search API 422: {} - {}", q, body.chars().take(120).collect::<String>());
+                // v0.3.29：422 是对整个 query 无效（限定的 repo 引用不可访问资源），
+                // 该源应视为「失败」而非「成功但无结果」，返回 Err 交由调用方计入 failed，
+                // 否则会被误当空结果，进而把真实关联任务标记陈旧后移出看板。
+                return Err(format!("Search API 422: {}", body.chars().take(120).collect::<String>()));
             }
             if status.as_u16() == 429 || status.as_u16() == 403 {
                 let retry_after = resp
@@ -925,14 +972,15 @@ impl GitHubClient {
                     .or_else(|| self.seconds_until_reset(resp.headers()))
                     .unwrap_or(10);
                 let wait_ms = (retry_after * 1000).min(MAX_BACKOFF_MS);
-                eprintln!("[gh] 限流（{}），等待 {}ms 后重试", status.as_u16(), wait_ms);
+                crate::tlog!("[gh] 限流（{}），等待 {}ms 后重试", status.as_u16(), wait_ms);
                 std::thread::sleep(Duration::from_millis(wait_ms));
                 let resp2 = self.http_get(&url)?;
                 let status2 = resp2.status();
                 if status2.as_u16() == 422 || !status2.is_success() {
                     let body = resp2.text().unwrap_or_default();
-                    eprintln!("[sync] Search API 重试失败 ({}): {}", status2.as_u16(), body.chars().take(120).collect::<String>());
-                    break;
+                    crate::tlog!("[sync] Search API 重试失败 ({}): {}", status2.as_u16(), body.chars().take(120).collect::<String>());
+                    // v0.3.29：重试后仍失败（含 422/非 2xx），视为该源失败，避免被当空结果误删任务。
+                    return Err(format!("Search API 重试失败 ({}): {}", status2.as_u16(), body.chars().take(120).collect::<String>()));
                 }
                 let v = resp2.json::<serde_json::Value>().map_err(|e| e.to_string())?;
                 let items = v.get("items").and_then(|i| i.as_array()).cloned().unwrap_or_default();
@@ -1086,7 +1134,7 @@ mod tests {
         let prs = client
             .fetch_prs(&repos)
             .expect("fetch_prs 不应报错");
-        eprintln!(
+        crate::tlog!(
             "[test] 隔离 fetch_prs 拉到 {} 个 PR，耗时 {:.1}s",
             prs.len(),
             t0.elapsed().as_secs_f64()

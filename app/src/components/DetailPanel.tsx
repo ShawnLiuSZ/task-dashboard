@@ -1,52 +1,8 @@
-import { useState } from "react";
-import { api } from "../api";
+import { useEffect, useRef, useState } from "react";
+import { api, openExternal } from "../api";
+import { AGENTS, agentLabel } from "../agents";
 import { COLUMNS, type StatusKey, type Task } from "../types";
 import { fmtTime, useI18n } from "../i18n";
-
-// 主流 coding agent 列表：供「中断会话」记录时标注来源。可按需增删。
-// value 为规范化 slug（与 MCP/agent 自报名一致，便于存储与展示统一），
-// label 为下拉里展示的名称。存储只认 value。
-const AGENTS: { value: string; label: string }[] = [
-  { value: "amazon-q", label: "Amazon Q" },
-  { value: "augment", label: "Augment Code" },
-  { value: "bolt", label: "Bolt.new" },
-  { value: "chatgpt", label: "ChatGPT" },
-  { value: "claude-code", label: "Claude Code" },
-  { value: "cline", label: "Cline" },
-  { value: "codebuddy", label: "CodeBuddy" },
-  { value: "codeium", label: "Codeium" },
-  { value: "codex", label: "Codex (OpenAI)" },
-  { value: "codestral", label: "Codestral" },
-  { value: "cody", label: "Sourcegraph Cody" },
-  { value: "continue", label: "Continue" },
-  { value: "copilot", label: "GitHub Copilot" },
-  { value: "cursor", label: "Cursor" },
-  { value: "deepseek", label: "DeepSeek" },
-  { value: "devin", label: "Devin" },
-  { value: "doubao", label: "豆包 (Doubao)" },
-  { value: "factory", label: "Factory Droid" },
-  { value: "gemini-cli", label: "Gemini CLI" },
-  { value: "glm", label: "智谱 GLM" },
-  { value: "goose", label: "Goose" },
-  { value: "grok", label: "Grok (xAI)" },
-  { value: "helix", label: "Helix CLI" },
-  { value: "kimi", label: "Kimi" },
-  { value: "llama", label: "Llama (Meta)" },
-  { value: "opencode", label: "OpenCode" },
-  { value: "openhands", label: "OpenHands" },
-  { value: "phind", label: "Phind" },
-  { value: "qwen-code", label: "Qwen Code" },
-  { value: "replit", label: "Replit Agent" },
-  { value: "roo-code", label: "Roo Code" },
-  { value: "tabnine", label: "Tabnine" },
-  { value: "tongyi", label: "通义灵码" },
-  { value: "trae", label: "Trae" },
-  { value: "v0", label: "Vercel v0" },
-  { value: "windsurf", label: "Windsurf" },
-  { value: "workbuddy", label: "WorkBuddy" },
-  { value: "zcode", label: "ZCode" },
-  { value: "aider", label: "Aider" },
-];
 
 interface Props {
   task: Task;
@@ -62,6 +18,14 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [handoff, setHandoff] = useState(task.handoff ?? "");
+  // 「已复制」提示的复位定时器：组件的卸载（切换任务、关闭面板）时需清理，
+  // 避免定时器在其后触发 setCopiedKey（在已卸载组件上 setState）。
+  const copiedTimer = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+    };
+  }, []);
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -77,13 +41,33 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
   };
 
   const copyToClipboard = async (text: string, key: string) => {
-    await navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    setTimeout(() => setCopiedKey(null), 1500);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      // 复用 ref 管理复位定时器：连点前先清旧定时器，避免多个定时器叠加提前复位。
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => {
+        setCopiedKey(null);
+        copiedTimer.current = null;
+      }, 1500);
+    } catch (e) {
+      // 权限不足或非安全上下文时 writeText 会 reject：原先无 catch，
+      // 既产生未处理拒绝，又让「已复制」态卡住不给任何反馈。
+      setErr(String(e));
+      setCopiedKey(null);
+    }
   };
 
   return (
-    <aside className="detail">
+    <aside
+      className="detail"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${task.repo}#${task.number}`}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+    >
       <div className="detail-head">
         <div>
           <span className="repo">{task.repo}</span>
@@ -112,7 +96,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
               key={c.key}
               className={`seg-btn${task.status === c.key ? " on" : ""}`}
               disabled={busy}
-              onClick={() => run(() => api.updateStatus(task.key, c.key as StatusKey))}
+              onClick={() => run(() => api.updateStatus(task.issueKey, c.key as StatusKey))}
             >
               {t(`status.${c.key}`)}
             </button>
@@ -132,7 +116,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
           <select className="select" value={agent} onChange={(e) => setAgent(e.target.value)}>
             {AGENTS.map((a) => (
               <option key={a.value} value={a.value}>
-                {a.label}
+                {agentLabel(a.value, t)}
               </option>
             ))}
           </select>
@@ -142,7 +126,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
             className="btn"
             disabled={busy || !sessionInput.trim()}
             onClick={() =>
-              run(() => api.recordSession(task.key, sessionInput.trim(), agent))
+              run(() => api.recordSession(task.issueKey, sessionInput.trim(), agent))
             }
           >
             {t("btn.record")}
@@ -150,7 +134,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
           <button
             className="btn"
             disabled={busy || !task.sessionId}
-            onClick={() => run(() => api.clearSession(task.key))}
+            onClick={() => run(() => api.clearSession(task.issueKey))}
           >
             {t("btn.clear")}
           </button>
@@ -165,7 +149,9 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
         {task.sessionId && (
           <div className="muted small">
             {t("detail.recordedAt", {
-              agent: task.sessionAgent || t("detail.unlabeled"),
+              agent: task.sessionAgent
+                ? agentLabel(task.sessionAgent, t)
+                : t("detail.unlabeled"),
               time: fmtTime(task.sessionAt ?? 0, lang),
             })}
           </div>
@@ -185,7 +171,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
           <button
             className="btn"
             disabled={busy || !handoff.trim()}
-            onClick={() => run(() => api.recordHandoff(task.key, handoff.trim()))}
+            onClick={() => run(() => api.recordHandoff(task.issueKey, handoff.trim()))}
           >
             {t("btn.save")}
           </button>
@@ -205,7 +191,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
       <section className="detail-block">
         <div className="block-title">GitHub</div>
         <div className="row">
-          <button className="btn" onClick={() => void api.openInBrowser(task.url)}>
+          <button className="btn" onClick={() => openExternal(task.url)}>
             {t("detail.openInBrowser")}
           </button>
           <button
@@ -216,7 +202,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
           </button>
           {task.prNumber > 0 && task.prUrl && (
             <>
-              <button className="btn" onClick={() => void api.openInBrowser(task.prUrl)}>
+              <button className="btn" onClick={() => openExternal(task.prUrl)}>
                 PR #{task.prNumber}
               </button>
               <button
@@ -228,7 +214,7 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
             </>
           )}
           {task.latestCommentUrl && (
-            <button className="btn" onClick={() => void api.openInBrowser(task.latestCommentUrl)}>
+            <button className="btn" onClick={() => openExternal(task.latestCommentUrl)}>
               {t("detail.latestComment")}
             </button>
           )}

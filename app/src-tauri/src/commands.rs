@@ -1,27 +1,25 @@
 use rusqlite::Connection;
 use serde::Serialize;
 use std::time::Duration;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::db::{Account, LabelMapping, LabelMappingInput};
+use crate::db::{Account, AccountColumn, LabelMapping, LabelMappingInput};
 use crate::sync::SyncResult;
 use crate::AppState;
-
-const VALID_STATUS: &[&str] = &["todo", "doing", "processed", "done"];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Task {
-    pub key: String,
+    pub issue_key: String,
     pub owner: String,
     pub repo: String,
     pub number: i64,
     pub title: String,
     pub url: String,
-    pub gh_state: String,
+    pub issue_state: String,
     pub ownership: String,
     pub status: String,
-    pub gh_status: String,
+    pub project_status: String,
     pub assignees: String,
     pub mentioned: bool,
     pub latest_comment_url: String,
@@ -33,7 +31,7 @@ pub struct Task {
     pub session_at: Option<i64>,
     pub candidate_done: bool,
     pub handoff: String,
-    pub updated_at: Option<String>,
+    pub updated_at: Option<i64>,
     /// v0.3.16：归属账号 id（指向 accounts.id），用于多账号视图过滤。
     pub account_id: i64,
 }
@@ -57,7 +55,7 @@ pub struct Settings {
     pub active_account_id: i64,
     /// v0.3.16+：视图模式。'single'=仅当前激活账号；'all'=所有账号任务聚合。
     pub view_mode: String,
-    /// v0.3.16+：所有账号列表（不含 PAT 本体）。
+    /// v0.3.16+：所有账号列表（不含 PAT 本体）。每个账号带各自的 board_mode（v0.3.43+）。
     pub accounts: Vec<Account>,
     /// v0.3.17+：GitHub OAuth Device Flow 的 client_id（注册 OAuth App 后填一次）。
     pub oauth_client_id: String,
@@ -91,7 +89,7 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
     let (sql, use_ownership_filter) = match ownership {
         Some(_) => (
             format!(
-                "SELECT key, owner, repo, number, title, url, gh_state, ownership, status, gh_status,
+                "SELECT issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status,
                         assignees, mentioned, latest_comment_url, pr_number, pr_url, branch,
                         session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id
                  FROM tasks WHERE ownership = ?{where_extra}
@@ -101,7 +99,7 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
         ),
         None => (
             format!(
-                "SELECT key, owner, repo, number, title, url, gh_state, ownership, status, gh_status,
+                "SELECT issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status,
                         assignees, mentioned, latest_comment_url, pr_number, pr_url, branch,
                         session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id
                  FROM tasks WHERE 1=1{where_extra}
@@ -114,16 +112,16 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let mapper = |r: &rusqlite::Row| {
         Ok(Task {
-            key: r.get(0)?,
+            issue_key: r.get(0)?,
             owner: r.get(1)?,
             repo: r.get(2)?,
             number: r.get(3)?,
             title: r.get(4)?,
             url: r.get(5)?,
-            gh_state: r.get(6)?,
+            issue_state: r.get(6)?,
             ownership: r.get(7)?,
             status: r.get(8)?,
-            gh_status: r.get(9)?,
+            project_status: r.get(9)?,
             assignees: r.get(10)?,
             mentioned: r.get::<_, i64>(11).unwrap_or(0) != 0,
             latest_comment_url: r.get(12)?,
@@ -184,8 +182,13 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncResult, String> {
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let st = handle.state::<AppState>();
-        let conn = st.db.lock().map_err(|e| e.to_string())?;
-        crate::sync::run(&conn)
+        // 与 lib.rs::run_sync 同一去重标志：已有同步在跑则拒绝本次，避免并发触发背靠背全量同步。
+        let _in_progress = crate::SyncGuard::acquire(&st.syncing)
+            .ok_or_else(|| "已有同步进行中，请稍后再试".to_string())?;
+        // 用独立连接跑同步：不持有共享 `AppState.db` 的 Mutex 跨网络 I/O，避免阻塞
+        // 主线程上的 UI 读命令（设置/账号/同步日志等面板）。见 lib.rs::open_sync_conn。
+        let conn = crate::db::open_db(&crate::db::db_path(&handle)?)?;
+        crate::sync::run(&conn, "manual")
     })
     .await
     .map_err(|e| format!("同步线程异常: {}", e))?
@@ -193,24 +196,28 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncResult, String> {
 
 #[tauri::command]
 pub fn update_task_status(
+    app: AppHandle,
     state: State<'_, AppState>,
     key: String,
     status: String,
 ) -> Result<(), String> {
-    if !VALID_STATUS.contains(&status.as_str()) {
-        return Err(format!("非法状态: {}", status));
+    // 中文四态归一化到英文四态，其余原样（自定义列 col_key，由校验函数放行或拒绝）。
+    let t = status.trim();
+    if t.is_empty() {
+        return Err("状态不能为空".to_string());
     }
+    // v0.3.49 (#147)：归一化 + 校验 + 写入走公共模块（与 mcp.rs 同一实现）。
+    let normalized = crate::common::normalize_status(t).unwrap_or_else(|| t.to_string());
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    conn.execute(
-        "UPDATE tasks SET status = ?1 WHERE key = ?2",
-        rusqlite::params![status, key],
-    )
-    .map_err(|e| e.to_string())?;
+    crate::common::set_task_status(&conn, &key, &normalized)?;
+    // #181：通知前端（含其他窗口）重查；MCP 子进程无 AppHandle，走不到这里。
+    let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
 }
 
 #[tauri::command]
 pub fn record_session(
+    app: AppHandle,
     state: State<'_, AppState>,
     key: String,
     session_id: String,
@@ -218,22 +225,23 @@ pub fn record_session(
 ) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let now = crate::sync::now_secs();
-    conn.execute(
-        "UPDATE tasks SET session_id = ?1, session_agent = ?2, session_at = ?3 WHERE key = ?4",
-        rusqlite::params![session_id, agent.unwrap_or_default(), now, key],
-    )
-    .map_err(|e| e.to_string())?;
+    // v0.3.49 (#147)：SQL 走公共模块（与 mcp.rs 同一实现）；0 行也静默 Ok（原有行为）。
+    crate::common::touch_session(&conn, &key, &session_id, agent.as_deref(), now, None)?;
+    // #181：同上，多窗口同步。
+    let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
 }
 
 #[tauri::command]
-pub fn clear_session(state: State<'_, AppState>, key: String) -> Result<(), String> {
+pub fn clear_session(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    conn.execute(
-        "UPDATE tasks SET session_id = NULL, session_agent = NULL WHERE key = ?1",
-        [key],
-    )
-    .map_err(|e| e.to_string())?;
+    crate::common::clear_task_session(&conn, &key)?;
+    // #181：同上，多窗口同步。
+    let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
 }
 
@@ -241,16 +249,16 @@ pub fn clear_session(state: State<'_, AppState>, key: String) -> Result<(), Stri
 /// 把交接上下文写入该 issue 卡片的 handoff 字段，供后续接手者直接在详情页查看。
 #[tauri::command]
 pub fn record_handoff(
+    app: AppHandle,
     state: State<'_, AppState>,
     key: String,
     text: String,
 ) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    conn.execute(
-        "UPDATE tasks SET handoff = ?1 WHERE key = ?2",
-        rusqlite::params![text, key],
-    )
-    .map_err(|e| e.to_string())?;
+    // v0.3.49 (#147)：SQL 走公共模块（与 mcp.rs 同一实现）。
+    crate::common::record_task_handoff(&conn, &key, &text)?;
+    // #181：同上，多窗口同步。
+    let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
 }
 
@@ -297,7 +305,7 @@ pub struct PatStatus {
 /// 便于前端展示「当前账号」且不必泄漏 PAT 本体。
 #[allow(dead_code)] // 由 `lib.rs::invoke_handler` 反射注册使用，编译期无可达调用
 #[tauri::command]
-pub fn save_pat(
+pub async fn save_pat(
     app: AppHandle,
     state: State<'_, AppState>,
     pat: String,
@@ -311,11 +319,17 @@ pub fn save_pat(
         crate::db::set_setting(&conn, "last_sync_error", "")?;
         return Ok(PatStatus { login: String::new(), has_pat: false });
     }
-    // 先在锁外构造客户端（避免构造时阻塞 db 锁）；构造仅作 PAT 形式校验，
-    // 真实 login 探测走 test_connection（v0.3.16 起构造不再自动探测）。
-    let client = crate::github::GitHubClient::new(trimmed.clone(), String::new(), String::new())
-        .map_err(|e| format!("PAT 验证失败: {}", e))?;
-    let login = client.test_connection()?.login;
+    // 网络重活（构造客户端 + test_connection 探测真实 login）放 blocking 池，
+    // 避免同步命令占住 Tauri 主线程（macOS beachball、UI 假死）。与 sync_now 同款处理。
+    let net_pat = trimmed.clone();
+    let login = tauri::async_runtime::spawn_blocking(move || {
+        let client = crate::github::GitHubClient::new(net_pat, String::new(), String::new())
+            .map_err(|e| format!("PAT 验证失败: {}", e))?;
+        let login = client.test_connection()?.login;
+        Ok::<String, String>(login)
+    })
+    .await
+    .map_err(|e| format!("PAT 探测线程异常: {}", e))??;
     {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         crate::db::set_setting(&conn, "pat_token", &trimmed)?;
@@ -331,16 +345,23 @@ pub fn save_pat(
 /// 给设置面板「测试连接」按钮专用。
 #[allow(dead_code)]
 #[tauri::command]
-pub fn test_pat(state: State<'_, AppState>) -> Result<PatStatus, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let pat = crate::db::get_setting(&conn, "pat_token");
-    if pat.is_empty() {
-        return Err("未配置 PAT，请先在设置面板粘贴".to_string());
-    }
-    // 取锁外构造（reqwest 的网络 IO 与 db 锁解耦）；构造后探测真实 login。
-    drop(conn);
-    let client = crate::github::GitHubClient::new(pat, String::new(), String::new())?;
-    let probe = client.test_connection()?.login;
+pub async fn test_pat(state: State<'_, AppState>) -> Result<PatStatus, String> {
+    let pat = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let pat = crate::db::get_setting(&conn, "pat_token");
+        if pat.is_empty() {
+            return Err("未配置 PAT，请先在设置面板粘贴".to_string());
+        }
+        pat
+    };
+    // 网络探测（test_connection）放 blocking 池，避免占住主线程假死。
+    let probe = tauri::async_runtime::spawn_blocking(move || {
+        let client = crate::github::GitHubClient::new(pat, String::new(), String::new())?;
+        let login = client.test_connection()?.login;
+        Ok::<String, String>(login)
+    })
+    .await
+    .map_err(|e| format!("PAT 测试线程异常: {}", e))??;
     Ok(PatStatus { login: probe, has_pat: true })
 }
 
@@ -372,10 +393,30 @@ pub fn save_settings(
 
 #[tauri::command]
 pub fn open_in_browser(url: String) -> Result<(), String> {
-    std::process::Command::new("open")
-        .arg(&url)
-        .spawn()
-        .map_err(|e| format!("打开浏览器失败: {}", e))?;
+    // v0.3.49 (#149)：先过白名单（仅 https GitHub 域），再按平台分发。
+    // Windows 的 `start` 是 cmd 内建命令，须经 `cmd /C start "" <url>` 调用。
+    let url = crate::common::validate_browser_url(&url)?;
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("打开浏览器失败: {e}"))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .spawn()
+            .map_err(|e| format!("打开浏览器失败: {e}"))?;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("打开浏览器失败: {e}"))?;
+    }
     Ok(())
 }
 
@@ -537,7 +578,7 @@ pub fn list_accounts(state: State<'_, AppState>) -> Result<Vec<Account>, String>
 /// 是权威；但同时把探测到的 login 回写到 DB 字段，确保 sync 时不会用错。
 #[allow(dead_code)]
 #[tauri::command]
-pub fn add_account(
+pub async fn add_account(
     state: State<'_, AppState>,
     label: String,
     login: String,
@@ -548,23 +589,34 @@ pub fn add_account(
     if pat.is_empty() {
         return Err("PAT 不能为空".to_string());
     }
-    // 锁外探测（避免阻塞 db 锁做网络 IO）；构造 + 探测真实 login + org。
-    let probe_client = crate::github::GitHubClient::new(pat.clone(), String::new(), String::new())?;
-    let probe_login = probe_client
-        .test_connection()
-        .map(|r| r.login)
-        .map_err(|e| format!("PAT 验证失败: {}", e))?;
-    // 用探测到的真实 login 作权威；用户输入的 login 仅作 hint。
-    let final_login = if probe_login.is_empty() {
-        login.trim().to_string()
-    } else {
-        probe_login
-    };
-    // 若调用方未指定 org，自动从 GitHub API 获取用户所属的第一个组织。
-    let final_org = if org.trim().is_empty() {
-        probe_client.fetch_user_org().unwrap_or_default()
-    } else {
-        org.trim().to_string()
+    // 网络重活（构造 + 探测真实 login + 自动取 org）放 blocking 池，避免占住主线程假死。
+    let (final_login, final_org) = {
+        let net_pat = pat.clone();
+        let login_hint = login.clone();
+        let org_hint = org.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let probe_client =
+                crate::github::GitHubClient::new(net_pat, String::new(), String::new())?;
+            let probe_login = probe_client
+                .test_connection()
+                .map(|r| r.login)
+                .map_err(|e| format!("PAT 验证失败: {}", e))?;
+            // 用探测到的真实 login 作权威；用户输入的 login 仅作 hint。
+            let final_login = if probe_login.is_empty() {
+                login_hint.trim().to_string()
+            } else {
+                probe_login
+            };
+            // 若调用方未指定 org，自动从 GitHub API 获取用户所属的第一个组织。
+            let final_org = if org_hint.trim().is_empty() {
+                probe_client.fetch_user_org().unwrap_or_default()
+            } else {
+                org_hint.trim().to_string()
+            };
+            Ok::<(String, String), String>((final_login, final_org))
+        })
+        .await
+        .map_err(|e| format!("账号探测线程异常: {}", e))??
     };
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let id = crate::db::insert_account(&conn, &label, &final_login, &final_org, &pat)?;
@@ -588,7 +640,7 @@ pub fn add_account(
 /// 若更新了 PAT，先在锁外探测验证，避免坏 token 入库。
 #[allow(dead_code)]
 #[tauri::command]
-pub fn update_account(
+pub async fn update_account(
     state: State<'_, AppState>,
     id: i64,
     label: Option<String>,
@@ -599,11 +651,17 @@ pub fn update_account(
     if let Some(p) = pat.as_ref() {
         let p = p.trim();
         if !p.is_empty() {
-            // 锁外探测（构造 + test_connection 校验 PAT 有效）
-            let probe = crate::github::GitHubClient::new(p.to_string(), String::new(), String::new())
-                .and_then(|c| c.test_connection())
-                .map_err(|e| format!("新 PAT 验证失败: {}", e))?;
-            let _ = probe;
+            // 网络重活（构造 + test_connection 校验 PAT 有效）放 blocking 池，避免占住主线程假死。
+            let net_pat = p.to_string();
+            tauri::async_runtime::spawn_blocking(move || {
+                let _probe =
+                    crate::github::GitHubClient::new(net_pat, String::new(), String::new())
+                        .and_then(|c| c.test_connection())
+                        .map_err(|e| format!("新 PAT 验证失败: {}", e))?;
+                Ok::<(), String>(())
+            })
+            .await
+            .map_err(|e| format!("PAT 验证线程异常: {}", e))??;
         }
     }
     let conn = state.db.lock().map_err(|e| e.to_string())?;
@@ -645,18 +703,25 @@ pub fn delete_account(state: State<'_, AppState>, id: i64) -> Result<(), String>
 /// 测试某账号的 PAT 是否仍有效；返回账号信息。
 #[allow(dead_code)]
 #[tauri::command]
-pub fn test_account_pat(
+pub async fn test_account_pat(
     state: State<'_, AppState>,
     id: i64,
 ) -> Result<PatStatus, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let (login, org, pat) = crate::db::get_account_pat(&conn, id)?;
-    drop(conn);
+    let (login, org, pat) = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        crate::db::get_account_pat(&conn, id)?
+    };
     if pat.is_empty() {
         return Err(format!("账号 #{id} ({login} / {org}) 未配置 PAT"));
     }
-    let client = crate::github::GitHubClient::new(pat, String::new(), String::new())?;
-    let probe = client.test_connection()?.login;
+    // 网络探测（test_connection）放 blocking 池，避免占住主线程假死。
+    let probe = tauri::async_runtime::spawn_blocking(move || {
+        let client = crate::github::GitHubClient::new(pat, String::new(), String::new())?;
+        let login = client.test_connection()?.login;
+        Ok::<String, String>(login)
+    })
+    .await
+    .map_err(|e| format!("PAT 测试线程异常: {}", e))??;
     Ok(PatStatus { login: probe, has_pat: true })
 }
 
@@ -698,15 +763,20 @@ pub fn set_view_mode(state: State<'_, AppState>, mode: String) -> Result<(), Str
     Ok(())
 }
 
-/// 设置看板列模式：'status' / 'label'。
+/// v0.3.43+：设置某账号的看板列展示方式（status/project/custom）。
+/// 每个账号独立配置，存于 meta `board_mode:<account_id>`；未配置默认 project。
 #[tauri::command]
-pub fn set_board_mode(state: State<'_, AppState>, mode: String) -> Result<(), String> {
-    if mode != "status" && mode != "label" {
-        return Err(format!("非法看板模式: {mode}（应为 status / label）"));
-    }
+pub fn set_account_board_mode(
+    state: State<'_, AppState>,
+    account_id: i64,
+    mode: String,
+) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    crate::db::set_setting(&conn, "board_mode", &mode)?;
-    Ok(())
+    // 校验账号存在
+    if crate::db::get_account_pat(&conn, account_id).is_err() {
+        return Err(format!("账号 #{account_id} 不存在"));
+    }
+    crate::db::set_account_board_mode(&conn, account_id, &mode)
 }
 
 // ============================================================================
@@ -736,6 +806,16 @@ pub struct CheckUpdate {
     pub error: String,
 }
 
+/// v0.3.49 (#148)：检查更新用的仓库地址（单点常量 + 单测断言，防拼写漂移）。
+pub fn update_check_api_url() -> &'static str {
+    "https://api.github.com/repos/ShawnLiuSZ/task-dashboard/releases/latest"
+}
+
+/// 检查更新失败时的回退 release 页面。
+pub fn update_check_fallback_url() -> &'static str {
+    "https://github.com/ShawnLiuSZ/task-dashboard/releases"
+}
+
 /// 轻量检查更新：调用 GitHub Releases API `releases/latest`，对比最新/当前版本。
 /// 只读公开数据仓库，无需 PAT；用 `spawn_blocking` 避免阻塞主线程（reqwest 为 blocking）。
 #[tauri::command]
@@ -748,7 +828,7 @@ pub async fn check_latest_release() -> Result<CheckUpdate, String> {
             .build()
             .map_err(|e| format!("构造 HTTP 客户端失败: {e}"))?;
         let resp: serde_json::Value = client
-            .get("https://api.github.com/repos/ShawnLiuSZ/task-dashboard/releases/latest")
+            .get(update_check_api_url())
             .send()
             .map_err(|e| format!("检查更新失败（网络）：{e}"))?
             .error_for_status()
@@ -764,7 +844,7 @@ pub async fn check_latest_release() -> Result<CheckUpdate, String> {
         let url = resp
             .get("html_url")
             .and_then(|v| v.as_str())
-            .unwrap_or("https://github.com/ShawnLiuSZ/task-dashboard/releases")
+            .unwrap_or(update_check_fallback_url())
             .to_string();
         let up_to_date = !latest.is_empty() && latest == current;
         Ok(CheckUpdate {
@@ -846,18 +926,23 @@ pub fn get_label_columns_for_account(
 
 /// 诊断：测试当前账号的 Project Status 拉取（用于排查 "未标注" 问题）。
 #[tauri::command]
-pub fn diagnose_project_status(
-    state: State<'_, AppState>,
+pub async fn diagnose_project_status(
+    app: AppHandle,
     account_id: i64,
 ) -> Result<serde_json::Value, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let (login, org, pat) = crate::db::get_account_pat(&conn, account_id)?;
-    drop(conn);
+    // 读 PAT：快速锁共享连接读取后立即释放，不跨 await 持有。
+    let (login, org, pat) = {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        crate::db::get_account_pat(&conn, account_id)?
+    };
 
     if pat.is_empty() {
         return Err("账号未配置 PAT".to_string());
     }
-    let client = crate::github::GitHubClient::new(pat, login.clone(), org.clone())?;
+    // 网络重活放 blocking 池，避免占住主线程/事件循环（与 sync_now 同款处理）。
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = crate::github::GitHubClient::new(pat, login.clone(), org.clone())?;
 
     // 1. 拉取全部 project
     let all_projects = client.fetch_all_projects()?;
@@ -889,13 +974,16 @@ pub fn diagnose_project_status(
         }));
     }
 
-    Ok(serde_json::json!({
-        "org": org,
-        "login": login,
-        "projects": projects_info,
-        "status_count": status_map.len(),
-        "sample_statuses": status_map.iter().take(10).collect::<Vec<_>>(),
-    }))
+        Ok(serde_json::json!({
+            "org": org,
+            "login": login,
+            "projects": projects_info,
+            "status_count": status_map.len(),
+            "sample_statuses": status_map.iter().take(10).collect::<Vec<_>>(),
+        }))
+    })
+    .await
+    .map_err(|e| format!("诊断线程异常: {}", e))?
 }
 
 /// 列出某账号下已存储的项目（来自 projects 表）。
@@ -924,12 +1012,19 @@ pub fn list_sync_logs(state: State<'_, AppState>, limit: Option<i64>) -> Result<
     crate::db::list_sync_logs(&conn, limit)
 }
 
-/// 清理超过 7 天的同步日志。
+/// 清理超过 30 天的同步日志。
 #[tauri::command]
 pub fn prune_sync_logs(state: State<'_, AppState>) -> Result<usize, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let now = crate::sync::now_secs();
     crate::db::prune_sync_logs(&conn, now)
+}
+
+/// 清空全部同步日志（不可恢复）。
+#[tauri::command]
+pub fn clear_sync_logs(state: State<'_, AppState>) -> Result<usize, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    crate::db::clear_sync_logs(&conn)
 }
 
 // ============================================================================
@@ -948,7 +1043,8 @@ pub fn list_notes(state: State<'_, AppState>) -> Result<Vec<crate::db::Note>, St
 pub fn add_note(state: State<'_, AppState>, content: String, label: Option<String>) -> Result<crate::db::Note, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let now = crate::sync::now_secs();
-    let label = label.unwrap_or_else(|| "low".to_string());
+    // v0.3.49 (#147)：标签走统一校验（此前任意字符串可入库，与 MCP 约束分叉）。
+    let label = crate::common::normalize_note_label(label.as_deref())?;
     crate::db::add_note(&conn, &content, &label, now)
 }
 
@@ -963,6 +1059,8 @@ pub fn update_note(state: State<'_, AppState>, id: i64, content: String) -> Resu
 /// 更新记事标签。
 #[tauri::command]
 pub fn update_note_label(state: State<'_, AppState>, id: i64, label: String) -> Result<crate::db::Note, String> {
+    // v0.3.49 (#147)：标签走统一校验（此前任意字符串可入库）。
+    let label = crate::common::normalize_note_label(Some(&label))?;
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     crate::db::update_note_label(&conn, id, &label)
 }
@@ -978,8 +1076,9 @@ pub fn delete_note(state: State<'_, AppState>, id: i64) -> Result<(), String> {
 
 /// 导出记事为 JSON 文件，返回写入的完整路径与条数。
 ///
-/// 写入位置固定为应用数据目录下 `notes-backup/`（macOS：
-/// `~/Library/Application Support/com.shawnliu.taskboard/notes-backup/`），
+/// 写入位置（v0.3.45+，#103）：优先用前端传入的 `target_dir`；未传则用系统「下载」目录
+/// （`dirs::download_dir()`：macOS `~/Downloads` / Windows `%USERPROFILE%\Downloads` /
+/// Linux `$XDG_DOWNLOAD_DIR`）。上述取不到或不可写时，回退应用数据目录 `notes-backup/`。
 /// 文件名 `notes-backup-YYYYMMDD-HHMMSS.json`。仅含记事业务数据，不含 token 等敏感信息。
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -988,13 +1087,41 @@ pub struct ExportNotesResult {
     pub count: usize,
 }
 
+/// #103：解析导出目标目录。优先级 target_dir → 系统下载目录 → 应用数据目录 `notes-backup/`。
+fn resolve_export_dir(target_dir: Option<&str>) -> Result<std::path::PathBuf, String> {
+    use std::path::PathBuf;
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(t) = target_dir {
+        if !t.trim().is_empty() {
+            candidates.push(PathBuf::from(t));
+        }
+    }
+    if let Some(dl) = dirs::download_dir() {
+        // download_dir 可能返回同 target_dir 的重复项，去重避免重复尝试。
+        if !candidates.iter().any(|c| c == &dl) {
+            candidates.push(dl);
+        }
+    }
+    for dir in candidates {
+        if std::fs::create_dir_all(&dir).is_ok() {
+            return Ok(dir);
+        }
+    }
+    let fallback = crate::db::data_dir()?.join("notes-backup");
+    std::fs::create_dir_all(&fallback).map_err(|e| format!("创建备份目录失败: {e}"))?;
+    Ok(fallback)
+}
+
 #[tauri::command]
-pub fn export_notes(state: State<'_, AppState>) -> Result<ExportNotesResult, String> {
+pub fn export_notes(
+    state: State<'_, AppState>,
+    target_dir: Option<String>,
+) -> Result<ExportNotesResult, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let notes = crate::db::list_notes(&conn)?;
 
-    let dir = crate::db::data_dir()?.join("notes-backup");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建备份目录失败: {e}"))?;
+    let dir = resolve_export_dir(target_dir.as_deref())?;
 
     let now = crate::sync::now_secs();
     let ts = format!(
@@ -1061,6 +1188,11 @@ pub fn import_notes(state: State<'_, AppState>, json: String) -> Result<ImportNo
 
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let now = crate::sync::now_secs();
+    // v0.3.49 (#147)：整个导入包在一个事务里（原来每条 1 SELECT + 1 INSERT，
+    // 大导入慢且可部分成功）。失败整体回滚。
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("开启导入事务失败: {e}"))?;
     let mut imported = 0usize;
     let mut skipped = 0usize;
     for n in file.notes {
@@ -1074,13 +1206,40 @@ pub fn import_notes(state: State<'_, AppState>, json: String) -> Result<ImportNo
         };
         let created = if n.created_at > 0 { n.created_at } else { now };
         let updated = if n.updated_at > 0 { n.updated_at } else { created };
-        match crate::db::import_note(&conn, &n.content, &label, created, updated) {
+        match crate::db::import_note(&tx, &n.content, &label, created, updated) {
             Ok(true) => imported += 1,
             Ok(false) => skipped += 1,
             Err(e) => return Err(e),
         }
     }
+    tx.commit()
+        .map_err(|e| format!("提交导入事务失败: {e}"))?;
     Ok(ImportNotesResult { imported, skipped })
+}
+
+// ============================================================================
+// v0.3.28+：自定义列映射（按账号配置看板列）
+// ============================================================================
+
+/// 列出某账号下所有自定义列。
+#[tauri::command]
+pub fn list_account_columns(
+    state: State<'_, AppState>,
+    account_id: i64,
+) -> Result<Vec<AccountColumn>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    crate::db::list_account_columns(&conn, account_id)
+}
+
+/// 保存某账号的列配置（全量替换）。
+#[tauri::command]
+pub fn save_account_columns(
+    state: State<'_, AppState>,
+    account_id: i64,
+    columns: Vec<AccountColumn>,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    crate::db::save_account_columns(&conn, account_id, &columns)
 }
 
 /// `now_secs` 按秒格式化为指定 `strftime` 模式（用于导出文件名）。
@@ -1131,6 +1290,27 @@ mod tests {
     }
 
     // 导出文件名的时间戳：epoch 0、近期典型值。
+    // v0.3.49 (#148)：检查更新 URL 单点常量，防 `task-dashborad` 拼写漂移。
+    #[test]
+    fn update_check_urls_point_at_real_repo() {
+        assert!(
+            super::update_check_api_url().contains("task-dashboard"),
+            "API 地址应指向真实仓库"
+        );
+        assert!(
+            !super::update_check_api_url().contains("dashborad"),
+            "API 地址含拼写错误"
+        );
+        assert!(
+            super::update_check_fallback_url().contains("task-dashboard"),
+            "回退地址应指向真实仓库"
+        );
+        assert!(
+            !super::update_check_fallback_url().contains("dashborad"),
+            "回退地址含拼写错误"
+        );
+    }
+
     #[test]
     fn time_str_formats_epoch_and_boundaries() {
         assert_eq!(super::time_str(0, "%Y%m%d"), "19700101");
@@ -1158,5 +1338,61 @@ mod tests {
         assert_eq!(hello.created_at, 100);
         assert_eq!(hello.updated_at, 200);
         assert_eq!(hello.label, "low");
+    }
+
+    // #103：导出目录解析 —— 空/空白 target 回退下载目录；合法 target 优先。
+    #[test]
+    fn resolve_export_dir_prefers_target_then_download() {
+        // 空白 target → 落到系统下载目录（或数据目录兜底）
+        for t in [Some(""), Some("   ")] {
+            let d = super::resolve_export_dir(t).unwrap();
+            let s = d.to_string_lossy();
+            assert!(
+                s.contains("Downloads") || s.contains("notes-backup"),
+                "未落到下载/兜底目录: {s}"
+            );
+        }
+        // 合法自定义目录优先于下载目录
+        let tmp = std::env::temp_dir().join(format!("tb_export_test_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let d2 = super::resolve_export_dir(Some(tmp.to_str().unwrap())).unwrap();
+        assert_eq!(d2, tmp);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // 校验 helper：helper_status 只放行四态，或该任务所属账号的自定义列 col_key。
+    #[test]
+    fn validate_status_accepts_four_states_and_account_columns() {
+        let conn = mem_conn();
+        // 插入一条直属某账号的任务；该账号定义自定义列 col_alpha。
+        conn.execute(
+            "INSERT INTO accounts (id, label, login, org, pat_token, is_default, created_at) VALUES (77, 'test', 'tester', '', 'pat', 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state, ownership, synced_at, account_id)
+             VALUES ('a#1', 'a', 'a', 1, 't', 'u', 'open', 'mine', 0, 77)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO account_columns (account_id, col_key, col_name, match_rules, order_index)
+             VALUES (77, 'col_alpha', 'Alpha', '[]', 0)",
+            [],
+        )
+        .unwrap();
+
+        // 四态放行
+        assert!(crate::common::validate_task_status(&conn, "a#1", "todo").is_ok());
+        assert!(crate::common::validate_task_status(&conn, "a#1", "done").is_ok());
+        // 该账号自定义列放行
+        assert!(crate::common::validate_task_status(&conn, "a#1", "col_alpha").is_ok());
+        // 拼错/未知状态拒绝
+        assert!(crate::common::validate_task_status(&conn, "a#1", "donee").is_err());
+        // 该任务账号无该自定义列 → 拒绝
+        assert!(crate::common::validate_task_status(&conn, "a#1", "col_beta").is_err());
+        // 任务不存在：非四态一律拒绝（无账号可判定）
+        assert!(crate::common::validate_task_status(&conn, "ghost#1", "col_alpha").is_err());
     }
 }
