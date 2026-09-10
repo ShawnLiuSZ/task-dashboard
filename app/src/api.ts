@@ -23,6 +23,10 @@ import type {
 
 export const SYNCED_EVENT = "taskboard://synced";
 
+// #181：App 内写入（看板状态 / session / handoff）后后端发出的通知，
+// 前端收到即重查。MCP 子进程发不出此事件，仍靠聚焦 + 轮询兜底。
+export const TASKS_CHANGED_EVENT = "taskboard://tasks-changed";
+
 export const api = {
   listTasks: (ownership?: string, accountId?: number | null) =>
     invoke<Task[]>("list_tasks", {
@@ -157,6 +161,9 @@ export const api = {
 };
 export function onSynced(cb: (r: SyncResult) => void) {
   return listen<SyncResult>(SYNCED_EVENT, (e) => cb(e.payload));
+}
+export function onTasksChanged(cb: () => void) {
+  return listen<string>(TASKS_CHANGED_EVENT, () => cb());
 }
 
 /**

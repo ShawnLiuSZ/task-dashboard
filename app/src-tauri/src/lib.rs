@@ -80,6 +80,9 @@ pub struct AppState {
 
 const TRAY_ID: &str = "main";
 pub const SYNCED_EVENT: &str = "taskboard://synced";
+/// #181：App 内写入（看板状态 / session / handoff）后通知前端重查。
+/// MCP 子进程无 AppHandle 发不出此事件，仍靠前端聚焦 + 轮询兜底。
+pub const TASKS_CHANGED_EVENT: &str = "taskboard://tasks-changed";
 
 fn schedule_minutes(app: &AppHandle) -> u64 {
     let state = app.state::<AppState>();
