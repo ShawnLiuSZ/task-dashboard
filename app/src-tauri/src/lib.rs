@@ -11,8 +11,10 @@ use tauri::{
 };
 
 mod commands;
+mod common;
 pub mod db;
 mod github;
+mod hooks;
 mod mcp;
 mod oauth;
 mod sync;
@@ -78,6 +80,9 @@ pub struct AppState {
 
 const TRAY_ID: &str = "main";
 pub const SYNCED_EVENT: &str = "taskboard://synced";
+/// #181：App 内写入（看板状态 / session / handoff）后通知前端重查。
+/// MCP 子进程无 AppHandle 发不出此事件，仍靠前端聚焦 + 轮询兜底。
+pub const TASKS_CHANGED_EVENT: &str = "taskboard://tasks-changed";
 
 fn schedule_minutes(app: &AppHandle) -> u64 {
     let state = app.state::<AppState>();
@@ -170,7 +175,8 @@ fn open_sync_conn(app: &AppHandle) -> Result<Connection, String> {
 }
 
 /// 执行一次同步，并刷新菜单栏角标、通知前端刷新列表。
-pub fn run_sync(app: &AppHandle) -> Option<sync::SyncResult> {
+/// `trigger_type`: "startup" | "auto" | "manual" — 用于同步日志记录触发来源。
+pub fn run_sync(app: &AppHandle, trigger_type: &str) -> Option<sync::SyncResult> {
     // 并发去重。已有同步在跑（Tray/启动/定时/前端按钮并发触发）时直接跳过本次，
     // 避免背靠背跑多次全量同步：既放大 GitHub 限流又阻塞编辑。
     let state = app.state::<AppState>();
@@ -200,7 +206,7 @@ pub fn run_sync(app: &AppHandle) -> Option<sync::SyncResult> {
         );
         return None;
     }
-    let result = match sync::run(&conn) {
+    let result = match sync::run(&conn, trigger_type) {
         Ok(r) => {
             // 成功同步：清掉旧错误信息，banner 自动消失。
             let _ = db::set_setting(&conn, "last_sync_error", "");
@@ -234,6 +240,13 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             autoclear_self_quarantine_and_notify(app.handle());
 
+            // #177：启动时自动注册全局默认集（claude + opencode，host 已装但 ours 缺失才装，
+            // best-effort 不 blocking；参考 clawd-on-desk fresh-install auto-sync）。
+            let auto_hooks = crate::hooks::ensure_global_defaults();
+            if !auto_hooks.is_empty() {
+                eprintln!("[hooks] 启动自动注册全局 hooks: {auto_hooks}");
+            }
+
             let handle = app.handle().clone();
             let conn = db::init(&handle).map_err(|e| {
                 Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
@@ -257,7 +270,7 @@ pub fn run() {
                     "sync" => {
                         let h = app.clone();
                         thread::spawn(move || {
-                            run_sync(&h);
+                            run_sync(&h, "manual");
                         });
                     }
                     "quit" => app.exit(0),
@@ -282,14 +295,14 @@ pub fn run() {
             let h_startup = handle.clone();
             thread::spawn(move || {
                 thread::sleep(Duration::from_secs(2));
-                run_sync(&h_startup);
+                run_sync(&h_startup, "startup");
             });
 
             let h_tick = handle.clone();
             thread::spawn(move || loop {
                 let mins = schedule_minutes(&h_tick);
                 thread::sleep(Duration::from_secs(mins * 60));
-                run_sync(&h_tick);
+                run_sync(&h_tick, "auto");
             });
 
             Ok(())
@@ -338,6 +351,7 @@ pub fn run() {
             // v0.3.23+：同步日志管理。
             commands::list_sync_logs,
             commands::prune_sync_logs,
+            commands::clear_sync_logs,
             // v0.3.24+：记事本管理。
             commands::list_notes,
             commands::add_note,
@@ -350,6 +364,11 @@ pub fn run() {
             // v0.3.28+：自定义列映射（按账号配置看板列）。
             commands::list_account_columns,
             commands::save_account_columns,
+            // #177：一键安装/卸载 agent 看板 hooks（claude/opencode × 项目/全局）。
+            // 实现参考 clawd-on-desk 的 Settings → Agents：per-agent 安装器 + 跳过未安装 host。
+            hooks::install_agent_hooks,
+            hooks::uninstall_agent_hooks,
+            hooks::get_agent_hooks_status,
         ])
         .run(tauri::generate_context!())
         .expect("TaskBoard 启动失败");

@@ -34,7 +34,18 @@ Artifact location (by current platform): `app/src-tauri/target/release/bundle/{m
 
 ### CI Packaging
 
-Release builds are produced automatically by GitHub Actions for all three platforms (macOS / Windows / Linux). See [`docs/design-and-release.md`](./docs/design-and-release.md) for the release flow, signing prerequisites, and runner configuration.
+Release builds are produced automatically by GitHub Actions for multiple platforms. See [`docs/design-and-release.md`](./docs/design-and-release.md) for the release flow, signing prerequisites, and runner configuration.
+
+#### Supported Platforms & Architectures
+
+| Platform | Architecture | Format | Status |
+|----------|--------------|--------|--------|
+| macOS | ARM (Apple Silicon) | .dmg / .app | ✅ Supported |
+| macOS | x64 (Intel) | .dmg / .app | ✅ Supported |
+| Windows | x64 | .exe (NSIS) | ✅ Supported |
+| Windows | ARM64 | .exe (NSIS) | ✅ Supported |
+| Linux (Debian/Ubuntu) | amd64 | .deb | ✅ Supported |
+| Linux (Universal) | x86_64 | .AppImage | ✅ Supported |
 
 > **⚠️ Update notice**: **v0.3.24 and below** cannot auto-update — the in-app "Check for Updates" can no longer reach the Releases API due to a repository migration. Please download the latest installer from [GitHub Releases](https://github.com/ShawnLiuSZ/task-dashboard/releases) (or use the download link shown on the app's About page).
 
@@ -52,11 +63,23 @@ Release builds are produced automatically by GitHub Actions for all three platfo
 | Interrupted session | Select a card → enter a session id + pick an agent (claude-code / workbuddy / doubao / opencode / codex / zcode / gemini-cli / cursor / aider / qwen-code, etc.) → record; copyable and clearable |
 | Handoff task | Select a card → fill details in the "Handoff" section and save (can later be written automatically by connected agents when they recognize a "create handoff task" intent) |
 | **Sync logs** | "Sync logs" button in the top bar → view recent sync history (time, trigger type, duration, status, added/updated/removed counts, errors); supports manual cleanup of expired logs, logs older than 7 days are auto-cleaned |
-| Local data | `~/Library/Application Support/com.shawnliu.taskboard/taskboard.db` |
+| Local data | See "Local Data Path" below |
 
 ### Key Constraint
 
 > **session ids and task states live only in local SQLite and are never written back to GitHub.** No Issue / Project creation, no changes to Issue titles / labels / comments.
+
+### Local Data Path
+
+Default database file location (via `dirs::data_dir()` + `com.shawnliu.taskboard`):
+
+| Platform | Default Path |
+|---|---|
+| macOS | `~/Library/Application Support/com.shawnliu.taskboard/taskboard.db` |
+| Windows | `%APPDATA%\com.shawnliu.taskboard\taskboard.db` (i.e. `C:\Users\<user>\AppData\Roaming\com.shawnliu.taskboard\taskboard.db`) |
+| Linux | `$XDG_CONFIG_HOME/com.shawnliu.taskboard/taskboard.db` (defaults to `~/.config/com.shawnliu.taskboard/taskboard.db`) |
+
+Override with the **`TASKBOARD_DB`** environment variable.
 
 ### UI Language (i18n)
 
@@ -77,7 +100,7 @@ PRD §6 planned a "MCP Server + Skill" so AI agents automatically maintain the b
 **Two run modes (same tool contract)**:
 
 1. **Built-in binary (recommended, from v0.3.12)**: the `taskboard` binary has a new `mcp` subcommand — `main.rs` enters a stdio JSON-RPC loop directly when argv contains `mcp`, **without launching the GUI**. It reuses the **exact same** `db.rs` schema and the same `taskboard.db` as the App — **zero Python dependency, no scattered folders, no schema drift**. Install the app and you have MCP built in; point mcp.json straight at the in-app binary (see config below).
-2. **Standalone `server.py` (portable / dev fallback)**: `mcp_server/server.py` remains — using **only the Python standard library** (handwritten JSON-RPC 2.0 + LSP-style `Content-Length` framing), no third-party deps. It lets agents read/write the same database on non-macOS machines or before the app is installed; its tools stay compatible with the built-in binary. The default DB path is `~/Library/Application Support/com.shawnliu.taskboard/taskboard.db` (same for the built-in binary), overridable via the `TASKBOARD_DB` env var; on startup it idempotently backfills the `branch` / `handoff` columns (matching the App's `db.rs::init` migration), so it works **even if the App has never launched**.
+2. **Standalone `server.py` (portable / dev fallback)**: `mcp_server/server.py` remains — using **only the Python standard library** (handwritten JSON-RPC 2.0 + LSP-style `Content-Length` framing), no third-party deps. It lets agents read/write the same database on non-macOS machines or before the app is installed; its tools stay compatible with the built-in binary. The default DB path is the same as above (platform-standard location), overridable via the `TASKBOARD_DB` env var; on startup it idempotently backfills the `branch` / `handoff` columns (matching the App's `db.rs::init` migration), so it works **even if the App has never launched**.
 
 **Provided tools** (aligned with PRD §6.2):
 
@@ -108,17 +131,32 @@ PRD §6 planned a "MCP Server + Skill" so AI agents automatically maintain the b
 }
 ```
 
-> Path note: the above is the default install location (`/Applications/TaskBoard.app/...`). If you installed elsewhere, point `command` at your actual `TaskBoard.app/Contents/MacOS/taskboard` absolute path. If the app is **not installed and you use the `server.py` fallback**, set it to `"command": "python3", "args": ["/path/to/mcp_server/server.py"]`.
+> **Platform-specific `command` paths**:
 >
-> Note: a registered WorkBuddy MCP must be "trusted" on its connectors page before it activates; for codex / cursor etc., fill in the same `command` + `args` per each tool's own MCP config location.
+> | Platform | Default path |
+> |---|---|
+> | macOS | `/Applications/TaskBoard.app/Contents/MacOS/taskboard` |
+> | Windows | `C:\Program Files\TaskBoard\taskboard.exe` |
+> | Linux (deb) | `/usr/bin/taskboard` |
+>
+> If you installed to a non-default location, change `command` to the actual `taskboard` binary path. If the app is **not installed and you use the `server.py` fallback**, set it to `"command": "python3", "args": ["/path/to/mcp_server/server.py"]`.
+>
+> WorkBuddy has it registered; trust it on its connectors page. For other agents (codex / cursor / opencode, etc.), fill in the same `command` + `args` per each tool's own MCP config location.
 
 ### Making agents actually hook in (trigger logic)
 
-The MCP Server only provides tools. To make agents call them **automatically** on "start / interrupt / say 'create handoff task' / complete", you need a set of **trigger rules** loaded by the agent. This repo ships them in:
+The MCP Server only provides tools (the **capability layer**). To make agents call them **automatically** on "start / interrupt / say 'create handoff task' / complete", you also need **trigger rules** loaded by the agent (the **trigger layer**). Both are required: without MCP, hooks have nothing to call; without trigger logic, tools sit idle. This repo ships them in:
 
 - **`mcp_server/AGENT_INSTRUCTIONS.md`** — a cross-agent instruction spec: trigger timing → exact MCP tool calls, issue reference format, state enums, session-id source conventions. You can feed the whole file to claude-code / codex / opencode / zcode / helix / cursor / doubao.
 - **`CLAUDE.md`** (repo root) — the auto-loaded entry for claude-code, pointing to the instruction file above with quick-reference rules; it takes effect automatically when running claude-code in this repo.
-- Other agents: merge the contents of `AGENT_INSTRUCTIONS.md` into their system prompt / project instructions (codex's `AGENTS.md`, helix's skills/system prompt, cursor's `.cursorrules`, etc.).
+- **`.claude/`** (#177, deterministic triggers for claude-code) — `settings.json` registers `SessionStart` (injects `$TASKBOARD_SESSION_ID` / `${CLAUDE_SESSION_ID}` + board rules) and `UserPromptSubmit` (nudges only when an issue is mentioned) hooks (bash + python3 only, never write to DB); `commands/task-start|task-done|task-handoff.md` provide explicit one-shot commands. Run `/task-start <repo#num>` when starting, `/task-done` when finished.
+- **`.opencode/`** (#177, deterministic triggers for opencode) — `opencode.json` registers the `taskboard` MCP (`python3 mcp_server/server.py`, cross-platform, no app install needed); `plugins/taskboard.js` (zero deps) auto-fills `session_id` / `agent` / `branch` for `record_session` in `tool.execute.before`; `commands/task-start|task-done|task-handoff.md` mirror the claude side (branch auto-injected via backtick `git branch --show-current`). Same `/task-start` → `/task-done` flow.
+- **App Settings → Agent Hooks** (#177, one-click install/uninstall, modeled on clawd-on-desk's Settings → Agents) — all 39 agents from the task detail session dropdown are selectable:
+  - **One-click install** (hook mechanism verified one by one): `claude-code` / `opencode` / `workbuddy` / `codebuddy` / `trae`;
+  - **The other 34**: selecting them returns manual setup guidance (including known config paths for codex / cursor / copilot / gemini / qwen / kimi / zcode), never a faked success;
+  - **Two scopes**: global (user dirs like `~/.claude` and `~/.config/opencode`, effective in all repos, auto-completed at startup) and single repo;
+  - Merge on install, remove-only-ours on uninstall (`.taskboard-bak` backup before touching configs); agents never installed are skipped automatically.
+- Other agents (no hook mechanism): merge the contents of `AGENT_INSTRUCTIONS.md` into their system prompt / project instructions (codex's `AGENTS.md`, helix's skills/system prompt, cursor's `.cursorrules`, etc.).
 
 > This completes PRD D5's "MCP first, Skill later": MCP is the capability layer (in place), the instruction files are the "Skill" equivalent (reusable across agents), and each agent orchestrates calls by intent.
 
@@ -129,4 +167,4 @@ The MCP Server only provides tools. To make agents call them **automatically** o
 - [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — per-version update & fix log (v0.3.1 → v0.3.15)
 - [`docs/v0.3.15-pat-auth.md`](./docs/v0.3.15-pat-auth.md) — v0.3.15 PAT auth & visual polish design doc (gh replacement, card colors, multi-account plan)
 
-> Version v0.3.19 · Local cross-platform app (Windows / macOS / Linux), 2026-09-05
+> Version v0.3.54 · Local cross-platform app (Windows / macOS / Linux), 2026-09-09

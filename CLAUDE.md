@@ -25,6 +25,22 @@
 
 **MCP 工具速记表**见 [`AGENTS.md §7`](./AGENTS.md)（6 个工具：`update_task_status` / `get_task_status` / `record_session` / `record_handoff` / `clear_session` / `list_my_tasks`）。Claude Code 调用时 `<agent-name>` 固定传 `"claude-code"`，便于多 agent 写入时区分。
 
+### 项目级自动维护（#177：hooks + slash commands）
+
+本仓库已内置 `.claude/settings.json`（随仓库提交，克隆即生效）：
+
+- `SessionStart` hook（`.claude/hooks/taskboard-session-start.sh`）：把本次 `session_id` 注入上下文并写入 `$TASKBOARD_SESSION_ID`；slash command 里也可用 `${CLAUDE_SESSION_ID}`。**session_id 优先用它，不要编造、不要用分支名冒充**。
+- `UserPromptSubmit` hook（`.claude/hooks/taskboard-prompt-reminder.sh`）：仅当 prompt 疑似提到某 issue（`repo#num` / GitHub URL）时提醒查板开工，其余时间静默。
+- Hooks 只注入上下文、**不写 DB**；真正的写库仍由你调 MCP 工具完成。
+
+快捷命令（显式触发，推荐）：
+
+- `/task-start <repo#num>` —— 查现状 → 置「处理中」→ `record_session`（含分支）。分支必须先用 Bash 跑 `git branch --show-current` 取到再传值，**禁止把 `$(...)` 塞进 MCP 参数**。
+- `/task-done <repo#num>` —— 置「已完成」+ `clear_session`。
+- `/task-handoff <repo#num> <交接详情>` —— 写 `handoff` 并保留可恢复会话。
+
+也就是说：开始处理某 issue 时不要只改代码，先 `/task-start`（或等价的两步 MCP 调用）；做完 `/task-done`。详见 slash command 文件与 [`mcp_server/AGENT_INSTRUCTIONS.md`](./mcp_server/AGENT_INSTRUCTIONS.md) §2。
+
 `issue` 支持 `repo#number` / `owner/repo#number` / GitHub URL 三种写法。
 **只写本地看板，绝不调用 GitHub API、绝不改 Issue / Project / label / 评论。**
 

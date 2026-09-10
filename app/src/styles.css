@@ -6,7 +6,8 @@
   --border-strong: rgba(0, 0, 0, 0.2);
   --text: #1d1d1f;
   --text-2: #6e6e73;
-  --text-3: #9a9aa0;
+  /* v0.3.49 (#150)：加深弱文本，对比度从 ~2.8:1 提到 AA 级（浅底上 ≥ 4.5:1）。 */
+  --text-3: #6b6b70;
   --accent: #0a6cff;
   --amber-bg: #fdf0d5;
   --amber-text: #8a5a00;
@@ -163,6 +164,32 @@ body {
   color: #a32d2d;
 }
 
+/* #178：同步后新任务被筛选隐藏的提示（琥珀色，与 ok/error 区分）。 */
+/* #177：Agent 接入分组颜色（与看板列标题配色同源）。
+   已接入=绿（done 同色），可接入=蓝（doing 同色），未安装/手动=灰。 */
+.hook-group-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: baseline;
+}
+.hook-group-title-installed { color: #0b6b4f; }
+.hook-group-dot-installed { background: #0b6b4f; }
+.hook-group-title-available { color: #0a5bd0; }
+.hook-group-dot-available { background: #0a5bd0; }
+.hook-group-title-missing { color: var(--text-3); }
+.hook-group-dot-missing { background: var(--text-3); }
+.hook-group-title-manual { color: var(--text-3); }
+.hook-group-dot-manual { background: transparent; border: 1px dashed var(--text-3); }
+.hook-row-installed { color: #0b6b4f; }
+.hook-row-available { color: #0a5bd0; }
+.banner.warn {
+  background: #fff7e6;
+  color: #8a5a00;
+}
+
 /* v0.3.22+：Project Status 诊断结果（多行文本）。 */
 .diag-banner {
   white-space: pre-line;
@@ -230,6 +257,10 @@ body {
 
 /* 列底色保持中性，状态色只落在列头胶囊上，与白色卡片不打架。 */
 .column-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
   margin: 8px 8px 2px;
   padding: 5px 10px;
   border-radius: 7px;
@@ -261,12 +292,20 @@ body {
 .column-head .count {
   margin-left: auto;
 }
-
-.column-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
+/* v0.3.51 (#165)：未匹配列提示（未映射的 project_status 值） */
+.unmapped-hint {
+  margin: 0 8px 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-2, #6b7280);
+  background: rgba(255, 165, 0, 0.08);
+  border: 1px dashed rgba(255, 165, 0, 0.45);
+  border-radius: 6px;
+  cursor: default;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .column-title {
@@ -549,16 +588,7 @@ body {
 .gh-status-18 { background: #fdf4ff; color: #a21caf; border-color: #f0abfc; }
 .gh-status-19 { background: #fefce8; color: #a16207; border-color: #fef08a; }
 
-/* v0.3.17+：issue 状态独立行（标题下方），左对齐、不与标题行挤占。
-   （后调整：状态徽章回到 card-top「★我的」之后，本行样式保留仅供回退参考。） */
-.gh-status-row {
-  display: flex;
-  margin: -2px 0 4px;
-}
-
-.gh-status-row .gh-status {
-  margin-left: 0;
-}
+/* v0.3.49 (#150)：.gh-status-row 已无引用（状态徽章回到 card-top），死码删除。 */
 
 /* v0.3.17+：账号徽章独占卡片最顶行。 */
 .account-row-top {
@@ -989,6 +1019,31 @@ body {
   margin-top: 4px;
 }
 
+/* ===== v0.3.51+ 应用内确认弹窗（替代 Tauri 不支持的 window.confirm） ===== */
+
+.confirm-modal {
+  width: 400px;
+}
+
+.confirm-message {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.btn.primary.danger {
+  background: #c0392b;
+  border-color: #c0392b;
+  color: #fff;
+}
+
+.btn.primary.danger:hover:not(:disabled) {
+  background: #a32d2d;
+  border-color: #a32d2d;
+  color: #fff;
+}
+
 /* ===== v0.3.19+ 关于页 ============================================ */
 
 .about-modal .about-status {
@@ -1220,12 +1275,36 @@ body {
   white-space: nowrap;
 }
 
+/* v0.3.51 (#161)：错误信息默认单行截断，点击展开全文（hover 有系统 tooltip 显示原文）。 */
 .sync-logs-table .error-cell {
-  max-width: 200px;
+  max-width: 220px;
+  color: #a32d2d;
+}
+
+.sync-logs-table .error-cell .error-toggle {
+  display: block;
+  width: 100%;
+  max-width: 220px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #a32d2d;
+}
+
+.sync-logs-table .error-cell .error-toggle:hover {
+  text-decoration: underline;
+}
+
+.sync-logs-table .error-cell .error-toggle.expanded {
+  max-width: 360px;
+  white-space: normal;
+  word-break: break-all;
 }
 
 .badge {
@@ -1760,4 +1839,11 @@ body {
 .note-error .note-tool:hover {
   background: rgba(163, 45, 45, 0.12);
   color: #a32d2d;
+}
+
+/* v0.3.49 (#150)：减弱动效偏好下关闭所有过渡。 */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
 }

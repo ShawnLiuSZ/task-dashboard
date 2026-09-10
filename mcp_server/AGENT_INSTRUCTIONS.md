@@ -40,7 +40,7 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 | `list_my_tasks` | `status?` / `ownership?` | 列出看板任务（可按四态 / 归属过滤） |
 | `get_task_status` | `issue` | 查某任务当前状态 + 已记录的 session / handoff |
 | `update_task_status` | `issue`, `status` | 改本地看板状态 |
-| `record_session` | `issue`, `session_id`, `agent?` | 记录中断会话 id |
+| `record_session` | `issue`, `session_id`, `agent?`, `branch?` | 记录中断会话 id；`branch` 非空则一并记录当前工作分支（写 `work_branch`，与同步的 PR `branch` 分离） |
 | `record_handoff` | `issue`, `text` | 记录「交接任务」详情 |
 | `clear_session` | `issue` | 任务完成后清空 session 字段（保留审计） |
 
@@ -59,18 +59,22 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 
 | 时机 | 动作 |
 |---|---|
-| **开始处理**某个 issue（用户派活 / 你认领 / 你开始改它） | `update_task_status(issue, "处理中")` |
+| **开始处理**某个 issue（用户派活 / 你认领 / 你开始改它） | `update_task_status(issue, "处理中")` + `record_session(issue, <当前会话 id>, "<agent 名>", branch=<当前工作分支>)` |
 | **中途停止 / 会话中断 / 你要切到别的任务** | `record_session(issue, <当前会话 id>, "<你的 agent 名>")` |
 | 用户说「**生成交接任务**」「交接一下」「handoff」之类 | `record_handoff(issue, "<已做/未做/卡点/如何恢复>")`；如需保留可恢复会话，同时 `record_session` |
 | **任务完成**（你确认做完、要收尾） | `update_task_status(issue, "已完成")` + `clear_session(issue)` |
 | 想了解某任务现状 / 恢复上下文 | `get_task_status(issue)` |
 | 想看任务清单（如只看「无人认领」） | `list_my_tasks(ownership="notassignee")` |
 
-### 会话 id 来源（重要）
-`session_id` **由调用方自行提供**，无统一来源（多 agent 并行时单一来源会失效）：
-- claude-code：可用当前会话标识 / tmux 会话 / 工作分支名等可恢复标识
-- codex / opencode / zcode / helix：各自取本会话的可恢复 id
+### 会话 id / 分支来源（重要，#177）
+`session_id` **由调用方提供**，优先级如下（多 agent 并行时不要混用对方的 id）：
+- claude-code（本仓库，已接项目级 hooks）：`SessionStart` hook 已把本次会话 id 注入上下文并持久化到 `$TASKBOARD_SESSION_ID`（`CLAUDE_ENV_FILE`），slash command 里也可用 `${CLAUDE_SESSION_ID}`。三者同值，优先用 `${CLAUDE_SESSION_ID}`，为空再用 `$TASKBOARD_SESSION_ID`。兜底才用 tmux 会话等可恢复标识。
+- opencode（本仓库，已接项目级 plugin `.opencode/plugins/taskboard.js`）：调 `record_session` 时**不用填** `session_id` / `agent` / `branch`——插件在 `tool.execute.before` 自动用真实会话 id + `opencode` + git 分支补齐，不要编造。快捷方式：`/task-start <repo#num>`。**自动开始**：用户 prompt 里含**唯一** issue 引用（`repo#num` / `owner/repo#num` / GitHub issue URL）时，插件自动置处理中 + 记 session（走同一 MCP 后端），无需手动调命令；零条或多条（无法消歧）→ 手动 `/task-start`。
+- codex / zcode / helix：各自取本会话的可恢复 id。
 - **务必带 `agent` 参数**（`claude-code` / `codex` / `opencode` / `zcode` / `helix` …），便于多进程区分谁记的
+
+`branch` **也由调用方提供，但必须分两步**：先用 Bash 工具执行 `git branch --show-current`（或 `git -C <该 issue 对应项目目录> branch --show-current`）拿到纯分支名，再把结果作为字符串传给 `record_session` 的 `branch` 参数。**禁止把 `$(...)` / 反引号原样塞进 MCP 参数**（MCP 不执行 shell，只会写入字面量脏数据）。
+**取不到就传空**（没在 git 仓库 / 无分支时不要硬塞脏数据）。写入独立 `work_branch` 列，与同步自动拉的 PR `branch` 分离——同步不会覆盖它。
 
 ### 中断时状态如何保持
 中断后**保持「处理中」**（不要回退到「待处理」）——回退会丢失「该任务已有半成品」的信号，而这正是 session id 存在的意义；下次恢复时显式再转「处理中」即可。
@@ -80,8 +84,10 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 ## 3. 示例（claude-code 处理 `fad-backend#1247`）
 
 ```
-# 1) 接到任务，开始处理
+# 1) 接到任务，开始处理（快捷方式：/task-start fad-backend#1247）
+# 先用 Bash 工具执行 git branch --show-current 拿到分支，再调下面两步
 update_task_status(issue="fad-backend#1247", status="处理中")
+record_session(issue="fad-backend#1247", session_id="${CLAUDE_SESSION_ID}", agent="claude-code", branch="<上一步 Bash 的输出，可空>")
 
 # 2) 中途要切去别的事，先记录会话
 record_session(issue="fad-backend#1247", session_id="tmux:work-1247", agent="claude-code")

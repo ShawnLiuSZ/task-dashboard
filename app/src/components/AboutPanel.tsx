@@ -14,16 +14,32 @@ type State =
   | { phase: "ok"; data: CheckUpdate }
   | { phase: "error"; message: string };
 
+/** 按当前安装平台返回 taskboard 二进制的默认路径（与 README 一致）。 */
+function getMcpCommand(): string {
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes("mac")) {
+    return "/Applications/TaskBoard.app/Contents/MacOS/taskboard";
+  }
+  if (ua.includes("win")) {
+    return "C:\\Program Files\\TaskBoard\\taskboard.exe";
+  }
+  // Linux / 其他
+  return "/usr/bin/taskboard";
+}
+
 /** MCP 接入配置片段（与 README 一致，代码块非翻译）。 */
-const MCP_SNIPPET = `{
+function buildMcpSnippet(): string {
+  const cmd = getMcpCommand();
+  return `{
   "mcpServers": {
     "taskboard": {
       "type": "stdio",
-      "command": "/Applications/TaskBoard.app/Contents/MacOS/taskboard",
+      "command": ${JSON.stringify(cmd)},
       "args": ["mcp"]
     }
   }
 }`;
+}
 
 /** v0.3.19+「关于」弹窗：展示当前版本号 + 检查更新入口。 */
 export default function AboutPanel({ onClose }: Props) {
@@ -60,7 +76,16 @@ export default function AboutPanel({ onClose }: Props) {
 
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal about-modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal about-modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("about.title")}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onClose();
+        }}
+      >
         <h3 className="modal-title">{t("about.title")}</h3>
 
         <div className="about-body">
@@ -89,8 +114,7 @@ export default function AboutPanel({ onClose }: Props) {
           <section className="about-section">
             <h4>{t("about.mcpTitle")}</h4>
             <p className="muted small">{t("about.mcpDesc")}</p>
-            <pre className="about-code">{MCP_SNIPPET}</pre>
-            <p className="muted small">{t("about.mcpWorkbuddy")}</p>
+            <pre className="about-code">{buildMcpSnippet()}</pre>
             <p className="muted small">{t("about.mcpFallback")}</p>
           </section>
 
