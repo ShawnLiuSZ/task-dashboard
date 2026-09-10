@@ -155,6 +155,7 @@ export const api = {
         hooksOk: boolean;
         commandsOk: boolean;
         settingsOk: boolean;
+        hostPresent: boolean;
       }[];
       notices: string[];
     }>("get_agent_hooks_status", { scope, targetDir, agents }),

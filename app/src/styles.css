@@ -165,6 +165,26 @@ body {
 }
 
 /* #178：同步后新任务被筛选隐藏的提示（琥珀色，与 ok/error 区分）。 */
+/* #177：Agent 接入分组颜色（与看板列标题配色同源）。
+   已接入=绿（done 同色），可接入=蓝（doing 同色），未安装/手动=灰。 */
+.hook-group-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: baseline;
+}
+.hook-group-title-installed { color: #0b6b4f; }
+.hook-group-dot-installed { background: #0b6b4f; }
+.hook-group-title-available { color: #0a5bd0; }
+.hook-group-dot-available { background: #0a5bd0; }
+.hook-group-title-missing { color: var(--text-3); }
+.hook-group-dot-missing { background: var(--text-3); }
+.hook-group-title-manual { color: var(--text-3); }
+.hook-group-dot-manual { background: transparent; border: 1px dashed var(--text-3); }
+.hook-row-installed { color: #0b6b4f; }
+.hook-row-available { color: #0a5bd0; }
 .banner.warn {
   background: #fff7e6;
   color: #8a5a00;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { AGENTS, HOOK_SUPPORTED_AGENTS, MANUAL_PATH_HINTS, agentLabel } from "../agents";
 import { useI18n, type LangMode } from "../i18n";
@@ -245,8 +245,8 @@ export default function SettingsPanel({
     updateAccountState(accountId, { ruleInput: "" });
   };
 
-  // #177：一键安装/卸载 agent 看板 hooks（作用域 project|global × claude|opencode）。
-  // 实现参考 clawd-on-desk 的 Settings → Agents：per-agent 行 + 跳过未安装 host。
+  // #177：agent 看板 hooks 接入页（作用域 project|global × 下拉全量 agent）。
+  // 打开页签自动查询全部状态，分组展示：已接入 / 可接入 / 未安装 / 手动配置。
   type HooksScope = "project" | "global";
   interface AgentStatus {
     agent: string;
@@ -254,31 +254,43 @@ export default function SettingsPanel({
     hooksOk: boolean;
     commandsOk: boolean;
     settingsOk: boolean;
+    hostPresent: boolean;
   }
   const [hooksScope, setHooksScope] = useState<HooksScope>("global");
   const [targetDir, setTargetDir] = useState("");
-  // 默认选中已验证一键安装的 agent；其余下拉 agent 同样可勾选，安装时返回手动指引
-  const [hooksAgents, setHooksAgents] = useState<string[]>([...HOOK_SUPPORTED_AGENTS]);
   const [hooksBusy, setHooksBusy] = useState(false);
   const [hooksMsg, setHooksMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [hooksNotices, setHooksNotices] = useState<string[]>([]);
   const [hooksStatus, setHooksStatus] = useState<AgentStatus[] | null>(null);
 
+  const allAgentIds = useMemo(() => AGENTS.map((a) => a.value), []);
   const hooksTarget = () => (hooksScope === "global" ? null : targetDir.trim() || null);
-  const hooksReady = () =>
-    !hooksBusy && hooksAgents.length > 0 && (hooksScope === "global" || targetDir.trim().length > 0);
 
-  const refreshHooksStatus = async () => {
-    const s = await api.getAgentHooksStatus(hooksScope, hooksTarget(), hooksAgents);
+  const refreshHooksStatus = useCallback(async () => {
+    const s = await api.getAgentHooksStatus(hooksScope, hooksTarget(), allAgentIds);
     setHooksStatus(s.agents);
     setHooksNotices(s.notices);
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hooksScope]);
 
-  const checkHooks = async () => {
-    if (!hooksReady()) return;
+  // 打开 Agent 页签 / 切换作用域时自动查询，无需手动点
+  useEffect(() => {
+    if (tab !== "agents" || hooksBusy) return;
+    setHooksMsg(null);
+    refreshHooksStatus().catch((e) => setHooksMsg({ ok: false, text: String(e) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, hooksScope]);
+
+  const runHooksOp = async (
+    op: (scope: HooksScope, target: string | null, agents: string[]) => Promise<unknown>,
+    agents: string[],
+  ) => {
+    if (hooksBusy || agents.length === 0) return;
+    if (hooksScope === "project" && !targetDir.trim()) return;
     setHooksBusy(true);
     setHooksMsg(null);
     try {
+      await op(hooksScope, hooksTarget(), agents);
       await refreshHooksStatus();
     } catch (e) {
       setHooksMsg({ ok: false, text: String(e) });
@@ -287,48 +299,62 @@ export default function SettingsPanel({
     }
   };
 
-  const installHooks = async () => {
-    if (!hooksReady()) return;
-    setHooksBusy(true);
-    setHooksMsg(null);
-    try {
-      const r = await api.installAgentHooks(hooksScope, hooksTarget(), hooksAgents);
-      await refreshHooksStatus();
-      setHooksNotices(r.notices);
-      setHooksMsg({
-        ok: true,
-        text: r.filesWritten.length === 0 ? t("settings.hooks.upToDate") : t("settings.hooks.doneFiles", { n: r.filesWritten.length }),
-      });
-    } catch (e) {
-      setHooksMsg({ ok: false, text: String(e) });
-    } finally {
-      setHooksBusy(false);
-    }
-  };
+  const installSingle = (a: string) =>
+    runHooksOp(
+      async (scope, target, agents) => {
+        const r = await api.installAgentHooks(scope, target, agents);
+        setHooksNotices(r.notices);
+        setHooksMsg({
+          ok: true,
+          text:
+            r.filesWritten.length === 0
+              ? t("settings.hooks.upToDate")
+              : t("settings.hooks.doneFiles", { n: r.filesWritten.length }),
+        });
+      },
+      [a],
+    );
 
-  const uninstallHooks = async () => {
-    if (!hooksReady()) return;
-    setHooksBusy(true);
-    setHooksMsg(null);
-    try {
-      const r = await api.uninstallAgentHooks(hooksScope, hooksTarget(), hooksAgents);
-      await refreshHooksStatus();
-      setHooksNotices(r.notices);
-      const kept = r.filesKept.length > 0 ? t("settings.hooks.keptFiles", { n: r.filesKept.length }) : "";
-      setHooksMsg({
-        ok: true,
-        text: t("settings.hooks.removedFiles", { n: r.filesRemoved.length }) + kept,
-      });
-    } catch (e) {
-      setHooksMsg({ ok: false, text: String(e) });
-    } finally {
-      setHooksBusy(false);
-    }
-  };
+  const uninstallSingle = (a: string) =>
+    runHooksOp(
+      async (scope, target, agents) => {
+        const r = await api.uninstallAgentHooks(scope, target, agents);
+        setHooksNotices(r.notices);
+        const kept =
+          r.filesKept.length > 0 ? t("settings.hooks.keptFiles", { n: r.filesKept.length }) : "";
+        setHooksMsg({
+          ok: true,
+          text: t("settings.hooks.removedFiles", { n: r.filesRemoved.length }) + kept,
+        });
+      },
+      [a],
+    );
 
-  const toggleHooksAgent = (a: string) => {
-    setHooksAgents((prev) => (prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]));
-    setHooksStatus(null);
+  // 当前作用域下可一键安装的 agent（项目级仅 claude-code/opencode 有项目目录）
+  const supportedHere = (v: string) =>
+    HOOK_SUPPORTED_AGENTS.includes(v) &&
+    (hooksScope === "global" || v === "claude-code" || v === "opencode");
+
+  // 一键安装全部“可接入”（已装 host 但 ours 缺失的一键 agent）
+  const installAllAvailable = () => {
+    const list = (hooksStatus ?? [])
+      .filter((st) => supportedHere(st.agent) && st.hostPresent && !st.installed)
+      .map((st) => st.agent);
+    if (list.length === 0) return;
+    void runHooksOp(
+      async (scope, target, agents) => {
+        const r = await api.installAgentHooks(scope, target, agents);
+        setHooksNotices(r.notices);
+        setHooksMsg({
+          ok: true,
+          text:
+            r.filesWritten.length === 0
+              ? t("settings.hooks.upToDate")
+              : t("settings.hooks.doneFiles", { n: r.filesWritten.length }),
+        });
+      },
+      list,
+    );
   };
 
   const diagnoseProject = async () => {
@@ -515,54 +541,105 @@ export default function SettingsPanel({
           )}
           <div className="field">
             <label>{t("settings.hooks.agents")}</label>
-            <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-              {AGENTS.map((a) => (
-                <button
-                  key={a.value}
-                  type="button"
-                  onClick={() => toggleHooksAgent(a.value)}
-                  className={`chip${hooksAgents.includes(a.value) ? " on" : ""}`}
-                  style={{ padding: "4px 12px", cursor: "pointer" }}
-                  title={
-                    HOOK_SUPPORTED_AGENTS.includes(a.value)
-                      ? undefined
-                      : `${t("settings.hooks.manual")}${MANUAL_PATH_HINTS[a.value] ? `: ${MANUAL_PATH_HINTS[a.value]}` : ""}`
-                  }
-                >
-                  {agentLabel(a.value, t)}
-                  {!HOOK_SUPPORTED_AGENTS.includes(a.value) && (
-                    <span className="muted"> °</span>
-                  )}
-                </button>
-              ))}
-            </div>
+            {(
+              [
+                ["installed", t("settings.hooks.group.installed")],
+                ["available", t("settings.hooks.group.available")],
+                ["missing", t("settings.hooks.group.missing")],
+                ["manual", t("settings.hooks.group.manual")],
+              ] as const
+            ).map(([group, title]) => {
+              const rows = AGENTS.map((a) => a.value).filter((v) => {
+                const supported = supportedHere(v);
+                const st = hooksStatus?.find((s) => s.agent === v);
+                if (!supported) return group === "manual";
+                if (!st) return group === "available";
+                if (st.installed) return group === "installed";
+                if (st.hostPresent) return group === "available";
+                return group === "missing";
+              });
+              if (rows.length === 0) return null;
+              return (
+                <div key={group} style={{ marginTop: 8 }}>
+                  <div className={`muted small hook-group-title-${group}`} style={{ fontWeight: 600 }}>
+                    <span className={`hook-group-dot hook-group-dot-${group}`} />
+                    {title}（{rows.length}）
+                  </div>
+                  {rows.map((v) => {
+                    const st = hooksStatus?.find((s) => s.agent === v);
+                    const supported = supportedHere(v);
+                    const detail = !supported
+                      ? (MANUAL_PATH_HINTS[v] ?? t("settings.hooks.manual"))
+                      : st
+                        ? `hooks ${st.hooksOk ? "✓" : "✗"} · commands ${st.commandsOk ? "✓" : "✗"} · ${v === "opencode" ? "mcp" : "settings"} ${st.settingsOk ? "✓" : "✗"}`
+                        : "…";
+                    return (
+                      <div
+                        key={v}
+                        className="row"
+                        style={{ alignItems: "center", gap: 6, padding: "3px 0" }}
+                      >
+                        <span
+                          style={{ minWidth: 130 }}
+                          className={
+                            group === "installed"
+                              ? "hook-row-installed"
+                              : group === "available"
+                                ? "hook-row-available"
+                                : undefined
+                          }
+                        >
+                          {agentLabel(v, t)}
+                        </span>
+                        <span className="muted small">{detail}</span>
+                        <span style={{ marginLeft: "auto" }}>
+                          {supported && st?.installed && (
+                            <button
+                              className="btn ghost small"
+                              disabled={hooksBusy}
+                              onClick={() => void uninstallSingle(v)}
+                            >
+                              {t("settings.hooks.uninstall")}
+                            </button>
+                          )}
+                          {supported && (!st || (st.hostPresent && !st.installed)) && (
+                            <button
+                              className="btn ghost small"
+                              disabled={hooksBusy}
+                              onClick={() => void installSingle(v)}
+                            >
+                              {t("settings.hooks.install")}
+                            </button>
+                          )}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
             <div className="muted small" style={{ marginTop: 4 }}>{t("settings.hooks.manualHint")}</div>
           </div>
           <div className="row" style={{ gap: 6 }}>
-            <button className="btn" onClick={() => { void checkHooks(); }} disabled={!hooksReady()}>
-              {hooksBusy ? t("settings.hooks.working") : t("settings.hooks.check")}
+            <button
+              className="btn"
+              onClick={() => {
+                if (hooksBusy) return;
+                if (hooksScope === "project" && !targetDir.trim()) return;
+                setHooksBusy(true);
+                setHooksMsg(null);
+                refreshHooksStatus()
+                  .catch((e) => setHooksMsg({ ok: false, text: String(e) }))
+                  .finally(() => setHooksBusy(false));
+              }}
+              disabled={hooksBusy || (hooksScope === "project" && !targetDir.trim())}
+            >
+              {hooksBusy ? t("settings.hooks.working") : t("settings.hooks.refresh")}
             </button>
-            <button className="btn primary" onClick={() => { void installHooks(); }} disabled={!hooksReady()}>
-              {hooksBusy ? t("settings.hooks.working") : t("settings.hooks.install")}
-            </button>
-            <button className="btn ghost" onClick={() => { void uninstallHooks(); }} disabled={!hooksReady()}>
-              {hooksBusy ? t("settings.hooks.working") : t("settings.hooks.uninstall")}
+            <button className="btn primary" onClick={installAllAvailable} disabled={hooksBusy}>
+              {t("settings.hooks.installAll")}
             </button>
           </div>
-          {hooksStatus && hooksStatus.map((st) => (
-            <div key={st.agent} className="muted small" style={{ marginTop: 4 }}>
-              <span className={st.installed ? "ok" : undefined}>
-                {agentLabel(st.agent, t)}:{" "}
-                {!HOOK_SUPPORTED_AGENTS.includes(st.agent)
-                  ? t("settings.hooks.manual")
-                  : st.installed
-                    ? t("settings.hooks.installed")
-                    : t("settings.hooks.notInstalled")}
-              </span>
-              {HOOK_SUPPORTED_AGENTS.includes(st.agent) &&
-                ` · hooks ${st.hooksOk ? "✓" : "✗"} · commands ${st.commandsOk ? "✓" : "✗"} · ${st.agent === "opencode" ? "mcp" : "settings"} ${st.settingsOk ? "✓" : "✗"}`}
-            </div>
-          ))}
           {hooksNotices.length > 0 && (
             <div className="muted small" style={{ marginTop: 6, whiteSpace: "pre-line" }}>
               {hooksNotices.map((n, i) => (
