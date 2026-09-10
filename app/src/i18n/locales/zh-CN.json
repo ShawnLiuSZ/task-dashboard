@@ -50,6 +50,7 @@
   "btn.delete": "删除",
   "btn.done": "完成",
   "sync.result": "新增 {added} · 更新 {updated} · 候选完成 {done}",
+  "sync.filterHidesNew": "本次同步的 {n} 个任务被当前筛选隐藏",
   "sync.pruned": "清理已完成 {n}",
   "search.placeholder": "搜索仓库 / 编号 / 标题…",
   "filter.byRepo": "按仓库筛选",

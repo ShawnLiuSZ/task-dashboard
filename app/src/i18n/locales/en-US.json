@@ -50,6 +50,7 @@
   "btn.delete": "Delete",
   "btn.done": "Done",
   "sync.result": "Added {added} · Updated {updated} · Candidate done {done}",
+  "sync.filterHidesNew": "{n} tasks from this sync are hidden by current filters",
   "sync.pruned": "Pruned completed {n}",
   "search.placeholder": "Search repo / number / title…",
   "filter.byRepo": "Filter by repository",
