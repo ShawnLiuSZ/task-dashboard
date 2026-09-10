@@ -112,9 +112,54 @@ MCP 是**能力层**（读写看板的工具），hooks 是**触发层**（何�
 3. prompt 提到 issue 时有轻提醒，普通闲聊无打扰；
 4. `branch` 列不再出现 `$(git` 字面量。
 
+## opencode 自动执行 + 全局 MCP 自动合并（#177 后续，clawd-on-desk 对标）
+
+动机：opencode 只能手动 `/task-start`，不能自动执行。完全参考
+[clawd-on-desk](https://github.com/rullerzhou-afk/clawd-on-desk/tree/main/agents)
+的 agents 接入方式（`agents/*.js` 注册表 + `hooks/opencode-family-plugin/core.mjs`
+事件驱动 + `hooks/opencode-family-install.js` 安装器），取三条、舍一条：
+
+取：
+
+1. **事件驱动自动感知**（对应其 event hook → HTTP POST 到 Clawd）：
+   `.opencode/plugins/taskboard.js` 的 `event` hook 新增 message 系处理——
+   `message.updated` / `message.part.updated` 中取用户文本（多路径防御提取，
+   仅 role=user；part 分片按 session 累计缓冲后扫描），正则提取 issue 引用
+   （`repo#num` / `owner/repo#num` / GitHub issue URL，归一化规则与
+   `mcp.rs::parse_issue_ref` 一致）。**唯一引用**才自动执行，同
+   `(session, issue)` 去重；零条无事、多条无法消歧（回退手动 `/task-start`）。
+2. **进程内直调本地后端**（对应其"插件跑在宿主进程内"）：
+   自动执行不经过 HTTP（本 App 无 HTTP 服务，不新增），而是一次 spawn
+   `taskboard mcp` 完成 `get_task_status`（不存在→温和跳过；已 done→不回退）
+   + `update_task_status(处理中)` + `record_session`。宿主可能是 Bun（CLI/TUI）
+   或 Node（Desktop）：优先 `Bun.spawnSync`，退回 `node:child_process`
+   （动态 import 内建模块，不算 npm 依赖）；**env 必须显式透传**
+   （`TASKBOARD_DB` 覆盖等；Bun spawnSync 默认不继承，曾误写生产库，
+   已修 + 沙盒验证 + 生产复核）。
+3. **安装器 winning-file 自动合并**（对应其 `configCandidates` 高优在前）：
+   `hooks.rs::merge_global_opencode_mcp`——`opencode.jsonc > opencode.json >
+   config.json` 首个已存在文件生效，都没有则新建 `opencode.json`；
+   严格 JSON 走 `merge_mcp_value` 整体解析回写，JSONC 走注释保留的字符串手术
+   （mcp 内追加 / 顶层新增 / 陈旧 ours 原位更新）；他人条目保留 + notice；
+   异形文件 Err 回退手动指引（原 `global_opencode_mcp_notice` 保留作回退文案）。
+   host 未安装仍跳过不污染。
+
+舍（暂不做）：`processNames` 进程探测——TaskBoard 的 session 经由插件/MCP
+直接获得，不需要从进程表反推；`agents/*.js` 式全量注册表暂不引入，
+现有 `AGENTS` spec（5 家）已够用。
+
+实测（沙盒库 + 真实插件加载，均通过，生产库复核未动）：
+
+- `node --check` 插件语法；引用正则 7 用例全过。
+- Bun 驱动插件：唯一引用→`(doing, test-sess-1, opencode, test-auto)`；
+  重复触发去重；多引用不动作；非看板引用温和跳过；assistant 消息不触发。
+- Rust：`cargo test` 全过（新增 5 例：winning 优先级 / jsonc 追加+注释保留 /
+  缺省新建 / 外来保留+陈旧更新 / 坏文件报错不动；另更新 1 例旧断言）。
+- 待真机：opencode TUI 里 prompt 含 issue 的端到端自动开始。
+
 ## 相关链接
 
 - Issue：[#177](https://github.com/ShawnLiuSZ/task-dashboard/issues/177)
-- 分支：`feature/issue-177-claude-session-hooks`
+- 分支：`feature/issue-177-claude-session-hooks`（已合入）、`fix/issue-177-agent-groups`（本节工作分支）
 - 前置设计：[`docs/issue-171-record-session-branch.md`](./issue-171-record-session-branch.md)（`work_branch` 分离）、[`mcp_server/AGENT_INSTRUCTIONS.md`](../mcp_server/AGENT_INSTRUCTIONS.md) §2
 - CHANGELOG：待发版时在 `docs/CHANGELOG.md` 对应版本下追加指向本文档的链接

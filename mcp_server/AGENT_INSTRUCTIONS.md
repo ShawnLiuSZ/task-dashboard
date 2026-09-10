@@ -69,7 +69,7 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 ### 会话 id / 分支来源（重要，#177）
 `session_id` **由调用方提供**，优先级如下（多 agent 并行时不要混用对方的 id）：
 - claude-code（本仓库，已接项目级 hooks）：`SessionStart` hook 已把本次会话 id 注入上下文并持久化到 `$TASKBOARD_SESSION_ID`（`CLAUDE_ENV_FILE`），slash command 里也可用 `${CLAUDE_SESSION_ID}`。三者同值，优先用 `${CLAUDE_SESSION_ID}`，为空再用 `$TASKBOARD_SESSION_ID`。兜底才用 tmux 会话等可恢复标识。
-- opencode（本仓库，已接项目级 plugin `.opencode/plugins/taskboard.js`）：调 `record_session` 时**不用填** `session_id` / `agent` / `branch`——插件在 `tool.execute.before` 自动用真实会话 id + `opencode` + git 分支补齐，不要编造。快捷方式：`/task-start <repo#num>`。
+- opencode（本仓库，已接项目级 plugin `.opencode/plugins/taskboard.js`）：调 `record_session` 时**不用填** `session_id` / `agent` / `branch`——插件在 `tool.execute.before` 自动用真实会话 id + `opencode` + git 分支补齐，不要编造。快捷方式：`/task-start <repo#num>`。**自动开始**：用户 prompt 里含**唯一** issue 引用（`repo#num` / `owner/repo#num` / GitHub issue URL）时，插件自动置处理中 + 记 session（走同一 MCP 后端），无需手动调命令；零条或多条（无法消歧）→ 手动 `/task-start`。
 - codex / zcode / helix：各自取本会话的可恢复 id。
 - **务必带 `agent` 参数**（`claude-code` / `codex` / `opencode` / `zcode` / `helix` …），便于多进程区分谁记的
 
