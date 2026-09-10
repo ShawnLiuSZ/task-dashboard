@@ -164,6 +164,12 @@ body {
   color: #a32d2d;
 }
 
+/* #178：同步后新任务被筛选隐藏的提示（琥珀色，与 ok/error 区分）。 */
+.banner.warn {
+  background: #fff7e6;
+  color: #8a5a00;
+}
+
 /* v0.3.22+：Project Status 诊断结果（多行文本）。 */
 .diag-banner {
   white-space: pre-line;
