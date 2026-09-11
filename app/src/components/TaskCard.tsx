@@ -124,19 +124,22 @@ function TaskCard({ task, accountLabel, active, onSelectKey, repoIndex, showGhSt
         )}
       </div>
 
-      <div className="card-bottom">
-        {task.sessionId ? (
-          <span className="session">
+      {/* #197：有 session 时在分配人下一行独立展示（不再挤占时间位置）。 */}
+      {task.sessionId && (
+        <div className="meta-row session-row">
+          <span className="session" title={task.sessionId}>
             <span className="session-label">{t("card.sessionLabel")}</span>
             <code>{task.sessionId}</code>
           </span>
-        ) : (
-          <span className="muted small">
-            {task.updatedAt
-              ? new Date(task.updatedAt * 1000).toISOString().slice(0, 10)
-              : ""}
-          </span>
-        )}
+        </div>
+      )}
+
+      <div className="card-bottom">
+        <span className="muted small">
+          {task.updatedAt
+            ? new Date(task.updatedAt * 1000).toISOString().slice(0, 10)
+            : ""}
+        </span>
         {task.latestCommentUrl && (
           <a
             className="cmt-link"
