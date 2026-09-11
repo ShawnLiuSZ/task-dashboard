@@ -14,6 +14,7 @@ mod commands;
 mod common;
 pub mod db;
 mod github;
+mod hooks;
 mod mcp;
 mod oauth;
 mod sync;
@@ -79,6 +80,9 @@ pub struct AppState {
 
 const TRAY_ID: &str = "main";
 pub const SYNCED_EVENT: &str = "taskboard://synced";
+/// #181：App 内写入（看板状态 / session / handoff）后通知前端重查。
+/// MCP 子进程无 AppHandle 发不出此事件，仍靠前端聚焦 + 轮询兜底。
+pub const TASKS_CHANGED_EVENT: &str = "taskboard://tasks-changed";
 
 fn schedule_minutes(app: &AppHandle) -> u64 {
     let state = app.state::<AppState>();
@@ -236,6 +240,13 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             autoclear_self_quarantine_and_notify(app.handle());
 
+            // #177：启动时自动注册全局默认集（claude + opencode，host 已装但 ours 缺失才装，
+            // best-effort 不 blocking；参考 clawd-on-desk fresh-install auto-sync）。
+            let auto_hooks = crate::hooks::ensure_global_defaults();
+            if !auto_hooks.is_empty() {
+                eprintln!("[hooks] 启动自动注册全局 hooks: {auto_hooks}");
+            }
+
             let handle = app.handle().clone();
             let conn = db::init(&handle).map_err(|e| {
                 Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
@@ -353,6 +364,11 @@ pub fn run() {
             // v0.3.28+：自定义列映射（按账号配置看板列）。
             commands::list_account_columns,
             commands::save_account_columns,
+            // #177：一键安装/卸载 agent 看板 hooks（claude/opencode × 项目/全局）。
+            // 实现参考 clawd-on-desk 的 Settings → Agents：per-agent 安装器 + 跳过未安装 host。
+            hooks::install_agent_hooks,
+            hooks::uninstall_agent_hooks,
+            hooks::get_agent_hooks_status,
         ])
         .run(tauri::generate_context!())
         .expect("TaskBoard 启动失败");

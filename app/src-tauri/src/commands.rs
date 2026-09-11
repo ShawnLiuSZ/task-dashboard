@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use serde::Serialize;
 use std::time::Duration;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::{Account, AccountColumn, LabelMapping, LabelMappingInput};
 use crate::sync::SyncResult;
@@ -196,6 +196,7 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncResult, String> {
 
 #[tauri::command]
 pub fn update_task_status(
+    app: AppHandle,
     state: State<'_, AppState>,
     key: String,
     status: String,
@@ -209,11 +210,14 @@ pub fn update_task_status(
     let normalized = crate::common::normalize_status(t).unwrap_or_else(|| t.to_string());
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     crate::common::set_task_status(&conn, &key, &normalized)?;
+    // #181：通知前端（含其他窗口）重查；MCP 子进程无 AppHandle，走不到这里。
+    let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
 }
 
 #[tauri::command]
 pub fn record_session(
+    app: AppHandle,
     state: State<'_, AppState>,
     key: String,
     session_id: String,
@@ -223,13 +227,21 @@ pub fn record_session(
     let now = crate::sync::now_secs();
     // v0.3.49 (#147)：SQL 走公共模块（与 mcp.rs 同一实现）；0 行也静默 Ok（原有行为）。
     crate::common::touch_session(&conn, &key, &session_id, agent.as_deref(), now, None)?;
+    // #181：同上，多窗口同步。
+    let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
 }
 
 #[tauri::command]
-pub fn clear_session(state: State<'_, AppState>, key: String) -> Result<(), String> {
+pub fn clear_session(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     crate::common::clear_task_session(&conn, &key)?;
+    // #181：同上，多窗口同步。
+    let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
 }
 
@@ -237,6 +249,7 @@ pub fn clear_session(state: State<'_, AppState>, key: String) -> Result<(), Stri
 /// 把交接上下文写入该 issue 卡片的 handoff 字段，供后续接手者直接在详情页查看。
 #[tauri::command]
 pub fn record_handoff(
+    app: AppHandle,
     state: State<'_, AppState>,
     key: String,
     text: String,
@@ -244,6 +257,8 @@ pub fn record_handoff(
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     // v0.3.49 (#147)：SQL 走公共模块（与 mcp.rs 同一实现）。
     crate::common::record_task_handoff(&conn, &key, &text)?;
+    // #181：同上，多窗口同步。
+    let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
 }
 

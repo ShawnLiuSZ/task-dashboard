@@ -23,6 +23,10 @@ import type {
 
 export const SYNCED_EVENT = "taskboard://synced";
 
+// #181：App 内写入（看板状态 / session / handoff）后后端发出的通知，
+// 前端收到即重查。MCP 子进程发不出此事件，仍靠聚焦 + 轮询兜底。
+export const TASKS_CHANGED_EVENT = "taskboard://tasks-changed";
+
 export const api = {
   listTasks: (ownership?: string, accountId?: number | null) =>
     invoke<Task[]>("list_tasks", {
@@ -121,9 +125,46 @@ export const api = {
     invoke<AccountColumn[]>("list_account_columns", { accountId }),
   saveAccountColumns: (accountId: number, columns: AccountColumn[]) =>
     invoke<void>("save_account_columns", { accountId, columns }),
+  // #177：一键安装/卸载 agent 看板 hooks（作用域 project|global × agents）。
+  installAgentHooks: (scope: string, targetDir: string | null, agents: string[]) =>
+    invoke<{
+      scope: string;
+      target: string;
+      filesWritten: string[];
+      settingsMerged: boolean;
+      mcpConfigured: boolean;
+      notices: string[];
+    }>("install_agent_hooks", { scope, targetDir, agents }),
+  uninstallAgentHooks: (scope: string, targetDir: string | null, agents: string[]) =>
+    invoke<{
+      scope: string;
+      target: string;
+      filesRemoved: string[];
+      filesKept: string[];
+      settingsCleaned: boolean;
+      backups: string[];
+      notices: string[];
+    }>("uninstall_agent_hooks", { scope, targetDir, agents }),
+  getAgentHooksStatus: (scope: string, targetDir: string | null, agents: string[]) =>
+    invoke<{
+      scope: string;
+      target: string;
+      agents: {
+        agent: string;
+        installed: boolean;
+        hooksOk: boolean;
+        commandsOk: boolean;
+        settingsOk: boolean;
+        hostPresent: boolean;
+      }[];
+      notices: string[];
+    }>("get_agent_hooks_status", { scope, targetDir, agents }),
 };
 export function onSynced(cb: (r: SyncResult) => void) {
   return listen<SyncResult>(SYNCED_EVENT, (e) => cb(e.payload));
+}
+export function onTasksChanged(cb: () => void) {
+  return listen<string>(TASKS_CHANGED_EVENT, () => cb());
 }
 
 /**

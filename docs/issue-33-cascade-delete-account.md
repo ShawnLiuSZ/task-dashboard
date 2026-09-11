@@ -30,4 +30,4 @@
 
 ## 相关链接
 
-- Issue: https://github.com/ShawnLiuSZ/task-dashborad/issues/33
+- Issue: https://github.com/ShawnLiuSZ/task-dashboard/issues/33

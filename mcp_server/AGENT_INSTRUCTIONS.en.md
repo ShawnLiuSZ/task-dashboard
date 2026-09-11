@@ -66,15 +66,15 @@ The MCP Server is registered as `taskboard` in WorkBuddy's `~/.workbuddy/mcp.jso
 | Want to know a task's current state / restore context | `get_task_status(issue)` |
 | Want to see the task list (e.g. only "unassigned") | `list_my_tasks(ownership="notassignee")` |
 
-### Where the session id comes from (important)
-The `session_id` is **supplied by the caller**; there is no single source of truth (a single source breaks with multiple parallel agents):
-- claude-code: use a recoverable id such as the current session identifier / a tmux session / a working branch name
-- codex / opencode / zcode / helix: pick a recoverable id from each one's current session
+### Where the session id / branch comes from (important, #177)
+The `session_id` is **supplied by the caller**, with this priority (don't mix ids across parallel agents):
+- claude-code (this repo, project hooks installed): the `SessionStart` hook injects the current session id into context and persists it to `$TASKBOARD_SESSION_ID` (via `CLAUDE_ENV_FILE`); `${CLAUDE_SESSION_ID}` is also available in slash commands. All three hold the same value — prefer `${CLAUDE_SESSION_ID}`, fall back to `$TASKBOARD_SESSION_ID`. Only use a tmux session or similar recoverable id as a last resort.
+- opencode (this repo, project plugin `.opencode/plugins/taskboard.js` installed): when calling `record_session`, **leave** `session_id` / `agent` / `branch` empty — the plugin auto-fills them in `tool.execute.before` with the real session id + `opencode` + git branch. Never invent one. Shortcut: `/task-start <repo#num>`. **Auto-start**: if the user's prompt contains exactly one issue reference (`repo#num` / `owner/repo#num` / GitHub issue URL), the plugin automatically marks it 处理中 + records the session (same MCP backend) — no manual command needed. Zero or ambiguous (2+) references → use `/task-start` manually.
+- codex / zcode / helix: pick a recoverable id from each one's current session
 - **always pass the `agent` argument** (`claude-code` / `codex` / `opencode` / `zcode` / `helix` …) so multiple processes can tell who recorded what
 
-`branch` is **also supplied by the caller**: take the current working branch with
-`git -C <the project dir for that issue> branch --show-current`, and **pass an empty string if it can't be resolved**
-(no git repo / no branch — don't stuff in dirty data). It's written to a separate `work_branch` column, kept apart
+`branch` is **also supplied by the caller, in two steps**: first run `git branch --show-current` (or `git -C <the project dir for that issue> branch --show-current`) with the Bash tool to get the plain branch name, then pass the result as the string `branch` argument to `record_session`. **Never paste `$(...)` / backticks literally into MCP arguments** (MCP never runs a shell — that would store a literal dirty string).
+**pass an empty string if it can't be resolved** (no git repo / no branch — don't stuff in dirty data). It's written to a separate `work_branch` column, kept apart
 from the synced PR `branch`, so sync never overwrites it.
 
 ### How state is kept when interrupting
@@ -85,9 +85,10 @@ After an interrupt, **keep the state as "处理中"** (do not fall back to "待�
 ## 3. Example (claude-code working on `fad-backend#1247`)
 
 ```
-# 1) Got the task; start working
+# 1) Got the task; start working (shortcut: /task-start fad-backend#1247)
+# First run `git branch --show-current` with the Bash tool, then call the two steps below
 update_task_status(issue="fad-backend#1247", status="处理中")
-record_session(issue="fad-backend#1247", session_id="tmux:work-1247", agent="claude-code", branch="$(git -C /path/to/fad-backend branch --show-current)")
+record_session(issue="fad-backend#1247", session_id="${CLAUDE_SESSION_ID}", agent="claude-code", branch="<Bash output from previous step, may be empty>")
 
 # 2) Switching to something else mid-way; record the session first
 record_session(issue="fad-backend#1247", session_id="tmux:work-1247", agent="claude-code")

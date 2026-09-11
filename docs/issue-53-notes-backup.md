@@ -2,7 +2,7 @@
 
 > 涉及版本：v0.3.27
 >
-> 关联：[GitHub Issue #53](https://github.com/ShawnLiuSZ/task-dashborad/issues/53)、[docs/CHANGELOG.md](./CHANGELOG.md)、PR → develop
+> 关联：[GitHub Issue #53](https://github.com/ShawnLiuSZ/task-dashboard/issues/53)、[docs/CHANGELOG.md](./CHANGELOG.md)、PR → develop
 
 ## 背景 / 动机
 
@@ -58,6 +58,6 @@
 
 ## 相关链接
 
-- [Issue #53](https://github.com/ShawnLiuSZ/task-dashborad/issues/53)
+- [Issue #53](https://github.com/ShawnLiuSZ/task-dashboard/issues/53)
 - 代码：`app/src-tauri/src/commands.rs`（`export_notes` / `import_notes`）、`app/src-tauri/src/db.rs`（`import_note`）、`app/src/components/NotesPanel.tsx`、`app/src/api.ts`
 - [docs/CHANGELOG.md](./CHANGELOG.md)

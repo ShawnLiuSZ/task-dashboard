@@ -2,6 +2,17 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.3.55 (2026-09-11) — Cross-agent board hooks (#177) + sync-filter hint (#178) + external-write auto-refresh (#181) + board-mode simplification (#108)**
+
+  - **#177 Cross-agent board hooks with one-click install/uninstall**: new project-level `.claude/` (commands `/task-start` `/task-done` / hooks) and `.opencode/` plugin record "processing + session_id/session_agent + work_branch" in one call when work on an issue starts, and clear the session when it ends; `AGENT_INSTRUCTIONS.md` pins down the trigger timing, fixing "prompt-only convention is easy to forget". See [docs/issue-177-claude-session-hooks.md](./issue-177-claude-session-hooks.md).
+  - **#177 follow-up: opencode auto-start + global MCP auto-merge**: the `.opencode/plugins/taskboard.js` event hook extracts a single issue reference from user messages and calls the local `taskboard mcp` directly (`get_task_status` + set processing + `record_session`; multiple references fall back to manual); `hooks.rs::merge_global_opencode_mcp` auto-merges the global MCP config into the first effective file (`opencode.jsonc > opencode.json > config.json`, preserving JSONC comments and other people's entries). See [docs/issue-177-claude-session-hooks.md](./issue-177-claude-session-hooks.md).
+  - **#178 Hint when synced tasks are hidden by filters, with one-click clear**: snapshot `issueKey → updatedAt` before/after sync and diff to count "newly changed yet hidden by current filters" tasks; only then show an amber banner with the count + one-click filter reset; never bothers when no filter is active. New unit-testable pure module `syncHint.ts` (8 cases). See [docs/issue-178-sync-filter-hint.md](./issue-178-sync-filter-hint.md).
+  - **#181 Auto-refresh after external writes**: frontend re-queries on window focus / `visibilitychange` plus a 20s polling fallback (skipped while hidden, `loadingRef` re-entry guard); `taskSig.ts` fingerprint covers locally-written fields (`updated_at` alone is not enough — local writes don't bump it), skipping re-render when nothing changed; backend `update_task_status` / `record_session` / `clear_session` / `record_handoff` emit the new `taskboard://tasks-changed` event (multi-window correctness). No MCP-protocol or DB-schema change. See [docs/issue-181-auto-refresh.md](./issue-181-auto-refresh.md).
+  - **#108 Board-mode simplification**: the settings "board mode" dropdown drops the "four-state columns" option, keeping only "Project Status Columns" and "Custom Columns"; historic `status` values degrade to `project` at the Board render layer, zero schema change; settings modal widened 460px → 520px. See [docs/issue-108-simplify-board-mode.md](./issue-108-simplify-board-mode.md).
+  - **Repo rename + full bug audit**: remote renamed to `task-dashboard` with all references synced (incl. the About-page link typo); new [docs/bug-audit-2026-09.md](./bug-audit-2026-09.md) (13 issues + 3 open questions + 2 false positives ruled out, inventory only, no source changes).
+  - **CI**: Intel builds now cross-compile on `macos-latest`, fixing `macos-13` runner queueing.
+  - **No schema change**. Verified: `npm test` 7 files / 36 cases pass, `tsc --noEmit` passes, `i18n:check` 273 keys consistent, `check-mcp-columns.py` 24 columns consistent.
+
 - **v0.3.54 (2026-09-09) — Rust built-in MCP read path column mix-up fix (#173)**
 
   - **#173 `row_to_value` positional indices didn't follow the 24-column `SELECT_COLS`**: after #155 rebuilt the `tasks` table and inserted columns such as `url`, `issue_state`, `project_status`, `pr_number`, and #169/#171 grew `SELECT_COLS` to 24 columns, `mcp.rs::row_to_value` still read positions `get(0..10)` using an older, slim column order. As a result, the built-in MCP's `list_my_tasks` / `get_task_status` returned almost all fields misaligned (`repo` held the owner, `number` held the repo string, `status` held the title…). `check-mcp-columns.py` only diffs the `SELECT_COLS` strings on both sides — it can't cover the "position → column" mapping — so CI stayed green while the feature was broken. `row_to_value` is now rewritten to map strictly against the 24-column order (including `work_branch` / `updated_at`), matching the Python side's `dict(row)`.
@@ -183,7 +194,7 @@
   - New "About" page (opened via the top-bar "About" button):
     - Shows the current version (read from the Rust package version on the backend, not hard-coded in the frontend)
     - "Check for Updates" button: calls the GitHub Releases API `releases/latest`, compares current/latest, and shows "You are up to date" or "New version available" with a one-click link to download
-    - The repository name is now a clickable link that opens `https://github.com/ShawnLiuSZ/task-dashborad` in the system browser
+    - The repository name is now a clickable link that opens `https://github.com/ShawnLiuSZ/task-dashboard` in the system browser
     - Built-in bilingual support (i18n keys `about.*` / `btn.about`)
 
   - Technical notes: `check_latest_release` only reads the public repo (no PAT needed); it uses `spawn_blocking` so the blocking-reqwest request does not stall the main thread.

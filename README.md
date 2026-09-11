@@ -109,7 +109,7 @@ PRD §6 规划了「MCP Server + Skill」让 AI Agent 在执行任务时自动�
 | `list_my_tasks`      | `status?` / `ownership?`        | 列出看板任务，可按四态 / 归属过滤                       |
 | `get_task_status`    | `issue`                         | 查询某任务当前状态 + 已记录的 session / handoff       |
 | `update_task_status` | `issue`, `status`               | 改本地看板状态（todo/doing/processed/done 或中文四态） |
-| `record_session`     | `issue`, `session_id`, `agent?` | 记录中断会话 id（不碰 GitHub）                     |
+| `record_session`     | `issue`, `session_id`, `agent?`, `branch?` | 记录中断会话 id + 工作分支（`branch` 非空写 `work_branch`，不碰 GitHub） |
 | `record_handoff`     | `issue`, `text`                 | 记录「交接任务」详情（不碰 GitHub）                    |
 | `clear_session`      | `issue`                         | 任务完成后清空 session 字段（保留 session\_at 审计）    |
 
@@ -141,17 +141,27 @@ PRD §6 规划了「MCP Server + Skill」让 AI Agent 在执行任务时自动�
 >
 > 若安装到了非默认位置，把 `command` 改成实际 `taskboard` 二进制的绝对路径即可。**未安装 app、改用 `server.py` 兜底**时，配置改为 `"command": "python3", "args": ["/path/to/mcp_server/server.py"]`。
 >
-> WorkBuddy 已内置注册，需在其连接器页「信任」后才会激活；其余 agent（codex / cursor / opencode 等）按各自 MCP 配置位置填入上述 `command` + `args` 即可。
+> WorkBuddy 已内置注册；opencode 在本仓库开箱即用（项目级 `opencode.json` 已注册）；其余 agent（codex / cursor 等）按各自 MCP 配置位置填入上述 `command` + `args` 即可。
 
 ### 让 Agent 真正自动接上（触发逻辑）
 
-MCP Server 只提供工具；要让 Agent 在「开始 / 中断 / 说『生成交接任务』/ 完成」时**自动**调用，需要一份**触发规则**被 Agent 加载。已在仓库内置：
+MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中断 / 说『生成交接任务』/ 完成」时**自动**调用，还需要一份**触发规则**被 Agent 加载（**触发层**）。两者缺一不可：没有 MCP，hooks 无处可调；没有触发逻辑，工具只能被动等人调。已在仓库内置：
 
 - **`mcp_server/AGENT_INSTRUCTIONS.md`** —— 跨 Agent 通用的指令规范：触发时机 → 精确 MCP 工具调用、issue 引用格式、状态枚举、会话 id 来源约定。可直接整体喂给 claude-code / codex / opencode / zcode / helix / cursor / doubao。
 
 - **`CLAUDE.md`**（仓库根） —— 给 claude-code 的自动加载入口，指向上述指令文件并给出速记规则；在本仓库跑 claude-code 时会自动生效。
 
-- 其他 Agent：把 `AGENT_INSTRUCTIONS.md` 的内容并入其 system prompt / 项目指令即可（codex 的 `AGENTS.md`、helix 的技能/系统提示、cursor 的 `.cursorrules` 等同理）。
+- **`.claude/`**（#177，claude-code 确定性触发） —— `settings.json` 注册 `SessionStart`（注入 `$TASKBOARD_SESSION_ID` / `${CLAUDE_SESSION_ID}` + 看板规则）与 `UserPromptSubmit`（仅提到 issue 时轻提醒）两个 hooks（`bash + python3` 零依赖，不写 DB）；`commands/task-start|task-done|task-handoff.md` 提供显式一键命令。开始处理先 `/task-start <repo#num>`，做完 `/task-done`。
+
+- **`.opencode/`**（#177，opencode 确定性触发） —— `opencode.json` 已注册 `taskboard` MCP（`python3 mcp_server/server.py`，跨平台、免装 app）；`plugins/taskboard.js`（零依赖）在 `tool.execute.before` 自动补 `record_session` 的 `session_id` / `agent` / `branch`；`commands/task-start|task-done|task-handoff.md` 同 claude 侧语义（分支用 `!`git branch --show-current`` 自动填入）。同样先 `/task-start`，做完 `/task-done`。
+
+- **App 设置 → Agent 接入**（#177，一键安装/卸载，实现参考 clawd-on-desk 的 Settings → Agents） —— 任务详情 session 下拉的 39 个 agent **全量可选**：
+  - **一键安装**（hook 机制已逐项验证）：`claude-code` / `opencode` / `workbuddy` / `codebuddy` / `trae`；
+  - **其余 34 个**：选中后返回手动配置指引（含 codex / cursor / copilot / gemini / qwen / kimi / zcode 的已知配置路径），不伪造成功；
+  - **作用域两档**：全局（`~/.claude`、`~/.config/opencode` 等用户目录，所有仓库生效，启动时自动补齐缺失项）与指定仓库；
+  - 合并安装、卸载只摘 TaskBoard 部分（改动前留 `.taskboard-bak`）；未安装过的 agent 自动跳过。
+
+- 其他（无 hook 机制的）Agent：把 `AGENT_INSTRUCTIONS.md` 的内容并入其 system prompt / 项目指令即可（codex 的 `AGENTS.md`、helix 的技能/系统提示、cursor 的 `.cursorrules` 等同理）。
 
 > 这样即完成 PRD D5 的「先 MCP，后包 Skill」：MCP 是能力层（已就位），指令文件是「Skill」等价物（跨 Agent 复用），Agent 侧按意图编排调用。
 
@@ -169,5 +179,7 @@ MCP Server 只提供工具；要让 Agent 在「开始 / 中断 / 说『生成�
 
 - [`docs/troubleshoot-mcp-timeout.md`](./docs/troubleshoot-mcp-timeout.md) — 排障：MCP 连接超时（30000ms）——macOS Gatekeeper / quarantine 隔离属性排查与修复
 
-> 版本 v0.3.48 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-07
+- [`docs/issue-181-auto-refresh.md`](./docs/issue-181-auto-refresh.md) — 外部写入（MCP）后 App 任务界面自动刷新：聚焦/轮询/指纹跳过 + `tasks-changed` 事件
+
+> 版本 v0.3.54 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-09
 
