@@ -6,7 +6,7 @@
 
 ## 设计 / 方案
 
-- 面板右缘拖拽条（`ew-resize`）：按占主区宽度百分比实时调宽，范围 15%–50%，松手值写入 `localStorage["notes.widthPct"]`（与 `notes.collapsed` 同类本地偏好，不入 DB）；键盘左右箭头 ±1%，`role=separator` + `aria-valuemin/max/now`
+- 面板右缘拖拽条（`ew-resize`）：按占主区宽度百分比实时调宽，范围 25%–50%（#209 起下限 25%，原 15%），松手值写入 `localStorage["notes.widthPct"]`（与 `notes.collapsed` 同类本地偏好，不入 DB）；键盘左右箭头 ±1%，`role=separator` + `aria-valuemin/max/now`
 - 默认 25%（1280 宽窗口 ≈ 现状 320px，老用户无感）；收起态（36px）逻辑不变
 - 丝滑：拖动中只做 DOM 直写 + rAF 合并，不进 React state，松手提交一次（单次渲染 + 单次持久化）
 - 抓手：右缘垂直居中常显 pill（hover/聚焦变蓝）
