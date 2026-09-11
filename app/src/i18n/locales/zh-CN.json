@@ -97,6 +97,7 @@
   "detail.assignees": "分配人：{list}",
   "detail.mentionedSuffix": "评论区有人 @我",
   "detail.branch": "🌿 分支：{branch}",
+  "detail.workBranch": "🤖 工作分支：{branch}",
   "detail.localOnly": "会话与状态只存在本地，不会写回 GitHub",
   "settings.title": "设置",
   "accounts.title": "账号管理",

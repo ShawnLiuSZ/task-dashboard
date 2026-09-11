@@ -56,6 +56,8 @@ export interface Task {
   prNumber: number;
   prUrl: string;
   branch: string;
+  /** #193：agent 工作分支（record_session 写入，与同步的 PR branch 分离）。 */
+  workBranch: string;
   sessionId: string | null;
   sessionAgent: string | null;
   sessionAt: number | null;

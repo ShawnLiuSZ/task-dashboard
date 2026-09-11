@@ -97,6 +97,7 @@
   "detail.assignees": "Assignees: {list}",
   "detail.mentionedSuffix": "Someone mentioned me in comments",
   "detail.branch": "🌿 Branch: {branch}",
+  "detail.workBranch": "🤖 Work branch: {branch}",
   "detail.localOnly": "Sessions and status are stored locally only, never written back to GitHub",
   "settings.title": "Settings",
   "accounts.title": "Account Management",

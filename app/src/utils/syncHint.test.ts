@@ -25,6 +25,7 @@ function task(over: Partial<Task> & { issueKey: string }): Task {
     prNumber: 0,
     prUrl: "",
     branch: "",
+    workBranch: "",
     sessionId: null,
     sessionAgent: null,
     sessionAt: null,

@@ -1206,20 +1206,33 @@ pub fn resolve_status_from_rules(
     labels_csv: &str,
     fallback_state: &str,
 ) -> String {
+    resolve_status_from_rules_explicit(rules, org, repo, labels_csv)
+        .unwrap_or_else(|| fallback_state_from_gh_state(fallback_state))
+}
+
+/// 仅显式 label 映射命中时返回 `Some(status)`（含 `todo`），无命中返回 `None`。
+/// #192：调用方（同步状态机）需区分「显式映射到 todo」与「state 兜底的 todo」——
+/// 前者按 AGENTS.md §2.2 优先级 #2 优先于 gh_status，后者才让位。
+pub fn resolve_status_from_rules_explicit(
+    rules: &[LabelRule],
+    org: &str,
+    repo: &str,
+    labels_csv: &str,
+) -> Option<String> {
     let labels: Vec<&str> = labels_csv
         .split(',')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
     if labels.is_empty() {
-        return fallback_state_from_gh_state(fallback_state);
+        return None;
     }
     for label in &labels {
         if let Some(rule) = rules
             .iter()
             .find(|r| r.org == org && r.repo == repo && r.label == *label)
         {
-            return rule.status.clone();
+            return Some(rule.status.clone());
         }
     }
     for label in &labels {
@@ -1227,10 +1240,10 @@ pub fn resolve_status_from_rules(
             .iter()
             .find(|r| r.org == org && r.repo.is_empty() && r.label == *label)
         {
-            return rule.status.clone();
+            return Some(rule.status.clone());
         }
     }
-    fallback_state_from_gh_state(fallback_state)
+    None
 }
 
 /// 预加载的自定义列规则（`match_rules` JSON 已解析一次，顺序即 order_index 升序）。
@@ -1817,6 +1830,57 @@ mod tests {
         assert_eq!(
             resolve_status_from_rules(&rules, "acme", "web", "", "open"),
             "todo"
+        );
+    }
+
+    /// #192：显式命中返回 Some（含 todo），无命中/空 labels 返回 None（兜底不在此产生）。
+    #[test]
+    fn resolve_status_explicit_distinguishes_todo_hit_from_fallback() {
+        let rules = vec![
+            LabelRule {
+                org: "acme".into(),
+                repo: "".into(),
+                label: "bug".into(),
+                status: "doing".into(),
+            },
+            LabelRule {
+                org: "acme".into(),
+                repo: "web".into(),
+                label: "triage".into(),
+                status: "todo".into(),
+            },
+        ];
+        // 显式命中 todo 也是 Some（调用方据此优先于 gh_status）。
+        assert_eq!(
+            resolve_status_from_rules_explicit(&rules, "acme", "web", "triage"),
+            Some("todo".to_string())
+        );
+        // repo 级优先。
+        assert_eq!(
+            resolve_status_from_rules_explicit(&rules, "acme", "web", "bug"),
+            Some("doing".to_string())
+        );
+        // 无命中 → None（不是兜底 todo）。
+        assert_eq!(
+            resolve_status_from_rules_explicit(&rules, "acme", "web", "chore"),
+            None
+        );
+        assert_eq!(
+            resolve_status_from_rules_explicit(&rules, "acme", "web", ""),
+            None
+        );
+        // 旧 wrapper 语义不变：显式命中直返，无命中走 state 兜底。
+        assert_eq!(
+            resolve_status_from_rules(&rules, "acme", "web", "triage", "open"),
+            "todo"
+        );
+        assert_eq!(
+            resolve_status_from_rules(&rules, "acme", "web", "chore", "open"),
+            "todo"
+        );
+        assert_eq!(
+            resolve_status_from_rules(&rules, "acme", "web", "chore", "closed"),
+            "done"
         );
     }
 

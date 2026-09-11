@@ -26,6 +26,8 @@ pub struct Task {
     pub pr_number: i64,
     pub pr_url: String,
     pub branch: String,
+    /// #193：agent 工作分支（record_session 写入，与同步的 PR branch 分离）。
+    pub work_branch: String,
     pub session_id: Option<String>,
     pub session_agent: Option<String>,
     pub session_at: Option<i64>,
@@ -91,7 +93,7 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
             format!(
                 "SELECT issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status,
                         assignees, mentioned, latest_comment_url, pr_number, pr_url, branch,
-                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id
+                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch
                  FROM tasks WHERE ownership = ?{where_extra}
                  ORDER BY candidate_done ASC, status ASC, updated_at DESC"
             ),
@@ -101,7 +103,7 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
             format!(
                 "SELECT issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status,
                         assignees, mentioned, latest_comment_url, pr_number, pr_url, branch,
-                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id
+                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch
                  FROM tasks WHERE 1=1{where_extra}
                  ORDER BY candidate_done ASC, status ASC, updated_at DESC"
             ),
@@ -135,6 +137,7 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
             handoff: r.get(20)?,
             updated_at: r.get(21)?,
             account_id: r.get(22)?,
+            work_branch: r.get(23)?,
         })
     };
 
