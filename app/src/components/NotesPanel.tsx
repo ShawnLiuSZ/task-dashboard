@@ -70,13 +70,13 @@ const ICON = {
 /** 收起状态持久化键（本地偏好，不入数据库）。 */
 const COLLAPSED_KEY = "notes.collapsed";
 
-/** 宽度百分比持久化键（本地偏好，不入数据库）。范围 15–50，默认 25。 */
+/** 宽度百分比持久化键（本地偏好，不入数据库）。范围 25–50，默认 25。 */
 const WIDTH_KEY = "notes.widthPct";
-const MIN_WIDTH_PCT = 15;
+const MIN_WIDTH_PCT = 25;
 const MAX_WIDTH_PCT = 50;
 const DEFAULT_WIDTH_PCT = 25;
 
-/** 钳制到 [15, 50]；非法输入回默认。 */
+/** 钳制到 [25, 50]；非法输入回默认。 */
 export function clampNotesWidthPct(v: number): number {
   if (!Number.isFinite(v)) return DEFAULT_WIDTH_PCT;
   return Math.min(MAX_WIDTH_PCT, Math.max(MIN_WIDTH_PCT, v));

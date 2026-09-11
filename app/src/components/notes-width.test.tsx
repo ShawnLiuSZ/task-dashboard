@@ -23,8 +23,8 @@ afterEach(() => {
 });
 
 describe("clampNotesWidthPct (#202)", () => {
-  it("钳制到 [15, 50]", () => {
-    expect(clampNotesWidthPct(10)).toBe(15);
+  it("钳制到 [25, 50]", () => {
+    expect(clampNotesWidthPct(10)).toBe(25);
     expect(clampNotesWidthPct(60)).toBe(50);
     expect(clampNotesWidthPct(30)).toBe(30);
   });
