@@ -43,6 +43,9 @@ export const api = {
     invoke<void>("record_handoff", { key, text }),
   // #214：认领任务（首个 GitHub 写回：调 API 设自己为 assignee，用户确认后调用）。
   claimIssue: (key: string) => invoke<void>("claim_issue", { key }),
+  // #215：详情 Project 状态写回（GraphQL mutation，用户确认后调用）。
+  setProjectStatus: (key: string, status: string) =>
+    invoke<void>("set_project_status", { key, status }),
   getSettings: () => invoke<Settings>("get_settings"),
   saveSettings: (scheduleMinutes: number, ghPath: string) =>
     invoke<Settings>("save_settings", { scheduleMinutes, ghPath }),

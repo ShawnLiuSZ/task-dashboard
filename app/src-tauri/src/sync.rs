@@ -54,7 +54,9 @@ fn map_project_status(raw: &str) -> Option<&'static str> {
 /// 4. gh_status 有值 → 映射；映射不到 → 保持本地（绝不回落原始文案，
 ///    非四态 status 会让任务无列可归、表现为「任务消失」）
 /// 5. 无 gh_status → 保持本地手动态
-fn resolve_final_status(
+///
+/// #215 由 `set_project_status` 复用，保证乐观更新与同步同一语义。
+pub(crate) fn resolve_final_status(
     closed: bool,
     column_status: Option<String>,
     explicit_label: Option<String>,
@@ -231,13 +233,14 @@ fn sync_account(
 
     // v0.3.49 (#143)：各 project 的 Status 选项 + issue 列表并行拉取（纯网络），
     // DB 写入仍串行（同一连接）。线程 panic 按该项目失败处理（gid 为空即跳过）。
-    // fetch_project_issues 返回 status_map 和项目中发现的完整 issue 列表，
-    // 用于将「项目中有但搜索源未覆盖」的 issue 合并进同步数据。
+    // fetch_project_issues 返回 status_map、项目中发现的完整 issue 列表与条目 id，
+    // 用于将「项目中有但搜索源未覆盖」的 issue 合并进同步数据（#215：item id 落库供写回）。
     let fetched_projects: Vec<(
         String,
-        Vec<(String, i64)>,
+        github::StatusField,
         std::collections::HashMap<String, String>,
         Vec<github::RawTask>,
+        std::collections::HashMap<String, String>,
     )> = std::thread::scope(|s| {
         let handles: Vec<_> = project_ids
             .iter()
@@ -246,22 +249,29 @@ fn sync_account(
                 let client = &client;
                 let org = &account.org;
                 s.spawn(move || {
-                    let opts = match client.fetch_project_status_options(&gid) {
-                        Ok(o) => o,
+                    let field = match client.status_field(&gid) {
+                        Ok(f) => f,
                         Err(e) => {
                             crate::tlog!("[sync] 拉取项目 {gid} 状态选项失败: {e}");
-                            Vec::new()
+                            github::StatusField {
+                                field_id: String::new(),
+                                options: Vec::new(),
+                            }
                         }
                     };
-                    let (status_map, issues) =
+                    let (status_map, issues, item_ids) =
                         match client.fetch_project_issues(&gid, org) {
                             Ok(v) => v,
                             Err(e) => {
                                 crate::tlog!("[sync] 拉取项目 {gid} 状态/issue 失败: {e}");
-                                (std::collections::HashMap::new(), Vec::new())
+                                (
+                                    std::collections::HashMap::new(),
+                                    Vec::new(),
+                                    std::collections::HashMap::new(),
+                                )
                             }
                         };
-                    (gid, opts, status_map, issues)
+                    (gid, field, status_map, issues, item_ids)
                 })
             })
             .collect();
@@ -271,9 +281,13 @@ fn sync_account(
                 h.join().unwrap_or_else(|_| {
                     (
                         String::new(),
-                        Vec::new(),
+                        github::StatusField {
+                            field_id: String::new(),
+                            options: Vec::new(),
+                        },
                         std::collections::HashMap::new(),
                         Vec::new(),
+                        std::collections::HashMap::new(),
                     )
                 })
             })
@@ -282,14 +296,37 @@ fn sync_account(
     let mut project_status: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let mut project_issues: Vec<github::RawTask> = Vec::new();
-    for (gid, opts, status_map, issues) in fetched_projects {
+    for (gid, field, status_map, issues, item_ids) in fetched_projects {
         if gid.is_empty() {
             continue;
         }
-        if !opts.is_empty() {
-            if let Err(e) = crate::db::upsert_project_statuses(conn, account.id, &gid, &opts, now)
+        // #215：选项（含 option_id）与字段 id 落库，供写回 mutation。
+        if !field.options.is_empty() {
+            let opts: Vec<(String, String, i64)> = field
+                .options
+                .iter()
+                .map(|o| (o.name.clone(), o.option_id.clone(), o.order_index))
+                .collect();
+            if let Err(e) =
+                crate::db::upsert_project_statuses(conn, account.id, &gid, &opts, now)
             {
                 crate::tlog!("[sync] 存储项目 {gid} 状态选项失败: {e}");
+            }
+            if !field.field_id.is_empty() {
+                if let Err(e) =
+                    crate::db::set_project_status_field(conn, account.id, &gid, &field.field_id)
+                {
+                    crate::tlog!("[sync] 存储项目 {gid} 字段 id 失败: {e}");
+                }
+            }
+        }
+        if !item_ids.is_empty() {
+            let items: Vec<(String, String)> =
+                item_ids.into_iter().collect();
+            if let Err(e) =
+                crate::db::replace_project_items(conn, account.id, &gid, &items)
+            {
+                crate::tlog!("[sync] 存储项目 {gid} 条目 id 失败: {e}");
             }
         }
         crate::tlog!(

@@ -210,6 +210,21 @@ pub struct GitHubClient {
     search_gate: std::sync::Mutex<Option<Instant>>,
 }
 
+/// Status 单选选项（含写回用的 option id，#215）。
+#[derive(Debug, Clone)]
+pub struct StatusOption {
+    pub name: String,
+    pub option_id: String,
+    pub order_index: i64,
+}
+
+/// 项目的 Status 字段（含写回用的 field id 与选项，#215）。
+#[derive(Debug, Clone)]
+pub struct StatusField {
+    pub field_id: String,
+    pub options: Vec<StatusOption>,
+}
+
 impl GitHubClient {
     /// 构造客户端。`login` / `org` 为空时仍允许（外部调用方可能用不到）。
     ///
@@ -581,17 +596,17 @@ impl GitHubClient {
         Ok(map)
     }
 
-    /// 查询某项目的 Status 字段选项及顺序（用于看板列排序）。
-    /// 返回 `(status_name, order_index)` 列表，顺序与 GitHub 看板一致。
-    pub fn fetch_project_status_options(&self, project_id: &str) -> Result<Vec<(String, i64)>, String> {
-        // 查项目所有字段，找 Status 类型的 SingleSelectField，取其 options 顺序
+    /// 查询某项目的 Status 字段（含字段/选项 id，供 #215 写回）。
+    pub fn status_field(&self, project_id: &str) -> Result<StatusField, String> {
+        // 查项目所有字段，找 Status 类型的 SingleSelectField，取其 id 与 options（含 id）
         let q = format!(
             r#"query {{ node(id:"{pid}") {{ ... on ProjectV2 {{
               fields(first:50) {{
                 nodes {{
                   ... on ProjectV2SingleSelectField {{
+                    id
                     name
-                    options {{ name }}
+                    options {{ id name }}
                   }}
                 }}
               }}
@@ -606,15 +621,22 @@ impl GitHubClient {
         for n in nodes {
             let fname = n["name"].as_str().unwrap_or("");
             if fname.eq_ignore_ascii_case("Status") || fname.contains("tatus") || fname.contains("状态") {
-                let options = n["options"].as_array()
+                let field_id = n["id"].as_str().unwrap_or("").to_string();
+                let options = n["options"]
+                    .as_array()
                     .ok_or_else(|| format!("字段 '{}' 无 options", fname))?;
-                let result: Vec<(String, i64)> = options.iter().enumerate().map(|(i, o)| {
-                    let name = o["name"].as_str().unwrap_or("").to_string();
-                    (name, i as i64)
-                }).collect();
+                let result: Vec<StatusOption> = options
+                    .iter()
+                    .enumerate()
+                    .map(|(i, o)| StatusOption {
+                        name: o["name"].as_str().unwrap_or("").to_string(),
+                        option_id: o["id"].as_str().unwrap_or("").to_string(),
+                        order_index: i as i64,
+                    })
+                    .collect();
                 if !result.is_empty() {
-                    crate::tlog!("[gh] project {} field '{}' options={:?}", project_id, fname, result.iter().map(|(n,_)| n).collect::<Vec<_>>());
-                    return Ok(result);
+                    crate::tlog!("[gh] project {} field '{}' options={:?}", project_id, fname, result.iter().map(|o| &o.name).collect::<Vec<_>>());
+                    return Ok(StatusField { field_id, options: result });
                 }
             }
         }
@@ -703,9 +725,11 @@ impl GitHubClient {
         &self,
         project_id: &str,
         org: &str,
-    ) -> Result<(HashMap<String, String>, Vec<RawTask>), String> {
+    ) -> Result<(HashMap<String, String>, Vec<RawTask>, HashMap<String, String>), String> {
         let mut status_map: HashMap<String, String> = HashMap::new();
         let mut issues: Vec<RawTask> = Vec::new();
+        // #215：issue_key -> project item id（写回用）。
+        let mut item_ids: HashMap<String, String> = HashMap::new();
         let mut cursor: Option<String> = None;
         for _ in 0..100 {
             let after = match &cursor {
@@ -716,6 +740,7 @@ impl GitHubClient {
                 r#"query {{ node(id:"{pid}") {{ ... on ProjectV2 {{ items(first:50{after}) {{
                   pageInfo {{ hasNextPage endCursor }}
                   nodes {{
+                    id
                     content {{
                       __typename
                       ... on Issue {{
@@ -806,6 +831,10 @@ impl GitHubClient {
                 if !status.is_empty() {
                     status_map.insert(key.clone(), status);
                 }
+                // #215：条目 id（写回 mutation 用；空则该条不可写回）。
+                if let Some(iid) = n["id"].as_str().filter(|s| !s.is_empty()) {
+                    item_ids.insert(key.clone(), iid.to_string());
+                }
                 // 用 owner 构造 GitHub 网页 URL（项目条目的 url 是 GraphQL node url，非网页链接）
                 let html_url = format!("https://github.com/{}/{}/issues/{}", owner, repo, num);
                 issues.push(RawTask {
@@ -830,7 +859,7 @@ impl GitHubClient {
                 break;
             }
         }
-        Ok((status_map, issues))
+        Ok((status_map, issues, item_ids))
     }
 
     // ===== 私有方法 =====
@@ -1117,6 +1146,57 @@ impl GitHubClient {
         Err(Self::write_error("认领", status, &body_text))
     }
 
+    /// Project 状态写回 mutation 文本（纯函数，可单测）。
+    pub fn project_status_mutation(
+        project_id: &str,
+        item_id: &str,
+        field_id: &str,
+        option_id: &str,
+    ) -> String {
+        format!(
+            r#"mutation {{ updateProjectV2ItemFieldValue(input: {{ projectId: "{project_id}", itemId: "{item_id}", fieldId: "{field_id}", value: {{ singleSelectOptionId: "{option_id}" }} }}) {{ projectV2Item {{ id }} }} }}"#
+        )
+    }
+
+    /// 设置 Project 条目的 Status（#215 写回：用户确认框后显式调用）。
+    pub fn set_project_item_status(
+        &self,
+        project_id: &str,
+        item_id: &str,
+        field_id: &str,
+        option_id: &str,
+    ) -> Result<(), String> {
+        // #215 写回日志：记三件套与结果，绝不记 PAT。
+        eprintln!("[proj-write] mutation project={project_id} item={item_id}");
+        let start = std::time::Instant::now();
+        let v = self
+            .graphql(&Self::project_status_mutation(
+                project_id, item_id, field_id, option_id,
+            ))
+            .map_err(|e| {
+                if e.contains("FORBIDDEN")
+                    || e.contains("not accessible")
+                    || e.contains("requires")
+                    || e.contains("INSUFFICIENT_SCOPES")
+                {
+                    format!("{e}（解决：classic PAT 去 GitHub Settings → Developer settings → Personal access tokens 勾选 `project` 后重新生成，再到本应用账号管理更新该账号 PAT；fine-grained 则给 Projects 读写权限）")
+                } else {
+                    format!("状态回写失败：{e}")
+                }
+            })?;
+        let back = v["data"]["updateProjectV2ItemFieldValue"]["projectV2Item"]["id"]
+            .as_str()
+            .unwrap_or("");
+        if back.is_empty() {
+            return Err("状态回写失败：GitHub 未返回确认（mutation 无 projectV2Item.id）".to_string());
+        }
+        eprintln!(
+            "[proj-write] GitHub 已确认（{}ms）",
+            start.elapsed().as_millis()
+        );
+        Ok(())
+    }
+
     fn http_timeout(&self) -> u64 {
         30
     }
@@ -1202,6 +1282,17 @@ mod tests {
         assert!(GitHubClient::write_error("认领", 403, "x").contains("写权限"));
         assert!(GitHubClient::write_error("认领", 404, "x").contains("不存在"));
         assert!(GitHubClient::write_error("认领", 500, "boom").contains("500"));
+    }
+
+    /// #215：写回 mutation 文本组装（纯函数，不碰网络）。
+    #[test]
+    fn project_status_mutation_shape() {
+        let q = GitHubClient::project_status_mutation("P", "I", "F", "O");
+        assert!(q.contains("updateProjectV2ItemFieldValue"));
+        assert!(q.contains(r#"projectId: "P""#));
+        assert!(q.contains(r#"itemId: "I""#));
+        assert!(q.contains(r#"fieldId: "F""#));
+        assert!(q.contains(r#"singleSelectOptionId: "O""#));
     }
 
     /// 隔离验证：不跑任何 issue 搜索，单独测 `fetch_prs` 能否在测试环境里正常拉到 PR。
