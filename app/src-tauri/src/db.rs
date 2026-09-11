@@ -93,6 +93,8 @@ CREATE TABLE IF NOT EXISTS projects (
   number_of_items INTEGER NOT NULL DEFAULT 0,
   owner_type   TEXT NOT NULL DEFAULT '',
   created_at   INTEGER NOT NULL,
+  -- #215：Status 字段 id（写回 mutation 用；老库由迁移补）。
+  status_field_id TEXT NOT NULL DEFAULT '',
   UNIQUE(account_id, github_id)
 );
 CREATE INDEX IF NOT EXISTS idx_projects_account ON projects(account_id);
@@ -103,9 +105,21 @@ CREATE TABLE IF NOT EXISTS project_statuses (
   project_github_id TEXT NOT NULL,
   name         TEXT NOT NULL,
   order_index  INTEGER NOT NULL DEFAULT 0,
+  -- #215：选项 id（写回 mutation 用；老库由迁移补）。
+  option_id    TEXT NOT NULL DEFAULT '',
   UNIQUE(account_id, project_github_id, name)
 );
 CREATE INDEX IF NOT EXISTS idx_project_statuses_project ON project_statuses(account_id, project_github_id);
+
+-- #215：issue 在各 project 中的条目 id（写回 mutation 的 itemId；每轮同步全量替换）。
+CREATE TABLE IF NOT EXISTS project_items (
+  account_id        INTEGER NOT NULL,
+  project_github_id TEXT NOT NULL,
+  issue_key         TEXT NOT NULL,
+  item_id           TEXT NOT NULL,
+  UNIQUE(account_id, project_github_id, issue_key)
+);
+CREATE INDEX IF NOT EXISTS idx_project_items_issue ON project_items(account_id, issue_key);
 
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
@@ -298,6 +312,37 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
     ) {
         if crate::common::verbose_enabled() {
             crate::tlog!("[db] notes label 列迁移跳过（已存在）: {}", e);
+        }
+    }
+    // #215：Project 写回三件套。老库补列 + 建表（新库由 SCHEMA 一次建好）。
+    for col_sql in [
+        "ALTER TABLE projects ADD COLUMN status_field_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE project_statuses ADD COLUMN option_id TEXT NOT NULL DEFAULT ''",
+    ] {
+        if let Err(e) = conn.execute(col_sql, []) {
+            if crate::common::verbose_enabled() {
+                crate::tlog!("[db] project 写回列迁移跳过（已存在）: {}", e);
+            }
+        }
+    }
+    if let Err(e) = conn.execute(
+        "CREATE TABLE IF NOT EXISTS project_items (
+           account_id        INTEGER NOT NULL,
+           project_github_id TEXT NOT NULL,
+           issue_key         TEXT NOT NULL,
+           item_id           TEXT NOT NULL,
+           UNIQUE(account_id, project_github_id, issue_key)
+         )",
+        [],
+    ) {
+        return Err(format!("创建 project_items 表失败: {e}"));
+    }
+    if let Err(e) = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_project_items_issue ON project_items(account_id, issue_key)",
+        [],
+    ) {
+        if crate::common::verbose_enabled() {
+            crate::tlog!("[db] project_items 索引创建跳过: {}", e);
         }
     }
     // v0.3.15 → v0.3.16 自动迁移：把 v0.3.15 写在 meta.pat_token 的单账号 PAT
@@ -753,6 +798,9 @@ pub fn delete_account(conn: &Connection, id: i64) -> Result<(), String> {
     // 2. 删除 projects
     tx.execute("DELETE FROM projects WHERE account_id = ?1", [id])
         .map_err(|e| format!("删除 projects 失败: {e}"))?;
+    // 2b. 删除 project_items（#215 写回 id，不留脏数据）。
+    tx.execute("DELETE FROM project_items WHERE account_id = ?1", [id])
+        .map_err(|e| format!("删除 project_items 失败: {e}"))?;
     // 3. 删除 project_statuses
     tx.execute("DELETE FROM project_statuses WHERE account_id = ?1", [id])
         .map_err(|e| format!("删除 project_statuses 失败: {e}"))?;
@@ -846,6 +894,9 @@ pub fn prune_projects(
         let n = conn
             .execute("DELETE FROM projects WHERE account_id = ?1", [account_id])
             .map_err(|e| format!("清空项目失败: {e}"))?;
+        // #215：条目 id 一并清空（否则脏 item 指向已删项目）。
+        conn.execute("DELETE FROM project_items WHERE account_id = ?1", [account_id])
+            .map_err(|e| format!("清空项目条目失败: {e}"))?;
         return Ok(n);
     }
     let placeholders: String = keep_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
@@ -862,6 +913,13 @@ pub fn prune_projects(
     let n = conn
         .execute(&sql, param_refs.as_slice())
         .map_err(|e| format!("清理项目失败: {e}"))?;
+    // #215：被清掉项目的条目 id 一并删除（同条件）。
+    let item_sql = format!(
+        "DELETE FROM project_items WHERE account_id = ?1 AND project_github_id NOT IN ({})",
+        placeholders
+    );
+    conn.execute(&item_sql, param_refs.as_slice())
+        .map_err(|e| format!("清理项目条目失败: {e}"))?;
     Ok(n)
 }
 
@@ -927,22 +985,143 @@ pub fn upsert_project_statuses(
     conn: &Connection,
     account_id: i64,
     project_github_id: &str,
-    statuses: &[(String, i64)], // (name, order_index)
+    statuses: &[(String, String, i64)], // (name, option_id, order_index)
     _now: i64,
 ) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    for (name, order_idx) in statuses {
+    for (name, option_id, order_idx) in statuses {
         tx.execute(
-            "INSERT INTO project_statuses (account_id, project_github_id, name, order_index)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO project_statuses (account_id, project_github_id, name, order_index, option_id)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(account_id, project_github_id, name) DO UPDATE SET
-               order_index = excluded.order_index",
-            rusqlite::params![account_id, project_github_id, name, order_idx],
+               order_index = excluded.order_index,
+               option_id = excluded.option_id",
+            rusqlite::params![account_id, project_github_id, name, order_idx, option_id],
         )
         .map_err(|e| format!("upsert 项目状态失败: {e}"))?;
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// #215：记录某项目的 Status 字段 id（写回 mutation 用）。
+pub fn set_project_status_field(
+    conn: &Connection,
+    account_id: i64,
+    project_github_id: &str,
+    field_id: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE projects SET status_field_id = ?1 WHERE account_id = ?2 AND github_id = ?3",
+        rusqlite::params![field_id, account_id, project_github_id],
+    )
+    .map_err(|e| format!("写入项目字段 id 失败: {e}"))?;
+    Ok(())
+}
+
+/// #215：全量替换某项目下的 issue→item 映射（每轮同步一次）。
+pub fn replace_project_items(
+    conn: &Connection,
+    account_id: i64,
+    project_github_id: &str,
+    items: &[(String, String)], // (issue_key, item_id)
+) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM project_items WHERE account_id = ?1 AND project_github_id = ?2",
+        rusqlite::params![account_id, project_github_id],
+    )
+    .map_err(|e| format!("清理项目条目失败: {e}"))?;
+    for (issue_key, item_id) in items {
+        tx.execute(
+            "INSERT INTO project_items (account_id, project_github_id, issue_key, item_id)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![account_id, project_github_id, issue_key, item_id],
+        )
+        .map_err(|e| format!("写入项目条目失败: {e}"))?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// #215 写回目标：选定 project 的三件套。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectWriteTarget {
+    pub project_github_id: String,
+    pub project_name: String,
+    pub item_id: String,
+    pub field_id: String,
+}
+
+/// #215：解析某任务的写回目标。多项目含该 issue 时选条目数最多的主项目
+/// （与 App 取主项目列逻辑一致）。任一 ID 缺失即报错（需等下轮同步补齐）。
+pub fn resolve_project_write_target(
+    conn: &Connection,
+    account_id: i64,
+    issue_key: &str,
+) -> Result<ProjectWriteTarget, String> {
+    let row: Option<(String, String, String, String)> = conn
+        .query_row(
+            "SELECT pi.project_github_id, p.name, pi.item_id, p.status_field_id
+             FROM project_items pi
+             JOIN projects p ON p.account_id = pi.account_id AND p.github_id = pi.project_github_id
+             WHERE pi.account_id = ?1 AND pi.issue_key = ?2
+             ORDER BY p.number_of_items DESC LIMIT 1",
+            rusqlite::params![account_id, issue_key],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .map(Some)
+        .unwrap_or(None);
+    match row {
+        None => Err(format!(
+            "任务 {issue_key} 不在任何 Project 中（或同步尚未拉取条目 id），无法写回状态"
+        )),
+        Some((_gid, name, item_id, field_id)) if item_id.is_empty() || field_id.is_empty() => Err(format!(
+            "任务 {issue_key} 在项目「{name}」中的写回 ID 不完整，请先同步一次补齐"
+        )),
+        Some((gid, name, item_id, field_id)) => Ok(ProjectWriteTarget {
+            project_github_id: gid,
+            project_name: name,
+            item_id,
+            field_id,
+        }),
+    }
+}
+
+/// #215：按选项名查 option_id（大小写敏感，须与 GitHub 完全一致）。
+pub fn project_option_id(
+    conn: &Connection,
+    account_id: i64,
+    project_github_id: &str,
+    name: &str,
+) -> Result<String, String> {
+    let id: Option<String> = conn
+        .query_row(
+            "SELECT option_id FROM project_statuses
+             WHERE account_id = ?1 AND project_github_id = ?2 AND name = ?3",
+            rusqlite::params![account_id, project_github_id, name],
+            |r| r.get(0),
+        )
+        .map(Some)
+        .unwrap_or(None);
+    match id {
+        Some(s) if !s.is_empty() => Ok(s),
+        _ => {
+            let names: Vec<String> = conn
+                .prepare(
+                    "SELECT name FROM project_statuses WHERE account_id = ?1 AND project_github_id = ?2 ORDER BY order_index",
+                )
+                .and_then(|mut st| {
+                    st.query_map(rusqlite::params![account_id, project_github_id], |r| r.get(0))
+                        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                })
+                .unwrap_or_default();
+            Err(format!(
+                "Project 无状态“{name}”（可选：{}；同步尚未拉取选项 id 时也会如此）",
+                names.join("、")
+            ))
+        }
+    }
 }
 
 /// 清空某账号下所有项目的 Status 选项（sync 前调用）。
@@ -1719,6 +1898,81 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("taskboard.db")
+    }
+
+    /// #215：写回三件套落库与解析（主项目优先、缺 ID 报错、选项名查 id）。
+    #[test]
+    fn project_write_target_resolves_main_project() {
+        let path = tmp_db("write-target");
+        let conn = open_db(&path).unwrap();
+        // 新库 schema 自带新列/新表。
+        for (table, col) in [
+            ("projects", "status_field_id"),
+            ("project_statuses", "option_id"),
+        ] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?2",
+                    rusqlite::params![table, col],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "{table}.{col} 应存在");
+        }
+        // 两个项目都含该 issue：条目数多的为主项目。
+        upsert_projects(
+            &conn,
+            1,
+            &[
+                ("PVT_small".to_string(), "小".to_string(), 3, "org".to_string()),
+                ("PVT_big".to_string(), "大".to_string(), 9, "org".to_string()),
+            ],
+            1,
+        )
+        .unwrap();
+        set_project_status_field(&conn, 1, "PVT_small", "F1").unwrap();
+        set_project_status_field(&conn, 1, "PVT_big", "F2").unwrap();
+        upsert_project_statuses(
+            &conn,
+            1,
+            "PVT_big",
+            &[("开发中".to_string(), "O1".to_string(), 0)],
+            1,
+        )
+        .unwrap();
+        replace_project_items(
+            &conn,
+            1,
+            "PVT_small",
+            &[("r#1".to_string(), "I-small".to_string())],
+        )
+        .unwrap();
+        replace_project_items(
+            &conn,
+            1,
+            "PVT_big",
+            &[("r#1".to_string(), "I-big".to_string())],
+        )
+        .unwrap();
+        let t = resolve_project_write_target(&conn, 1, "r#1").unwrap();
+        assert_eq!(
+            t,
+            ProjectWriteTarget {
+                project_github_id: "PVT_big".to_string(),
+                project_name: "大".to_string(),
+                item_id: "I-big".to_string(),
+                field_id: "F2".to_string(),
+            }
+        );
+        assert_eq!(project_option_id(&conn, 1, "PVT_big", "开发中").unwrap(), "O1");
+        // 未知选项报错并列出可选；不在项目中的 issue 报错。
+        assert!(project_option_id(&conn, 1, "PVT_big", "不存在").is_err());
+        assert!(resolve_project_write_target(&conn, 1, "r#9").is_err());
+        // 替换语义：二次 replace 覆盖旧条目。
+        replace_project_items(&conn, 1, "PVT_big", &[]).unwrap();
+        let t2 = resolve_project_write_target(&conn, 1, "r#1").unwrap();
+        assert_eq!(t2.project_github_id, "PVT_small");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     /// #146：热查询索引必须存在（新库建出、老库幂等补齐）。

@@ -3,6 +3,7 @@ import { api, openExternal } from "../api";
 import { AGENTS, agentLabel } from "../agents";
 import { type ProjectStatus, type Task } from "../types";
 import { fmtTime, useI18n } from "../i18n";
+import ConfirmDialog from "./ConfirmDialog";
 
 interface Props {
   task: Task;
@@ -20,6 +21,8 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
   const [err, setErr] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [handoff, setHandoff] = useState(task.handoff ?? "");
+  // #215：待确认的目标 Project 状态（确认框 → set_project_status 写回）。
+  const [pendingStatus, setPendingStatus] = useState<string | null>(null);
   // 「已复制」提示的复位定时器：组件的卸载（切换任务、关闭面板）时需清理，
   // 避免定时器在其后触发 setCopiedKey（在已卸载组件上 setState）。
   const copiedTimer = useRef<number | null>(null);
@@ -106,22 +109,35 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
 
       <section className="detail-block">
         <div className="block-title">{t("detail.statusTitle")}</div>
-        {/* #200：只保留 GitHub 状态行（同步只读）；四态手动入口已移除，
-            状态变更走 agent/MCP。 */}
+        {/* #215：GitHub 状态行可点（确认框 → 写回远端 Status）。
+            #200 去掉了四态手动入口，此处是唯一的状态切换入口。 */}
         <div className="muted small">{t("detail.projectStatus")}</div>
         <div className="seg project-status-seg">
           {projectStatusOptions.map((name) => (
             <button
               key={name}
               className={`seg-btn${name === currentProjectStatus ? " on" : ""}`}
-              disabled
+              disabled={busy || name === currentProjectStatus}
               title={projectStatusLabel(name)}
+              onClick={() => setPendingStatus(name)}
             >
               {projectStatusLabel(name)}
             </button>
           ))}
         </div>
       </section>
+      {/* #215：状态写回二次确认（失败在详情内横幅展示；成功重查）。 */}
+      {pendingStatus !== null && (
+        <ConfirmDialog
+          message={t("detail.projectStatusConfirm", { name: projectStatusLabel(pendingStatus) })}
+          onCancel={() => setPendingStatus(null)}
+          onConfirm={() => {
+            const name = pendingStatus;
+            setPendingStatus(null);
+            void run(() => api.setProjectStatus(task.issueKey, name));
+          }}
+        />
+      )}
 
       <section className="detail-block">
         <div className="block-title">{t("detail.sessionTitle")}</div>

@@ -35,7 +35,7 @@ GitHub (只读)  ──>  本地 SQLite (读写)  ──>  UI / MCP
 
 > 本节是对本项目（TaskBoard 应用）行为的描述，不是 agent 协作禁令。
 
-- TaskBoard 同步路径只从 GitHub 只读拉取（Search / REST / GraphQL）；**用户在 UI 确认框后显式触发的操作除外**（#214 起：卡片认领 assignee，规划中：详情 Project 状态）。
+- TaskBoard 同步路径只从 GitHub 只读拉取（Search / REST / GraphQL）；**用户在 UI 确认框后显式触发的操作除外**（#214：卡片认领 assignee；#215：详情 Project 状态）。
 - 看板状态、session id、handoff 默认**只**写本地 SQLite `taskboard.db`；上述显式写回成功后本地乐观更新，下次同步对账。
 - 数据流向：`GitHub ──> 本地 SQLite ──> UI / MCP`，外加一条用户确认的显式写回通道（`claim_issue` 等）；同步代码（`sync.rs`）本身仍不写 GitHub，未经确认的反向同步依然是 bug。
 
