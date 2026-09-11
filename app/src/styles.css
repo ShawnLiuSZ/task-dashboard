@@ -765,6 +765,19 @@ body {
   color: #6b4700;
 }
 
+/* #207：agent 分组下拉开关（整行可点，键盘可达）。 */
+.hook-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
 /* #197：分配人下一行的 session 独立行：列窄时省略，全值放 title。 */
 .session-row {
   margin-top: 4px;
