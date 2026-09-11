@@ -265,6 +265,94 @@ pub fn record_handoff(
     Ok(())
 }
 
+/// #214：认领任务——调 GitHub API 把当前账号设为 assignee（用户确认框后显式写回，
+/// 首个写回操作；详见 docs/issue-214-claim-assignee.md）。
+/// 成功后本地 ownership/assignees 乐观更新（下次同步对账）；失败本地不动。
+#[tauri::command]
+pub async fn claim_issue(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<(), String> {
+    // 读任务归属（锁内快读，不跨 await 持有）。
+    let (mut owner, repo, number, account_id, url) = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT owner, repo, number, account_id, url FROM tasks WHERE issue_key = ?1",
+            rusqlite::params![key.clone()],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => format!("任务不存在: {key}"),
+            _ => e.to_string(),
+        })?
+    };
+    // #214：老库 owner 列存的是账号 org（个人账号为空），为空时从 issue URL 反推。
+    if owner.trim().is_empty() {
+        owner = crate::github::GitHubClient::owner_from_issue_url(&url).unwrap_or_default();
+        if !owner.trim().is_empty() {
+            eprintln!("[claim] {key} 的 owner 列为空，已从 URL 反推为 {owner}");
+        }
+    }
+    if owner.trim().is_empty() {
+        return Err(format!("任务 {key} 缺少 owner 信息，无法认领"));
+    }
+    let (login, _org, pat) = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        crate::db::get_account_pat(&conn, account_id)?
+    };
+    if pat.is_empty() {
+        return Err("账号未配置 PAT".to_string());
+    }
+    // 网络写放 blocking 池（与 add_account 同款，避免占住主线程假死）。
+    eprintln!("[claim] 开始认领 {key}（repo={owner}/{repo}#{number}）");
+    let remote_assignees = tauri::async_runtime::spawn_blocking(move || {
+        let client = crate::github::GitHubClient::new(pat, login.clone(), String::new())?;
+        client.add_assignee(&owner, &repo, number, &login)
+    })
+    .await
+    .map_err(|e| format!("认领任务异常: {e}"))??;
+    // 落本地：ownership→assigned，assignees 与远端合并去重。
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let current: String = conn
+            .query_row(
+                "SELECT assignees FROM tasks WHERE issue_key = ?1",
+                rusqlite::params![key.clone()],
+                |r| r.get(0),
+            )
+            .unwrap_or_default();
+        let mut names: Vec<String> = current
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect();
+        for n in remote_assignees {
+            if !names.iter().any(|x| x.eq_ignore_ascii_case(&n)) {
+                names.push(n);
+            }
+        }
+        let merged = names.join(",");
+        conn.execute(
+            "UPDATE tasks SET ownership = 'assigned', assignees = ?1 WHERE issue_key = ?2",
+            rusqlite::params![merged, key.clone()],
+        )
+        .map_err(|e| e.to_string())?;
+        eprintln!("[claim] {key} 本地已更新 ownership=assigned assignees={merged}");
+    }
+    let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settings, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;

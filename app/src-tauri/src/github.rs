@@ -1028,6 +1028,95 @@ impl GitHubClient {
         Ok(v)
     }
 
+    /// 认领 URL（纯函数，可单测）：`POST /repos/{owner}/{repo}/issues/{n}/assignees`。
+    pub fn assignees_url(owner: &str, repo: &str, number: i64) -> String {
+        format!("https://api.github.com/repos/{owner}/{repo}/issues/{number}/assignees")
+    }
+
+    /// 从 issue URL 提取 owner（纯函数，可单测）：`https://github.com/{owner}/{repo}/issues/{n}`。
+    /// #214 fallback：老库 `tasks.owner` 存的是账号 org（个人账号为空），为空时用 URL 反推。
+    pub fn owner_from_issue_url(url: &str) -> Option<String> {
+        let rest = url.trim().strip_prefix("https://github.com/")?;
+        let mut segs = rest.split('/').filter(|s| !s.is_empty());
+        let owner = segs.next()?.to_string();
+        let repo = segs.next()?;
+        if repo.is_empty() || owner.is_empty() {
+            return None;
+        }
+        // 至少形如 owner/repo/issues/n（多一段才可信，避免错切）。
+        if segs.next().is_none() {
+            return None;
+        }
+        Some(owner)
+    }
+
+    /// 写操作错误映射（纯函数，可单测）：401/403/404 给重配指引，其余带状态码+片段。
+    pub fn write_error(action: &str, status: u16, body: &str) -> String {
+        let snippet: String = body.chars().take(160).collect();
+        match status {
+            401 => format!("{action}失败：PAT 无效或已过期，请重配 token"),
+            403 => format!(
+                "{action}失败：PAT 缺少写权限（classic 需 `repo`；fine-grained 需 Issues 读写）或 SSO 未授权。GitHub 返回：{snippet}"
+            ),
+            404 => format!("{action}失败：仓库不存在或 token 无访问权限。GitHub 返回：{snippet}"),
+            _ => format!("{action}失败：GitHub API 错误 ({status}): {snippet}"),
+        }
+    }
+
+    /// 把 `login` 加为 issue assignee（#214 写回：用户确认框后显式调用）。
+    /// 单次请求（写操作不盲目重试）；返回远端确认的 assignees 列表。
+    pub fn add_assignee(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: i64,
+        login: &str,
+    ) -> Result<Vec<String>, String> {
+        let url = Self::assignees_url(owner, repo, number);
+        // #214 写回日志：记方法/地址/账号与结果，绝不记 PAT。
+        eprintln!("[claim] POST {url} login={login}");
+        let start = std::time::Instant::now();
+        let body = serde_json::json!({ "assignees": [login] });
+        let resp = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.pat))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .timeout(Duration::from_secs(self.http_timeout()))
+            .json(&body)
+            .send()
+            .map_err(|e| format!("网络请求失败: {}", e))?;
+        let status = resp.status().as_u16();
+        // POST assignees 成功返回 201（幂等：重复添加同一个人同样成功）。
+        if status == 200 || status == 201 {
+            let v: serde_json::Value =
+                resp.json().map_err(|e| format!("解析 GitHub 返回失败: {}", e))?;
+            let names = v
+                .get("assignees")
+                .and_then(|a| a.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|u| {
+                            u.get("login").and_then(|l| l.as_str()).map(String::from)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            eprintln!(
+                "[claim] GitHub 回应 {status}（{}ms），远端 assignees 已确认",
+                start.elapsed().as_millis()
+            );
+            return Ok(names);
+        }
+        let body_text = resp.text().unwrap_or_default();
+        eprintln!(
+            "[claim] GitHub 回应 {status}（{}ms），失败",
+            start.elapsed().as_millis()
+        );
+        Err(Self::write_error("认领", status, &body_text))
+    }
+
     fn http_timeout(&self) -> u64 {
         30
     }
@@ -1089,6 +1178,31 @@ fn urlencode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #214：认领 URL 与写错误映射（纯函数，不碰网络）。
+    #[test]
+    fn claim_url_and_write_errors() {
+        assert_eq!(
+            GitHubClient::assignees_url("acme", "web", 7),
+            "https://api.github.com/repos/acme/web/issues/7/assignees"
+        );
+        // owner 缺失时从 URL 反推（老库 owner 列可能为空）。
+        assert_eq!(
+            GitHubClient::owner_from_issue_url("https://github.com/acme/web/issues/7"),
+            Some("acme".to_string())
+        );
+        assert_eq!(
+            GitHubClient::owner_from_issue_url("https://github.com/acme/web/pull/7"),
+            Some("acme".to_string())
+        );
+        assert_eq!(GitHubClient::owner_from_issue_url("https://github.com/acme"), None);
+        assert_eq!(GitHubClient::owner_from_issue_url("not a url"), None);
+        assert_eq!(GitHubClient::owner_from_issue_url(""), None);
+        assert!(GitHubClient::write_error("认领", 401, "").contains("过期"));
+        assert!(GitHubClient::write_error("认领", 403, "x").contains("写权限"));
+        assert!(GitHubClient::write_error("认领", 404, "x").contains("不存在"));
+        assert!(GitHubClient::write_error("认领", 500, "boom").contains("500"));
+    }
 
     /// 隔离验证：不跑任何 issue 搜索，单独测 `fetch_prs` 能否在测试环境里正常拉到 PR。
     /// 用途：区分环境/rate-limit/网络三类根因。默认忽略，需时
