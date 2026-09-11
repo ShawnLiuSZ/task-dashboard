@@ -984,6 +984,14 @@ fn install_one(
             }
         }
     }
+    // #206：开发版手动安装时提醒路径有效期（启动自动注册已取消，此处仅提示）。
+    if is_dev_binary(exe)
+        && (res.settings_merged || res.mcp_configured || !res.files_written.is_empty())
+    {
+        res.notices.push(
+            "注意：当前运行的是开发版，该二进制路径重编即失效；正式使用请换安装版后重装".to_string(),
+        );
+    }
     Ok(())
 }
 
@@ -1248,41 +1256,9 @@ fn status_one(home: &Path, project: Option<&Path>, agent_id: &str) -> AgentStatu
 }
 
 /// 开发版二进制判定：`target/` 下的路径重编即失效（#193）。
-/// 调用方（ensure_global_defaults）在命中时跳过自动注册，避免把一次性路径
-/// 写进用户全局配置（手动指引 global_opencode_mcp_notice 亦有同款警告）。
+/// #206 起仅用于手动安装的时效提醒（启动自动注册已取消）。
 fn is_dev_binary(exe: &str) -> bool {
     exe.contains("/target/") || exe.contains("\\target\\")
-}
-
-/// 启动时自动注册全局默认集（注册表全体）：host 已装但 ours 缺失才装，
-/// 全程 best-effort 不抛错。返回实际安装的 agent（"" = 无动作）。Clawd 同款。
-pub fn ensure_global_defaults() -> String {
-    let home = match home_dir() {
-        Ok(h) => h,
-        Err(_) => return String::new(),
-    };
-    let exe = mcp_bin().unwrap_or_default();
-    // #193：开发版不自动写全局配置（路径重编即失效）。
-    if is_dev_binary(&exe) {
-        return String::new();
-    }
-    let mut done = Vec::new();
-    for spec in AGENTS.iter() {
-        let agent_id = spec.id;
-        if config_root(&home, None, spec).is_none() {
-            continue;
-        }
-        if status_one(&home, None, agent_id).installed {
-            continue;
-        }
-        let mut res = InstallResult::empty("global", &home.display().to_string());
-        if install_one(&home, None, agent_id, &exe, &mut res).is_ok()
-            && !res.files_written.is_empty()
-        {
-            done.push(agent_id);
-        }
-    }
-    done.join(",")
 }
 
 /// Tauri command：一键安装（scope=project|global，agents 为 session 下拉 value；
@@ -1976,5 +1952,30 @@ mod tests {
         assert!(!is_dev_binary("/Applications/TaskBoard.app/Contents/MacOS/taskboard"));
         assert!(!is_dev_binary("/usr/local/bin/taskboard"));
         assert!(!is_dev_binary(""));
+    }
+
+    #[test]
+    fn manual_install_with_dev_binary_warns() {
+        // #206：开发版手动安装成功时提示路径时效（不阻止安装）；正式版无此提示。
+        let repo = tmp("dev-warn");
+        let home = fake_home("dev-warn-home");
+        let mut res = InstallResult::empty("project", "x");
+        install_one(&home, Some(&repo), "claude-code", "/tmp/build/target/debug/taskboard", &mut res).unwrap();
+        assert!(res.settings_merged);
+        assert!(res.notices.iter().any(|n| n.contains("开发版")));
+        let repo2 = tmp("dev-warn-rel");
+        let mut r2 = InstallResult::empty("project", "x");
+        install_one(
+            &home,
+            Some(&repo2),
+            "claude-code",
+            "/Applications/TaskBoard.app/Contents/MacOS/taskboard",
+            &mut r2,
+        )
+        .unwrap();
+        assert!(!r2.notices.iter().any(|n| n.contains("开发版")));
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&repo2);
+        let _ = std::fs::remove_dir_all(&home);
     }
 }
