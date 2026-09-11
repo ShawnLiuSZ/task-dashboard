@@ -665,6 +665,18 @@ body {
   color: var(--amber-text);
 }
 
+/* #214：认领按钮（button 版 unassigned-tag：复位默认外观）。 */
+button.unassigned-tag {
+  font: inherit;
+  font-size: 10px;
+  border: 0;
+  cursor: pointer;
+}
+button.unassigned-tag:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .assignee-info {
   display: inline-flex;
   align-items: center;

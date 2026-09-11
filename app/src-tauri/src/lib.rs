@@ -308,6 +308,8 @@ pub fn run() {
             commands::record_session,
             commands::clear_session,
             commands::record_handoff,
+            // #214：认领任务（首个 GitHub 写回操作，用户确认后显式调用）。
+            commands::claim_issue,
             commands::get_settings,
             commands::save_settings,
             commands::open_in_browser,

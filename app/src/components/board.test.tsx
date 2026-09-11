@@ -205,3 +205,34 @@ describe("TaskCard session 行（#197）", () => {
     expect(html).toContain("2024-09-10");
   });
 });
+
+describe("TaskCard 认领按钮（#214）", () => {
+  it("未认领任务渲染可点认领按钮", () => {
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <TaskCard
+          task={mkTask({ issueKey: "a", ownership: "notassignee" })}
+          active={false}
+          onSelectKey={noop}
+        />
+      </I18nProvider>,
+    );
+    expect(html).toContain("claim-btn");
+    expect(html).toContain("无人认领");
+    // 确认框只在点击后出现，SSR 无点击故不存在
+    expect(html).not.toContain("confirm-modal");
+  });
+
+  it("已分配任务无认领按钮", () => {
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <TaskCard
+          task={mkTask({ issueKey: "a", ownership: "assigned", assignees: "me" })}
+          active={false}
+          onSelectKey={noop}
+        />
+      </I18nProvider>,
+    );
+    expect(html).not.toContain("claim-btn");
+  });
+});
