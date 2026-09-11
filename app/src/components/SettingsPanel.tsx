@@ -32,6 +32,9 @@ function parseMatchRules(matchRules: string): string[] {
 
 type SettingsTab = "base" | "columns" | "diagnose" | "agents";
 
+/** #226：自定义列映射暂关闭（页签隐藏；已有 custom 配置照常渲染，重开即恢复）。 */
+const CUSTOM_COLUMN_MAPPING_ENABLED = false;
+
 // 每个账号的编辑状态
 interface AccountEditState {
   columns: AccountColumn[];
@@ -429,7 +432,9 @@ export default function SettingsPanel({
         </h3>
 
         <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
-          {( ["base", "columns", "diagnose", "agents"] as SettingsTab[]).map((k) => (
+          {(["base", "columns", "diagnose", "agents"] as SettingsTab[])
+            .filter((k) => CUSTOM_COLUMN_MAPPING_ENABLED || k !== "columns")
+            .map((k) => (
             <button
               key={k}
               type="button"
@@ -677,8 +682,8 @@ export default function SettingsPanel({
           )}
         </div>
 
-        {/* 自定义列映射 - 平铺卡片 */}
-        <div style={{ display: tab === "columns" ? "block" : "none" }}>
+        {/* 自定义列映射 - 平铺卡片（#226 暂关闭：入口隐藏，此处再守一道） */}
+        <div style={{ display: tab === "columns" && CUSTOM_COLUMN_MAPPING_ENABLED ? "block" : "none" }}>
           <div className="field">
             <label>{t("settings.boardModeTitle")}</label>
             <div className="muted small" style={{ marginBottom: 8 }}>{t("settings.boardModeDesc")}</div>
