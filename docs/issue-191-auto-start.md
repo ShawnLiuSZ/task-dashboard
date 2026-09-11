@@ -28,6 +28,10 @@
 - `node --check` 通过；插件无单测基建（Bun/Node 双运行时），靠 review + 手工验证
 - 验收标准见 issue #191（任一调用失败 → warn + 可重试；processed/done 不回退）
 
+## 后续（#204）
+
+累计 buffer 判唯一导致单窗口多任务永久失活，已改为按当前消息判定（历史不再抑制）+ 尾部 40 字分片兜底，详见 issue #204。
+
 ## 相关链接
 
 - Issue：[#191](https://github.com/ShawnLiuSZ/task-dashboard/issues/191)
