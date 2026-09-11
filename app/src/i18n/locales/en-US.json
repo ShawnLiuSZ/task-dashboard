@@ -29,6 +29,7 @@
   "syncLogs.pruning": "Pruning…",
   "syncLogs.errorExpandHint": "Click to expand/collapse full error",
   "syncLogs.headers.time": "Time",
+  "syncLogs.headers.account": "Account",
   "syncLogs.headers.trigger": "Trigger",
   "syncLogs.headers.duration": "Duration",
   "syncLogs.headers.status": "Status",

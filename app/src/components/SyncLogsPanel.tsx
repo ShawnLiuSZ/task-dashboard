@@ -45,6 +45,15 @@ export function toggleExpanded(expandedId: number | null, id: number): number | 
   return expandedId === id ? null : id;
 }
 
+/** #224：日志行账号展示（账号已删回退 `#id`）。 */
+export function accountLabelForLog(
+  accounts: { id: number; login: string }[],
+  accountId: number,
+): string {
+  const a = accounts.find((x) => x.id === accountId);
+  return a ? `@${a.login}` : `#${accountId}`;
+}
+
 /** 状态徽章（文案走 i18n）。 */
 function StatusBadge({ status, t }: { status: string; t: (key: string) => string }) {
   if (status === "success") {
@@ -66,12 +75,20 @@ export default function SyncLogsPanel({ onClose }: Props) {
   const [confirming, setConfirming] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // #224：账号 id → login（日志行展示所属账号）。
+  const [accounts, setAccounts] = useState<{ id: number; login: string }[]>([]);
 
   const loadLogs = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await api.listSyncLogs(100);
+      const [data, settings] = await Promise.all([
+        api.listSyncLogs(100),
+        api.getSettings(),
+      ]);
       setLogs(data);
+      setAccounts(
+        (settings.accounts ?? []).map((a) => ({ id: a.id, login: a.login })),
+      );
       setError(null);
     } catch (e) {
       // 失败必须可见：原先只 console.error，面板仍显示「暂无同步日志」，用户会误判。
@@ -149,6 +166,7 @@ export default function SyncLogsPanel({ onClose }: Props) {
                 <thead>
                   <tr>
                     <th>{t("syncLogs.headers.time")}</th>
+                    <th>{t("syncLogs.headers.account")}</th>
                     <th>{t("syncLogs.headers.trigger")}</th>
                     <th>{t("syncLogs.headers.duration")}</th>
                     <th>{t("syncLogs.headers.status")}</th>
@@ -162,6 +180,7 @@ export default function SyncLogsPanel({ onClose }: Props) {
                   {logs.map((log) => (
                     <tr key={log.id}>
                       <td className="nowrap">{formatTime(log.createdAt)}</td>
+                      <td className="nowrap">{accountLabelForLog(accounts, log.accountId)}</td>
                       <td>{triggerLabel(t, log.triggerType)}</td>
                       <td>{duration(log.startedAt, log.finishedAt)}</td>
                       <td><StatusBadge status={log.status} t={t} /></td>

@@ -29,6 +29,7 @@
   "syncLogs.pruning": "清理中…",
   "syncLogs.errorExpandHint": "点击展开/收起完整错误信息",
   "syncLogs.headers.time": "时间",
+  "syncLogs.headers.account": "账号",
   "syncLogs.headers.trigger": "触发",
   "syncLogs.headers.duration": "耗时",
   "syncLogs.headers.status": "状态",
