@@ -732,7 +732,13 @@ pub fn delete_account(conn: &Connection, id: i64) -> Result<(), String> {
         )
         .unwrap_or(0);
     if is_default != 0 {
-        return Err("默认账号不可删除，请先把另一个账号设为默认".to_string());
+        // #216：仅剩一个账号时允许删除（删后无账号无默认，调用方把 active 归零）。
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0))
+            .unwrap_or(0);
+        if count > 1 {
+            return Err("默认账号不可删除，请先把另一个账号设为默认".to_string());
+        }
     }
     // 检查账号是否存在
     let exists: i64 = conn
@@ -1904,5 +1910,28 @@ mod tests {
         assert_eq!(resolve_column_from_rules(&rules, "需求"), Some("a".to_string()));
         assert_eq!(resolve_column_from_rules(&rules, ""), None);
         assert_eq!(resolve_column_from_rules(&rules, "未知"), None);
+    }
+
+    /// #216：仅剩一个账号时允许删除默认账号；多账号时仍拒绝；不存在的 id 报错。
+    #[test]
+    fn delete_last_account_allowed() {
+        let path = tmp_db("del-last");
+        let conn = open_db(&path).unwrap();
+        // 首个账号自动为默认。
+        let id = insert_account(&conn, "主", "me", "", "pat123").unwrap();
+        delete_account(&conn, id).expect("仅剩一个时应可删除");
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0, "删后应无账号");
+        assert!(delete_account(&conn, 999).is_err(), "不存在的 id 应报错");
+        // 两个账号时删默认仍拒绝。
+        let a = insert_account(&conn, "一", "u1", "", "p1").unwrap();
+        let _b = insert_account(&conn, "二", "u2", "", "p2").unwrap();
+        assert!(
+            delete_account(&conn, a).is_err(),
+            "多账号时默认账号不可删除"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }
