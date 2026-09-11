@@ -86,6 +86,7 @@
   "detail.closedPending": "Closed on GitHub · pending confirmation",
   "detail.updatedAt": "Updated {time}",
   "detail.statusTitle": "Execution status",
+  "detail.projectStatus": "GitHub status (synced, read-only)",
   "detail.sessionTitle": "Interrupted session",
   "detail.unlabeled": "unlabeled",
   "detail.recordedAt": "{agent} · recorded {time}",

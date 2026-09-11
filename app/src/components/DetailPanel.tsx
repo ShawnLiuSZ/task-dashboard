@@ -1,16 +1,18 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, openExternal } from "../api";
 import { AGENTS, agentLabel } from "../agents";
-import { COLUMNS, type StatusKey, type Task } from "../types";
+import { COLUMNS, type ProjectStatus, type StatusKey, type Task } from "../types";
 import { fmtTime, useI18n } from "../i18n";
 
 interface Props {
   task: Task;
   onClose: () => void;
   onChanged: () => void;
+  /** #196：项目 Status 选项（用于 GitHub 状态行的选项与排序；缺省时只展示当前值）。 */
+  projectStatuses?: ProjectStatus[];
 }
 
-export default function DetailPanel({ task, onClose, onChanged }: Props) {
+export default function DetailPanel({ task, onClose, onChanged, projectStatuses }: Props) {
   const { t, lang } = useI18n();
   const [busy, setBusy] = useState(false);
   const [sessionInput, setSessionInput] = useState(task.sessionId ?? "");
@@ -26,6 +28,20 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
       if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
     };
   }, []);
+
+  // #196：当前 GitHub 状态键（与 Board.groupByProjectStatus 同规则）：
+  // closed→done，有原文取原文，空→unclassified。详情状态区永远以此为准，
+  // 不跟随 custom 列展示方式。
+  const currentProjectStatus =
+    task.issueState === "closed" ? "done" : task.projectStatus?.trim() || "unclassified";
+  // 选项 = projectStatuses 名称；当前值不在其中时前置，保证永远可见且默认选中。
+  const projectStatusOptions = useMemo(() => {
+    const names = (projectStatuses ?? []).map((ps) => ps.name);
+    if (!names.includes(currentProjectStatus)) return [currentProjectStatus, ...names];
+    return names;
+  }, [projectStatuses, currentProjectStatus]);
+  const projectStatusLabel = (name: string) =>
+    name === "done" ? t("status.done") : name === "unclassified" ? t("detail.unlabeled") : name;
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -90,6 +106,21 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
 
       <section className="detail-block">
         <div className="block-title">{t("detail.statusTitle")}</div>
+        {/* #196：GitHub 状态行（同步只读镜像）：展示 projectStatuses 选项，
+            当前 project.status 默认选中；四态按钮保留为手动覆盖入口。 */}
+        <div className="muted small">{t("detail.projectStatus")}</div>
+        <div className="seg">
+          {projectStatusOptions.map((name) => (
+            <button
+              key={name}
+              className={`seg-btn${name === currentProjectStatus ? " on" : ""}`}
+              disabled
+              title={projectStatusLabel(name)}
+            >
+              {projectStatusLabel(name)}
+            </button>
+          ))}
+        </div>
         <div className="seg">
           {COLUMNS.map((c) => (
             <button

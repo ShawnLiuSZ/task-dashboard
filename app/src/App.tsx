@@ -507,6 +507,7 @@ function BoardApp() {
           <DetailPanel
             key={selectedTask.issueKey}
             task={selectedTask}
+            projectStatuses={projectStatuses}
             onClose={() => setSelected(null)}
             onChanged={() => {
               void load();
