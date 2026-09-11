@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import Board, { groupTasksByCustomColumns, resolveBoardView } from "./Board";
+import TaskCard from "./TaskCard";
 import { I18nProvider } from "../i18n";
 import type { AccountColumn, ProjectStatus, Task } from "../types";
 
@@ -171,5 +172,36 @@ describe("Board 渲染（#159）", () => {
     );
     expect(html).toContain("未标注");
     expect(html).not.toContain("待处理");
+  });
+});
+
+describe("TaskCard session 行（#197）", () => {
+  it("有 session 时分配人下一行展示会话，且底部仍显示时间", () => {
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <TaskCard
+          task={mkTask({ issueKey: "a", sessionId: "sess-123", updatedAt: 1725926400 })}
+          active={false}
+          onSelectKey={noop}
+        />
+      </I18nProvider>,
+    );
+    expect(html).toContain("session-row");
+    expect(html).toContain("sess-123");
+    expect(html).toContain("2024-09-10");
+  });
+
+  it("无 session 时不渲染会话行，底部显示时间", () => {
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <TaskCard
+          task={mkTask({ issueKey: "a", updatedAt: 1725926400 })}
+          active={false}
+          onSelectKey={noop}
+        />
+      </I18nProvider>,
+    );
+    expect(html).not.toContain("session-row");
+    expect(html).toContain("2024-09-10");
   });
 });

@@ -765,6 +765,20 @@ body {
   color: #6b4700;
 }
 
+/* #197：分配人下一行的 session 独立行：列窄时省略，全值放 title。 */
+.session-row {
+  margin-top: 4px;
+}
+.session-row .session {
+  max-width: 100%;
+  overflow: hidden;
+}
+.session-row .session code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .candidate-tag {
   font-size: 10px;
   background: #ececee;
