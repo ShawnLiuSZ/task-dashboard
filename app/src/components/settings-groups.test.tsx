@@ -65,3 +65,14 @@ describe("Agent 分组下拉（#207）", () => {
     expect(html).toContain('aria-expanded="true"');
   });
 });
+
+describe("自定义列映射页签（#226）", () => {
+  it("暂关闭：无入口", () => {
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <SettingsPanel settings={mkSettings()} onSaved={noop} onClose={noop} />
+      </I18nProvider>,
+    );
+    expect(html).not.toContain("自定义列映射");
+  });
+});
