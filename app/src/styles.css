@@ -793,7 +793,7 @@ body {
   top: 46px;
   right: 0;
   bottom: 0;
-  width: 460px;
+  width: 50%;
   background: var(--surface);
   border-left: 0.5px solid var(--border);
   padding: 14px 16px;
@@ -875,6 +875,11 @@ body {
   color: var(--text);
   font-weight: 500;
   box-shadow: 0 0 0 0.5px var(--border);
+}
+
+/* #200：project.status 行按钮间距在 .seg(4px) 基础上直接加 1px。 */
+.project-status-seg {
+  gap: 5px;
 }
 
 .row {
