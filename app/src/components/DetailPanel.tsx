@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, openExternal } from "../api";
 import { AGENTS, agentLabel } from "../agents";
-import { COLUMNS, type ProjectStatus, type StatusKey, type Task } from "../types";
+import { type ProjectStatus, type Task } from "../types";
 import { fmtTime, useI18n } from "../i18n";
 
 interface Props {
@@ -106,10 +106,10 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
 
       <section className="detail-block">
         <div className="block-title">{t("detail.statusTitle")}</div>
-        {/* #196：GitHub 状态行（同步只读镜像）：展示 projectStatuses 选项，
-            当前 project.status 默认选中；四态按钮保留为手动覆盖入口。 */}
+        {/* #200：只保留 GitHub 状态行（同步只读）；四态手动入口已移除，
+            状态变更走 agent/MCP。 */}
         <div className="muted small">{t("detail.projectStatus")}</div>
-        <div className="seg">
+        <div className="seg project-status-seg">
           {projectStatusOptions.map((name) => (
             <button
               key={name}
@@ -118,18 +118,6 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
               title={projectStatusLabel(name)}
             >
               {projectStatusLabel(name)}
-            </button>
-          ))}
-        </div>
-        <div className="seg">
-          {COLUMNS.map((c) => (
-            <button
-              key={c.key}
-              className={`seg-btn${task.status === c.key ? " on" : ""}`}
-              disabled={busy}
-              onClick={() => run(() => api.updateStatus(task.issueKey, c.key as StatusKey))}
-            >
-              {t(`status.${c.key}`)}
             </button>
           ))}
         </div>
