@@ -11,7 +11,8 @@
 //    用户消息中出现**唯一** issue 引用（repo#num / owner/repo#num / GitHub issue URL）
 //    时，自动完成 update_task_status(处理中) + record_session，无需手动 /task-start。
 //    零条或多条引用 → 不动作（回退手动）；不在看板 → get_task_status 不存在则跳过；
-//    已 done → 不回退。同 (session, issue) 只自动执行一次。
+//    done/processed → 不回退；doing 且已有 session → 视为已接管。同 (session, issue)
+//    只自动执行一次（成功后才标记，失败可重试）。
 //
 // 写库仍走 MCP 工具（与 Claude 侧 `.claude/` 设计同构：hooks 只注上下文/补参，不写库）
 // —— 自动执行是唯一的例外，且走的仍是同一 MCP 后端（`taskboard mcp` 子进程）。
@@ -232,36 +233,40 @@ async function applog(client, level, message) {
   }
 }
 
-/// 自动开始：唯一引用 + 看板存在 + 未 done → 置处理中 + 记 session。
+/// 自动开始：唯一引用 + 看板存在 + todo → 置处理中 + 记 session。
+/// #191：成功后才记去重（失败可重试）；两路调用结果都检查；done/processed 不回退。
 async function autoStart(ctx, issueKey) {
   const { $, client } = ctx;
   const sid = sessionId;
   if (!sid) return;
   const dedup = `${sid}|${issueKey}`;
   if (autoFired.has(dedup)) return;
-  autoFired.add(dedup);
   const bin = await resolveBin($);
   if (!bin) {
     await applog(client, "debug", `[taskboard] 自动执行跳过：找不到 taskboard 二进制（${issueKey}），请手动 /task-start`);
     return;
   }
-  let branch = "";
   try {
     const [got] = await mcpCall(bin, [{ name: "get_task_status", args: { issue: issueKey } }]);
-    if (got.error || !got.data || got.data.found !== true) return; // 不在看板 → 温和跳过
-    if (got.data.status === "done") return; // 已完成不回退
-    branch = await currentBranch($);
-    const [, rec] = await mcpCall(bin, [
+    if (got.error || !got.data || got.data.found !== true) return; // 不在看板 → 温和跳过（允许重试）
+    if (got.data.status === "done" || got.data.status === "processed") return; // 已完成/已处理不回退
+    if (got.data.status === "doing" && got.data.session_id) {
+      autoFired.add(dedup); // 已在处理中且有 session：视为已接管，不再重复写
+      return;
+    }
+    const branch = await currentBranch($);
+    const [upd, rec] = await mcpCall(bin, [
       { name: "update_task_status", args: { issue: issueKey, status: "doing" } },
       { name: "record_session", args: { issue: issueKey, session_id: sid, agent: "opencode", branch } },
     ]);
-    if (rec.error) {
-      await applog(client, "warn", `[taskboard] 自动执行失败 ${issueKey}：${rec.error}`);
+    if (upd.error || rec.error) {
+      await applog(client, "warn", `[taskboard] 自动执行失败 ${issueKey}：${upd.error || rec.error}（可重试）`);
       return;
     }
+    autoFired.add(dedup); // 成功后才标记
     await applog(client, "info", `[taskboard] 已自动开始 ${issueKey}（处理中，分支 ${branch || "未知"}）`);
   } catch (e) {
-    await applog(client, "warn", `[taskboard] 自动执行异常 ${issueKey}：${(e && e.message) || e}`);
+    await applog(client, "warn", `[taskboard] 自动执行异常 ${issueKey}：${(e && e.message) || e}（可重试）`);
   }
 }
 
