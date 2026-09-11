@@ -19,6 +19,7 @@ function mkTask(partial: Partial<Task> & { issueKey: string }): Task {
     prNumber: 0,
     prUrl: "",
     branch: "",
+    workBranch: "",
     sessionId: null,
     sessionAgent: null,
     sessionAt: null,
@@ -50,6 +51,8 @@ describe("taskListSignature (#181)", () => {
     ).not.toBe(sig);
     // record_task_handoff
     expect(taskListSignature([{ ...base[0], handoff: "交接" }])).not.toBe(sig);
+    // touch_session 带工作分支（#193 workBranch 纳入指纹）
+    expect(taskListSignature([{ ...base[0], workBranch: "feat/x" }])).not.toBe(sig);
     // clear_session（有值变无值）
     const withSession = [
       { ...base[0], sessionId: "s1", sessionAgent: "opencode" },

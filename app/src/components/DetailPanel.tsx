@@ -242,6 +242,18 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
             </button>
           </div>
         )}
+        {/* #193：agent 工作分支（与 PR 分支不同时才展示，避免重复）。 */}
+        {task.workBranch && task.workBranch !== task.branch && (
+          <div className="branch-line top-gap">
+            <span>{t("detail.workBranch", { branch: task.workBranch })}</span>
+            <button
+              className="btn ghost small inline"
+              onClick={() => copyToClipboard(task.workBranch, "workBranch")}
+            >
+              {copiedKey === "workBranch" ? t("btn.copied") : t("btn.copy")}
+            </button>
+          </div>
+        )}
         <div className="muted small top-gap">{t("detail.localOnly")}</div>
       </section>
 

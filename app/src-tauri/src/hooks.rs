@@ -1247,6 +1247,13 @@ fn status_one(home: &Path, project: Option<&Path>, agent_id: &str) -> AgentStatu
     }
 }
 
+/// 开发版二进制判定：`target/` 下的路径重编即失效（#193）。
+/// 调用方（ensure_global_defaults）在命中时跳过自动注册，避免把一次性路径
+/// 写进用户全局配置（手动指引 global_opencode_mcp_notice 亦有同款警告）。
+fn is_dev_binary(exe: &str) -> bool {
+    exe.contains("/target/") || exe.contains("\\target\\")
+}
+
 /// 启动时自动注册全局默认集（注册表全体）：host 已装但 ours 缺失才装，
 /// 全程 best-effort 不抛错。返回实际安装的 agent（"" = 无动作）。Clawd 同款。
 pub fn ensure_global_defaults() -> String {
@@ -1255,6 +1262,10 @@ pub fn ensure_global_defaults() -> String {
         Err(_) => return String::new(),
     };
     let exe = mcp_bin().unwrap_or_default();
+    // #193：开发版不自动写全局配置（路径重编即失效）。
+    if is_dev_binary(&exe) {
+        return String::new();
+    }
     let mut done = Vec::new();
     for spec in AGENTS.iter() {
         let agent_id = spec.id;
@@ -1955,5 +1966,15 @@ mod tests {
             parse_request("global", None, vec!["opencode".into(), "claude-code".into(), "claude-code".into()]).unwrap();
         assert!(global);
         assert_eq!(list, vec!["opencode".to_string(), "claude-code".to_string()]);
+    }
+
+    #[test]
+    fn dev_binary_detection() {
+        // #193：target 下的 dev 路径重编即失效，不得自动写入全局配置。
+        assert!(is_dev_binary("/tmp/build/target/debug/taskboard"));
+        assert!(is_dev_binary("C:\\proj\\target\\debug\\taskboard.exe"));
+        assert!(!is_dev_binary("/Applications/TaskBoard.app/Contents/MacOS/taskboard"));
+        assert!(!is_dev_binary("/usr/local/bin/taskboard"));
+        assert!(!is_dev_binary(""));
     }
 }

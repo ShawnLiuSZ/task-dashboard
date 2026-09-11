@@ -20,6 +20,7 @@ function mkTask(projectStatus: string): Task {
     prNumber: 0,
     prUrl: "",
     branch: "",
+    workBranch: "",
     sessionId: null,
     sessionAgent: null,
     sessionAt: null,
