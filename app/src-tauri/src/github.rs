@@ -876,6 +876,8 @@ impl GitHubClient {
         // 剩余计数，避免触发 Search API 二次（突发）限流。
 
         for attempt in 0..3 {
+            // #228：单次尝试计时（成功/失败都记调用日志，verbose 门控）。
+            let start = std::time::Instant::now();
             let resp = self
                 .http
                 .get(url)
@@ -910,6 +912,13 @@ impl GitHubClient {
             // 2. 其它非 2xx（如 404/422/401）：立即返回错误，由 best-effort 逻辑降级。
             if !status.is_success() {
                 let body = resp.text().unwrap_or_default();
+                log_api_call(
+                    "GET",
+                    url,
+                    status.as_u16(),
+                    start.elapsed().as_millis(),
+                    &summarize_text(&body, 160),
+                );
                 return Err(format!(
                     "GitHub API 错误 ({}): {}",
                     status.as_u16(),
@@ -938,6 +947,7 @@ impl GitHubClient {
                 }
             }
 
+            log_api_call("GET", url, status.as_u16(), start.elapsed().as_millis(), "");
             return resp
                 .json::<serde_json::Value>()
                 .map_err(|e| format!("解析 GitHub 返回失败: {}", e));
@@ -1030,6 +1040,8 @@ impl GitHubClient {
     pub fn graphql(&self, query: &str) -> Result<serde_json::Value, String> {
         let url = "https://api.github.com/graphql";
         let body = serde_json::json!({ "query": query });
+        // #228：计时（成功/失败都记调用日志，verbose 门控）。
+        let start = std::time::Instant::now();
         let resp = self
             .http
             .post(url)
@@ -1042,7 +1054,10 @@ impl GitHubClient {
         let v: serde_json::Value = resp
             .json()
             .map_err(|e| format!("解析 GraphQL 返回失败: {}", e))?;
+        let elapsed_ms = start.elapsed().as_millis();
         if !status.is_success() {
+            let snippet = summarize_text(&v.to_string(), 160);
+            log_api_call("POST", query, status.as_u16(), elapsed_ms, &snippet);
             return Err(format!(
                 "GraphQL API 错误 ({}): {}",
                 status.as_u16(),
@@ -1051,9 +1066,17 @@ impl GitHubClient {
         }
         if let Some(errs) = v.get("errors") {
             if !errs.is_null() && errs.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+                log_api_call(
+                    "POST",
+                    query,
+                    status.as_u16(),
+                    elapsed_ms,
+                    &summarize_text(&errs.to_string(), 200),
+                );
                 return Err(format!("GraphQL 业务错误: {}", errs));
             }
         }
+        log_api_call("POST", query, status.as_u16(), elapsed_ms, "");
         Ok(v)
     }
 
@@ -1102,10 +1125,14 @@ impl GitHubClient {
         login: &str,
     ) -> Result<Vec<String>, String> {
         let url = Self::assignees_url(owner, repo, number);
-        // #214 写回日志：记方法/地址/账号与结果，绝不记 PAT。
-        eprintln!("[claim] POST {url} login={login}");
-        let start = std::time::Instant::now();
         let body = serde_json::json!({ "assignees": [login] });
+        // #214 写回日志：记方法/地址/账号与结果，绝不记 PAT。
+        // #228：补请求体摘要（常开，低频）。
+        eprintln!(
+            "[claim] POST {url} login={login} body={}",
+            summarize_text(&body.to_string(), 160)
+        );
+        let start = std::time::Instant::now();
         let resp = self
             .http
             .post(&url)
@@ -1133,15 +1160,17 @@ impl GitHubClient {
                 })
                 .unwrap_or_default();
             eprintln!(
-                "[claim] GitHub 回应 {status}（{}ms），远端 assignees 已确认",
-                start.elapsed().as_millis()
+                "[claim] GitHub 回应 {status}（{}ms），远端 assignees 已确认：{}",
+                start.elapsed().as_millis(),
+                summarize_text(&format!("{names:?}"), 200)
             );
             return Ok(names);
         }
         let body_text = resp.text().unwrap_or_default();
         eprintln!(
-            "[claim] GitHub 回应 {status}（{}ms），失败",
-            start.elapsed().as_millis()
+            "[claim] GitHub 回应 {status}（{}ms），失败：{}",
+            start.elapsed().as_millis(),
+            summarize_text(&body_text, 200)
         );
         Err(Self::write_error("认领", status, &body_text))
     }
@@ -1167,7 +1196,8 @@ impl GitHubClient {
         option_id: &str,
     ) -> Result<(), String> {
         // #215 写回日志：记三件套与结果，绝不记 PAT。
-        eprintln!("[proj-write] mutation project={project_id} item={item_id}");
+        // #228：补请求目标 id（常开，低频）。
+        eprintln!("[proj-write] mutation project={project_id} item={item_id} field={field_id} option={option_id}");
         let start = std::time::Instant::now();
         let v = self
             .graphql(&Self::project_status_mutation(
@@ -1183,7 +1213,19 @@ impl GitHubClient {
                 } else {
                     format!("状态回写失败：{e}")
                 }
-            })?;
+            });
+        let v = match v {
+            Ok(v) => v,
+            Err(e) => {
+                // #228：失败记返回摘要（常开，低频）。
+                eprintln!(
+                    "[proj-write] 失败（{}ms）：{}",
+                    start.elapsed().as_millis(),
+                    summarize_text(&e, 240)
+                );
+                return Err(e);
+            }
+        };
         let back = v["data"]["updateProjectV2ItemFieldValue"]["projectV2Item"]["id"]
             .as_str()
             .unwrap_or("");
@@ -1191,7 +1233,8 @@ impl GitHubClient {
             return Err("状态回写失败：GitHub 未返回确认（mutation 无 projectV2Item.id）".to_string());
         }
         eprintln!(
-            "[proj-write] GitHub 已确认（{}ms）",
+            "[proj-write] GitHub 已确认 {}（{}ms）",
+            summarize_text(back, 60),
             start.elapsed().as_millis()
         );
         Ok(())
@@ -1236,6 +1279,32 @@ pub fn merge_tasks_all(lists: Vec<Vec<RawTask>>) -> Vec<RawTask> {
         }
     }
     map.into_values().collect()
+}
+
+/// 日志摘要：空白折叠后按字符截断（纯函数，可单测；多字节安全）。
+/// #228：请求/返回记日志时防刷屏。
+pub fn summarize_text(s: &str, max: usize) -> String {
+    let one_line: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() <= max {
+        one_line
+    } else {
+        let mut out: String = one_line.chars().take(max).collect();
+        out.push('…');
+        out
+    }
+}
+
+/// 统一 API 调用日志（#228，verbose 门控 `TASKBOARD_LOG=1`）。
+/// 高频同步路径默认静默；用户主动写操作另有 `eprintln!` 常开行。
+fn log_api_call(method: &str, target: &str, status: u16, elapsed_ms: u128, note: &str) {
+    crate::tlog!(
+        "[api] {} {} → {} ({}ms) {}",
+        method,
+        summarize_text(target, 200),
+        status,
+        elapsed_ms,
+        note
+    );
 }
 
 /// 极简 URL 编码（仅编码 Search API 查询里 unsafe 字符），不依赖 `url` crate。
@@ -1293,6 +1362,15 @@ mod tests {
         assert!(q.contains(r#"itemId: "I""#));
         assert!(q.contains(r#"fieldId: "F""#));
         assert!(q.contains(r#"singleSelectOptionId: "O""#));
+    }
+
+    /// #228：日志摘要截断（空白折叠 + 多字节安全）。
+    #[test]
+    fn summarize_text_truncates() {
+        assert_eq!(summarize_text("a  b\n c", 10), "a b c");
+        assert_eq!(summarize_text("123456789", 5), "12345…");
+        assert_eq!(summarize_text("开发中测试", 2), "开发…");
+        assert_eq!(summarize_text("", 5), "");
     }
 
     /// 隔离验证：不跑任何 issue 搜索，单独测 `fetch_prs` 能否在测试环境里正常拉到 PR。
