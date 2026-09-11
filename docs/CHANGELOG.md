@@ -6,6 +6,22 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.4.0（2026-09-12）— GitHub 写回反转（#214 认领 + #215 状态）+ 记事本宽度 + 详情重做**
+
+  - **写回反转（产品约束变更）**：`AGENTS.md §2.1` / `PRD.md` 从"只读 GitHub"放宽为"默认读 + 用户确认的显式写回"；同步路径本身仍只读，MCP 工具保持只写本地。PAT 需配套升级写权限（classic `repo` + `project`；Device Flow scope 已补 `project`，老 token 需重授权）。
+  - **#214 卡片认领**：点"无人认领"→ 确认框 → `POST assignees` 设自己为 assignee，本地乐观更新；owner 为空时从 URL 反推；全链路日志。详见 [docs/issue-214-claim-assignee.md](./issue-214-claim-assignee.md)。
+  - **#215 详情 Project 状态写回**：同步补存 item/field/option 三件套（`projects.status_field_id`、`project_statuses.option_id`、`project_items` 新表，老库迁移）；`set_project_status`（缺 ID 即时补拉、closed 拒绝、乐观更新走同步同一决策）；详情 GitHub 状态行可点 + 确认框。详见 [docs/issue-215-proj-status-write.md](./issue-215-proj-status-write.md)。
+  - **#196/#200 详情重做**：状态区永远按 `project.status` 展示与默认选中（#196）；宽度 460px→50%，去掉四态按钮，行间距 +1px（#200）。详见 [docs/issue-196-detail-project-status.md](./issue-196-detail-project-status.md) 与 [docs/issue-200-detail-width.md](./issue-200-detail-width.md)。
+  - **#202/#209 记事本宽度可调**：右缘拖拽 + 键盘 ±1%，按主区百分比（25%–50%，默认 25%），localStorage 持久化；拖动中 DOM 直写 + rAF 合并；`main-layout` grid 改 flex row。详见 [docs/issue-202-notes-width.md](./issue-202-notes-width.md) 与 [docs/issue-209-notes-min-width.md](./issue-209-notes-min-width.md)。
+  - **#190 hooks 备份**：安装覆盖/卸载摘除改动前必备份（此前项目级 opencode 备份的是改后文件）。详见 [docs/issue-190-hooks-backup.md](./issue-190-hooks-backup.md)。
+  - **#191/#204 opencode 自动执行**：失败看两路结果、成功后才去重、`processed` 不回退（#191）；改按当前消息判定，单窗口多任务可依次执行（#204）。
+  - **#206 取消启动自动接入**：全部走手动一键安装；开发版安装给时效提醒。详见 [docs/issue-206-no-auto-enroll.md](./issue-206-no-auto-enroll.md)。
+  - **#192 Label 优先**：显式 label→todo 优先于 gh_status（owner 已确认）。详见 [docs/issue-192-label-todo-priority.md](./issue-192-label-todo-priority.md)。
+  - **#193/#207/#224/#228 小项**：开发版跳过自动注册 + `workBranch` 贯通详情（#193）；agent 四分组下拉（#207）；同步日志账号列（#224）；同步与写回请求/返回日志（#228）。
+  - **修复**：#197 卡片 session 独立行；#212 死代码 warning 清零；#216 仅剩单账号可删；#220 指纹纳入 projectStatus（写回即时刷新）；#221 切换账号请求合并（不再滞留旧账号）。
+  - **schema 变更**：`projects.status_field_id`、`project_statuses.option_id`、`project_items` 新表（新库 SCHEMA + 老库迁移双写）。
+  - **验证**：`cargo test`（lib 72 例 + db_test 19 例）零 warning、`tsc --noEmit`、`vitest` 10 文件 54 例、`i18n:check` 279 key 一致、`check-mcp-columns.py` 24 列一致。
+
 - **v0.3.55（2026-09-11）— 跨 agent 看板 hooks（#177）+ 同步筛选提示（#178）+ 外部写入自动刷新（#181）+ 看板列模式精简（#108）**
 
   - **#177 跨 agent 看板 hooks 与一键安装/卸载**：新增项目级 `.claude/`（commands `/task-start` `/task-done` /hooks）与 `.opencode/` 插件，开始处理 issue 时一次完成「处理中 + session_id/session_agent + work_branch」三写入，结束时清 session；`AGENT_INSTRUCTIONS.md` 明确触发时机，根治"只靠 prompt 约定易遗忘"。详见 [docs/issue-177-claude-session-hooks.md](./issue-177-claude-session-hooks.md)。
