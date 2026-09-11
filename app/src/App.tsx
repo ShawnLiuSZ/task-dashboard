@@ -1,6 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { api, onSynced, onTasksChanged, TASKBOARD_ERROR_EVENT } from "./api";
 import { taskListSignature } from "./utils/taskSig";
+import { coalescedLoad, createLoadCoalescer } from "./utils/coalescedLoad";
 import { countHiddenChanged, snapshotTasks } from "./utils/syncHint";
 import { fmtTime, I18nProvider, useI18n } from "./i18n";
 import Board from "./components/Board";
@@ -63,7 +64,12 @@ function BoardApp() {
   // #181：无变化跳过 setState。本地写入不更新 updated_at，
   // 指纹覆盖 status / session / handoff 等字段（见 utils/taskSig）。
   const tasksSig = useRef("");
-  const loadingRef = useRef(false);
+  const loadCoalescer = useRef(createLoadCoalescer());
+  // 最新筛选快照（供定时/事件触发的重查使用，避免闭包过期）。
+  const filterRef = useRef({ ownership, accountId: accountFilter });
+  useEffect(() => {
+    filterRef.current = { ownership, accountId: accountFilter };
+  }, [ownership, accountFilter]);
   const applyTasks = useCallback((fresh: Task[]) => {
     const sig = taskListSignature(fresh);
     if (sig === tasksSig.current) return;
@@ -71,19 +77,25 @@ function BoardApp() {
     setTasks(fresh);
   }, []);
 
-  const load = useCallback(async () => {
-    // #181：轮询/聚焦/多事件并发时防重入（本地 SQLite 查询快，跳过一次无影响）。
-    if (loadingRef.current) return;
-    loadingRef.current = true;
-    try {
-      applyTasks(await api.listTasks(ownership || undefined, accountFilter));
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      loadingRef.current = false;
-    }
-  }, [ownership, accountFilter, applyTasks]);
+  // #221：并发查询合并——忙时记下最新参数，完成后重跑，保证最新请求总被执行。
+  // （旧逻辑忙则直接丢弃：切换账号时新筛选请求被旧请求吞掉，看板长期停留旧账号。）
+  const loadWith = useCallback(
+    (ow: string, af: number | null) =>
+      coalescedLoad(loadCoalescer.current, { ownership: ow, accountId: af }, async (a) => {
+        try {
+          applyTasks(await api.listTasks(a.ownership || undefined, a.accountId));
+          setError(null);
+        } catch (e) {
+          setError(String(e));
+        }
+      }),
+    [applyTasks],
+  );
+
+  const load = useCallback(() => {
+    const f = filterRef.current;
+    return loadWith(f.ownership, f.accountId);
+  }, [loadWith]);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -347,8 +359,9 @@ function BoardApp() {
     setError(null);
     try {
       await api.setActiveAccount(id);
-      // v0.3.49 (#145)：两路加载无依赖，并行。
-      await Promise.all([loadSettings(), load()]);
+      await loadSettings();
+      // #221：显式传新账号 id——闭包里的 accountFilter 还是旧值，靠它会查出旧账号。
+      await loadWith(ownership, id);
     } catch (e) {
       setError(String(e));
     }
@@ -441,7 +454,12 @@ function BoardApp() {
         <select
           className="select"
           value={ownership}
-          onChange={(e) => setOwnership(e.target.value)}
+          onChange={(e) => {
+            // #221：load 已稳定化（不再随筛选变身份），归属变化需显式重查。
+            const v = e.target.value;
+            setOwnership(v);
+            void loadWith(v, accountFilter);
+          }}
           title={t("filter.byOwnership")}
         >
           <option value="">{t("filter.allOwnership")}</option>
