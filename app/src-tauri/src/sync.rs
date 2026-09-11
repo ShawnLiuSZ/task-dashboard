@@ -47,6 +47,37 @@ fn map_project_status(raw: &str) -> Option<&'static str> {
     }
 }
 
+/// 看板状态决策（AGENTS.md §2.2 同步优先级）：
+/// 1. `closed` → done（远程权威覆盖）
+/// 2. custom 看板模式的列映射
+/// 3. 显式 label 映射（#192：含 todo，优先于 gh_status）
+/// 4. gh_status 有值 → 映射；映射不到 → 保持本地（绝不回落原始文案，
+///    非四态 status 会让任务无列可归、表现为「任务消失」）
+/// 5. 无 gh_status → 保持本地手动态
+fn resolve_final_status(
+    closed: bool,
+    column_status: Option<String>,
+    explicit_label: Option<String>,
+    gh_status_raw: &str,
+    existing_status: &str,
+) -> String {
+    if closed {
+        return "done".to_string();
+    }
+    if let Some(col_key) = column_status {
+        return col_key;
+    }
+    if let Some(status) = explicit_label {
+        return status;
+    }
+    if !gh_status_raw.is_empty() {
+        return map_project_status(gh_status_raw)
+            .unwrap_or(existing_status)
+            .to_string();
+    }
+    existing_status.to_string()
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncResult {
@@ -412,16 +443,17 @@ fn sync_account(
         let existing_branch = existing.map(|e| e.branch.as_str()).unwrap_or("");
         let exists = existing.is_some();
 
-        // 决定看板状态：closed→已完成；自定义列 gh_status 匹配→列 key；label 映射→映射状态；Project Status→映射；不在项目中→维持本地手动态。
+        // 决定看板状态（优先级见 resolve_final_status）：closed→done；自定义列；
+        // 显式 label 映射（含 todo，#192）；Project Status 映射；都不命中→维持本地手动态。
         let gh_status_raw = project_status.get(&key).cloned().unwrap_or_default();
         let labels_csv = t.labels.join(",");
-        // 先用 label 映射解析（优先级：repo > org > 全局默认 > state 兜底）
-        let mapped_status = crate::db::resolve_status_from_rules(
+        // #192：只取显式命中（优先级 repo > org）；state 兜底不在此产生——
+        // 显式映射到 todo 同样优先于 gh_status。
+        let explicit_label = crate::db::resolve_status_from_rules_explicit(
             &label_rules,
             &account.org,
             &t.repo,
             &labels_csv,
-            &t.state,
         );
         // v0.3.28+：检查自定义列映射（按账号的 account_columns 匹配 gh_status）。
         // 仅当看板模式为 custom 时才生效，否则四态/Project 视图下任务会因 status 变成 col_key 而消失。
@@ -430,22 +462,13 @@ fn sync_account(
         } else {
             None
         };
-        let final_status: String = if t.state == "closed" {
-            "done".to_string()
-        } else if let Some(col_key) = column_status {
-            // 自定义列映射优先于 label 映射和 Project Status 映射
-            col_key
-        } else if !mapped_status.is_empty() && mapped_status != "todo" {
-            mapped_status
-        } else if !gh_status_raw.is_empty() {
-            // gh_status 有值时优先用 map_project_status；映射不到则保持本地状态。
-            // 绝不回落原始文案：非四态的 status 会让该任务不属于任何看板列，表现为「任务消失」。
-            map_project_status(&gh_status_raw)
-                .unwrap_or(&existing_status)
-                .to_string()
-        } else {
-            existing_status.to_string()
-        };
+        let final_status = resolve_final_status(
+            t.state == "closed",
+            column_status,
+            explicit_label,
+            &gh_status_raw,
+            existing_status,
+        );
 
         let assignees_csv = t.assignees.join(",");
         let done_at_val = if final_status == "done" { now } else { 0 };
@@ -905,6 +928,45 @@ mod tests {
         // 未识别 → None，让 sync 维持本地手动态
         assert_eq!(map_project_status("Random new tag"), None);
         assert_eq!(map_project_status(""), None);
+    }
+
+    #[test]
+    fn resolve_final_status_follows_priority() {
+        // #192：显式 label→todo 优先于 gh_status 映射（此前被降级）。
+        assert_eq!(
+            resolve_final_status(false, None, Some("todo".into()), "✨开发中", "doing"),
+            "todo"
+        );
+        // closed 最高：远程权威覆盖一切。
+        assert_eq!(
+            resolve_final_status(true, None, Some("todo".into()), "✨开发中", "doing"),
+            "done"
+        );
+        // custom 列映射次之。
+        assert_eq!(
+            resolve_final_status(false, Some("col_1".into()), Some("todo".into()), "✨开发中", "doing"),
+            "col_1"
+        );
+        // 非 todo 显式映射同样优先。
+        assert_eq!(
+            resolve_final_status(false, None, Some("processed".into()), "✨开发中", "doing"),
+            "processed"
+        );
+        // 无显式命中 → gh_status 映射。
+        assert_eq!(
+            resolve_final_status(false, None, None, "✨开发中", "todo"),
+            "doing"
+        );
+        // gh_status 映射不到 → 保持本地（不回落原文）。
+        assert_eq!(
+            resolve_final_status(false, None, None, "Backlog", "doing"),
+            "doing"
+        );
+        // 无 gh_status → 保持本地。
+        assert_eq!(
+            resolve_final_status(false, None, None, "", "processed"),
+            "processed"
+        );
     }
 
     #[test]
