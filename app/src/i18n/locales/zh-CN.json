@@ -234,6 +234,7 @@
   "notes.title": "记事本",
   "notes.expandTitle": "展开记事本",
   "notes.collapseTitle": "收起记事本（内容不再显示）",
+  "notes.resizeTitle": "拖动调整记事本宽度",
   "notes.exportTitle": "导出全部记事为 JSON 备份",
   "notes.importTitle": "从 JSON 备份导入记事（按内容去重）",
   "notes.closeTitle": "关闭",

@@ -234,6 +234,7 @@
   "notes.title": "Notes",
   "notes.expandTitle": "Expand notes",
   "notes.collapseTitle": "Collapse notes (hide contents)",
+  "notes.resizeTitle": "Drag to resize notes width",
   "notes.exportTitle": "Export all notes as JSON backup",
   "notes.importTitle": "Import notes from JSON backup (dedup by content)",
   "notes.closeTitle": "Close",

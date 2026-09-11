@@ -1353,15 +1353,16 @@ body {
  * 用 grid：记事本列在第 1 列、永远不动；看板在第 2 列、独自横向滚动。
  * 这样横向滚动条只会出现在「记事本列右边」——避免滚动条穿过 panel 下方。 */
 .main-layout {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-rows: minmax(0, 1fr);
+  /* #202：flex row（代替 grid auto 1fr）：记事本按容器百分比宽可靠解析，
+     看板区 flex:1 占剩余。 */
+  display: flex;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
 }
 
 .board-wrap {
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -1375,6 +1376,8 @@ body {
 .notes-panel {
   flex: 0 0 320px;
   width: 320px;
+  /* #202：百分比调宽时的硬上限（JS 侧钳制为主，此为兜底）。 */
+  max-width: 50%;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -1393,6 +1396,39 @@ body {
 .notes-panel.collapsed {
   flex: 0 0 36px;
   width: 36px;
+}
+
+/* #202：宽度拖拽条（面板右缘，hover/聚焦时显 1px 线）。 */
+.notes-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 9px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.notes-resizer:focus-visible {
+  outline: none;
+}
+
+/* #202：右缘垂直居中的常显抓手（hover/聚焦时加深）。 */
+.notes-resizer-grip {
+  position: absolute;
+  top: 50%;
+  right: 1px;
+  transform: translateY(-50%);
+  width: 5px;
+  height: 48px;
+  border-radius: 3px;
+  background: var(--border-strong);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.notes-resizer:hover .notes-resizer-grip,
+.notes-resizer:focus-visible .notes-resizer-grip {
+  background: var(--accent);
+  opacity: 1;
 }
 
 .notes-rail {
