@@ -262,6 +262,20 @@ export default function SettingsPanel({
   const [hooksMsg, setHooksMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [hooksNotices, setHooksNotices] = useState<string[]>([]);
   const [hooksStatus, setHooksStatus] = useState<AgentStatus[] | null>(null);
+  // #207：分组成员收起态（默认全展开），持久化到本地。
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
+    () => {
+      try {
+        const raw = localStorage.getItem("settings.hooks.groupsCollapsed");
+        return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+      } catch {
+        return {};
+      }
+    },
+  );
+  useEffect(() => {
+    localStorage.setItem("settings.hooks.groupsCollapsed", JSON.stringify(collapsedGroups));
+  }, [collapsedGroups]);
 
   const allAgentIds = useMemo(() => AGENTS.map((a) => a.value), []);
   const hooksTarget = () => (hooksScope === "global" ? null : targetDir.trim() || null);
@@ -559,13 +573,24 @@ export default function SettingsPanel({
                 return group === "missing";
               });
               if (rows.length === 0) return null;
+              const collapsed = collapsedGroups[group] === true;
               return (
                 <div key={group} style={{ marginTop: 8 }}>
-                  <div className={`muted small hook-group-title-${group}`} style={{ fontWeight: 600 }}>
+                  <button
+                    type="button"
+                    className="hook-group-toggle muted small"
+                    aria-expanded={!collapsed}
+                    onClick={() =>
+                      setCollapsedGroups((m) => ({ ...m, [group]: !m[group] }))
+                    }
+                    style={{ fontWeight: 600 }}
+                  >
+                    <span aria-hidden="true">{collapsed ? "▸" : "▾"}</span>
                     <span className={`hook-group-dot hook-group-dot-${group}`} />
                     {title}（{rows.length}）
-                  </div>
-                  {rows.map((v) => {
+                  </button>
+                  {!collapsed &&
+                    rows.map((v) => {
                     const st = hooksStatus?.find((s) => s.agent === v);
                     const supported = supportedHere(v);
                     const detail = !supported
@@ -614,7 +639,7 @@ export default function SettingsPanel({
                         </span>
                       </div>
                     );
-                  })}
+                    })}
                 </div>
               );
             })}
