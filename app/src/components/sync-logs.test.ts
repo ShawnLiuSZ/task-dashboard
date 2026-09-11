@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { syncLogErrorText, toggleExpanded } from "./SyncLogsPanel";
+import { accountLabelForLog, syncLogErrorText, toggleExpanded } from "./SyncLogsPanel";
 
 describe("syncLogErrorText (#161)", () => {
   it("优先展示 errorMessage", () => {
@@ -27,5 +27,24 @@ describe("toggleExpanded (#161)", () => {
 
   it("再次点击已展开行收起", () => {
     expect(toggleExpanded(1, 1)).toBeNull();
+  });
+});
+
+describe("accountLabelForLog (#224)", () => {
+  it("命中账号显示 @login", () => {
+    expect(
+      accountLabelForLog(
+        [
+          { id: 1, login: "alice" },
+          { id: 2, login: "bob" },
+        ],
+        2,
+      ),
+    ).toBe("@bob");
+  });
+
+  it("账号已删回退 #id", () => {
+    expect(accountLabelForLog([{ id: 1, login: "alice" }], 9)).toBe("#9");
+    expect(accountLabelForLog([], 9)).toBe("#9");
   });
 });
