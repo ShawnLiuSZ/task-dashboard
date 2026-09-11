@@ -920,6 +920,17 @@ fn install_one(
     };
     for (rel, content, exec) in files_of(agent_id) {
         let p = root.join(rel);
+        // #190 用户定制保护：已存在且与模板不一致 → 先备份（仅首份），覆盖记入 notice。
+        if let Ok(old) = std::fs::read_to_string(&p) {
+            if old != content {
+                if let Some(b) = backup_once(&p)? {
+                    res.notices.push(format!(
+                        "{} 与内置模板不一致，已按新模板覆盖，用户定制备份于 {b}",
+                        display_path(home, project, &p)
+                    ));
+                }
+            }
+        }
         if write_file(&p, &content, exec)? {
             res.files_written.push(display_path(home, project, &p));
         }
@@ -935,6 +946,10 @@ fn install_one(
         let existing = std::fs::read_to_string(&sp).ok();
         let (merged, changed) = merged_settings(existing.as_deref(), &prefix)?;
         if changed || !sp.exists() {
+            // #190：改动既有配置先备份（仅首份）；新建文件无需备份。
+            if sp.exists() {
+                backup_once(&sp)?;
+            }
             write_atomic(&sp, &merged)?;
             res.files_written.push(display_path(home, project, &sp));
             res.settings_merged = true;
@@ -1012,12 +1027,13 @@ fn prune_empty_subdirs(root: &Path) {
 }
 
 /// 项目级 opencode.json 摘除 mcp.taskboard（仅当命令指向 ours：相等或 basename taskboard*）。
-/// 返回 (changed, file_deleted, notice)。
-fn strip_opencode_mcp(repo: &Path, mcp_file: &str, exe: &str) -> Result<(bool, bool, Option<String>), String> {
+/// 返回 (changed, file_deleted, notice, backup)。改动前先备份（#190：此前调用方在
+/// 写后备份，`.taskboard-bak` 里是摘除后的内容、无法恢复；与全局路径对齐）。
+fn strip_opencode_mcp(repo: &Path, mcp_file: &str, exe: &str) -> Result<(bool, bool, Option<String>, Option<String>), String> {
     let path = repo.join(mcp_file);
     let existing = match std::fs::read_to_string(&path) {
         Ok(s) => s,
-        Err(_) => return Ok((false, false, None)),
+        Err(_) => return Ok((false, false, None, None)),
     };
     let mut root: serde_json::Value = serde_json::from_str(&existing)
         .map_err(|e| err(format!("已有 opencode.json 解析失败（未改动）: {e}")))?;
@@ -1054,16 +1070,18 @@ fn strip_opencode_mcp(repo: &Path, mcp_file: &str, exe: &str) -> Result<(bool, b
         }
     }
     if root == before {
-        return Ok((false, false, notice));
+        return Ok((false, false, notice, None));
     }
+    // 先备份原文（仅首份），再写/删（#190）。
+    let backup = backup_once(&path)?;
     if root.as_object().map(|o| o.is_empty()).unwrap_or(false) {
         std::fs::remove_file(&path).map_err(|e| err(format!("删除 opencode.json 失败: {e}")))?;
-        return Ok((true, true, notice));
+        return Ok((true, true, notice, backup));
     }
     let text =
         serde_json::to_string_pretty(&root).map_err(|e| err(format!("序列化失败: {e}")))?;
     write_atomic(&path, &(text + "\n"))?;
-    Ok((true, false, notice))
+    Ok((true, false, notice, backup))
 }
 
 /// 单 agent 卸载：只删内容与模板一致的文件；settings 改动前备份。
@@ -1116,12 +1134,14 @@ fn uninstall_one(
     } else if spec.mcp_file.is_some() {
         if let Some(proj) = project {
             let mcp_file = spec.mcp_file.unwrap_or("opencode.json");
-            let (changed, deleted, notice) = strip_opencode_mcp(proj, mcp_file, exe)?;
+            // #190：备份由 strip 内部在改动前完成（返回值），调用方只负责上报。
+            let (changed, deleted, notice, backup) = strip_opencode_mcp(proj, mcp_file, exe)?;
             if changed {
                 res.settings_cleaned = true;
                 if deleted {
                     res.files_removed.push(mcp_file.to_string());
-                } else if let Some(b) = backup_once(&proj.join(mcp_file))? {
+                }
+                if let Some(b) = backup {
                     res.backups.push(b);
                 }
             }
@@ -1733,6 +1753,72 @@ mod tests {
         assert!(!status_one(&home, Some(&repo), "opencode").installed);
         assert!(!repo.join("opencode.json").exists(), "只含 ours 的 opencode.json 应删除");
         assert!(!u.backups.is_empty());
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn uninstall_project_opencode_backup_holds_original() {
+        // #190：备份必须在摘除前完成，.bak 里是原文（含 taskboard 条目）。
+        let repo = tmp("uninst-bak");
+        let orig = r#"{"mcp":{"taskboard":{"type":"local","command":["/Applications/TaskBoard.app/Contents/MacOS/taskboard","mcp"],"enabled":true}},"other":1}"#;
+        std::fs::write(repo.join("opencode.json"), orig).unwrap();
+        let home = fake_home("uninst-bak-home");
+        let exe = "/Applications/TaskBoard.app/Contents/MacOS/taskboard";
+        let mut u = UninstallResult::empty("project", "x");
+        uninstall_one(&home, Some(&repo), "opencode", exe, &mut u).unwrap();
+        let bak = std::fs::read_to_string(repo.join("opencode.taskboard-bak")).unwrap();
+        assert_eq!(bak, orig, "备份应为改前原文");
+        let after = std::fs::read_to_string(repo.join("opencode.json")).unwrap();
+        assert!(!after.contains("taskboard"), "条目应被摘除");
+        assert!(after.contains("\"other\""), "兄弟键保留");
+        assert!(u.backups.iter().any(|b| b.contains("taskboard-bak")), "应上报备份路径");
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn install_overwrites_custom_script_with_backup() {
+        // #190：用户定制的 hook 脚本被新模板覆盖时，必须先留备份并 notice。
+        let repo = tmp("custom-script");
+        let home = fake_home("custom-script-home");
+        let dir = repo.join(".claude").join("hooks");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("taskboard-session-start.sh"), "#!/bin/bash\necho mine\n").unwrap();
+        let exe = "/Applications/TaskBoard.app/Contents/MacOS/taskboard";
+        let mut res = InstallResult::empty("project", "x");
+        install_one(&home, Some(&repo), "claude-code", exe, &mut res).unwrap();
+        let bak = std::fs::read_to_string(dir.join("taskboard-session-start.taskboard-bak")).unwrap();
+        assert!(bak.contains("echo mine"), "备份应为用户定制原文");
+        let now = std::fs::read_to_string(dir.join("taskboard-session-start.sh")).unwrap();
+        assert_eq!(now, SESSION_START_SH, "文件应已按模板覆盖");
+        assert!(res.notices.iter().any(|n| n.contains("备份")), "应 notice 告知覆盖+备份");
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn install_settings_merge_backs_up_existing() {
+        // #190：合并改写既有 settings.json 前留备份（仅首份）。
+        let repo = tmp("settings-bak");
+        let home = fake_home("settings-bak-home");
+        let claude = repo.join(".claude");
+        std::fs::create_dir_all(&claude).unwrap();
+        let orig = r#"{"hooks":{"SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"echo hi","timeout":5}]}]}}"#;
+        std::fs::write(claude.join("settings.json"), orig).unwrap();
+        let exe = "/Applications/TaskBoard.app/Contents/MacOS/taskboard";
+        let mut res = InstallResult::empty("project", "x");
+        install_one(&home, Some(&repo), "claude-code", exe, &mut res).unwrap();
+        assert!(res.settings_merged);
+        let bak = std::fs::read_to_string(claude.join("settings.taskboard-bak")).unwrap();
+        assert_eq!(bak, orig, "备份应为改前原文");
+        let merged = std::fs::read_to_string(claude.join("settings.json")).unwrap();
+        assert!(merged.contains("echo hi"), "用户原有 hook 保留");
+        assert!(merged.contains("taskboard-session-start.sh"), "ours 已合并");
+        // 幂等：重装不再写文件
+        let mut r2 = InstallResult::empty("project", "x");
+        install_one(&home, Some(&repo), "claude-code", exe, &mut r2).unwrap();
+        assert!(r2.files_written.is_empty(), "幂等重装不应再写文件");
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(&home);
     }
