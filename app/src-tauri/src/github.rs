@@ -522,27 +522,6 @@ impl GitHubClient {
             .last())
     }
 
-    /// 查询单个 issue 的当前状态（open/closed），用于「陈旧任务」回路判定。
-    /// `repo_owner` 用于 org 为空时构造完整仓库路径。
-    pub fn fetch_state(&self, repo: &str, number: i64, repo_owner: &str) -> Result<String, String> {
-        let full_repo = if !self.org.is_empty() {
-            format!("{}/{}", self.org, repo)
-        } else if !repo_owner.is_empty() {
-            format!("{}/{}", repo_owner, repo)
-        } else {
-            return Err("无法确定仓库 owner（org 为空且无 repo_owner）".to_string());
-        };
-        let url = format!(
-            "https://api.github.com/repos/{}/issues/{}",
-            full_repo, number
-        );
-        let v = self.get(&url)?;
-        v.get("state")
-            .and_then(|s| s.as_str())
-            .map(String::from)
-            .ok_or_else(|| "issue 响应无 state 字段".to_string())
-    }
-
     /// 拉取 GitHub Project「OMS Kanban」中每个 issue 的 Status 字段，
     /// 返回 `repo#number -> Status 原文` 的映射，供 sync 映射到看板四态。
     ///

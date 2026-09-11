@@ -848,7 +848,6 @@ mod tests {
             .expect("VACUUM INTO 快照失败");
         }
         crate::tlog!("[test] 已快照生产库到临时文件（不影响生产数据）：{}", tmp.display());
-        let conn = Connection::open(&tmp).expect("打开临时库");
         // 快照经 open_db 统一补 schema/迁移（与 App 打开路径一致）。
         let conn = db::open_db(&tmp).expect("open_db 快照库");
 
