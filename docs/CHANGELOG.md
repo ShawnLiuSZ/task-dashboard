@@ -6,6 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.3.55（2026-09-11）— 跨 agent 看板 hooks（#177）+ 同步筛选提示（#178）+ 外部写入自动刷新（#181）+ 看板列模式精简（#108）**
+
+  - **#177 跨 agent 看板 hooks 与一键安装/卸载**：新增项目级 `.claude/`（commands `/task-start` `/task-done` /hooks）与 `.opencode/` 插件，开始处理 issue 时一次完成「处理中 + session_id/session_agent + work_branch」三写入，结束时清 session；`AGENT_INSTRUCTIONS.md` 明确触发时机，根治"只靠 prompt 约定易遗忘"。详见 [docs/issue-177-claude-session-hooks.md](./issue-177-claude-session-hooks.md)。
+  - **#177 后续 opencode 自动执行与全局 MCP 自动合并**：`.opencode/plugins/taskboard.js` 事件 hook 从用户消息自动提取唯一 issue 引用并直调本地 `taskboard mcp`（`get_task_status` + 置处理中 + `record_session`，多引用回退手动）；`hooks.rs::merge_global_opencode_mcp` 按 `opencode.jsonc > opencode.json > config.json` 首个生效文件自动合并全局 MCP 配置（JSONC 注释保留，他人条目保留）。详见 [docs/issue-177-claude-session-hooks.md](./issue-177-claude-session-hooks.md)。
+  - **#178 同步后被筛选隐藏任务的提示与一键清除**：同步前后按 `issueKey → updatedAt` 快照 diff，精确算出"本次新变且被当前筛选藏住"的任务数，藏住才出琥珀色横幅 + 数量 + 一键清除筛选；无筛选时恒不打扰。新增可单测纯函数模块 `syncHint.ts`（8 例）。详见 [docs/issue-178-sync-filter-hint.md](./issue-178-sync-filter-hint.md)。
+  - **#181 外部写入后自动刷新任务列表**：前端窗口聚焦/`visibilitychange` 即时重查 + 20s 轮询兜底（后台隐藏跳过，`loadingRef` 防重入）；`taskSig.ts` 指纹覆盖本地写入字段（不能只看 `updated_at`，本地写库不更新它），无变化不重渲染；后端 `update_task_status` / `record_session` / `clear_session` / `record_handoff` 成功后 emit 新事件 `taskboard://tasks-changed`（多窗口正确性）。MCP 协议与 DB schema 无变化。详见 [docs/issue-181-auto-refresh.md](./issue-181-auto-refresh.md)。
+  - **#108 看板列模式精简**：设置页「看板列模式」去掉「四态列」选项，仅保留「Project 状态列」和「自定义列」；`boardModeProject` 文案缩短；历史 `status` 值在 Board 渲染层降级为 `project`，零 schema 变更；设置 modal 宽度 460px→520px。详见 [docs/issue-108-simplify-board-mode.md](./issue-108-simplify-board-mode.md)。
+  - **仓库改名与全量 bug 排查**：远程仓库改名 `task-dashboard`，同步全部引用（含 About 页链接 typo）；新增 [docs/bug-audit-2026-09.md](./bug-audit-2026-09.md)（13 条问题 + 3 条存疑 + 2 条误报排除，只出清单未改源码）。
+  - **CI**：Intel 构建改用 `macos-latest` 交叉编译，解决 `macos-13` runner 排队问题。
+  - **无 schema 变更**。验证：`npm test` 7 文件 36 例通过、`tsc --noEmit` 通过、`i18n:check` 273 key 一致、`check-mcp-columns.py` 24 列一致。
+
 - **v0.3.54（2026-09-09）— Rust 内置 MCP 读路径字段错位修复（#173）**
 
   - **#173 `row_to_value` 位置索引未同步 24 列 `SELECT_COLS`**：#155 重建 `tasks` 表并插入 `url` / `issue_state` / `project_status` / `pr_number` 等列、#169/#171 把 `SELECT_COLS` 扩成 24 列后，`mcp.rs::row_to_value` 仍按老的精简列序用位置 `get(0..10)` 取值，导致内置 MCP 的 `list_my_tasks` / `get_task_status` 返回字段**几乎全部错位**（`repo` 填 owner、`number` 填 repo 字符串、`status` 填 title……）。`check-mcp-columns.py` 只比两侧 `SELECT_COLS` 字符串、管不了「位置 → 列名」映射，故 CI 一直绿而功能坏。现已重写 `row_to_value` 严格按 24 列顺序逐一映射（含 `work_branch` / `updated_at` 等），语义与 Python 侧 `dict(row)` 对齐。
