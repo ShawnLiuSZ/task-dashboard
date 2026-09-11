@@ -8,8 +8,9 @@
 // 3. `shell.env`：向 shell 执行注入 TASKBOARD_SESSION_ID。
 // 4. 自动执行（clawd-on-desk agents 式事件驱动：事件 hook → 直接调本地后端，
 //    只是我们不经过 HTTP，用 `taskboard mcp` 子命令一-shot 直写同一 SQLite）：
-//    用户消息中出现**唯一** issue 引用（repo#num / owner/repo#num / GitHub issue URL）
+//    当前用户消息中出现**唯一未触发** issue 引用（repo#num / owner/repo#num / GitHub issue URL）
 //    时，自动完成 update_task_status(处理中) + record_session，无需手动 /task-start。
+//    （#204：按当前消息判定，历史引用不再抑制——单窗口多任务可依次自动执行。）
 //    零条或多条引用 → 不动作（回退手动）；不在看板 → get_task_status 不存在则跳过；
 //    done/processed → 不回退；doing 且已有 session → 视为已接管。同 (session, issue)
 //    只自动执行一次（成功后才标记，失败可重试）。
@@ -23,7 +24,7 @@ let sessionId = "";
 let repoDir = "";
 // 已自动执行过的 "sessionId|issueKey"，防重复触发（进程级，opencode 重启即清）。
 const autoFired = new Set();
-// 用户文本 part 的累计缓冲（按 session）：part 事件可能分片，拼起来再扫引用。
+// 用户文本 part 的累计缓冲（按 session）：分片兜底时取尾部 40 字重叠再扫。
 const partBuf = new Map();
 
 // session.created 的 payload 形状跨版本不稳定，多路径尽力提取。
@@ -283,20 +284,29 @@ export const TaskboardPlugin = async ({ directory, $, client }) => {
         if (id) sessionId = id;
         return;
       }
-      // message 系事件：跟进 session id + 用户文本扫 issue 引用
+      // message 系事件：跟进 session id + 当前消息扫 issue 引用
+      // #204：按当前消息判定（历史引用不再抑制新任务，单窗口多任务可依次自动执行）；
+      // 当前无引用时用上条尾部 40 字 + 当前文本再扫一次（分片切断 token 兜底）。
       if (event.type === "message.updated" || event.type === "message.part.updated") {
         const sid = pickSessionId(event);
         if (sid) sessionId = sid;
         if (!sessionId) return;
         const text = userTextOf(event);
-        if (text) {
-          const prev = partBuf.get(sessionId) || "";
-          partBuf.set(sessionId, (prev + "\n" + text).slice(-4000));
+        if (!text) return;
+        const prev = partBuf.get(sessionId) || "";
+        partBuf.set(sessionId, (prev + "\n" + text).slice(-4000));
+        const unfired = (keys) => keys.filter((k) => !autoFired.has(`${sessionId}|${k}`));
+        // 当前消息恰好一个未触发引用 → 自动执行；多条无法消歧（回退手动）
+        const cur = unfired(extractIssueRefs(text));
+        if (cur.length === 1) {
+          await autoStart(ctx, cur[0]);
+          return;
         }
-        const refs = extractIssueRefs(partBuf.get(sessionId) || "");
-        // 唯一引用才自动执行：零条无事可做，多条无法消歧（回退手动 /task-start）
-        if (refs.length === 1) {
-          await autoStart(ctx, refs[0]);
+        if (cur.length > 1) return;
+        // 当前 0 引用：分片可能切断 token，尾部重叠再扫一次
+        const tail = unfired(extractIssueRefs((prev.slice(-40) + "\n" + text).slice(-4000)));
+        if (tail.length === 1) {
+          await autoStart(ctx, tail[0]);
         }
         return;
       }
