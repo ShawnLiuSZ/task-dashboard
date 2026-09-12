@@ -33,6 +33,7 @@
       "app",
       "dmg"
     ],
+    "createUpdaterArtifacts": true,
     "macOS": {
       "signingIdentity": "-"
     },
@@ -43,5 +44,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "__REPLACE_WITH_TAURI_SIGNER_PUBLIC_KEY__",
+      "endpoints": [
+        "https://github.com/ShawnLiuSZ/task-dashboard/releases/latest/download/latest.json"
+      ]
+    }
   }
 }
