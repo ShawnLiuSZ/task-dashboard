@@ -236,6 +236,24 @@ export interface SyncLog {
   createdAt: number;
 }
 
+/** #235：一次 API 调用的请求/返回参数明细（同步 / 认领 / 状态写回）。 */
+export interface ApiLog {
+  id: number;
+  /** `sync` | `claim` | `status` */
+  kind: string;
+  accountId: number;
+  /** 关联的 sync_logs.id；独立写回操作为 0。 */
+  syncLogId: number;
+  method: string;
+  target: string;
+  status: number;
+  ok: boolean;
+  elapsedMs: number;
+  request: string;
+  response: string;
+  createdAt: number;
+}
+
 /** v0.3.24+：记事本记录。 */
 export interface Note {
   id: number;

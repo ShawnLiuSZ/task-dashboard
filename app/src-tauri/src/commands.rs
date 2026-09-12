@@ -314,12 +314,28 @@ pub async fn claim_issue(
     }
     // 网络写放 blocking 池（与 add_account 同款，避免占住主线程假死）。
     eprintln!("[claim] 开始认领 {key}（repo={owner}/{repo}#{number}）");
-    let remote_assignees = tauri::async_runtime::spawn_blocking(move || {
-        let client = crate::github::GitHubClient::new(pat, login.clone(), String::new())?;
-        client.add_assignee(&owner, &repo, number, &login)
+    // #235：blocking 池内建客户端并挂采集槽，把 sink 随结果一起带回来落盘。
+    let (call_result, api_calls) = tauri::async_runtime::spawn_blocking(move || {
+        let (client, sink) =
+            crate::github::GitHubClient::new_with_sink(pat, login.clone(), String::new())?;
+        let r = client.add_assignee(&owner, &repo, number, &login);
+        Ok::<_, String>((r, crate::github::drain_api_log(&sink)))
     })
     .await
     .map_err(|e| format!("认领任务异常: {e}"))??;
+    // #235：无论成败，先落盘本次请求/返回参数（kind=claim，不关联 sync_log）。
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let _ = crate::db::insert_api_logs(
+            &conn,
+            "claim",
+            account_id,
+            0,
+            crate::sync::now_secs(),
+            &api_calls,
+        );
+    }
+    let remote_assignees = call_result?;
     // 落本地：ownership→assigned，assignees 与远端合并去重。
     {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
@@ -395,21 +411,36 @@ pub async fn set_project_status(
         if pat.is_empty() {
             return Err("账号未配置 PAT".to_string());
         }
-        let client =
-            crate::github::GitHubClient::new(pat, String::new(), org.clone())?;
-        // 解析写回目标 + 选项 id；本地缺失即时补拉后重试。
-        let (target, option_id) =
-            resolve_or_refresh(&conn, &client, account_id, &org, &key, &status)?;
-        eprintln!(
-            "[proj-write] 开始写回 {key} → {status}（project={})",
-            target.project_name
+        // #235：挂采集槽 —— resolve 补拉的读调用与 mutation 都会被记录。
+        let (client, sink) =
+            crate::github::GitHubClient::new_with_sink(pat, String::new(), org.clone())?;
+        // 把「解析目标 + 写回」收进一个可失败表达式，结束后统一 drain，
+        // 这样失败路径（`?` 提前返回）也能留下请求/返回明细。
+        let write_result = (|| -> Result<(), String> {
+            // 解析写回目标 + 选项 id；本地缺失即时补拉后重试。
+            let (target, option_id) =
+                resolve_or_refresh(&conn, &client, account_id, &org, &key, &status)?;
+            eprintln!(
+                "[proj-write] 开始写回 {key} → {status}（project={})",
+                target.project_name
+            );
+            client.set_project_item_status(
+                &target.project_github_id,
+                &target.item_id,
+                &target.field_id,
+                &option_id,
+            )
+        })();
+        // #235：无论成败先落盘本次请求/返回参数（kind=status，不关联 sync_log）。
+        let _ = crate::db::insert_api_logs(
+            &conn,
+            "status",
+            account_id,
+            0,
+            crate::sync::now_secs(),
+            &crate::github::drain_api_log(&sink),
         );
-        client.set_project_item_status(
-            &target.project_github_id,
-            &target.item_id,
-            &target.field_id,
-            &option_id,
-        )?;
+        write_result?;
         // 落本地：project_status=目标名；status 走与同步同一决策（显式 label 优先等）。
         let board_mode = crate::db::get_account_board_mode(&conn, account_id);
         let label_rules = crate::db::load_label_rules(&conn).unwrap_or_default();
@@ -1416,6 +1447,37 @@ pub fn prune_sync_logs(state: State<'_, AppState>) -> Result<usize, String> {
 pub fn clear_sync_logs(state: State<'_, AppState>) -> Result<usize, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     crate::db::clear_sync_logs(&conn)
+}
+
+// ============================================================================
+// #235：API 调用明细（同步 / 认领 / 状态写回的请求与返回参数）
+// ============================================================================
+
+/// 列出 API 调用明细（最近 N 条），按 created_at 降序。
+#[tauri::command]
+pub fn list_api_logs(
+    state: State<'_, AppState>,
+    limit: Option<i64>,
+) -> Result<Vec<crate::db::ApiLog>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    // 明细行更长（含请求/返回），上限比 sync_logs 保守。
+    let limit = limit.unwrap_or(300).max(1).min(1000);
+    crate::db::list_api_logs(&conn, limit)
+}
+
+/// 清理过期（7 天）+ 超条数上限的 API 明细。
+#[tauri::command]
+pub fn prune_api_logs(state: State<'_, AppState>) -> Result<usize, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let now = crate::sync::now_secs();
+    crate::db::prune_api_logs(&conn, now, crate::db::API_LOG_MAX_ROWS)
+}
+
+/// 清空全部 API 明细（不可恢复）。
+#[tauri::command]
+pub fn clear_api_logs(state: State<'_, AppState>) -> Result<usize, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    crate::db::clear_api_logs(&conn)
 }
 
 // ============================================================================

@@ -6,6 +6,13 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 应用内 API 调用明细（#235）**
+
+  - **#235 请求/返回参数落盘 + 应用内可查**：新增 `api_logs` 表（`kind` / `method` / `target` / `status` / `ok` / `elapsed_ms` / `request` / `response`），把同步、领取任务（`claim_issue`）、更新状态（`set_project_status`）三路 GitHub API 调用的**请求参数与返回参数**落盘。同步日志面板改为**双页签**（「同步记录」/「API 明细」），明细页签支持按类型筛选、逐行展开查看请求与返回。承接 [#228](./issue-228-api-logging.md) 的 stderr 埋点（默认静默、终端可见），补齐「落盘 + UI 可视化」。详见 [docs/issue-235-in-app-api-log.md](./issue-235-in-app-api-log.md)。
+  - **实现要点**：`GitHubClient` 采用可选 sink（`new_with_sink`，`new` 保持原签名走 `None`），既有调用点零改动；drain 放在 `sync_account` 包装层，保证 `sync_account_inner` 内 `?` 提前返回的**失败路径也落盘**；`ApiLogEntry.ok` 独立于状态码（GraphQL 可 HTTP 200 带 `errors`）；请求/返回按字符截断（400/600）存摘要，保留 7 天 / 上限 2000 行；绝不写入 PAT。
+  - **schema 变更**：新增 `api_logs` 表 + `idx_api_logs_created` / `idx_api_logs_kind`（新表，`CREATE TABLE IF NOT EXISTS` 幂等，老库启动自动建表，无 ALTER 迁移）。
+  - **验证**：`cargo test --lib` 80 passed（+5 例）、`tsc --noEmit` 0 error、`npm run build` ✅、`npm test` 10 文件 79 例（`sync-logs.test.ts` 7→32）、`i18n:check` 中英各 302 key（+18）、`check-mcp-columns.py` 24 列一致。
+
 - **v0.4.0（2026-09-12）— GitHub 写回反转（#214 认领 + #215 状态）+ 记事本宽度 + 详情重做**
 
   - **写回反转（产品约束变更）**：`AGENTS.md §2.1` / `PRD.md` 从"只读 GitHub"放宽为"默认读 + 用户确认的显式写回"；同步路径本身仍只读，MCP 工具保持只写本地。PAT 需配套升级写权限（classic `repo` + `project`；Device Flow scope 已补 `project`，老 token 需重授权）。

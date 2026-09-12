@@ -183,5 +183,7 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/release-backmerge-policy.md`](./docs/release-backmerge-policy.md) — **发布回合策略**：release 合入 `main` 后必须把 `main` 回合 `develop`，避免版本号与 CHANGELOG 断档
 
+- [`docs/issue-235-in-app-api-log.md`](./docs/issue-235-in-app-api-log.md) — **应用内 API 调用明细**：`api_logs` 新表 + 可选 sink 收集器，同步/认领/状态写回的请求与返回参数可在日志面板展开查看（承接 #228 的 stderr 埋点）
+
 > 版本 v0.3.54 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-09
 

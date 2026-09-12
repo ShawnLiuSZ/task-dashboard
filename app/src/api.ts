@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   Account,
   AccountColumn,
+  ApiLog,
   AppUpdate,
   BoardMode,
   CheckUpdate,
@@ -120,6 +121,11 @@ export const api = {
     invoke<SyncLog[]>("list_sync_logs", { limit: limit ?? 50 }),
   pruneSyncLogs: () => invoke<number>("prune_sync_logs"),
   clearSyncLogs: () => invoke<number>("clear_sync_logs"),
+  // #235：API 调用明细（同步/认领/状态写回的请求与返回参数）。
+  listApiLogs: (limit?: number) =>
+    invoke<ApiLog[]>("list_api_logs", { limit: limit ?? 300 }),
+  pruneApiLogs: () => invoke<number>("prune_api_logs"),
+  clearApiLogs: () => invoke<number>("clear_api_logs"),
   // v0.3.24+：记事本管理。
   listNotes: () => invoke<Note[]>("list_notes"),
   addNote: (content: string, label?: string) =>

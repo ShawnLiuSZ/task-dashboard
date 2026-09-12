@@ -1374,6 +1374,94 @@ button.unassigned-tag:disabled {
   color: var(--text-2);
 }
 
+/* ===== #235：API 调用明细（同步 / 认领 / 状态写回的请求与返回参数） ========== */
+
+.sync-logs-tabs,
+.sync-logs-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.sync-logs-tabs .chip {
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+.sync-logs-filter .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chip-count {
+  display: inline-block;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+}
+
+.sync-logs-tabs .chip.on .chip-count,
+.sync-logs-filter .chip.on .chip-count {
+  background: rgba(255, 255, 255, 0.3);
+  color: #fff;
+}
+
+/* 目标列（REST 路径 / GraphQL 操作名）等宽展示，长 URL 单行省略 + tooltip。 */
+.sync-logs-table .mono {
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 明细列的可点击按钮：沿用 error-cell 的布局，但用强调色而非报错红。 */
+.sync-logs-table.api-logs-table .error-cell {
+  max-width: 60px;
+  color: var(--accent);
+}
+
+.api-log-detail-row td {
+  background: var(--surface-2);
+  padding: 8px 10px;
+}
+
+.api-log-param + .api-log-param {
+  margin-top: 8px;
+}
+
+.api-log-param-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.api-log-param-body {
+  margin: 0;
+  padding: 8px;
+  border: 0.5px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 220px;
+  overflow: auto;
+}
+
 /* v0.3.24+：主布局（记事本 + 看板）。
  * 用 grid：记事本列在第 1 列、永远不动；看板在第 2 列、独自横向滚动。
  * 这样横向滚动条只会出现在「记事本列右边」——避免滚动条穿过 panel 下方。 */

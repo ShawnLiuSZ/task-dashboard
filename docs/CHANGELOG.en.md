@@ -2,6 +2,13 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — In-app API call details (#235)**
+
+  - **#235 Request/response parameters persisted, visible in-app**: new `api_logs` table (`kind` / `method` / `target` / `status` / `ok` / `elapsed_ms` / `request` / `response`) records the **request and response parameters** of all three GitHub API call paths: sync, claim (`claim_issue`), and status write-back (`set_project_status`). The sync-log panel becomes **two tabs** ("Sync records" / "API details"); the details tab supports type filtering and per-row expansion showing request and response. This continues [#228](./issue-228-api-logging.md) (stderr instrumentation, silent by default, terminal-only) by adding persistence and in-app visualization. See [docs/issue-235-in-app-api-log.md](./issue-235-in-app-api-log.md).
+  - **Implementation notes**: `GitHubClient` gains an optional sink (`new_with_sink`; `new` keeps its signature and passes `None`), so existing call sites are untouched. Draining happens in a `sync_account` wrapper so **failure paths still persist** despite early `?` returns inside `sync_account_inner`. `ApiLogEntry.ok` is independent of the status code (GraphQL can return HTTP 200 carrying `errors`). Request/response are stored as character-truncated summaries (400/600), retained 7 days with a 2000-row cap, and PATs are never written.
+  - **Schema change**: new `api_logs` table plus `idx_api_logs_created` / `idx_api_logs_kind` (new table via idempotent `CREATE TABLE IF NOT EXISTS`; existing DBs create it on startup, no ALTER migration).
+  - **Verification**: `cargo test --lib` 80 passed (+5), `tsc --noEmit` 0 errors, `npm run build` ✅, `npm test` 10 files / 79 tests (`sync-logs.test.ts` 7→32), `i18n:check` 302 keys per locale (+18), `check-mcp-columns.py` 24 columns consistent.
+
 - **v0.4.0 (2026-09-12) — GitHub write-back reversal (#214 claim + #215 status) + notes width + detail rework**
 
   - **Write-back reversal (product-constraint change)**: `AGENTS.md §2.1` / `PRD.md` relaxed from "read-only GitHub" to "read by default + explicit user-confirmed writes"; the sync path itself stays read-only and MCP tools stay local-only. PATs need matching write scopes (classic `repo` + `project`; Device Flow scope now includes `project`, old tokens must re-authorize).

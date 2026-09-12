@@ -418,6 +418,10 @@ pub fn run() {
             commands::list_sync_logs,
             commands::prune_sync_logs,
             commands::clear_sync_logs,
+            // #235：API 调用明细（同步/认领/状态写回的请求与返回参数）。
+            commands::list_api_logs,
+            commands::prune_api_logs,
+            commands::clear_api_logs,
             // v0.3.24+：记事本管理。
             commands::list_notes,
             commands::add_note,
