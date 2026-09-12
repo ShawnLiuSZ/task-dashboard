@@ -145,6 +145,25 @@ CREATE TABLE IF NOT EXISTS sync_logs (
 CREATE INDEX IF NOT EXISTS idx_sync_logs_account ON sync_logs(account_id);
 CREATE INDEX IF NOT EXISTS idx_sync_logs_created ON sync_logs(created_at);
 
+-- #235：API 调用明细（同步 / 认领 / 状态写回的请求与返回参数）。
+-- request/response 均经 summarize_text 截断后写入；绝不写入 PAT。
+CREATE TABLE IF NOT EXISTS api_logs (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind        TEXT NOT NULL DEFAULT 'sync',
+  account_id  INTEGER NOT NULL DEFAULT 0,
+  sync_log_id INTEGER NOT NULL DEFAULT 0,
+  method      TEXT NOT NULL DEFAULT '',
+  target      TEXT NOT NULL DEFAULT '',
+  status      INTEGER NOT NULL DEFAULT 0,
+  ok          INTEGER NOT NULL DEFAULT 1,
+  elapsed_ms  INTEGER NOT NULL DEFAULT 0,
+  request     TEXT NOT NULL DEFAULT '',
+  response    TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_api_logs_created ON api_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_api_logs_kind ON api_logs(kind);
+
 CREATE TABLE IF NOT EXISTS notes (
 	  id         INTEGER PRIMARY KEY AUTOINCREMENT,
 	  content    TEXT NOT NULL,
@@ -1648,6 +1667,181 @@ pub fn clear_sync_logs(conn: &Connection) -> Result<usize, String> {
     Ok(n)
 }
 
+// ============================================================================
+// #235：API 调用明细（同步 / 认领 / 状态写回的请求与返回参数）
+// ============================================================================
+
+/// API 明细保留天数。明细属排障信息，短于 sync_logs 的 30 天。
+pub const API_LOG_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
+/// API 明细条数上限：一次同步会产生数十次调用，必须有上界。
+pub const API_LOG_MAX_ROWS: i64 = 2000;
+
+/// API 调用明细记录（与 api_logs 表一一对应；前端用）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiLog {
+    pub id: i64,
+    /// `sync` | `claim` | `status`（由写库方按操作类型标注）。
+    pub kind: String,
+    pub account_id: i64,
+    /// 关联的 sync_logs.id；独立写回操作为 0。
+    pub sync_log_id: i64,
+    pub method: String,
+    pub target: String,
+    pub status: i64,
+    pub ok: bool,
+    pub elapsed_ms: i64,
+    pub request: String,
+    pub response: String,
+    pub created_at: i64,
+}
+
+/// 待落盘的一条 API 调用。由 `github.rs` 在调用处采集；
+/// `kind` / `account_id` / `sync_log_id` / `created_at` 由调用方写库时统一补。
+#[derive(Debug, Clone)]
+pub struct ApiLogEntry {
+    pub method: String,
+    pub target: String,
+    pub status: i64,
+    pub ok: bool,
+    pub elapsed_ms: i64,
+    pub request: String,
+    pub response: String,
+}
+
+impl ApiLogEntry {
+    /// `ok` 必须显式给出：GraphQL 业务错误 HTTP 仍是 200，不能只看状态码。
+    pub fn new(
+        method: &str,
+        target: &str,
+        status: i64,
+        ok: bool,
+        elapsed_ms: i64,
+        request: &str,
+        response: &str,
+    ) -> Self {
+        Self {
+            method: method.to_string(),
+            target: target.to_string(),
+            status,
+            ok,
+            elapsed_ms,
+            request: request.to_string(),
+            response: response.to_string(),
+        }
+    }
+}
+
+/// 批量写入 API 调用明细；`entries` 为空时直接返回 0（不开启事务）。
+///
+/// 仅供日志使用：失败不该影响主流程，调用方按需 `let _ =` 忽略。
+pub fn insert_api_logs(
+    conn: &Connection,
+    kind: &str,
+    account_id: i64,
+    sync_log_id: i64,
+    created_at: i64,
+    entries: &[ApiLogEntry],
+) -> Result<usize, String> {
+    if entries.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("开启 API 日志事务失败: {e}"))?;
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO api_logs
+                   (kind, account_id, sync_log_id, method, target, status, ok,
+                    elapsed_ms, request, response, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            )
+            .map_err(|e| format!("准备 API 日志插入失败: {e}"))?;
+        for e in entries {
+            stmt.execute(rusqlite::params![
+                kind,
+                account_id,
+                sync_log_id,
+                e.method,
+                e.target,
+                e.status,
+                if e.ok { 1i64 } else { 0i64 },
+                e.elapsed_ms,
+                e.request,
+                e.response,
+                created_at
+            ])
+            .map_err(|e| format!("写入 API 日志失败: {e}"))?;
+        }
+    }
+    tx.commit().map_err(|e| format!("提交 API 日志失败: {e}"))?;
+    Ok(entries.len())
+}
+
+/// 列出 API 调用明细（最近 N 条），按 created_at 降序、id 降序。
+pub fn list_api_logs(conn: &Connection, limit: i64) -> Result<Vec<ApiLog>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, kind, account_id, sync_log_id, method, target, status, ok,
+                    elapsed_ms, request, response, created_at
+             FROM api_logs ORDER BY created_at DESC, id DESC LIMIT ?1",
+        )
+        .map_err(|e| format!("查询 API 日志失败: {e}"))?;
+    let rows = stmt
+        .query_map([limit], |r| {
+            Ok(ApiLog {
+                id: r.get(0)?,
+                kind: r.get(1)?,
+                account_id: r.get(2)?,
+                sync_log_id: r.get(3)?,
+                method: r.get(4)?,
+                target: r.get(5)?,
+                status: r.get(6)?,
+                ok: r.get::<_, i64>(7)? != 0,
+                elapsed_ms: r.get(8)?,
+                request: r.get(9)?,
+                response: r.get(10)?,
+                created_at: r.get(11)?,
+            })
+        })
+        .map_err(|e| format!("遍历 API 日志失败: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取 API 日志行失败: {e}"))?);
+    }
+    Ok(out)
+}
+
+/// 清理 API 明细：先按保留期删过期，再按条数上限裁剪最早的行，返回删除总行数。
+/// `max_rows <= 0` 时跳过裁剪（仅按时间淘汰）。
+pub fn prune_api_logs(conn: &Connection, now: i64, max_rows: i64) -> Result<usize, String> {
+    let mut removed = conn
+        .execute(
+            "DELETE FROM api_logs WHERE ?1 - created_at > ?2",
+            [now, API_LOG_RETENTION_SECS],
+        )
+        .map_err(|e| format!("清理过期 API 日志失败: {e}"))?;
+    if max_rows > 0 {
+        removed += conn
+            .execute(
+                "DELETE FROM api_logs WHERE id NOT IN (
+                   SELECT id FROM api_logs ORDER BY id DESC LIMIT ?1)",
+                [max_rows],
+            )
+            .map_err(|e| format!("裁剪 API 日志条数失败: {e}"))?;
+    }
+    Ok(removed)
+}
+
+/// 清空全部 API 调用明细（不可恢复）。
+pub fn clear_api_logs(conn: &Connection) -> Result<usize, String> {
+    let n = conn
+        .execute("DELETE FROM api_logs", [])
+        .map_err(|e| format!("清空 API 日志失败: {e}"))?;
+    Ok(n)
+}
+
 // ── Notes ──────────────────────────────────────────────────────────────────
 
 /// 记事本记录。
@@ -2186,6 +2380,91 @@ mod tests {
             delete_account(&conn, a).is_err(),
             "多账号时默认账号不可删除"
         );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #235：API 明细写入/读取往返（含 kind / ok / 关联字段）。
+    #[test]
+    fn api_logs_insert_and_list_roundtrip() {
+        let path = tmp_db("api-logs");
+        let conn = open_db(&path).unwrap();
+        let entries = vec![
+            ApiLogEntry::new(
+                "GET",
+                "/repos/a/b/issues",
+                200,
+                true,
+                12,
+                "https://x/y?q=1",
+                "{\"ok\":1}",
+            ),
+            ApiLogEntry::new(
+                "GRAPHQL",
+                "updateProjectV2ItemFieldValue",
+                200,
+                false,
+                34,
+                "mutation {...}",
+                "{\"errors\":[1]}",
+            ),
+        ];
+        assert_eq!(
+            insert_api_logs(&conn, "sync", 7, 42, 100, &entries).unwrap(),
+            2
+        );
+        // 空列表不写、也不开事务。
+        assert_eq!(insert_api_logs(&conn, "sync", 7, 42, 100, &[]).unwrap(), 0);
+
+        let rows = list_api_logs(&conn, 10).unwrap();
+        assert_eq!(rows.len(), 2);
+        // created_at 降序 + id 降序 → 后插入的在前。
+        let top = &rows[0];
+        assert_eq!(top.kind, "sync");
+        assert_eq!(top.account_id, 7);
+        assert_eq!(top.sync_log_id, 42);
+        assert_eq!(top.method, "GRAPHQL");
+        assert_eq!(top.target, "updateProjectV2ItemFieldValue");
+        assert!(!top.ok, "GraphQL 业务错误应落为失败");
+        assert_eq!(top.elapsed_ms, 34);
+        assert_eq!(top.request, "mutation {...}");
+        assert_eq!(top.created_at, 100);
+        let second = &rows[1];
+        assert!(second.ok);
+        assert_eq!(second.status, 200);
+        assert_eq!(second.target, "/repos/a/b/issues");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #235：新库读不到明细时返回空列表，而不是报错。
+    #[test]
+    fn api_logs_empty_on_fresh_db() {
+        let path = tmp_db("api-logs-empty");
+        let conn = open_db(&path).unwrap();
+        assert!(list_api_logs(&conn, 50).unwrap().is_empty());
+        assert_eq!(clear_api_logs(&conn).unwrap(), 0);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #235：条数上限裁剪只保留最新行；超期按保留期淘汰。
+    #[test]
+    fn api_logs_prune_trims_to_max_rows() {
+        let path = tmp_db("api-logs-prune");
+        let conn = open_db(&path).unwrap();
+        for i in 0..5 {
+            let e = vec![ApiLogEntry::new(
+                "GET", "/x", 200, true, 1, "req", "resp",
+            )];
+            insert_api_logs(&conn, "claim", 1, 0, 1000 + i, &e).unwrap();
+        }
+        // 上限 3（now 与 created_at 同量级 → 不触发超期淘汰）→ 只留最新 3 行。
+        assert_eq!(prune_api_logs(&conn, 1000, 3).unwrap(), 2);
+        let rows = list_api_logs(&conn, 10).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].created_at, 1004, "应保留最新的一条");
+        // 超期淘汰：now 远超保留期 → 全部清掉（max_rows=0 表示只按时间）。
+        let removed = prune_api_logs(&conn, 10_000_000, 0).unwrap();
+        assert_eq!(removed, 3, "全部过期应被清掉");
+        assert_eq!(clear_api_logs(&conn).unwrap(), 0);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }

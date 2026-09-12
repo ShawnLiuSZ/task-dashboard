@@ -195,18 +195,48 @@ struct PendingUpsert {
 /// - key 仍为 `repo#number`（PRIMARY KEY 不变）。多账号下同 key 会被后写入者覆盖——
 ///   这是 v0.3.16 的已知限制（设计文档 3.1 节确认）。单账号视图（默认）下不会出现冲突。
 /// - 单账号内仍走 5 源合并 + PR 关联 + Project Status 联动，与 v0.3.15 逻辑等价。
+/// #235：`sync_account` 薄包装 —— 建客户端、挂采集槽，并在**无论成败**后
+/// 把本次同步实际发生的 API 调用（请求/返回参数）落盘。
+///
+/// 之所以放在包装层而不是 body 内：body 里遍布 `?` 早期返回，只有在这里
+/// drain 才能保证失败路径也留下明细。
 fn sync_account(
     conn: &Connection,
     account: &crate::db::Account,
     pat: &str,
     now: i64,
     board_mode: &str,
+    sync_log_id: Option<i64>,
 ) -> Result<AccountSyncResult, String> {
-    let client = github::GitHubClient::new(
+    let (client, sink) = github::GitHubClient::new_with_sink(
         pat.to_string(),
         account.login.clone(),
         account.org.clone(),
     )?;
+    let result = sync_account_inner(conn, account, &client, now, board_mode);
+    let calls = github::drain_api_log(&sink);
+    if !calls.is_empty() {
+        if let Err(e) = crate::db::insert_api_logs(
+            conn,
+            "sync",
+            account.id,
+            sync_log_id.unwrap_or(0),
+            now,
+            &calls,
+        ) {
+            crate::tlog!("[sync] 落盘 API 调用明细失败: {}", e);
+        }
+    }
+    result
+}
+
+fn sync_account_inner(
+    conn: &Connection,
+    account: &crate::db::Account,
+    client: &github::GitHubClient,
+    now: i64,
+    board_mode: &str,
+) -> Result<AccountSyncResult, String> {
 
     // 发现并存储该账号下的全部 Project（best-effort）。
     let project_ids = match client.fetch_all_projects() {
@@ -761,7 +791,7 @@ pub fn run(conn: &Connection, trigger_type: &str) -> Result<SyncResult, String> 
         // v0.3.43+：看板列模式改为「每账号」配置（meta 里 board_mode:<id>），决定是否启用
         // 自定义列映射（仅 custom 时写入 col_key）。未配置默认 project。
         let board_mode = crate::db::get_account_board_mode(conn, account.id);
-        match sync_account(conn, account, &pat, now, &board_mode) {
+        match sync_account(conn, account, &pat, now, &board_mode, log_id) {
             Ok(r) => {
                 total_added += r.added;
                 total_updated += r.updated;
@@ -801,8 +831,10 @@ pub fn run(conn: &Connection, trigger_type: &str) -> Result<SyncResult, String> 
 
     crate::db::set_setting(conn, "last_sync_at", &now.to_string())?;
 
-    // v0.3.23：清理超过 7 天的同步日志（保留策略）
+    // v0.3.23：清理超过 30 天的同步日志（保留策略；具体数值见 `db::prune_sync_logs`）
     let _ = crate::db::prune_sync_logs(conn, now);
+    // #235：清理 API 调用明细（7 天 + 条数上限，避免高频同步写爆库）。
+    let _ = crate::db::prune_api_logs(conn, now, crate::db::API_LOG_MAX_ROWS);
 
     let total: usize = conn
         .query_row("SELECT COUNT(*) FROM tasks", [], |r| r.get(0))
