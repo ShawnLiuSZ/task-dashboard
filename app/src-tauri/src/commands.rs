@@ -1137,6 +1137,120 @@ pub async fn check_latest_release() -> Result<CheckUpdate, String> {
 }
 
 // ============================================================================
+// #231：应用内自动更新（tauri-plugin-updater）
+//
+// 核心收益：更新包由应用自身进程下载（reqwest + rustls），**不经过浏览器下载通道**，
+// 因此产物不会被打上 `com.apple.quarantine`。Gatekeeper 只在存在隔离标记时介入评估，
+// 所以应用内更新全程不会触发「仍需在隐私与安全性中放行」的提示。
+// ============================================================================
+
+/// 应用内更新检查结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUpdate {
+    /// 是否有可安装的更新。
+    pub available: bool,
+    /// 远端最新版本号（无更新时为空）。
+    pub version: String,
+    /// 当前版本号。
+    pub current: String,
+    /// 更新说明（release notes，可能为空）。
+    pub notes: String,
+    /// 非空表示检查失败（未配置签名公钥 / 网络 / 解析等），前端据此回退到跳转下载。
+    pub error: String,
+}
+
+/// 下载进度事件名。
+pub const UPDATE_PROGRESS_EVENT: &str = "taskboard://update-progress";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateProgress {
+    downloaded: u64,
+    total: Option<u64>,
+}
+
+/// #231：经 Tauri updater 通道检查更新（读取 Releases 上的 `latest.json`）。
+///
+/// 与 `check_latest_release` 的分工：本命令返回**可一键安装**的更新；
+/// `check_latest_release` 是纯版本号对比，用于 updater 不可用时的兜底
+/// （引导用户跳转浏览器手动下载）。
+///
+/// 失败不抛错，而是填进 `error` 字段，便于前端静默回退而不打断用户。
+#[tauri::command]
+pub async fn check_app_update(app: AppHandle) -> Result<AppUpdate, String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let current = env!("CARGO_PKG_VERSION").to_string();
+
+    let no_update = |error: String| AppUpdate {
+        available: false,
+        version: String::new(),
+        current: current.clone(),
+        notes: String::new(),
+        error,
+    };
+
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(e) => return Ok(no_update(format!("初始化更新器失败：{e}"))),
+    };
+
+    match updater.check().await {
+        Ok(Some(u)) => Ok(AppUpdate {
+            available: true,
+            version: u.version.clone(),
+            current,
+            notes: u.body.clone().unwrap_or_default(),
+            error: String::new(),
+        }),
+        Ok(None) => Ok(no_update(String::new())),
+        Err(e) => Ok(no_update(format!("检查更新失败：{e}"))),
+    }
+}
+
+/// #231：下载并安装更新。完成后由前端调用 `restart_app` 重启以生效。
+///
+/// 下载阶段全程由应用进程发起，**不写 `com.apple.quarantine`** —— 这是免除 Gatekeeper
+/// 重复放行的关键所在。
+#[tauri::command]
+pub async fn install_app_update(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = app
+        .updater()
+        .map_err(|e| format!("初始化更新器失败：{e}"))?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| format!("检查更新失败：{e}"))?
+        .ok_or_else(|| "当前已是最新版本".to_string())?;
+
+    let handle = app.clone();
+    let mut downloaded: u64 = 0;
+    update
+        .download_and_install(
+            move |chunk, total| {
+                downloaded += chunk as u64;
+                let _ = handle.emit(
+                    UPDATE_PROGRESS_EVENT,
+                    UpdateProgress { downloaded, total },
+                );
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| format!("下载或安装更新失败：{e}"))?;
+    Ok(())
+}
+
+/// #231：重启应用，使已安装的更新生效。
+#[tauri::command]
+pub fn restart_app(app: AppHandle) {
+    app.restart();
+}
+
+// ============================================================================
 // v0.3.20+：Label→Status 映射管理
 // ============================================================================
 

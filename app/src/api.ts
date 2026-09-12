@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   Account,
   AccountColumn,
+  AppUpdate,
   BoardMode,
   CheckUpdate,
   DeviceLoginPoll,
@@ -18,6 +19,7 @@ import type {
   SyncLog,
   SyncResult,
   Task,
+  UpdateProgress,
   ViewMode,
 } from "./types";
 
@@ -26,6 +28,9 @@ export const SYNCED_EVENT = "taskboard://synced";
 // #181：App 内写入（看板状态 / session / handoff）后后端发出的通知，
 // 前端收到即重查。MCP 子进程发不出此事件，仍靠聚焦 + 轮询兜底。
 export const TASKS_CHANGED_EVENT = "taskboard://tasks-changed";
+
+// #231：应用内更新下载进度事件（后端 install_app_update 下载期间持续发出）。
+export const UPDATE_PROGRESS_EVENT = "taskboard://update-progress";
 
 export const api = {
   listTasks: (ownership?: string, accountId?: number | null) =>
@@ -83,6 +88,10 @@ export const api = {
   getAppVersion: () => invoke<string>("get_app_version"),
   checkLatestRelease: () =>
     invoke<CheckUpdate>("check_latest_release"),
+  // #231：应用内自动更新（updater 通道：检查 / 下载安装 / 重启生效）。
+  checkAppUpdate: () => invoke<AppUpdate>("check_app_update"),
+  installAppUpdate: () => invoke<void>("install_app_update"),
+  restartApp: () => invoke<void>("restart_app"),
   // v0.3.20+：Label→Status 映射管理。
   listLabelMappings: () => invoke<LabelMapping[]>("list_label_mappings"),
   upsertLabelMapping: (input: LabelMappingInput) =>
@@ -170,6 +179,11 @@ export function onSynced(cb: (r: SyncResult) => void) {
 }
 export function onTasksChanged(cb: () => void) {
   return listen<string>(TASKS_CHANGED_EVENT, () => cb());
+}
+
+// #231：订阅应用内更新的下载进度。
+export function onUpdateProgress(cb: (p: UpdateProgress) => void) {
+  return listen<UpdateProgress>(UPDATE_PROGRESS_EVENT, (e) => cb(e.payload));
 }
 
 /**

@@ -19,15 +19,32 @@ mod mcp;
 mod oauth;
 mod sync;
 
-/// #101：macOS 首次启动自动清除自身可执行文件上的 `com.apple.quarantine`。
+/// 从可执行文件路径上溯定位 `.app` bundle 根目录。
+///
+/// 例：`/Applications/TaskBoard.app/Contents/MacOS/taskboard` → `/Applications/TaskBoard.app`
+/// 不在 bundle 内运行（如 `cargo run` 的裸二进制）时返回 `None`。
+#[cfg(target_os = "macos")]
+fn bundle_root_from_exe(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    exe.ancestors()
+        .find(|p| p.extension().and_then(|e| e.to_str()) == Some("app"))
+        .map(std::path::Path::to_path_buf)
+}
+
+/// #101 / #232：macOS 首次启动自动清除 Gatekeeper 隔离标记 `com.apple.quarantine`。
 ///
 /// 背景：本 App 为 ad-hoc 签名（`signingIdentity = "-"`，未公证）。Gatekeeper 会对带
 /// quarantine 标记的二进制做首次评估，使 MCP 客户端 spawn 主二进制（`taskboard mcp`）时
 /// 拖慢 / 拦截握手 → `connection timed out after 30000ms`。
 ///
+/// #232 修正：隔离标记的实际落点是 **`.app` bundle 根目录**（Safari 等下载渠道标记整个
+/// bundle），可执行文件自身只带 `com.apple.provenance`。而原实现只对 `current_exe()`
+/// （文件路径）执行 `xattr -dr` —— 该操作不向上越级，永远触达不到 bundle 根，导致此修复
+/// 在 macOS 26 上长期空转（`has_quarantine(exe)` 恒为 false 即提前返回）。
+/// 现在同时清理 bundle 根与可执行文件两个目标。
+///
 /// 关键事实：当前登录用户拥有自身 bundle，移除自身文件的 quarantine **无需 sudo**。
-/// 因此只要 GUI 打开过一次（Gatekeeper 放行一次），即可在启动时自动递归清除，此后 MCP
-/// 子进程 spawn 不再触发慢评估。返回是否发生清除，供前端弹一次性提示。
+/// 因此只要 GUI 打开过一次（Gatekeeper 放行一次），此后 MCP 子进程 spawn 不再触发慢评估。
+/// 返回是否发生清除，供前端弹一次性提示。
 #[cfg(target_os = "macos")]
 pub fn autoclear_self_quarantine() -> bool {
     use std::process::Command;
@@ -35,9 +52,8 @@ pub fn autoclear_self_quarantine() -> bool {
     let Ok(exe) = std::env::current_exe() else {
         return false;
     };
-    let path = exe.to_string_lossy().into_owned();
 
-    let has_quarantine = |p: &str| -> bool {
+    let has_quarantine = |p: &std::path::Path| -> bool {
         Command::new("xattr")
             .arg("-l")
             .arg(p)
@@ -47,18 +63,32 @@ pub fn autoclear_self_quarantine() -> bool {
             .unwrap_or(false)
     };
 
-    if !has_quarantine(&path) {
-        return false;
+    // 候选目标：bundle 根优先（隔离标记的实际落点），随后是可执行文件本身。
+    let mut targets: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(root) = bundle_root_from_exe(&exe) {
+        targets.push(root);
     }
-    // 递归清除自身 quarantine（当前用户拥有自身 bundle，免 root）。
-    let removed = Command::new("xattr")
-        .arg("-dr")
-        .arg("com.apple.quarantine")
-        .arg(&path)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    !has_quarantine(&path) || removed
+    targets.push(exe);
+
+    let mut cleared = false;
+    for target in targets {
+        if !has_quarantine(&target) {
+            continue;
+        }
+        // 递归清除 quarantine（当前用户拥有自身 bundle，免 root）。
+        let removed = Command::new("xattr")
+            .arg("-dr")
+            .arg("com.apple.quarantine")
+            .arg(&target)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if removed || !has_quarantine(&target) {
+            eprintln!("[#101/#232] quarantine cleared: {}", target.display());
+            cleared = true;
+        }
+    }
+    cleared
 }
 
 /// 启动时执行 #101 自动清除并可外发一次性提示事件。
@@ -161,6 +191,37 @@ mod tests {
         assert!(SyncGuard::acquire(&flag).is_some(), "释放后应可重新获取");
         assert!(!flag.load(Ordering::SeqCst), "释放后标志应复位");
     }
+
+    /// #232：`.app` bundle 根定位 —— 隔离标记实际落在这一层，而非可执行文件本身。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resolves_app_bundle_root_from_executable() {
+        let exe = std::path::Path::new("/Applications/TaskBoard.app/Contents/MacOS/taskboard");
+        assert_eq!(
+            super::bundle_root_from_exe(exe),
+            Some(std::path::PathBuf::from("/Applications/TaskBoard.app"))
+        );
+    }
+
+    /// 裸二进制（`cargo run` / `cargo test`）不在 `.app` 内，应返回 None 而非误判。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bundle_root_is_none_outside_app_bundle() {
+        let exe =
+            std::path::Path::new("/Users/me/dev/dashboard/app/src-tauri/target/debug/taskboard");
+        assert_eq!(super::bundle_root_from_exe(exe), None);
+    }
+
+    /// 可执行文件位于 bundle 内更深一层目录时，仍应上溯到 `.app` 根。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bundle_root_handles_nested_executable() {
+        let exe = std::path::Path::new("/opt/TaskBoard.app/Contents/MacOS/helpers/probe");
+        assert_eq!(
+            super::bundle_root_from_exe(exe),
+            Some(std::path::PathBuf::from("/opt/TaskBoard.app"))
+        );
+    }
 }
 
 /// 打开专用于同步的独立连接。
@@ -235,6 +296,9 @@ pub fn run_mcp() {
 
 pub fn run() {
     tauri::Builder::default()
+        // #231：应用内更新插件。更新包由应用自身进程下载，不写 quarantine 标记，
+        // 从而绕过 Gatekeeper 对每次更新的手动放行要求。
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // #101：macOS 首启自动清除自身 quarantine，免 sudo 修复 MCP 连接超时。
             #[cfg(target_os = "macos")]
@@ -335,6 +399,10 @@ pub fn run() {
             // v0.3.19+：关于页面 —— 当前版本号 + 检查更新。
             commands::get_app_version,
             commands::check_latest_release,
+            // #231：应用内自动更新（检查 / 下载安装 / 重启生效）。
+            commands::check_app_update,
+            commands::install_app_update,
+            commands::restart_app,
             // v0.3.20+：Label→Status 映射管理。
             commands::list_label_mappings,
             commands::upsert_label_mapping,

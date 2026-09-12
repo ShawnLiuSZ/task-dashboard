@@ -23,3 +23,8 @@ dirs = "5"
 # rustls-tls 避免 native-tls 在 CI Linux runner 上的 OpenSSL 依赖，二进制跨平台编译干净；
 # blocking 模式不引 tokio runtime，便于手动控制限流节奏（GUI 已是 async 但同步客户端更易控并发）。
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+# #231：应用内更新。更新包由应用自身进程下载，不经浏览器下载通道，
+# 因此不会被打上 com.apple.quarantine，Gatekeeper 不参与评估 —— 从根本上
+# 免除「每次更新都要手动放行」。完整性校验用 Tauri minisign 密钥对，与 Apple
+# 开发者证书无关，无需 $99/年 账号。
+tauri-plugin-updater = "2"
