@@ -1,16 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, openExternal } from "../api";
 import { AGENTS, agentLabel } from "../agents";
-import { COLUMNS, type StatusKey, type Task } from "../types";
+import { type ProjectStatus, type Task } from "../types";
 import { fmtTime, useI18n } from "../i18n";
+import ConfirmDialog from "./ConfirmDialog";
 
 interface Props {
   task: Task;
   onClose: () => void;
   onChanged: () => void;
+  /** #196：项目 Status 选项（用于 GitHub 状态行的选项与排序；缺省时只展示当前值）。 */
+  projectStatuses?: ProjectStatus[];
 }
 
-export default function DetailPanel({ task, onClose, onChanged }: Props) {
+export default function DetailPanel({ task, onClose, onChanged, projectStatuses }: Props) {
   const { t, lang } = useI18n();
   const [busy, setBusy] = useState(false);
   const [sessionInput, setSessionInput] = useState(task.sessionId ?? "");
@@ -18,6 +21,8 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [handoff, setHandoff] = useState(task.handoff ?? "");
+  // #215：待确认的目标 Project 状态（确认框 → set_project_status 写回）。
+  const [pendingStatus, setPendingStatus] = useState<string | null>(null);
   // 「已复制」提示的复位定时器：组件的卸载（切换任务、关闭面板）时需清理，
   // 避免定时器在其后触发 setCopiedKey（在已卸载组件上 setState）。
   const copiedTimer = useRef<number | null>(null);
@@ -26,6 +31,20 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
       if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
     };
   }, []);
+
+  // #196：当前 GitHub 状态键（与 Board.groupByProjectStatus 同规则）：
+  // closed→done，有原文取原文，空→unclassified。详情状态区永远以此为准，
+  // 不跟随 custom 列展示方式。
+  const currentProjectStatus =
+    task.issueState === "closed" ? "done" : task.projectStatus?.trim() || "unclassified";
+  // 选项 = projectStatuses 名称；当前值不在其中时前置，保证永远可见且默认选中。
+  const projectStatusOptions = useMemo(() => {
+    const names = (projectStatuses ?? []).map((ps) => ps.name);
+    if (!names.includes(currentProjectStatus)) return [currentProjectStatus, ...names];
+    return names;
+  }, [projectStatuses, currentProjectStatus]);
+  const projectStatusLabel = (name: string) =>
+    name === "done" ? t("status.done") : name === "unclassified" ? t("detail.unlabeled") : name;
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -90,19 +109,35 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
 
       <section className="detail-block">
         <div className="block-title">{t("detail.statusTitle")}</div>
-        <div className="seg">
-          {COLUMNS.map((c) => (
+        {/* #215：GitHub 状态行可点（确认框 → 写回远端 Status）。
+            #200 去掉了四态手动入口，此处是唯一的状态切换入口。 */}
+        <div className="muted small">{t("detail.projectStatus")}</div>
+        <div className="seg project-status-seg">
+          {projectStatusOptions.map((name) => (
             <button
-              key={c.key}
-              className={`seg-btn${task.status === c.key ? " on" : ""}`}
-              disabled={busy}
-              onClick={() => run(() => api.updateStatus(task.issueKey, c.key as StatusKey))}
+              key={name}
+              className={`seg-btn${name === currentProjectStatus ? " on" : ""}`}
+              disabled={busy || name === currentProjectStatus}
+              title={projectStatusLabel(name)}
+              onClick={() => setPendingStatus(name)}
             >
-              {t(`status.${c.key}`)}
+              {projectStatusLabel(name)}
             </button>
           ))}
         </div>
       </section>
+      {/* #215：状态写回二次确认（失败在详情内横幅展示；成功重查）。 */}
+      {pendingStatus !== null && (
+        <ConfirmDialog
+          message={t("detail.projectStatusConfirm", { name: projectStatusLabel(pendingStatus) })}
+          onCancel={() => setPendingStatus(null)}
+          onConfirm={() => {
+            const name = pendingStatus;
+            setPendingStatus(null);
+            void run(() => api.setProjectStatus(task.issueKey, name));
+          }}
+        />
+      )}
 
       <section className="detail-block">
         <div className="block-title">{t("detail.sessionTitle")}</div>
@@ -239,6 +274,18 @@ export default function DetailPanel({ task, onClose, onChanged }: Props) {
               onClick={() => copyToClipboard(task.branch, "branch")}
             >
               {copiedKey === "branch" ? t("btn.copied") : t("btn.copy")}
+            </button>
+          </div>
+        )}
+        {/* #193：agent 工作分支（与 PR 分支不同时才展示，避免重复）。 */}
+        {task.workBranch && task.workBranch !== task.branch && (
+          <div className="branch-line top-gap">
+            <span>{t("detail.workBranch", { branch: task.workBranch })}</span>
+            <button
+              className="btn ghost small inline"
+              onClick={() => copyToClipboard(task.workBranch, "workBranch")}
+            >
+              {copiedKey === "workBranch" ? t("btn.copied") : t("btn.copy")}
             </button>
           </div>
         )}

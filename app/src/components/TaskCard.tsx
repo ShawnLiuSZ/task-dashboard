@@ -1,7 +1,8 @@
-import { memo, type MouseEvent } from "react";
+import { memo, useState, type MouseEvent } from "react";
 import type { Task } from "../types";
-import { openExternal } from "../api";
+import { api, openExternal, reportError } from "../api";
 import { useT } from "../i18n";
+import ConfirmDialog from "./ConfirmDialog";
 
 interface Props {
   task: Task;
@@ -39,6 +40,9 @@ function TaskCard({ task, accountLabel, active, onSelectKey, repoIndex, showGhSt
   const assigneeNames = task.assignees
     ? task.assignees.split(",").filter(Boolean)
     : [];
+  // #214：认领确认框与防重提交（成功靠后端 TASKS_CHANGED_EVENT 触发 App 重查）。
+  const [confirmClaim, setConfirmClaim] = useState(false);
+  const [claiming, setClaiming] = useState(false);
 
   return (
     <article
@@ -116,27 +120,39 @@ function TaskCard({ task, accountLabel, active, onSelectKey, repoIndex, showGhSt
             {t("card.mentionedBadge")}
           </span>
         )}
-        {/* 仅未认领的任务在此行显示"无人认领"标识。 */}
+        {/* #214：无人认领可点认领（确认框 → GitHub 写回）。 */}
         {task.ownership === "notassignee" && (
-          <span className="unassigned-tag" title={t("card.unassignedTitle")}>
+          <button
+            type="button"
+            className="unassigned-tag claim-btn"
+            title={t("card.claimTitle")}
+            disabled={claiming}
+            onClick={(e) => {
+              e.stopPropagation();
+              setConfirmClaim(true);
+            }}
+          >
             {t("ownership.notassignee")}
-          </span>
+          </button>
         )}
       </div>
 
-      <div className="card-bottom">
-        {task.sessionId ? (
-          <span className="session">
+      {/* #197：有 session 时在分配人下一行独立展示（不再挤占时间位置）。 */}
+      {task.sessionId && (
+        <div className="meta-row session-row">
+          <span className="session" title={task.sessionId}>
             <span className="session-label">{t("card.sessionLabel")}</span>
             <code>{task.sessionId}</code>
           </span>
-        ) : (
-          <span className="muted small">
-            {task.updatedAt
-              ? new Date(task.updatedAt * 1000).toISOString().slice(0, 10)
-              : ""}
-          </span>
-        )}
+        </div>
+      )}
+
+      <div className="card-bottom">
+        <span className="muted small">
+          {task.updatedAt
+            ? new Date(task.updatedAt * 1000).toISOString().slice(0, 10)
+            : ""}
+        </span>
         {task.latestCommentUrl && (
           <a
             className="cmt-link"
@@ -159,6 +175,24 @@ function TaskCard({ task, accountLabel, active, onSelectKey, repoIndex, showGhSt
         )}
         {task.candidateDone && <span className="candidate-tag">{t("card.candidateTag")}</span>}
       </div>
+      {/* #214：认领二次确认（失败经全局错误横幅可见；成功靠后端事件重查）。 */}
+      {confirmClaim && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <ConfirmDialog
+            message={t("card.claimConfirm", { repo: task.repo, number: task.number })}
+            onCancel={() => setConfirmClaim(false)}
+            onConfirm={() => {
+              setConfirmClaim(false);
+              if (claiming) return;
+              setClaiming(true);
+              api
+                .claimIssue(task.issueKey)
+                .catch(reportError)
+                .finally(() => setClaiming(false));
+            }}
+          />
+        </div>
+      )}
     </article>
   );
 }

@@ -26,6 +26,8 @@ pub struct Task {
     pub pr_number: i64,
     pub pr_url: String,
     pub branch: String,
+    /// #193：agent 工作分支（record_session 写入，与同步的 PR branch 分离）。
+    pub work_branch: String,
     pub session_id: Option<String>,
     pub session_agent: Option<String>,
     pub session_at: Option<i64>,
@@ -91,7 +93,7 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
             format!(
                 "SELECT issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status,
                         assignees, mentioned, latest_comment_url, pr_number, pr_url, branch,
-                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id
+                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch
                  FROM tasks WHERE ownership = ?{where_extra}
                  ORDER BY candidate_done ASC, status ASC, updated_at DESC"
             ),
@@ -101,7 +103,7 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
             format!(
                 "SELECT issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status,
                         assignees, mentioned, latest_comment_url, pr_number, pr_url, branch,
-                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id
+                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch
                  FROM tasks WHERE 1=1{where_extra}
                  ORDER BY candidate_done ASC, status ASC, updated_at DESC"
             ),
@@ -135,6 +137,7 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
             handoff: r.get(20)?,
             updated_at: r.get(21)?,
             account_id: r.get(22)?,
+            work_branch: r.get(23)?,
         })
     };
 
@@ -260,6 +263,280 @@ pub fn record_handoff(
     // #181：同上，多窗口同步。
     let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
+}
+
+/// #214：认领任务——调 GitHub API 把当前账号设为 assignee（用户确认框后显式写回，
+/// 首个写回操作；详见 docs/issue-214-claim-assignee.md）。
+/// 成功后本地 ownership/assignees 乐观更新（下次同步对账）；失败本地不动。
+#[tauri::command]
+pub async fn claim_issue(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<(), String> {
+    // 读任务归属（锁内快读，不跨 await 持有）。
+    let (mut owner, repo, number, account_id, url) = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT owner, repo, number, account_id, url FROM tasks WHERE issue_key = ?1",
+            rusqlite::params![key.clone()],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => format!("任务不存在: {key}"),
+            _ => e.to_string(),
+        })?
+    };
+    // #214：老库 owner 列存的是账号 org（个人账号为空），为空时从 issue URL 反推。
+    if owner.trim().is_empty() {
+        owner = crate::github::GitHubClient::owner_from_issue_url(&url).unwrap_or_default();
+        if !owner.trim().is_empty() {
+            eprintln!("[claim] {key} 的 owner 列为空，已从 URL 反推为 {owner}");
+        }
+    }
+    if owner.trim().is_empty() {
+        return Err(format!("任务 {key} 缺少 owner 信息，无法认领"));
+    }
+    let (login, _org, pat) = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        crate::db::get_account_pat(&conn, account_id)?
+    };
+    if pat.is_empty() {
+        return Err("账号未配置 PAT".to_string());
+    }
+    // 网络写放 blocking 池（与 add_account 同款，避免占住主线程假死）。
+    eprintln!("[claim] 开始认领 {key}（repo={owner}/{repo}#{number}）");
+    let remote_assignees = tauri::async_runtime::spawn_blocking(move || {
+        let client = crate::github::GitHubClient::new(pat, login.clone(), String::new())?;
+        client.add_assignee(&owner, &repo, number, &login)
+    })
+    .await
+    .map_err(|e| format!("认领任务异常: {e}"))??;
+    // 落本地：ownership→assigned，assignees 与远端合并去重。
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let current: String = conn
+            .query_row(
+                "SELECT assignees FROM tasks WHERE issue_key = ?1",
+                rusqlite::params![key.clone()],
+                |r| r.get(0),
+            )
+            .unwrap_or_default();
+        let mut names: Vec<String> = current
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect();
+        for n in remote_assignees {
+            if !names.iter().any(|x| x.eq_ignore_ascii_case(&n)) {
+                names.push(n);
+            }
+        }
+        let merged = names.join(",");
+        conn.execute(
+            "UPDATE tasks SET ownership = 'assigned', assignees = ?1 WHERE issue_key = ?2",
+            rusqlite::params![merged, key.clone()],
+        )
+        .map_err(|e| e.to_string())?;
+        eprintln!("[claim] {key} 本地已更新 ownership=assigned assignees={merged}");
+    }
+    let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
+    Ok(())
+}
+
+/// #215：详情 Project 状态写回——调 GraphQL mutation 改远端 Status（用户确认框后显式调用）。
+/// 成功后本地 project_status/status 乐观更新（与同步同一决策语义，下次同步对账）；失败本地不动。
+/// 本地无写回 ID 时即时补拉（主项目优先），不等下轮同步。
+#[tauri::command]
+pub async fn set_project_status(
+    app: AppHandle,
+    key: String,
+    status: String,
+) -> Result<(), String> {
+    let status = status.trim().to_string();
+    if status.is_empty() {
+        return Err("状态不能为空".to_string());
+    }
+    // 独立连接跑全程（含网络）：不持有共享 AppState.db 锁跨网络 I/O（与 sync_now 同款）。
+    let db_path = crate::db::db_path(&app).map_err(|e| e.to_string())?;
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = crate::db::open_db(&db_path)?;
+        // 读任务归属与现状。
+        let (account_id, repo, issue_state, existing_status, labels_csv): (
+            i64,
+            String,
+            String,
+            String,
+            String,
+        ) = conn
+            .query_row(
+                "SELECT account_id, repo, issue_state, status, labels FROM tasks WHERE issue_key = ?1",
+                rusqlite::params![key.clone()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => format!("任务不存在: {key}"),
+                _ => e.to_string(),
+            })?;
+        if issue_state == "closed" {
+            return Err(format!("任务 {key} 在 GitHub 已关闭，无需再改 Project 状态"));
+        }
+        let (_login, org, pat) = crate::db::get_account_pat(&conn, account_id)?;
+        if pat.is_empty() {
+            return Err("账号未配置 PAT".to_string());
+        }
+        let client =
+            crate::github::GitHubClient::new(pat, String::new(), org.clone())?;
+        // 解析写回目标 + 选项 id；本地缺失即时补拉后重试。
+        let (target, option_id) =
+            resolve_or_refresh(&conn, &client, account_id, &org, &key, &status)?;
+        eprintln!(
+            "[proj-write] 开始写回 {key} → {status}（project={})",
+            target.project_name
+        );
+        client.set_project_item_status(
+            &target.project_github_id,
+            &target.item_id,
+            &target.field_id,
+            &option_id,
+        )?;
+        // 落本地：project_status=目标名；status 走与同步同一决策（显式 label 优先等）。
+        let board_mode = crate::db::get_account_board_mode(&conn, account_id);
+        let label_rules = crate::db::load_label_rules(&conn).unwrap_or_default();
+        let column_rules =
+            crate::db::load_column_rules(&conn, account_id).unwrap_or_default();
+        let explicit = crate::db::resolve_status_from_rules_explicit(
+            &label_rules,
+            &org,
+            &repo,
+            &labels_csv,
+        );
+        let column_status = if board_mode == "custom" {
+            crate::db::resolve_column_from_rules(&column_rules, &status)
+        } else {
+            None
+        };
+        let final_status = crate::sync::resolve_final_status(
+            false,
+            column_status,
+            explicit,
+            &status,
+            &existing_status,
+        );
+        conn.execute(
+            "UPDATE tasks SET project_status = ?1, status = ?2 WHERE issue_key = ?3",
+            rusqlite::params![status.clone(), final_status, key.clone()],
+        )
+        .map_err(|e| e.to_string())?;
+        eprintln!(
+            "[proj-write] {key} 本地已更新 project_status={status} status={final_status}"
+        );
+        let _ = handle.emit(crate::TASKS_CHANGED_EVENT, key);
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("状态回写任务异常: {e}"))?
+}
+
+/// #215：先从本地库解析写回目标；缺 ID 时按主项目优先即时补拉（存库）后重试一次。
+/// 补拉仍失败 → 返回最后一次错误（把"同步一下"变成自动动作，用户无需手动同步）。
+fn resolve_or_refresh(
+    conn: &rusqlite::Connection,
+    client: &crate::github::GitHubClient,
+    account_id: i64,
+    org: &str,
+    key: &str,
+    status: &str,
+) -> Result<(crate::db::ProjectWriteTarget, String), String> {
+    // 名称存在但 option_id 为空（老数据）同样走补拉：先只判目标行是否存在。
+    if let Ok(target) = crate::db::resolve_project_write_target(conn, account_id, key) {
+        if let Ok(option_id) = crate::db::project_option_id(
+            conn,
+            account_id,
+            &target.project_github_id,
+            status,
+        ) {
+            return Ok((target, option_id));
+        }
+    }
+    eprintln!("[proj-write] {key} 本地无写回 ID，即时补拉（主项目优先）…");
+    let mut projects = crate::db::list_projects(conn, account_id)?;
+    projects.sort_by(|a, b| b.number_of_items.cmp(&a.number_of_items));
+    if projects.is_empty() {
+        return Err("该账号下没有 Project（先同步一次拉取项目）".to_string());
+    }
+    let now = crate::sync::now_secs();
+    let mut last_err = String::new();
+    for p in &projects {
+        // 单项目失败跳过、试下一个（无 Status 字段的项目直接跳过）。
+        let field = match client.status_field(&p.github_id) {
+            Ok(f) if !f.field_id.is_empty() => f,
+            Ok(_) => continue,
+            Err(e) => {
+                last_err = e;
+                continue;
+            }
+        };
+        if let Err(e) =
+            crate::db::set_project_status_field(conn, account_id, &p.github_id, &field.field_id)
+        {
+            last_err = e;
+            continue;
+        }
+        let opts: Vec<(String, String, i64)> = field
+            .options
+            .iter()
+            .map(|o| (o.name.clone(), o.option_id.clone(), o.order_index))
+            .collect();
+        if let Err(e) =
+            crate::db::upsert_project_statuses(conn, account_id, &p.github_id, &opts, now)
+        {
+            last_err = e;
+            continue;
+        }
+        let item_ids = match client.fetch_project_issues(&p.github_id, org) {
+            Ok((_, _, ids)) => ids,
+            Err(e) => {
+                last_err = e;
+                continue;
+            }
+        };
+        let items: Vec<(String, String)> = item_ids.into_iter().collect();
+        if let Err(e) = crate::db::replace_project_items(conn, account_id, &p.github_id, &items)
+        {
+            last_err = e;
+            continue;
+        }
+        // 补拉后重试：命中即返回。
+        if let Ok(target) = crate::db::resolve_project_write_target(conn, account_id, key) {
+            match crate::db::project_option_id(
+                conn,
+                account_id,
+                &target.project_github_id,
+                status,
+            ) {
+                Ok(option_id) => return Ok((target, option_id)),
+                Err(e) => {
+                    last_err = e;
+                    continue;
+                }
+            }
+        }
+    }
+    if last_err.is_empty() {
+        last_err = format!("任务 {key} 不在任何 Project 中，无法写回状态");
+    }
+    Err(last_err)
 }
 
 #[tauri::command]

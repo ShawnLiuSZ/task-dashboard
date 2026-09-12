@@ -32,6 +32,9 @@ function parseMatchRules(matchRules: string): string[] {
 
 type SettingsTab = "base" | "columns" | "diagnose" | "agents";
 
+/** #226：自定义列映射暂关闭（页签隐藏；已有 custom 配置照常渲染，重开即恢复）。 */
+const CUSTOM_COLUMN_MAPPING_ENABLED = false;
+
 // 每个账号的编辑状态
 interface AccountEditState {
   columns: AccountColumn[];
@@ -262,6 +265,20 @@ export default function SettingsPanel({
   const [hooksMsg, setHooksMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [hooksNotices, setHooksNotices] = useState<string[]>([]);
   const [hooksStatus, setHooksStatus] = useState<AgentStatus[] | null>(null);
+  // #207：分组成员收起态（默认全展开），持久化到本地。
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
+    () => {
+      try {
+        const raw = localStorage.getItem("settings.hooks.groupsCollapsed");
+        return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+      } catch {
+        return {};
+      }
+    },
+  );
+  useEffect(() => {
+    localStorage.setItem("settings.hooks.groupsCollapsed", JSON.stringify(collapsedGroups));
+  }, [collapsedGroups]);
 
   const allAgentIds = useMemo(() => AGENTS.map((a) => a.value), []);
   const hooksTarget = () => (hooksScope === "global" ? null : targetDir.trim() || null);
@@ -415,7 +432,9 @@ export default function SettingsPanel({
         </h3>
 
         <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
-          {( ["base", "columns", "diagnose", "agents"] as SettingsTab[]).map((k) => (
+          {(["base", "columns", "diagnose", "agents"] as SettingsTab[])
+            .filter((k) => CUSTOM_COLUMN_MAPPING_ENABLED || k !== "columns")
+            .map((k) => (
             <button
               key={k}
               type="button"
@@ -559,13 +578,24 @@ export default function SettingsPanel({
                 return group === "missing";
               });
               if (rows.length === 0) return null;
+              const collapsed = collapsedGroups[group] === true;
               return (
                 <div key={group} style={{ marginTop: 8 }}>
-                  <div className={`muted small hook-group-title-${group}`} style={{ fontWeight: 600 }}>
+                  <button
+                    type="button"
+                    className="hook-group-toggle muted small"
+                    aria-expanded={!collapsed}
+                    onClick={() =>
+                      setCollapsedGroups((m) => ({ ...m, [group]: !m[group] }))
+                    }
+                    style={{ fontWeight: 600 }}
+                  >
+                    <span aria-hidden="true">{collapsed ? "▸" : "▾"}</span>
                     <span className={`hook-group-dot hook-group-dot-${group}`} />
                     {title}（{rows.length}）
-                  </div>
-                  {rows.map((v) => {
+                  </button>
+                  {!collapsed &&
+                    rows.map((v) => {
                     const st = hooksStatus?.find((s) => s.agent === v);
                     const supported = supportedHere(v);
                     const detail = !supported
@@ -614,7 +644,7 @@ export default function SettingsPanel({
                         </span>
                       </div>
                     );
-                  })}
+                    })}
                 </div>
               );
             })}
@@ -652,8 +682,8 @@ export default function SettingsPanel({
           )}
         </div>
 
-        {/* 自定义列映射 - 平铺卡片 */}
-        <div style={{ display: tab === "columns" ? "block" : "none" }}>
+        {/* 自定义列映射 - 平铺卡片（#226 暂关闭：入口隐藏，此处再守一道） */}
+        <div style={{ display: tab === "columns" && CUSTOM_COLUMN_MAPPING_ENABLED ? "block" : "none" }}>
           <div className="field">
             <label>{t("settings.boardModeTitle")}</label>
             <div className="muted small" style={{ marginBottom: 8 }}>{t("settings.boardModeDesc")}</div>

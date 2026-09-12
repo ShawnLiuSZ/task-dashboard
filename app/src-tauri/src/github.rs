@@ -210,6 +210,21 @@ pub struct GitHubClient {
     search_gate: std::sync::Mutex<Option<Instant>>,
 }
 
+/// Status 单选选项（含写回用的 option id，#215）。
+#[derive(Debug, Clone)]
+pub struct StatusOption {
+    pub name: String,
+    pub option_id: String,
+    pub order_index: i64,
+}
+
+/// 项目的 Status 字段（含写回用的 field id 与选项，#215）。
+#[derive(Debug, Clone)]
+pub struct StatusField {
+    pub field_id: String,
+    pub options: Vec<StatusOption>,
+}
+
 impl GitHubClient {
     /// 构造客户端。`login` / `org` 为空时仍允许（外部调用方可能用不到）。
     ///
@@ -522,27 +537,6 @@ impl GitHubClient {
             .last())
     }
 
-    /// 查询单个 issue 的当前状态（open/closed），用于「陈旧任务」回路判定。
-    /// `repo_owner` 用于 org 为空时构造完整仓库路径。
-    pub fn fetch_state(&self, repo: &str, number: i64, repo_owner: &str) -> Result<String, String> {
-        let full_repo = if !self.org.is_empty() {
-            format!("{}/{}", self.org, repo)
-        } else if !repo_owner.is_empty() {
-            format!("{}/{}", repo_owner, repo)
-        } else {
-            return Err("无法确定仓库 owner（org 为空且无 repo_owner）".to_string());
-        };
-        let url = format!(
-            "https://api.github.com/repos/{}/issues/{}",
-            full_repo, number
-        );
-        let v = self.get(&url)?;
-        v.get("state")
-            .and_then(|s| s.as_str())
-            .map(String::from)
-            .ok_or_else(|| "issue 响应无 state 字段".to_string())
-    }
-
     /// 拉取 GitHub Project「OMS Kanban」中每个 issue 的 Status 字段，
     /// 返回 `repo#number -> Status 原文` 的映射，供 sync 映射到看板四态。
     ///
@@ -602,17 +596,17 @@ impl GitHubClient {
         Ok(map)
     }
 
-    /// 查询某项目的 Status 字段选项及顺序（用于看板列排序）。
-    /// 返回 `(status_name, order_index)` 列表，顺序与 GitHub 看板一致。
-    pub fn fetch_project_status_options(&self, project_id: &str) -> Result<Vec<(String, i64)>, String> {
-        // 查项目所有字段，找 Status 类型的 SingleSelectField，取其 options 顺序
+    /// 查询某项目的 Status 字段（含字段/选项 id，供 #215 写回）。
+    pub fn status_field(&self, project_id: &str) -> Result<StatusField, String> {
+        // 查项目所有字段，找 Status 类型的 SingleSelectField，取其 id 与 options（含 id）
         let q = format!(
             r#"query {{ node(id:"{pid}") {{ ... on ProjectV2 {{
               fields(first:50) {{
                 nodes {{
                   ... on ProjectV2SingleSelectField {{
+                    id
                     name
-                    options {{ name }}
+                    options {{ id name }}
                   }}
                 }}
               }}
@@ -627,15 +621,22 @@ impl GitHubClient {
         for n in nodes {
             let fname = n["name"].as_str().unwrap_or("");
             if fname.eq_ignore_ascii_case("Status") || fname.contains("tatus") || fname.contains("状态") {
-                let options = n["options"].as_array()
+                let field_id = n["id"].as_str().unwrap_or("").to_string();
+                let options = n["options"]
+                    .as_array()
                     .ok_or_else(|| format!("字段 '{}' 无 options", fname))?;
-                let result: Vec<(String, i64)> = options.iter().enumerate().map(|(i, o)| {
-                    let name = o["name"].as_str().unwrap_or("").to_string();
-                    (name, i as i64)
-                }).collect();
+                let result: Vec<StatusOption> = options
+                    .iter()
+                    .enumerate()
+                    .map(|(i, o)| StatusOption {
+                        name: o["name"].as_str().unwrap_or("").to_string(),
+                        option_id: o["id"].as_str().unwrap_or("").to_string(),
+                        order_index: i as i64,
+                    })
+                    .collect();
                 if !result.is_empty() {
-                    crate::tlog!("[gh] project {} field '{}' options={:?}", project_id, fname, result.iter().map(|(n,_)| n).collect::<Vec<_>>());
-                    return Ok(result);
+                    crate::tlog!("[gh] project {} field '{}' options={:?}", project_id, fname, result.iter().map(|o| &o.name).collect::<Vec<_>>());
+                    return Ok(StatusField { field_id, options: result });
                 }
             }
         }
@@ -724,9 +725,11 @@ impl GitHubClient {
         &self,
         project_id: &str,
         org: &str,
-    ) -> Result<(HashMap<String, String>, Vec<RawTask>), String> {
+    ) -> Result<(HashMap<String, String>, Vec<RawTask>, HashMap<String, String>), String> {
         let mut status_map: HashMap<String, String> = HashMap::new();
         let mut issues: Vec<RawTask> = Vec::new();
+        // #215：issue_key -> project item id（写回用）。
+        let mut item_ids: HashMap<String, String> = HashMap::new();
         let mut cursor: Option<String> = None;
         for _ in 0..100 {
             let after = match &cursor {
@@ -737,6 +740,7 @@ impl GitHubClient {
                 r#"query {{ node(id:"{pid}") {{ ... on ProjectV2 {{ items(first:50{after}) {{
                   pageInfo {{ hasNextPage endCursor }}
                   nodes {{
+                    id
                     content {{
                       __typename
                       ... on Issue {{
@@ -827,6 +831,10 @@ impl GitHubClient {
                 if !status.is_empty() {
                     status_map.insert(key.clone(), status);
                 }
+                // #215：条目 id（写回 mutation 用；空则该条不可写回）。
+                if let Some(iid) = n["id"].as_str().filter(|s| !s.is_empty()) {
+                    item_ids.insert(key.clone(), iid.to_string());
+                }
                 // 用 owner 构造 GitHub 网页 URL（项目条目的 url 是 GraphQL node url，非网页链接）
                 let html_url = format!("https://github.com/{}/{}/issues/{}", owner, repo, num);
                 issues.push(RawTask {
@@ -851,7 +859,7 @@ impl GitHubClient {
                 break;
             }
         }
-        Ok((status_map, issues))
+        Ok((status_map, issues, item_ids))
     }
 
     // ===== 私有方法 =====
@@ -868,6 +876,8 @@ impl GitHubClient {
         // 剩余计数，避免触发 Search API 二次（突发）限流。
 
         for attempt in 0..3 {
+            // #228：单次尝试计时（成功/失败都记调用日志，verbose 门控）。
+            let start = std::time::Instant::now();
             let resp = self
                 .http
                 .get(url)
@@ -902,6 +912,13 @@ impl GitHubClient {
             // 2. 其它非 2xx（如 404/422/401）：立即返回错误，由 best-effort 逻辑降级。
             if !status.is_success() {
                 let body = resp.text().unwrap_or_default();
+                log_api_call(
+                    "GET",
+                    url,
+                    status.as_u16(),
+                    start.elapsed().as_millis(),
+                    &summarize_text(&body, 160),
+                );
                 return Err(format!(
                     "GitHub API 错误 ({}): {}",
                     status.as_u16(),
@@ -930,6 +947,7 @@ impl GitHubClient {
                 }
             }
 
+            log_api_call("GET", url, status.as_u16(), start.elapsed().as_millis(), "");
             return resp
                 .json::<serde_json::Value>()
                 .map_err(|e| format!("解析 GitHub 返回失败: {}", e));
@@ -1022,6 +1040,8 @@ impl GitHubClient {
     pub fn graphql(&self, query: &str) -> Result<serde_json::Value, String> {
         let url = "https://api.github.com/graphql";
         let body = serde_json::json!({ "query": query });
+        // #228：计时（成功/失败都记调用日志，verbose 门控）。
+        let start = std::time::Instant::now();
         let resp = self
             .http
             .post(url)
@@ -1034,7 +1054,10 @@ impl GitHubClient {
         let v: serde_json::Value = resp
             .json()
             .map_err(|e| format!("解析 GraphQL 返回失败: {}", e))?;
+        let elapsed_ms = start.elapsed().as_millis();
         if !status.is_success() {
+            let snippet = summarize_text(&v.to_string(), 160);
+            log_api_call("POST", query, status.as_u16(), elapsed_ms, &snippet);
             return Err(format!(
                 "GraphQL API 错误 ({}): {}",
                 status.as_u16(),
@@ -1043,10 +1066,178 @@ impl GitHubClient {
         }
         if let Some(errs) = v.get("errors") {
             if !errs.is_null() && errs.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+                log_api_call(
+                    "POST",
+                    query,
+                    status.as_u16(),
+                    elapsed_ms,
+                    &summarize_text(&errs.to_string(), 200),
+                );
                 return Err(format!("GraphQL 业务错误: {}", errs));
             }
         }
+        log_api_call("POST", query, status.as_u16(), elapsed_ms, "");
         Ok(v)
+    }
+
+    /// 认领 URL（纯函数，可单测）：`POST /repos/{owner}/{repo}/issues/{n}/assignees`。
+    pub fn assignees_url(owner: &str, repo: &str, number: i64) -> String {
+        format!("https://api.github.com/repos/{owner}/{repo}/issues/{number}/assignees")
+    }
+
+    /// 从 issue URL 提取 owner（纯函数，可单测）：`https://github.com/{owner}/{repo}/issues/{n}`。
+    /// #214 fallback：老库 `tasks.owner` 存的是账号 org（个人账号为空），为空时用 URL 反推。
+    pub fn owner_from_issue_url(url: &str) -> Option<String> {
+        let rest = url.trim().strip_prefix("https://github.com/")?;
+        let mut segs = rest.split('/').filter(|s| !s.is_empty());
+        let owner = segs.next()?.to_string();
+        let repo = segs.next()?;
+        if repo.is_empty() || owner.is_empty() {
+            return None;
+        }
+        // 至少形如 owner/repo/issues/n（多一段才可信，避免错切）。
+        if segs.next().is_none() {
+            return None;
+        }
+        Some(owner)
+    }
+
+    /// 写操作错误映射（纯函数，可单测）：401/403/404 给重配指引，其余带状态码+片段。
+    pub fn write_error(action: &str, status: u16, body: &str) -> String {
+        let snippet: String = body.chars().take(160).collect();
+        match status {
+            401 => format!("{action}失败：PAT 无效或已过期，请重配 token"),
+            403 => format!(
+                "{action}失败：PAT 缺少写权限（classic 需 `repo`；fine-grained 需 Issues 读写）或 SSO 未授权。GitHub 返回：{snippet}"
+            ),
+            404 => format!("{action}失败：仓库不存在或 token 无访问权限。GitHub 返回：{snippet}"),
+            _ => format!("{action}失败：GitHub API 错误 ({status}): {snippet}"),
+        }
+    }
+
+    /// 把 `login` 加为 issue assignee（#214 写回：用户确认框后显式调用）。
+    /// 单次请求（写操作不盲目重试）；返回远端确认的 assignees 列表。
+    pub fn add_assignee(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: i64,
+        login: &str,
+    ) -> Result<Vec<String>, String> {
+        let url = Self::assignees_url(owner, repo, number);
+        let body = serde_json::json!({ "assignees": [login] });
+        // #214 写回日志：记方法/地址/账号与结果，绝不记 PAT。
+        // #228：补请求体摘要（常开，低频）。
+        eprintln!(
+            "[claim] POST {url} login={login} body={}",
+            summarize_text(&body.to_string(), 160)
+        );
+        let start = std::time::Instant::now();
+        let resp = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.pat))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .timeout(Duration::from_secs(self.http_timeout()))
+            .json(&body)
+            .send()
+            .map_err(|e| format!("网络请求失败: {}", e))?;
+        let status = resp.status().as_u16();
+        // POST assignees 成功返回 201（幂等：重复添加同一个人同样成功）。
+        if status == 200 || status == 201 {
+            let v: serde_json::Value =
+                resp.json().map_err(|e| format!("解析 GitHub 返回失败: {}", e))?;
+            let names = v
+                .get("assignees")
+                .and_then(|a| a.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|u| {
+                            u.get("login").and_then(|l| l.as_str()).map(String::from)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            eprintln!(
+                "[claim] GitHub 回应 {status}（{}ms），远端 assignees 已确认：{}",
+                start.elapsed().as_millis(),
+                summarize_text(&format!("{names:?}"), 200)
+            );
+            return Ok(names);
+        }
+        let body_text = resp.text().unwrap_or_default();
+        eprintln!(
+            "[claim] GitHub 回应 {status}（{}ms），失败：{}",
+            start.elapsed().as_millis(),
+            summarize_text(&body_text, 200)
+        );
+        Err(Self::write_error("认领", status, &body_text))
+    }
+
+    /// Project 状态写回 mutation 文本（纯函数，可单测）。
+    pub fn project_status_mutation(
+        project_id: &str,
+        item_id: &str,
+        field_id: &str,
+        option_id: &str,
+    ) -> String {
+        format!(
+            r#"mutation {{ updateProjectV2ItemFieldValue(input: {{ projectId: "{project_id}", itemId: "{item_id}", fieldId: "{field_id}", value: {{ singleSelectOptionId: "{option_id}" }} }}) {{ projectV2Item {{ id }} }} }}"#
+        )
+    }
+
+    /// 设置 Project 条目的 Status（#215 写回：用户确认框后显式调用）。
+    pub fn set_project_item_status(
+        &self,
+        project_id: &str,
+        item_id: &str,
+        field_id: &str,
+        option_id: &str,
+    ) -> Result<(), String> {
+        // #215 写回日志：记三件套与结果，绝不记 PAT。
+        // #228：补请求目标 id（常开，低频）。
+        eprintln!("[proj-write] mutation project={project_id} item={item_id} field={field_id} option={option_id}");
+        let start = std::time::Instant::now();
+        let v = self
+            .graphql(&Self::project_status_mutation(
+                project_id, item_id, field_id, option_id,
+            ))
+            .map_err(|e| {
+                if e.contains("FORBIDDEN")
+                    || e.contains("not accessible")
+                    || e.contains("requires")
+                    || e.contains("INSUFFICIENT_SCOPES")
+                {
+                    format!("{e}（解决：classic PAT 去 GitHub Settings → Developer settings → Personal access tokens 勾选 `project` 后重新生成，再到本应用账号管理更新该账号 PAT；fine-grained 则给 Projects 读写权限）")
+                } else {
+                    format!("状态回写失败：{e}")
+                }
+            });
+        let v = match v {
+            Ok(v) => v,
+            Err(e) => {
+                // #228：失败记返回摘要（常开，低频）。
+                eprintln!(
+                    "[proj-write] 失败（{}ms）：{}",
+                    start.elapsed().as_millis(),
+                    summarize_text(&e, 240)
+                );
+                return Err(e);
+            }
+        };
+        let back = v["data"]["updateProjectV2ItemFieldValue"]["projectV2Item"]["id"]
+            .as_str()
+            .unwrap_or("");
+        if back.is_empty() {
+            return Err("状态回写失败：GitHub 未返回确认（mutation 无 projectV2Item.id）".to_string());
+        }
+        eprintln!(
+            "[proj-write] GitHub 已确认 {}（{}ms）",
+            summarize_text(back, 60),
+            start.elapsed().as_millis()
+        );
+        Ok(())
     }
 
     fn http_timeout(&self) -> u64 {
@@ -1090,6 +1281,32 @@ pub fn merge_tasks_all(lists: Vec<Vec<RawTask>>) -> Vec<RawTask> {
     map.into_values().collect()
 }
 
+/// 日志摘要：空白折叠后按字符截断（纯函数，可单测；多字节安全）。
+/// #228：请求/返回记日志时防刷屏。
+pub fn summarize_text(s: &str, max: usize) -> String {
+    let one_line: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() <= max {
+        one_line
+    } else {
+        let mut out: String = one_line.chars().take(max).collect();
+        out.push('…');
+        out
+    }
+}
+
+/// 统一 API 调用日志（#228，verbose 门控 `TASKBOARD_LOG=1`）。
+/// 高频同步路径默认静默；用户主动写操作另有 `eprintln!` 常开行。
+fn log_api_call(method: &str, target: &str, status: u16, elapsed_ms: u128, note: &str) {
+    crate::tlog!(
+        "[api] {} {} → {} ({}ms) {}",
+        method,
+        summarize_text(target, 200),
+        status,
+        elapsed_ms,
+        note
+    );
+}
+
 /// 极简 URL 编码（仅编码 Search API 查询里 unsafe 字符），不依赖 `url` crate。
 /// Search API 的 q 值已用 ASCII 字母/数字/冒号/空格，最小集够用。
 fn urlencode(s: &str) -> String {
@@ -1110,6 +1327,51 @@ fn urlencode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #214：认领 URL 与写错误映射（纯函数，不碰网络）。
+    #[test]
+    fn claim_url_and_write_errors() {
+        assert_eq!(
+            GitHubClient::assignees_url("acme", "web", 7),
+            "https://api.github.com/repos/acme/web/issues/7/assignees"
+        );
+        // owner 缺失时从 URL 反推（老库 owner 列可能为空）。
+        assert_eq!(
+            GitHubClient::owner_from_issue_url("https://github.com/acme/web/issues/7"),
+            Some("acme".to_string())
+        );
+        assert_eq!(
+            GitHubClient::owner_from_issue_url("https://github.com/acme/web/pull/7"),
+            Some("acme".to_string())
+        );
+        assert_eq!(GitHubClient::owner_from_issue_url("https://github.com/acme"), None);
+        assert_eq!(GitHubClient::owner_from_issue_url("not a url"), None);
+        assert_eq!(GitHubClient::owner_from_issue_url(""), None);
+        assert!(GitHubClient::write_error("认领", 401, "").contains("过期"));
+        assert!(GitHubClient::write_error("认领", 403, "x").contains("写权限"));
+        assert!(GitHubClient::write_error("认领", 404, "x").contains("不存在"));
+        assert!(GitHubClient::write_error("认领", 500, "boom").contains("500"));
+    }
+
+    /// #215：写回 mutation 文本组装（纯函数，不碰网络）。
+    #[test]
+    fn project_status_mutation_shape() {
+        let q = GitHubClient::project_status_mutation("P", "I", "F", "O");
+        assert!(q.contains("updateProjectV2ItemFieldValue"));
+        assert!(q.contains(r#"projectId: "P""#));
+        assert!(q.contains(r#"itemId: "I""#));
+        assert!(q.contains(r#"fieldId: "F""#));
+        assert!(q.contains(r#"singleSelectOptionId: "O""#));
+    }
+
+    /// #228：日志摘要截断（空白折叠 + 多字节安全）。
+    #[test]
+    fn summarize_text_truncates() {
+        assert_eq!(summarize_text("a  b\n c", 10), "a b c");
+        assert_eq!(summarize_text("123456789", 5), "12345…");
+        assert_eq!(summarize_text("开发中测试", 2), "开发…");
+        assert_eq!(summarize_text("", 5), "");
+    }
 
     /// 隔离验证：不跑任何 issue 搜索，单独测 `fetch_prs` 能否在测试环境里正常拉到 PR。
     /// 用途：区分环境/rate-limit/网络三类根因。默认忽略，需时

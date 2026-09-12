@@ -31,19 +31,19 @@ GitHub (只读)  ──>  本地 SQLite (读写)  ──>  UI / MCP
 
 ## 2. 硬约束（任何 agent 都不得违反）
 
-### 2.1 产品约束：不写回 GitHub（指 TaskBoard 同步方向）
+### 2.1 产品约束：默认不写回 GitHub（指 TaskBoard 同步方向）
 
 > 本节是对本项目（TaskBoard 应用）行为的描述，不是 agent 协作禁令。
 
-- TaskBoard 运行时只从 GitHub 只读拉取（Search / REST / GraphQL），绝不调用写 GitHub 的 API。
-- 看板状态、session id、handoff **只**写本地 SQLite `taskboard.db`，绝不映射写回 issue / label / Project / 评论。
-- 数据流向单向：`GitHub (只读) ──> 本地 SQLite ──> UI / MCP`，任何反向同步都是 bug（见 `sync.rs`）。
+- TaskBoard 同步路径只从 GitHub 只读拉取（Search / REST / GraphQL）；**用户在 UI 确认框后显式触发的操作除外**（#214：卡片认领 assignee；#215：详情 Project 状态）。
+- 看板状态、session id、handoff 默认**只**写本地 SQLite `taskboard.db`；上述显式写回成功后本地乐观更新，下次同步对账。
+- 数据流向：`GitHub ──> 本地 SQLite ──> UI / MCP`，外加一条用户确认的显式写回通道（`claim_issue` 等）；同步代码（`sync.rs`）本身仍不写 GitHub，未经确认的反向同步依然是 bug。
 
 Agent 协作默认：
 
 - 诊断 / 排查默认用 `gh` 只读命令。
-- 看板状态变更走本地 MCP 工具（`update_task_status` 等），不通过改 GitHub label / state 实现。
-- 维护者明确要求起草或修改 issue 正文、PR 描述、评论等协作文字时，允许执行；仍禁止把看板状态写回 GitHub。
+- 看板状态变更走本地 MCP 工具（`update_task_status` 等），不通过改 GitHub label / state 实现；**MCP 工具保持只写本地**（写回仅限 UI 确认框触发）。
+- 维护者明确要求起草或修改 issue 正文、PR 描述、评论等协作文字时，允许执行；未经明确要求，不得创建 / 关闭 / 改状态 / 改 label。
 
 数据库路径（macOS）：`~/Library/Application Support/com.shawnliu.taskboard/taskboard.db`
 可用环境变量 `TASKBOARD_DB` 覆盖。
@@ -262,7 +262,7 @@ CI：`/.github/workflows/i18n-check.yml` 在 PR 时自动校验 i18n 一致性�
 ## 8. 跨 agent 通用注意事项（所有 agent 都得读）
 
 1. **不直接 push 到 `main` / `develop`**。
-2. **不擅自修改 issue / label / PR / project 状态**——看板权威在本地 SQLite（产品约束见 §2.1）。维护者明确要求编辑 issue 正文、PR 描述等协作文字时允许；未经明确要求，不得创建 / 关闭 / 改状态 / 改 label。
+2. **不擅自修改 issue / label / PR / project 状态**——看板权威在本地 SQLite（产品约束见 §2.1）。维护者明确要求编辑 issue 正文、PR 描述等协作文字时允许；未经明确要求，不得创建 / 关闭 / 改状态 / 改 label。**用户在 UI 确认框后显式触发的写回（#214 起）除外**。
 3. **不擅自创建新分支**——按第 6 节规则；无 issue 时**必须先询问**。
 4. **完成的代码改动必须同步产出 `docs/` 知识库文档**（PR 时至少 stub）。
 5. **PR 描述里必须附 KB 文档路径或 stub 链接**。

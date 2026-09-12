@@ -2,6 +2,22 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.4.0 (2026-09-12) — GitHub write-back reversal (#214 claim + #215 status) + notes width + detail rework**
+
+  - **Write-back reversal (product-constraint change)**: `AGENTS.md §2.1` / `PRD.md` relaxed from "read-only GitHub" to "read by default + explicit user-confirmed writes"; the sync path itself stays read-only and MCP tools stay local-only. PATs need matching write scopes (classic `repo` + `project`; Device Flow scope now includes `project`, old tokens must re-authorize).
+  - **#214 Card claim**: click "unassigned" → confirm dialog → `POST assignees` assigns yourself, with optimistic local update; owner falls back to URL parsing when empty; full-chain logging. See [docs/issue-214-claim-assignee.md](./issue-214-claim-assignee.md).
+  - **#215 Detail Project-status write-back**: sync now stores item/field/option IDs (`projects.status_field_id`, `project_statuses.option_id`, new `project_items` table with migration); `set_project_status` (on-demand refresh when IDs are missing, rejects closed issues, optimistic update reuses sync semantics); clickable GitHub-status row in Detail with confirm dialog. See [docs/issue-215-proj-status-write.md](./issue-215-proj-status-write.md).
+  - **#196/#200 Detail rework**: status section always follows `project.status` (#196); width 460px → 50%, four-state buttons removed, +1px row gap (#200).
+  - **#202/#209 Resizable notes**: right-edge drag + keyboard ±1%, percent of main area (25%–50%, default 25%), localStorage persisted; direct-DOM writes + rAF coalescing while dragging; `main-layout` switched from grid to flex row.
+  - **#190 Hooks backup**: backups now happen before install-overwrite/uninstall-strip (project-level opencode previously backed up the post-strip file).
+  - **#191/#204 Opencode auto-start**: check both MCP results, dedupe only after success, no `processed` downgrade (#191); per-message detection so multiple tasks in one window start in turn (#204).
+  - **#206 No more auto-enroll on startup**: everything goes through manual one-click install; dev-binary installs get an expiry notice.
+  - **#192 Label priority**: explicit label→todo wins over gh_status (owner confirmed).
+  - **Smaller items**: dev-binary auto-register skip + `workBranch` in Detail (#193); collapsible agent groups (#207); account column in sync logs (#224); request/response API logging (#228).
+  - **Fixes**: #197 session row on cards; #212 zero dead-code warnings; #216 deleting the last remaining account; #220 fingerprint covers projectStatus (instant refresh after write-back); #221 coalesced loads (no more stale account board).
+  - **Schema changes**: `projects.status_field_id`, `project_statuses.option_id`, new `project_items` table (SCHEMA + migration).
+  - **Verification**: `cargo test` (72 lib + 19 db_test cases) zero warnings, `tsc --noEmit`, `vitest` 10 files / 54 cases, `i18n:check` 279 keys consistent, `check-mcp-columns.py` 24 columns consistent.
+
 - **v0.3.55 (2026-09-11) — Cross-agent board hooks (#177) + sync-filter hint (#178) + external-write auto-refresh (#181) + board-mode simplification (#108)**
 
   - **#177 Cross-agent board hooks with one-click install/uninstall**: new project-level `.claude/` (commands `/task-start` `/task-done` / hooks) and `.opencode/` plugin record "processing + session_id/session_agent + work_branch" in one call when work on an issue starts, and clear the session when it ends; `AGENT_INSTRUCTIONS.md` pins down the trigger timing, fixing "prompt-only convention is easy to forget". See [docs/issue-177-claude-session-hooks.md](./issue-177-claude-session-hooks.md).

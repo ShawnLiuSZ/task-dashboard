@@ -240,13 +240,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             autoclear_self_quarantine_and_notify(app.handle());
 
-            // #177：启动时自动注册全局默认集（claude + opencode，host 已装但 ours 缺失才装，
-            // best-effort 不 blocking；参考 clawd-on-desk fresh-install auto-sync）。
-            let auto_hooks = crate::hooks::ensure_global_defaults();
-            if !auto_hooks.is_empty() {
-                eprintln!("[hooks] 启动自动注册全局 hooks: {auto_hooks}");
-            }
-
+            // #206：不再启动自动注册全局 hooks——接入一律由用户在设置页手动一键安装。
             let handle = app.handle().clone();
             let conn = db::init(&handle).map_err(|e| {
                 Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
@@ -314,6 +308,10 @@ pub fn run() {
             commands::record_session,
             commands::clear_session,
             commands::record_handoff,
+            // #214：认领任务（首个 GitHub 写回操作，用户确认后显式调用）。
+            commands::claim_issue,
+            // #215：详情 Project 状态写回（用户确认后显式调用）。
+            commands::set_project_status,
             commands::get_settings,
             commands::save_settings,
             commands::open_in_browser,

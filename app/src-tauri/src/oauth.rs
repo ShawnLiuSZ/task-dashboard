@@ -20,8 +20,10 @@ use std::time::Duration;
 const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 
-/// OAuth scope 与 PAT 权限集对齐：仓库读写 + 组织读 + Projects V2 读。
-pub const DEVICE_FLOW_SCOPES: &str = "repo read:org read:project";
+/// OAuth scope 与 PAT 权限集对齐：仓库读写 + 组织读 + Projects V2 读写。
+/// #215：含 `project` 写 scope（写回 Project 状态用）。已发出的旧 token 不会自动
+/// 获得新 scope，改动后需重新走一遍授权登录换 token。
+pub const DEVICE_FLOW_SCOPES: &str = "repo read:org read:project project";
 
 /// 默认 client_id：GitHub CLI 官方 OAuth App 的公开 client_id（内嵌于开源仓库 cli/cli）。
 ///
@@ -210,6 +212,6 @@ mod tests {
 
     #[test]
     fn scopes_match_pat_permission_set() {
-        assert_eq!(DEVICE_FLOW_SCOPES, "repo read:org read:project");
+        assert_eq!(DEVICE_FLOW_SCOPES, "repo read:org read:project project");
     }
 }

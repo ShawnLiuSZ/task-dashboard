@@ -8,10 +8,12 @@
 // 3. `shell.env`：向 shell 执行注入 TASKBOARD_SESSION_ID。
 // 4. 自动执行（clawd-on-desk agents 式事件驱动：事件 hook → 直接调本地后端，
 //    只是我们不经过 HTTP，用 `taskboard mcp` 子命令一-shot 直写同一 SQLite）：
-//    用户消息中出现**唯一** issue 引用（repo#num / owner/repo#num / GitHub issue URL）
+//    当前用户消息中出现**唯一未触发** issue 引用（repo#num / owner/repo#num / GitHub issue URL）
 //    时，自动完成 update_task_status(处理中) + record_session，无需手动 /task-start。
+//    （#204：按当前消息判定，历史引用不再抑制——单窗口多任务可依次自动执行。）
 //    零条或多条引用 → 不动作（回退手动）；不在看板 → get_task_status 不存在则跳过；
-//    已 done → 不回退。同 (session, issue) 只自动执行一次。
+//    done/processed → 不回退；doing 且已有 session → 视为已接管。同 (session, issue)
+//    只自动执行一次（成功后才标记，失败可重试）。
 //
 // 写库仍走 MCP 工具（与 Claude 侧 `.claude/` 设计同构：hooks 只注上下文/补参，不写库）
 // —— 自动执行是唯一的例外，且走的仍是同一 MCP 后端（`taskboard mcp` 子进程）。
@@ -22,7 +24,7 @@ let sessionId = "";
 let repoDir = "";
 // 已自动执行过的 "sessionId|issueKey"，防重复触发（进程级，opencode 重启即清）。
 const autoFired = new Set();
-// 用户文本 part 的累计缓冲（按 session）：part 事件可能分片，拼起来再扫引用。
+// 用户文本 part 的累计缓冲（按 session）：分片兜底时取尾部 40 字重叠再扫。
 const partBuf = new Map();
 
 // session.created 的 payload 形状跨版本不稳定，多路径尽力提取。
@@ -232,36 +234,40 @@ async function applog(client, level, message) {
   }
 }
 
-/// 自动开始：唯一引用 + 看板存在 + 未 done → 置处理中 + 记 session。
+/// 自动开始：唯一引用 + 看板存在 + todo → 置处理中 + 记 session。
+/// #191：成功后才记去重（失败可重试）；两路调用结果都检查；done/processed 不回退。
 async function autoStart(ctx, issueKey) {
   const { $, client } = ctx;
   const sid = sessionId;
   if (!sid) return;
   const dedup = `${sid}|${issueKey}`;
   if (autoFired.has(dedup)) return;
-  autoFired.add(dedup);
   const bin = await resolveBin($);
   if (!bin) {
     await applog(client, "debug", `[taskboard] 自动执行跳过：找不到 taskboard 二进制（${issueKey}），请手动 /task-start`);
     return;
   }
-  let branch = "";
   try {
     const [got] = await mcpCall(bin, [{ name: "get_task_status", args: { issue: issueKey } }]);
-    if (got.error || !got.data || got.data.found !== true) return; // 不在看板 → 温和跳过
-    if (got.data.status === "done") return; // 已完成不回退
-    branch = await currentBranch($);
-    const [, rec] = await mcpCall(bin, [
+    if (got.error || !got.data || got.data.found !== true) return; // 不在看板 → 温和跳过（允许重试）
+    if (got.data.status === "done" || got.data.status === "processed") return; // 已完成/已处理不回退
+    if (got.data.status === "doing" && got.data.session_id) {
+      autoFired.add(dedup); // 已在处理中且有 session：视为已接管，不再重复写
+      return;
+    }
+    const branch = await currentBranch($);
+    const [upd, rec] = await mcpCall(bin, [
       { name: "update_task_status", args: { issue: issueKey, status: "doing" } },
       { name: "record_session", args: { issue: issueKey, session_id: sid, agent: "opencode", branch } },
     ]);
-    if (rec.error) {
-      await applog(client, "warn", `[taskboard] 自动执行失败 ${issueKey}：${rec.error}`);
+    if (upd.error || rec.error) {
+      await applog(client, "warn", `[taskboard] 自动执行失败 ${issueKey}：${upd.error || rec.error}（可重试）`);
       return;
     }
+    autoFired.add(dedup); // 成功后才标记
     await applog(client, "info", `[taskboard] 已自动开始 ${issueKey}（处理中，分支 ${branch || "未知"}）`);
   } catch (e) {
-    await applog(client, "warn", `[taskboard] 自动执行异常 ${issueKey}：${(e && e.message) || e}`);
+    await applog(client, "warn", `[taskboard] 自动执行异常 ${issueKey}：${(e && e.message) || e}（可重试）`);
   }
 }
 
@@ -278,20 +284,29 @@ export const TaskboardPlugin = async ({ directory, $, client }) => {
         if (id) sessionId = id;
         return;
       }
-      // message 系事件：跟进 session id + 用户文本扫 issue 引用
+      // message 系事件：跟进 session id + 当前消息扫 issue 引用
+      // #204：按当前消息判定（历史引用不再抑制新任务，单窗口多任务可依次自动执行）；
+      // 当前无引用时用上条尾部 40 字 + 当前文本再扫一次（分片切断 token 兜底）。
       if (event.type === "message.updated" || event.type === "message.part.updated") {
         const sid = pickSessionId(event);
         if (sid) sessionId = sid;
         if (!sessionId) return;
         const text = userTextOf(event);
-        if (text) {
-          const prev = partBuf.get(sessionId) || "";
-          partBuf.set(sessionId, (prev + "\n" + text).slice(-4000));
+        if (!text) return;
+        const prev = partBuf.get(sessionId) || "";
+        partBuf.set(sessionId, (prev + "\n" + text).slice(-4000));
+        const unfired = (keys) => keys.filter((k) => !autoFired.has(`${sessionId}|${k}`));
+        // 当前消息恰好一个未触发引用 → 自动执行；多条无法消歧（回退手动）
+        const cur = unfired(extractIssueRefs(text));
+        if (cur.length === 1) {
+          await autoStart(ctx, cur[0]);
+          return;
         }
-        const refs = extractIssueRefs(partBuf.get(sessionId) || "");
-        // 唯一引用才自动执行：零条无事可做，多条无法消歧（回退手动 /task-start）
-        if (refs.length === 1) {
-          await autoStart(ctx, refs[0]);
+        if (cur.length > 1) return;
+        // 当前 0 引用：分片可能切断 token，尾部重叠再扫一次
+        const tail = unfired(extractIssueRefs((prev.slice(-40) + "\n" + text).slice(-4000)));
+        if (tail.length === 1) {
+          await autoStart(ctx, tail[0]);
         }
         return;
       }

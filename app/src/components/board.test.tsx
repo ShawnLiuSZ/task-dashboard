@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import Board, { groupTasksByCustomColumns, resolveBoardView } from "./Board";
+import TaskCard from "./TaskCard";
 import { I18nProvider } from "../i18n";
 import type { AccountColumn, ProjectStatus, Task } from "../types";
 
@@ -35,6 +36,7 @@ function mkTask(partial: Partial<Task> & { issueKey: string }): Task {
     prNumber: 0,
     prUrl: "",
     branch: "",
+    workBranch: "",
     sessionId: null,
     sessionAgent: null,
     sessionAt: null,
@@ -170,5 +172,67 @@ describe("Board 渲染（#159）", () => {
     );
     expect(html).toContain("未标注");
     expect(html).not.toContain("待处理");
+  });
+});
+
+describe("TaskCard session 行（#197）", () => {
+  it("有 session 时分配人下一行展示会话，且底部仍显示时间", () => {
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <TaskCard
+          task={mkTask({ issueKey: "a", sessionId: "sess-123", updatedAt: 1725926400 })}
+          active={false}
+          onSelectKey={noop}
+        />
+      </I18nProvider>,
+    );
+    expect(html).toContain("session-row");
+    expect(html).toContain("sess-123");
+    expect(html).toContain("2024-09-10");
+  });
+
+  it("无 session 时不渲染会话行，底部显示时间", () => {
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <TaskCard
+          task={mkTask({ issueKey: "a", updatedAt: 1725926400 })}
+          active={false}
+          onSelectKey={noop}
+        />
+      </I18nProvider>,
+    );
+    expect(html).not.toContain("session-row");
+    expect(html).toContain("2024-09-10");
+  });
+});
+
+describe("TaskCard 认领按钮（#214）", () => {
+  it("未认领任务渲染可点认领按钮", () => {
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <TaskCard
+          task={mkTask({ issueKey: "a", ownership: "notassignee" })}
+          active={false}
+          onSelectKey={noop}
+        />
+      </I18nProvider>,
+    );
+    expect(html).toContain("claim-btn");
+    expect(html).toContain("无人认领");
+    // 确认框只在点击后出现，SSR 无点击故不存在
+    expect(html).not.toContain("confirm-modal");
+  });
+
+  it("已分配任务无认领按钮", () => {
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <TaskCard
+          task={mkTask({ issueKey: "a", ownership: "assigned", assignees: "me" })}
+          active={false}
+          onSelectKey={noop}
+        />
+      </I18nProvider>,
+    );
+    expect(html).not.toContain("claim-btn");
   });
 });
