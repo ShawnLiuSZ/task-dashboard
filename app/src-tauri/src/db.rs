@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   stale          INTEGER NOT NULL DEFAULT 0,
   project_status TEXT NOT NULL DEFAULT '',
   assignees      TEXT NOT NULL DEFAULT '',
+  -- #237：issue 创建人（GitHub author login，不含 @）。卡片「创建人」行用。
+  author         TEXT NOT NULL DEFAULT '',
   labels         TEXT NOT NULL DEFAULT '',
   done_at        INTEGER NOT NULL DEFAULT 0,
   mentioned      INTEGER NOT NULL DEFAULT 0,
@@ -382,6 +384,19 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
     ) {
         if crate::common::verbose_enabled() {
             crate::tlog!("[db] work_branch 列迁移跳过（已存在）: {}", e);
+        }
+    }
+    // #237：issue 创建人。**必须放在 `migrate_tasks_v2_rebuild` 之后**——
+    // 物理重建的 `tasks_new` 定义 + INSERT..SELECT 白名单是写死的列清单，
+    // 不含后来新增的列，因此重建会把新列丢掉；只有重建之后再补才可靠。
+    // 同理不能只写在 `migrate_legacy_alters`（仅 user_version<1 触发，
+    // 且执行时机在重建之前）。详见 docs/issue-175-*.md 的同款教训。
+    if let Err(e) = conn.execute(
+        "ALTER TABLE tasks ADD COLUMN author TEXT NOT NULL DEFAULT ''",
+        [],
+    ) {
+        if crate::common::verbose_enabled() {
+            crate::tlog!("[db] author 列迁移跳过（已存在）: {}", e);
         }
     }
     // v0.3.50 (#155)：新库（SCHEMA 顶层无此索引）与重建后均由此处幂等补齐 issue_key 索引。

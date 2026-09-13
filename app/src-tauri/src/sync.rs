@@ -177,6 +177,8 @@ struct PendingUpsert {
     gh_status_raw: String,
     assignees_csv: String,
     labels_csv: String,
+    /// #237：issue 创建人（GitHub author login，不含 @）。
+    author: String,
     done_at_val: i64,
     mentioned_val: i64,
     comments_count: i64,
@@ -599,6 +601,7 @@ fn sync_account_inner(
             gh_status_raw,
             assignees_csv,
             labels_csv,
+            author: t.author.clone(),
             done_at_val,
             mentioned_val,
             comments_count,
@@ -628,8 +631,8 @@ fn sync_account_inner(
                    (issue_key, owner, repo, number, title, url, issue_state, ownership,
                     status, project_status, assignees, labels, done_at, mentioned, comments_count,
                     latest_comment_url, pr_number, pr_url, branch, candidate_done, stale, updated_at, synced_at,
-                    account_id)
-                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 0, 0, ?20, ?21, ?22)
+                    account_id, author)
+                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 0, 0, ?20, ?21, ?22, ?23)
                   ON CONFLICT(repo, number, account_id) DO UPDATE SET
                     title = excluded.title,
                     repo = excluded.repo,
@@ -654,7 +657,8 @@ fn sync_account_inner(
                     pr_number = excluded.pr_number,
                     pr_url = excluded.pr_url,
                     branch = excluded.branch,
-                    account_id = excluded.account_id",
+                    account_id = excluded.account_id,
+                    author = excluded.author",
                 rusqlite::params![
                     row.key,
                     account.org,
@@ -678,6 +682,7 @@ fn sync_account_inner(
                     row.updated_at,
                     now,
                     account.id,
+                    row.author,
                 ],
             )
             .map_err(|e| format!("写入任务失败: {e}"))?;
