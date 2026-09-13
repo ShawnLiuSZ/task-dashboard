@@ -78,14 +78,28 @@
   - **#163 前端测试补充**：新增 3 个测试文件 18 个用例（合计 21 例），零依赖覆盖 #159/#160/#161 修复逻辑，为可测性抽出 `resolveBoardView` 等 4 个纯函数。详见 [docs/issue-163-frontend-tests.md](./issue-163-frontend-tests.md)。
   - **#165 custom 视图未匹配值提示**：未标注列展示未映射的 `project_status` 值（去重 + 计数，hover 看全），帮助用户快速定位漏配/错配的自定义列。详见 [docs/issue-165-unmapped-hint.md](./issue-165-unmapped-hint.md)。
 
-- **v0.3.50（2026-09-08）— tasks 表物理重建（#155）**
-
+- **v0.3.50（2026-09-08）— 性能 / 安全优化批次 + 同步日志与自定义列改进 + tasks 表物理重建（#133 #134 #135 #137 #138 #143–#150 #155）**
+  - ℹ️ **版本号说明**：本版本实际承载了「原计划的 v0.3.49」内容——**`v0.3.49` 版本号被跳过，从未打 tag、从未发布**（tag 序列 `v0.3.48` → `v0.3.50`）。因此源码中约 50 处标注为 `v0.3.49 (#143)` 之类的注释，所指即本版本 v0.3.50；代码注释不作订正以免污染 `git blame`。本条目的 #133–#150 部分为**事后补录**（原先只记了 #155），依据 `git log v0.3.48..v0.3.50` 与各 issue 补写。详见 [#239](https://github.com/ShawnLiuSZ/task-dashboard/issues/239)。
+  - **性能 / 安全优化批次（8 个 issue）**，批次索引见 [docs/perf-audit-optimization.md](./perf-audit-optimization.md)：
+    - **P0-1 #143 同步链路并发化**：5 个 Search 源 + Project 拉取并行，去掉固定 `sleep`；新增共享 Search 限流门。详见 [docs/issue-143-147-sync-concurrency.md](./issue-143-147-sync-concurrency.md)。
+    - **P0-2 #144 同步链路 N+1 消除 + 整段事务化写入**：预加载替代任务循环内的逐条查询，N 次 autocommit 合并为 1 次 commit。详见 [docs/issue-144-146-sync-db.md](./issue-144-146-sync-db.md)。
+    - **P0-3 #145 前端并行加载**：`Promise.all` 并行 + `Board`/`TaskCard` `memo` + 搜索防抖。详见 [docs/issue-145-148-150-frontend.md](./issue-145-148-150-frontend.md)。
+    - **P1-1 #146 热查询索引补齐**：`label_mappings` 复合索引 / `tasks` 看板复合索引 / `notes` 内容唯一索引 / prune 索引。详见 [docs/issue-144-146-sync-db.md](./issue-144-146-sync-db.md)。
+    - **P1-2 #147 建连版本化迁移**：引入 `PRAGMA user_version` 版本化迁移 + 抽取 `common.rs` + `import_notes` 事务化。**这是后续所有列迁移机制的前置**（见 [docs/issue-237-card-creator-row.md](./issue-237-card-creator-row.md)「决策 5」）。详见 [docs/issue-143-147-sync-concurrency.md](./issue-143-147-sync-concurrency.md)。
+    - **P1-3 #148 类型 / 拼写修复**：清零 i18n `any`、`SyncLogsPanel`/`NotesPanel` 补 i18n、`check_update` URL 修正。详见 [docs/issue-145-148-150-frontend.md](./issue-145-148-150-frontend.md)。
+    - **P2-1 #149 安全加固**：PAT 入 Keychain、CSP 最小策略 + 外链白名单、跨平台 `open_in_browser`、DB 文件权限 0600、日志门控。详见 [docs/issue-149-security-hardening.md](./issue-149-security-hardening.md)。
+    - **P2-2 #150 可访问性 a11y + CSS 收敛**：`TaskCard` 键盘可达、modal `role` / 焦点陷阱、对比度提升。详见 [docs/issue-145-148-150-frontend.md](./issue-145-148-150-frontend.md)。
+  - **#133 自定义列视图补 `gh_status` 徽章**：切到自定义列显示后卡片不再展示 `project.status`，补正确类名、无列配置时也显示，并在保存列配置时自动置 `boardMode=custom`。详见 [docs/issue-133-custom-col-status-badge.md](./issue-133-custom-col-status-badge.md)。
+  - **#134 同步日志保留期 7 天 → 30 天 + 「清理全部日志」**：新增全量清理按钮（二次确认）。详见 [docs/issue-134-sync-logs-cleanup.md](./issue-134-sync-logs-cleanup.md)。
+  - **#135 同步日志区分触发类型**：新增 `auto` / `manual` / `startup` 三态，「触发」列不再一律显示「自动」。详见 [docs/issue-135-sync-trigger-type.md](./issue-135-sync-trigger-type.md)。
+  - **#137 跳过已关闭 issue 的逐条 `fetch_state`**：改为批量标记 `candidate_done`，省 GitHub API 调用。详见 [docs/issue-137-skip-fetch-state.md](./issue-137-skip-fetch-state.md)。
+  - **#138 自定义列映射改为平铺账号布局**：账号维度不再用下拉切换，平铺列出所有账号各自独立配置。详见 [docs/issue-138-flat-account-config.md](./issue-138-flat-account-config.md)。
   - **#155 tasks 表物理重建**：字段命名彻底理清——`key→issue_key`（业务引用，新增）、自增 `id` 主键 + `UNIQUE(repo, number, account_id)` 解决多账号互相覆盖、`gh_state→issue_state`、`gh_status→project_status`（与本地四态 `status` 语义分离）、`updated_at` 由 TEXT 统一为 INTEGER 秒。基于 `PRAGMA user_version` 版本化迁移 + `key` 列幂等判定，老库自动重建、数据完整迁移。详见 [docs/issue-155-tasks-schema-rebuild.md](./issue-155-tasks-schema-rebuild.md)。
 
 - **v0.3.48（2026-09-07）— 扩展平台支持与 CI 优化（#118 #119 #120 #121 #122）**
 
   - **#118 扩展平台支持**：GitHub Actions release 工作流新增 macOS ARM/x64、Windows ARM64 双架构构建支持。详见 [docs/issue-118-expand-platform-support.md](./issue-118-expand-platform-support.md)。
-  - **#119 扩展 Release 打包矩阵**：补齐 arm64 全平台、rpm 与独立便携 zip 格式。macOS/Windows/Linux 均支持双架构，新增 zip/msi/rpm 格式。详见 [docs/issue-119-expand-release-matrix.md](./issue-119-expand-release-matrix.md)。
+  - **#119 扩展 Release 打包矩阵**：补齐 arm64 全平台、rpm 与 msi 格式。macOS/Windows/Linux 均支持双架构。详见 [docs/issue-119-expand-release-matrix.md](./issue-119-expand-release-matrix.md)。<br>⚠️ **勘误（2026-09-13 补注，[#239](https://github.com/ShawnLiuSZ/task-dashboard/issues/239)）**：本条原写「新增 zip/msi/rpm 格式」，其中 **`zip` 当日即被回滚**——Tauri 2 的 `--bundles` 只接受 app/dmg/nsis/msi/deb/rpm/appimage，`zip` 不是有效类型（提交 `18049ec`）。便携 zip 未曾交付，勿再尝试该写法。
   - **#120 CI 弃用警告修复**：升级 GitHub Actions（checkout@v5、setup-node@v5、tauri-action@v2），Node.js 版本升级到 22 LTS，消除弃用警告。详见 [docs/issue-120-upgrade-ci-actions.md](./issue-120-upgrade-ci-actions.md)。
   - **#121 关于页删除专属话术**：移除 AboutPanel 中 WorkBuddy/claude-code 专属性 agent 接入话术，收敛为通用说明。详见 [docs/issue-121-remove-workbuddy-text.md](./issue-121-remove-workbuddy-text.md)。
   - **#122 数据库路径全平台标注**：README 与 Rust 注释覆盖 Windows/Linux/macOS 三平台数据库路径。详见 [docs/issue-122-db-path-docs.md](./issue-122-db-path-docs.md)。
