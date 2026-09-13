@@ -6,20 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **未发布（Unreleased）— 应用内 API 调用明细（#235）**
+- **v0.5.0（2026-09-13）— macOS 免重复放行 + 应用内自动更新（#231/#232）+ 应用内 API 调用明细（#235）+ 看板卡片调整（#237）+ 文档完整性（#239）**
 
+  - **#231/#232 macOS 更新免除重复 Gatekeeper 放行 + 应用内自动更新**：根因是 ad-hoc 签名（`signingIdentity="-"`）的 designated requirement 直接绑定 `cdhash`，**每次构建都会变**，系统因此把每个新版本视为从未批准过的全新应用，放行记录永远命中不了。改为用**固定自签名证书**签名让 DR 恒定（首次放行后长期复用），并接入 `tauri-plugin-updater` 走应用内更新——更新包由**应用自身进程**下载，产物天然不带 `com.apple.quarantine`，Gatekeeper 完全不参与。同时修掉 #101 隔离标记自清长期空转：标记落在 **bundle 根目录**，原实现只清 `current_exe()`，`xattr -dr` 不向上越级，故 `has_quarantine(exe)` 恒为 false 提前返回；现同时清理 bundle 根与可执行文件。新增 `check_app_update` / `install_app_update` / `restart_app` 命令与 `taskboard://update-progress` 事件；About 页「检查更新」优先走应用内更新，失败**静默回退**为原版本号对比 + 跳转下载。详见 [docs/issue-231-macos-gatekeeper-update.md](./issue-231-macos-gatekeeper-update.md)。
   - **#235 请求/返回参数落盘 + 应用内可查**：新增 `api_logs` 表（`kind` / `method` / `target` / `status` / `ok` / `elapsed_ms` / `request` / `response`），把同步、领取任务（`claim_issue`）、更新状态（`set_project_status`）三路 GitHub API 调用的**请求参数与返回参数**落盘。同步日志面板改为**双页签**（「同步记录」/「API 明细」），明细页签支持按类型筛选、逐行展开查看请求与返回。承接 [#228](./issue-228-api-logging.md) 的 stderr 埋点（默认静默、终端可见），补齐「落盘 + UI 可视化」。详见 [docs/issue-235-in-app-api-log.md](./issue-235-in-app-api-log.md)。
-  - **实现要点**：`GitHubClient` 采用可选 sink（`new_with_sink`，`new` 保持原签名走 `None`），既有调用点零改动；drain 放在 `sync_account` 包装层，保证 `sync_account_inner` 内 `?` 提前返回的**失败路径也落盘**；`ApiLogEntry.ok` 独立于状态码（GraphQL 可 HTTP 200 带 `errors`）；请求/返回按字符截断（400/600）存摘要，保留 7 天 / 上限 2000 行；绝不写入 PAT。
-  - **schema 变更**：新增 `api_logs` 表 + `idx_api_logs_created` / `idx_api_logs_kind`（新表，`CREATE TABLE IF NOT EXISTS` 幂等，老库启动自动建表，无 ALTER 迁移）。
-  - **验证**：`cargo test --lib` 80 passed（+5 例）、`tsc --noEmit` 0 error、`npm run build` ✅、`npm test` 10 文件 79 例（`sync-logs.test.ts` 7→32）、`i18n:check` 中英各 302 key（+18）、`check-mcp-columns.py` 24 列一致。
-
-- **未发布（Unreleased）— 看板卡片结构调整（#237）**
-
+  - **#235 实现要点**：`GitHubClient` 采用可选 sink（`new_with_sink`，`new` 保持原签名走 `None`），既有调用点零改动；drain 放在 `sync_account` 包装层，保证 `sync_account_inner` 内 `?` 提前返回的**失败路径也落盘**；`ApiLogEntry.ok` 独立于状态码（GraphQL 可 HTTP 200 带 `errors`）；请求/返回按字符截断（400/600）存摘要，保留 7 天 / 上限 2000 行；绝不写入 PAT。
   - **#237 移除账号行 / 新增创建人行 / 加大 repo#编号 字号**：卡片第一行的「归属账号」徽章（`@liushizhao2025`）整行移除——单账号视图下每张卡片都一样，无信息量；改为展示 issue **创建人**，位置在「分配人」**上一行**；`repo #编号`（如 `fad-backend #1198`）行字号 11px → **13px**，成为扫视整列时的视觉锚点。详见 [docs/issue-237-card-creator-row.md](./issue-237-card-creator-row.md)。
-  - **实现要点**：`tasks` 表新增 `author` 列（Search API `user.login` + GraphQL `author { login }` 两路取值，缺失即空串不阻断同步）；前端创建人空/纯空白时**不渲染该行**，不留空标签行；`accountLabel` / `accounts` 死 prop 链（TaskCard → Board → App）一并清理，`card.accountTitle` i18n key 删除、新增 `card.creatorLabel`。
-  - **迁移要点**：`author` 的 `ALTER TABLE` 必须放在 `migrate_tasks_v2_rebuild` **之后**的热路径——v2 物理重建的列白名单是写死的，不含后增列，放前面会被重建丢掉（#175 同款陷阱）。
-  - **schema 变更**：`tasks` 新增 `author TEXT NOT NULL DEFAULT ''`（热路径幂等 ALTER，覆盖全部 `user_version`）。
-  - **验证**：`cargo test --lib` 80 passed、`cargo test --test db_test` 21 passed（+2 例，且已实测在缺修复时会失败）、`tsc --noEmit` 0 error、`npm run build` ✅、`npm test` 10 文件 84 例（+5）、`i18n:check` 中英各 302 key、`check-mcp-columns.py` 24 列一致。
+  - **#237 实现要点**：`tasks` 表新增 `author` 列（Search API `user.login` + GraphQL `author { login }` 两路取值，缺失即空串不阻断同步）；前端创建人空/纯空白时**不渲染该行**，不留空标签行；`accountLabel` / `accounts` 死 prop 链（TaskCard → Board → App）一并清理，`card.accountTitle` i18n key 删除、新增 `card.creatorLabel`。**迁移要点**：`author` 的 `ALTER TABLE` 必须放在 `migrate_tasks_v2_rebuild` **之后**的热路径——v2 物理重建的列白名单是写死的，不含后增列，放前面会被重建丢掉（#175 同款陷阱）。
+  - **#239 文档完整性修复**：一次性修掉 7 类共 24+ 处缺陷——3 篇**被引用却从未创建**的文档（`issue-118-*` / `issue-119-*` / `perf-audit-optimization.md`，其中前两篇违反 §2.4「每功能必建 KB 文档」）已据实补写；15 处 `file:///Users/<家目录>/...` 绝对路径与 4 处相对路径深度错误改为 `../app/...`；5 处已漂移到无关代码的 `#Lxxx` 行号锚点删除。同时对 CHANGELOG 本身勘误与补录：v0.3.48 的 #119 条目原写「新增 zip 格式」失实（`zip` 并非 Tauri 2 有效 bundle 类型，当日已回滚），v0.3.50 条目补录原先缺记的 13 个 issue，并说明 **`v0.3.49` 是幽灵版本号**（从未打 tag、从未发布）。新增 `scripts/check-doc-links.py` + CI 防回归。详见 [docs/issue-239-doc-integrity.md](./issue-239-doc-integrity.md)。
+  - **部署前置（一次性）**：#231 需在本机用「钥匙串访问 → 证书助理」创建名为 **`TaskBoard Local Signing`** 的自签名代码签名证书（身份类型「代码签名」，建议 3650 天），CI 通过 `APPLE_SIGNING_IDENTITY` 覆盖；`tauri.conf.json` 保留 `signingIdentity="-"` 使**没有证书的本地开发机不会构建失败**。首次发版还需生成 updater 的 minisign 密钥对并配置 `latest.json`。
+  - **schema 变更**：新增 `api_logs` 表 + 两个索引（#235，新表走 `CREATE TABLE IF NOT EXISTS` 幂等，老库启动自动建表）；`tasks` 新增 `author TEXT NOT NULL DEFAULT ''`（#237，热路径幂等 ALTER，覆盖全部 `user_version`）。**无破坏性变更**，老库自动迁移。
+  - **验证**：`cargo test --lib` 80 passed、`cargo test --test db_test` 21 passed（+2）、`tsc --noEmit` 0 error、`npm run build` ✅、`npm test` 10 文件 84 例（+5）、`i18n:check` 中英各 302 key、`check-mcp-columns.py` 24 列一致、`check-doc-links.py` 116 文件无缺陷。
 
 - **v0.4.0（2026-09-12）— GitHub 写回反转（#214 认领 + #215 状态）+ 记事本宽度 + 详情重做**
 
