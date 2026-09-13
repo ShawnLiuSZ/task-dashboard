@@ -6,7 +6,7 @@
 
 首次启动后，点击 **设置 / 关于 / 账号 / 同步日志** 任一按钮，鼠标变转圈（macOS beachball），界面看似卡死，必须等首次同步（拉取 GitHub issue / 写本地 SQLite）完成才能继续操作。
 
-这些面板的 React 组件本身早就是**异步加载 + loading 态**（[SettingsPanel.tsx](file:///Users/liushizhao/dev/dashboard/app/src/components/SettingsPanel.tsx)、[SyncLogsPanel.tsx](file:///Users/liushizhao/dev/dashboard/app/src/components/SyncLogsPanel.tsx) 等），弹窗由纯状态切换触发，阻塞不在前端，而在后端。
+这些面板的 React 组件本身早就是**异步加载 + loading 态**（[SettingsPanel.tsx](../app/src/components/SettingsPanel.tsx)、[SyncLogsPanel.tsx](../app/src/components/SyncLogsPanel.tsx) 等），弹窗由纯状态切换触发，阻塞不在前端，而在后端。
 
 ## 设计 / 方案
 
@@ -17,8 +17,8 @@
 - 这些读取命令是**同步命令**，跑在 Tauri 主线程（事件循环）上；主线程被阻塞排队等锁 → macOS 视为主线程无响应 → **beachball / 鼠标卡死转圈**。要等同步释放锁，命令才能返回。
 
 > 排查定位到两处入口同样持有共享锁跑全量同步：
-> - [lib.rs::run_sync](file:///Users/liushizhao/dev/dashboard/app/src-tauri/src/lib.rs)（启动 2s 后、Tray「立即同步」、定时同步）
-> - [commands.rs::sync_now](file:///Users/liushizhao/dev/dashboard/app/src-tauri/src/commands.rs)（前端「立即同步」按钮）
+> - [lib.rs::run_sync](../app/src-tauri/src/lib.rs)（启动 2s 后、Tray「立即同步」、定时同步）
+> - [commands.rs::sync_now](../app/src-tauri/src/commands.rs)（前端「立即同步」按钮）
 
 ### 修法：同步改用独立 DB 连接
 
