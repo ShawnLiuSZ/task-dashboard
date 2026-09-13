@@ -1,17 +1,29 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, openExternal } from "../api";
+import { api, onUpdateProgress, openExternal } from "../api";
 import { useI18n } from "../i18n";
-import type { CheckUpdate } from "../types";
 
 interface Props {
   onClose: () => void;
 }
 
-/** idle = 尚未检查（按钮可点）；loading = 正在检查（防重复点击）。 */
+/**
+ * idle = 尚未检查（按钮可点）；loading = 正在检查（防重复点击）。
+ * #231 扩展 available / installing / installed 三个阶段，用于承载应用内更新流程。
+ */
 type State =
   | { phase: "idle" }
   | { phase: "loading" }
-  | { phase: "ok"; data: CheckUpdate }
+  | { phase: "upToDate"; current: string }
+  | {
+      phase: "available";
+      version: string;
+      current: string;
+      notes: string;
+      /** 非空表示应用内更新不可用，退化为前往 Releases 手动下载。 */
+      manualUrl?: string;
+    }
+  | { phase: "installing"; percent: number | null }
+  | { phase: "installed"; version: string }
   | { phase: "error"; message: string };
 
 /** 按当前安装平台返回 taskboard 二进制的默认路径（与 README 一致）。 */
@@ -50,20 +62,60 @@ export default function AboutPanel({ onClose }: Props) {
   const loadVersion = useCallback(async () => {
     try {
       setVersion(await api.getAppVersion());
-    } catch (e) {
+    } catch {
       setVersion("?");
     }
   }, []);
 
+  /**
+   * #231：优先走应用内更新通道（tauri-plugin-updater）。
+   *
+   * 该通道不可用时（尚未配置签名公钥、或 Releases 上还没有 latest.json）回退为
+   * 纯版本号对比 + 跳转 Releases 手动下载，避免「检查更新」整体失效。
+   */
   const check = useCallback(async () => {
     setState({ phase: "loading" });
     try {
+      const u = await api.checkAppUpdate();
+      if (!u.error) {
+        setState(
+          u.available
+            ? {
+                phase: "available",
+                version: u.version,
+                current: u.current,
+                notes: u.notes,
+              }
+            : { phase: "upToDate", current: u.current },
+        );
+        return;
+      }
+
       const d = await api.checkLatestRelease();
       if (d.error) {
         setState({ phase: "error", message: d.error });
+      } else if (d.upToDate) {
+        setState({ phase: "upToDate", current: d.current });
       } else {
-        setState({ phase: "ok", data: d });
+        setState({
+          phase: "available",
+          version: d.latest,
+          current: d.current,
+          notes: "",
+          manualUrl: d.url,
+        });
       }
+    } catch (e) {
+      setState({ phase: "error", message: String(e) });
+    }
+  }, []);
+
+  /** #231：下载并安装更新，完成后引导用户重启生效。 */
+  const install = useCallback(async (target: string) => {
+    setState({ phase: "installing", percent: null });
+    try {
+      await api.installAppUpdate();
+      setState({ phase: "installed", version: target });
     } catch (e) {
       setState({ phase: "error", message: String(e) });
     }
@@ -73,6 +125,25 @@ export default function AboutPanel({ onClose }: Props) {
   useEffect(() => {
     void loadVersion();
   }, [loadVersion]);
+
+  // #231：订阅下载进度，仅在 installing 阶段刷新百分比。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void onUpdateProgress((p) => {
+      const percent =
+        p.total && p.total > 0
+          ? Math.min(100, Math.floor((p.downloaded / p.total) * 100))
+          : null;
+      setState((prev) =>
+        prev.phase === "installing" ? { phase: "installing", percent } : prev,
+      );
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, []);
+
+  const busy = state.phase === "loading" || state.phase === "installing";
 
   return (
     <div className="modal-mask" onClick={onClose}>
@@ -132,25 +203,66 @@ export default function AboutPanel({ onClose }: Props) {
           {state.phase === "loading" && (
             <div className="about-status">{t("about.checking")}</div>
           )}
-          {state.phase === "ok" &&
-            (state.data.upToDate ? (
-              <div className="about-status up-to-date">
-                {"✅"} {t("about.upToDate", { version: state.data.current })}
-              </div>
-            ) : (
-              <div className="about-status has-update">
-                {"✨"} {t("about.updateAvailable", { latest: state.data.latest, current: state.data.current })}
-                {state.data.url && (
-                  <button
-                    className="btn primary"
-                    style={{ marginTop: 6 }}
-                    onClick={() => openExternal(state.data.url)}
-                  >
-                    {t("about.download")} ↗
-                  </button>
-                )}
-              </div>
-            ))}
+
+          {state.phase === "upToDate" && (
+            <div className="about-status up-to-date">
+              {"✅"} {t("about.upToDate", { version: state.current })}
+            </div>
+          )}
+
+          {state.phase === "available" && (
+            <div className="about-status has-update">
+              {"✨"}{" "}
+              {t("about.updateAvailable", {
+                latest: state.version,
+                current: state.current,
+              })}
+              {state.notes && (
+                <p className="muted small" style={{ whiteSpace: "pre-wrap" }}>
+                  {state.notes}
+                </p>
+              )}
+              {state.manualUrl ? (
+                <button
+                  className="btn primary"
+                  style={{ marginTop: 6 }}
+                  onClick={() => openExternal(state.manualUrl as string)}
+                >
+                  {t("about.download")} ↗
+                </button>
+              ) : (
+                <button
+                  className="btn primary"
+                  style={{ marginTop: 6 }}
+                  onClick={() => void install(state.version)}
+                >
+                  {t("about.install")}
+                </button>
+              )}
+            </div>
+          )}
+
+          {state.phase === "installing" && (
+            <div className="about-status">
+              {state.percent === null
+                ? t("about.installing")
+                : t("about.progress", { percent: state.percent })}
+            </div>
+          )}
+
+          {state.phase === "installed" && (
+            <div className="about-status has-update">
+              {"✅"} {t("about.installed", { version: state.version })}
+              <button
+                className="btn primary"
+                style={{ marginTop: 6 }}
+                onClick={() => void api.restartApp()}
+              >
+                {t("about.restart")}
+              </button>
+            </div>
+          )}
+
           {state.phase === "error" && (
             <div className="about-status error">
               {t("about.error", { error: state.message })}
@@ -162,7 +274,7 @@ export default function AboutPanel({ onClose }: Props) {
           <button className="btn" onClick={onClose}>
             {t("btn.close")}
           </button>
-          <button className="btn primary" onClick={check} disabled={state.phase === "loading"}>
+          <button className="btn primary" onClick={check} disabled={busy}>
             {state.phase === "loading" ? t("about.checking") : t("about.checkUpdate")}
           </button>
         </div>

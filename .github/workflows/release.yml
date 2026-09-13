@@ -86,10 +86,46 @@ jobs:
         working-directory: app
         run: npm ci
 
+      # #231：导入固定的代码签名证书。
+      #
+      # 目的：让每个版本的 designated requirement（DR）保持恒定。ad-hoc 签名（`-`）的 DR
+      # 直接绑定 cdhash，每次构建都变，macOS 会把新版本当成全新应用 —— 这正是「每次更新
+      # 都要去隐私与安全性点『仍要打开』」的根因。换成固定证书后 DR 形如
+      # `identifier + 证书锚点`，跨版本不变，用户只需首次安装放行一次。
+      #
+      # 未配置 APPLE_CERTIFICATE 时跳过，构建退回 ad-hoc：不阻断 CI，但体验退化。
+      - name: Import signing certificate
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "::warning::APPLE_CERTIFICATE 未配置，本次构建使用 ad-hoc 签名"
+            exit 0
+          fi
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          # 必须设为 default-keychain，否则 codesign 找不到该 identity
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import certificate.p12 -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm -f certificate.p12
+          # 证书 CN 固定，见 docs/issue-231-macos-gatekeeper-update.md 的生成步骤
+          echo "APPLE_SIGNING_IDENTITY=TaskBoard Local Signing" >> "$GITHUB_ENV"
+
       - name: Build with Tauri
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # #231：updater 产物的 minisign 签名私钥（与 Apple 证书无关）。
+          # 缺失时构建会失败 —— bundle.createUpdaterArtifacts 已开启，签名不可禁用。
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: app
           tagName: ${{ github.event.release.tag_name || github.ref_name }}

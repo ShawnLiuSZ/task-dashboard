@@ -122,10 +122,11 @@ npx tsc --noEmit               # TS 严格检查
 cargo check --manifest-path app/src-tauri/Cargo.toml  # Rust 检查
 ```
 
-仓库根目录还有两个零依赖检查（各自有独立 CI workflow）：
+仓库根目录还有三个零依赖检查（各自有独立 CI workflow）：
 
 ```bash
 python3 scripts/check-mcp-columns.py   # MCP 列名一致性（#169）
+python3 scripts/check-doc-links.py     # 文档链接完整性（#239）
 ```
 
 ⚠️ **改 `tasks` 表 schema 后必跑** `scripts/check-mcp-columns.py`：它校验
@@ -134,7 +135,14 @@ python3 scripts/check-mcp-columns.py   # MCP 列名一致性（#169）
 #155 把 `tasks.key` 改名 `issue_key` 时漏改 Python 侧，读路径静默失效了几个版本无人发现
 （Python MCP 不参与 Tauri 构建，CI 兜不住），详见 [`docs/issue-169-mcp-server-schema-sync.md`](./docs/issue-169-mcp-server-schema-sync.md)。
 
+⚠️ **新增/移动/删除 `docs/` 下任何文档后必跑** `scripts/check-doc-links.py`：它校验全仓库
+markdown 的相对链接（断链）、禁止 `file://` 绝对路径（只在本机可用，违反 §5.5「内部链接用
+相对路径」）、禁止行号锚点 `#Lxxx`（行号必然漂移，点击会落到无关代码）。
+#239 一次性修掉 24 处此类缺陷（3 篇被引用却从未创建的文档 + 15 处 `file://` + 5 处失效锚点），
+本检查即为其防回归，详见 [`docs/issue-239-doc-integrity.md`](./docs/issue-239-doc-integrity.md)。
+
 CI：`/.github/workflows/i18n-check.yml` 在 PR 时自动校验 i18n 一致性。
+`/.github/workflows/docs-check.yml` 在 PR 时自动校验文档链接完整性。
 
 ### 4.3 发版流程
 

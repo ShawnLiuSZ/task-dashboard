@@ -38,6 +38,9 @@ pub struct RawTask {
     pub assignees: Vec<String>,
     #[serde(default)]
     pub labels: Vec<String>,
+    /// #237：issue 创建人（GitHub `user.login`，不含 @）。取不到时为空串。
+    #[serde(default)]
+    pub author: String,
     #[serde(default)]
     pub comments: u64,
     #[serde(default)]
@@ -97,6 +100,14 @@ impl RawTask {
                     .collect()
             })
             .unwrap_or_default();
+        // #237：Search API 的 `user` 字段即 issue 创建人（`{login: "..."}`）。
+        // 缺失不报错——创建人只用于卡片展示，属装饰性信息，不该让整条任务同步失败。
+        let author = v
+            .get("user")
+            .and_then(|u| u.get("login"))
+            .and_then(|l| l.as_str())
+            .unwrap_or("")
+            .to_string();
         Ok(RawTask {
             number: v
                 .get("number")
@@ -110,6 +121,7 @@ impl RawTask {
             repo_owner,
             assignees,
             labels,
+            author,
             comments: v.get("comments").and_then(|x| x.as_u64()).unwrap_or(0),
             is_pr: v.get("pull_request").is_some(),
         })
@@ -195,6 +207,64 @@ const SEARCH_PATH: &str = "search/issues";
 /// 构造时**不探测**——`test_connection` 是显式校验入口（PAT 是否仍有效、
 /// 探测到的真实 login），由调用方按需触发。空 PAT 构造直接返回错误，
 /// 由调用方提示用户去设置面板补 token。
+/// #235：API 调用采集槽。操作方（同步 / 认领 / 状态写回）持有一份，
+/// 在操作结束后 `drain` 出全部调用并落盘 `api_logs`。
+/// `Arc<Mutex<_>>` 因为 `GitHubClient` 可能被跨线程共享（Search 限流门同理）。
+pub type ApiLogSink = std::sync::Arc<std::sync::Mutex<Vec<crate::db::ApiLogEntry>>>;
+
+/// #235：`target`（端点标识）摘要上限。
+const API_LOG_TARGET_MAX: usize = 160;
+/// #235：`request`（请求参数）摘要上限。
+const API_LOG_REQ_MAX: usize = 400;
+/// #235：`response`（返回参数）摘要上限。响应体可能很大，只留开头。
+const API_LOG_RESP_MAX: usize = 600;
+
+/// 取出采集槽中的全部记录（`None` 槽或锁中毒时返回空 vec）。
+pub fn drain_api_log(sink: &ApiLogSink) -> Vec<crate::db::ApiLogEntry> {
+    match sink.lock() {
+        Ok(mut v) => std::mem::take(&mut *v),
+        Err(e) => std::mem::take(&mut *e.into_inner()),
+    }
+}
+
+/// #235：从完整 URL 取用于展示的 path（去掉 scheme / host / query）。
+/// 纯函数，可单测。
+pub fn url_display_path(url: &str) -> String {
+    let after_scheme = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let path = match after_scheme.find('/') {
+        Some(i) => &after_scheme[i..],
+        None => after_scheme,
+    };
+    summarize_text(path.split('?').next().unwrap_or(path), API_LOG_TARGET_MAX)
+}
+
+/// #235：GraphQL query 的展示标签。优先取 `query`/`mutation` 之后的第一个标识符
+/// （跳过形如 `($a: String!)` 的变量声明块），让日志表能一眼看出调的是哪个操作；
+/// 取不到时回退为 query 开头摘要。纯函数，可单测。
+pub fn graphql_op_label(query: &str) -> String {
+    let compact = query.split_whitespace().collect::<Vec<_>>().join(" ");
+    let rest = ["mutation", "query"]
+        .iter()
+        .find_map(|kw| compact.strip_prefix(*kw))
+        .unwrap_or(compact.as_str());
+    let mut rest = rest.trim_start();
+    // 跳过变量声明块 `(...)`，否则会误取变量名（如 `searchQuery`）。
+    if rest.starts_with('(') {
+        if let Some(i) = rest.find(')') {
+            rest = &rest[i + 1..];
+        }
+    }
+    let name: String = rest
+        .trim_start_matches(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    if name.is_empty() {
+        return summarize_text(&compact, 80);
+    }
+    summarize_text(&name, API_LOG_TARGET_MAX)
+}
+
 pub struct GitHubClient {
     pat: String,
     /// 调用方提供的 login（来自 accounts 表）；用于构造 search 查询的 `assignee:` 等限定符。
@@ -208,6 +278,8 @@ pub struct GitHubClient {
     /// v0.3.49 (#143)：Search 限流门（上次 search 调用时刻）。多线程共享，
     /// `wait_search_gate` 保证任意两次调用间隔 ≥ SEARCH_GATE_MS。
     search_gate: std::sync::Mutex<Option<Instant>>,
+    /// #235：API 调用采集槽；`None` = 不采集（既有调用方零改动）。
+    sink: Option<ApiLogSink>,
 }
 
 /// Status 单选选项（含写回用的 option id，#215）。
@@ -231,6 +303,39 @@ impl GitHubClient {
     /// 失败：PAT 为空。鉴权失败/网络错误不在构造时检查——交给 `test_connection` 显式触发，
     /// 这样批量 sync 时构造 N 个客户端不会再触发 N 次探测（每次同步 1 次即可）。
     pub fn new(pat: String, login: String, org: String) -> Result<Self, String> {
+        Self::build(pat, login, org, None)
+    }
+
+    /// #235：带采集槽构造。返回 `(client, sink)`；操作结束后由调用方
+    /// `drain_api_log(&sink)` 取出全部调用记录并落盘 `api_logs`。
+    ///
+    /// 采集是**按操作**的：一次同步 / 一次认领 / 一次状态写回各用一个 sink，
+    /// 这样 `kind` 由调用方在落盘时统一标注，无需在每个调用点判断语义。
+    pub fn new_with_sink(
+        pat: String,
+        login: String,
+        org: String,
+    ) -> Result<(Self, ApiLogSink), String> {
+        let sink: ApiLogSink = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let client = Self::build(pat, login, org, Some(sink.clone()))?;
+        Ok((client, sink))
+    }
+
+    /// #235：采集一次 API 调用。无槽或锁中毒时静默跳过 —— 日志失败绝不影响主流程。
+    fn emit_api(&self, entry: crate::db::ApiLogEntry) {
+        if let Some(sink) = &self.sink {
+            if let Ok(mut v) = sink.lock() {
+                v.push(entry);
+            }
+        }
+    }
+
+    fn build(
+        pat: String,
+        login: String,
+        org: String,
+        sink: Option<ApiLogSink>,
+    ) -> Result<Self, String> {
         let pat = pat.trim().to_string();
         if pat.is_empty() {
             return Err("GitHub PAT 为空，请在设置面板粘贴 token".to_string());
@@ -241,7 +346,15 @@ impl GitHubClient {
             .connect_timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| format!("构造 HTTP 客户端失败: {}", e))?;
-        Ok(Self { pat, login, org, http, accessible_repos: std::sync::Mutex::new(None), search_gate: std::sync::Mutex::new(None) })
+        Ok(Self {
+            pat,
+            login,
+            org,
+            http,
+            accessible_repos: std::sync::Mutex::new(None),
+            search_gate: std::sync::Mutex::new(None),
+            sink,
+        })
     }
 
     /// v0.3.49 (#143)：Search 限流门。跨线程共享，调用前等待到距上次 ≥ 2s。
@@ -749,6 +862,7 @@ impl GitHubClient {
                         assignees(first:10) {{ nodes {{ login }} }}
                         labels(first:20) {{ nodes {{ name }} }}
                         comments {{ totalCount }}
+                        author {{ login }}
                       }}
                       ... on PullRequest {{
                         number title url state
@@ -837,6 +951,11 @@ impl GitHubClient {
                 }
                 // 用 owner 构造 GitHub 网页 URL（项目条目的 url 是 GraphQL node url，非网页链接）
                 let html_url = format!("https://github.com/{}/{}/issues/{}", owner, repo, num);
+                // #237：创建人。`author` 可为 null（用户已注销）→ 空串，卡片不渲染该行。
+                let author = content["author"]["login"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
                 issues.push(RawTask {
                     number: num,
                     title,
@@ -847,6 +966,7 @@ impl GitHubClient {
                     repo_owner: owner.to_string(),
                     assignees,
                     labels,
+                    author,
                     comments,
                     is_pr: false,
                 });
@@ -912,13 +1032,24 @@ impl GitHubClient {
             // 2. 其它非 2xx（如 404/422/401）：立即返回错误，由 best-effort 逻辑降级。
             if !status.is_success() {
                 let body = resp.text().unwrap_or_default();
+                let elapsed_ms = start.elapsed().as_millis();
                 log_api_call(
                     "GET",
                     url,
                     status.as_u16(),
-                    start.elapsed().as_millis(),
+                    elapsed_ms,
                     &summarize_text(&body, 160),
                 );
+                // #235：落盘请求/返回参数（GET 的「请求参数」= 完整 URL 含 query）。
+                self.emit_api(crate::db::ApiLogEntry::new(
+                    "GET",
+                    &url_display_path(url),
+                    status.as_u16() as i64,
+                    false,
+                    elapsed_ms as i64,
+                    &summarize_text(url, API_LOG_REQ_MAX),
+                    &summarize_text(&body, API_LOG_RESP_MAX),
+                ));
                 return Err(format!(
                     "GitHub API 错误 ({}): {}",
                     status.as_u16(),
@@ -947,9 +1078,23 @@ impl GitHubClient {
                 }
             }
 
-            log_api_call("GET", url, status.as_u16(), start.elapsed().as_millis(), "");
-            return resp
-                .json::<serde_json::Value>()
+            let elapsed_ms = start.elapsed().as_millis();
+            log_api_call("GET", url, status.as_u16(), elapsed_ms, "");
+            // #235：成功路径此前只记状态码，响应体完全没留 —— 这里补上。
+            // 先取文本再解析（`Response::json()` 会消费 body）；失败文案保持原样。
+            let body_text = resp
+                .text()
+                .map_err(|e| format!("解析 GitHub 返回失败: {}", e))?;
+            self.emit_api(crate::db::ApiLogEntry::new(
+                "GET",
+                &url_display_path(url),
+                status.as_u16() as i64,
+                true,
+                elapsed_ms as i64,
+                &summarize_text(url, API_LOG_REQ_MAX),
+                &summarize_text(&body_text, API_LOG_RESP_MAX),
+            ));
+            return serde_json::from_str::<serde_json::Value>(&body_text)
                 .map_err(|e| format!("解析 GitHub 返回失败: {}", e));
         }
         Err(format!("达到最大重试次数（限流持续）: {}", url))
@@ -1058,6 +1203,16 @@ impl GitHubClient {
         if !status.is_success() {
             let snippet = summarize_text(&v.to_string(), 160);
             log_api_call("POST", query, status.as_u16(), elapsed_ms, &snippet);
+            // #235：请求参数 = GraphQL query 文本（不含 PAT）。
+            self.emit_api(crate::db::ApiLogEntry::new(
+                "GRAPHQL",
+                &graphql_op_label(query),
+                status.as_u16() as i64,
+                false,
+                elapsed_ms as i64,
+                &summarize_text(query, API_LOG_REQ_MAX),
+                &summarize_text(&v.to_string(), API_LOG_RESP_MAX),
+            ));
             return Err(format!(
                 "GraphQL API 错误 ({}): {}",
                 status.as_u16(),
@@ -1073,10 +1228,29 @@ impl GitHubClient {
                     elapsed_ms,
                     &summarize_text(&errs.to_string(), 200),
                 );
+                // #235：HTTP 200 但带 errors 的 GraphQL 也算失败（不能只看状态码）。
+                self.emit_api(crate::db::ApiLogEntry::new(
+                    "GRAPHQL",
+                    &graphql_op_label(query),
+                    status.as_u16() as i64,
+                    false,
+                    elapsed_ms as i64,
+                    &summarize_text(query, API_LOG_REQ_MAX),
+                    &summarize_text(&errs.to_string(), API_LOG_RESP_MAX),
+                ));
                 return Err(format!("GraphQL 业务错误: {}", errs));
             }
         }
         log_api_call("POST", query, status.as_u16(), elapsed_ms, "");
+        self.emit_api(crate::db::ApiLogEntry::new(
+            "GRAPHQL",
+            &graphql_op_label(query),
+            status.as_u16() as i64,
+            true,
+            elapsed_ms as i64,
+            &summarize_text(query, API_LOG_REQ_MAX),
+            &summarize_text(&v.to_string(), API_LOG_RESP_MAX),
+        ));
         Ok(v)
     }
 
@@ -1159,19 +1333,41 @@ impl GitHubClient {
                         .collect()
                 })
                 .unwrap_or_default();
+            let elapsed_ms = start.elapsed().as_millis();
             eprintln!(
                 "[claim] GitHub 回应 {status}（{}ms），远端 assignees 已确认：{}",
-                start.elapsed().as_millis(),
+                elapsed_ms,
                 summarize_text(&format!("{names:?}"), 200)
             );
+            // #235：落盘请求（POST body + login）与返回（远端确认的 assignees）。
+            self.emit_api(crate::db::ApiLogEntry::new(
+                "POST",
+                &url_display_path(&url),
+                status as i64,
+                true,
+                elapsed_ms as i64,
+                &summarize_text(&format!("{body}\nlogin={login}"), API_LOG_REQ_MAX),
+                &summarize_text(&v.to_string(), API_LOG_RESP_MAX),
+            ));
             return Ok(names);
         }
         let body_text = resp.text().unwrap_or_default();
+        let elapsed_ms = start.elapsed().as_millis();
         eprintln!(
             "[claim] GitHub 回应 {status}（{}ms），失败：{}",
-            start.elapsed().as_millis(),
+            elapsed_ms,
             summarize_text(&body_text, 200)
         );
+        // #235：失败也落盘（请求照记，返回为错误体）。
+        self.emit_api(crate::db::ApiLogEntry::new(
+            "POST",
+            &url_display_path(&url),
+            status as i64,
+            false,
+            elapsed_ms as i64,
+            &summarize_text(&format!("{body}\nlogin={login}"), API_LOG_REQ_MAX),
+            &summarize_text(&body_text, API_LOG_RESP_MAX),
+        ));
         Err(Self::write_error("认领", status, &body_text))
     }
 
@@ -1373,6 +1569,40 @@ mod tests {
         assert_eq!(summarize_text("", 5), "");
     }
 
+    /// #235：URL → 展示 path（去 scheme / host / query）。
+    #[test]
+    fn url_display_path_strips_host_and_query() {
+        assert_eq!(
+            url_display_path("https://api.github.com/repos/acme/web/issues?per_page=100"),
+            "/repos/acme/web/issues"
+        );
+        assert_eq!(
+            url_display_path("https://api.github.com/graphql"),
+            "/graphql"
+        );
+        // 无 scheme 时按原串取 path。
+        assert_eq!(url_display_path("/user"), "/user");
+    }
+
+    /// #235：GraphQL 操作标签必须跳过变量声明块，否则会误取变量名。
+    #[test]
+    fn graphql_op_label_skips_variable_block() {
+        assert_eq!(
+            graphql_op_label(
+                r#"mutation { updateProjectV2ItemFieldValue(input: { projectId: "P" }) { projectV2Item { id } } }"#
+            ),
+            "updateProjectV2ItemFieldValue"
+        );
+        assert_eq!(
+            graphql_op_label(
+                "query($searchQuery: String!) { search(query: $searchQuery) { issueCount } }"
+            ),
+            "search"
+        );
+        // 无 query/mutation 前缀时取首个标识符。
+        assert_eq!(graphql_op_label("{ viewer { login } }"), "viewer");
+    }
+
     /// 隔离验证：不跑任何 issue 搜索，单独测 `fetch_prs` 能否在测试环境里正常拉到 PR。
     /// 用途：区分环境/rate-limit/网络三类根因。默认忽略，需时
     /// `cargo test --lib -- --ignored test_fetch_prs_isolated` 显式运行。
@@ -1430,6 +1660,8 @@ mod tests {
             "updated_at": "2026-09-04T10:00:00Z",
             "comments": 3,
             "repository_url": "https://api.github.com/repos/FoodsUp-Inc/pq-backend",
+            // #237：Search API 的 `user` 即 issue 创建人。
+            "user": {"login": "liushizhao2025", "id": 7},
             "assignees": [
                 {"login": "liushizhao2025", "id": 1},
                 {"login": "dingminggg", "id": 2}
@@ -1443,6 +1675,8 @@ mod tests {
         assert_eq!(t.url, "https://github.com/FoodsUp-Inc/pq-backend/issues/1237");
         assert_eq!(t.assignees, vec!["liushizhao2025", "dingminggg"]);
         assert_eq!(t.comments, 3);
+        // #237：创建人取自 user.login（注意 ≠ assignees[0]，两者是不同概念）。
+        assert_eq!(t.author, "liushizhao2025");
         assert!(!t.is_pr);
     }
 
@@ -1456,12 +1690,14 @@ mod tests {
             "updated_at": "2026-09-04T10:00:00Z",
             "repository_url": "https://api.github.com/repos/o/r",
             "pull_request": {"merged_at": null}
-            // 无 assignees / comments —— default 应生效
+            // 无 assignees / comments / user —— default 应生效
         });
         let t = RawTask::from_item(&item).expect("解析应成功");
         assert!(t.is_pr);
         assert!(t.assignees.is_empty());
         assert_eq!(t.comments, 0);
+        // #237：缺 user 字段不报错，创建人为空串（卡片不渲染该行）。
+        assert_eq!(t.author, "");
     }
 
     /// 回归：REST pulls 原始 item —— url 应取 html_url（网页链接），

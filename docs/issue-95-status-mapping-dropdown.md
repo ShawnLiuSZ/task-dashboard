@@ -13,7 +13,7 @@ Feedback（两轮）：
 
 ## 设计 / 方案
 
-关键事实：**读取该账号 Project V2 的 status 可选项的能力早已存在**——后端 `list_project_statuses(account_id)`（[commands.rs](app/src-tauri/src/commands.rs#L953-L958)）与前端 `api.listProjectStatuses`（[api.ts](app/src/api.ts#L96-L98)）、`ProjectStatus` 类型均已具备，只是没接入自定义列配置 UI。
+关键事实：**读取该账号 Project V2 的 status 可选项的能力早已存在**——后端 `list_project_statuses(account_id)`（[commands.rs](../app/src-tauri/src/commands.rs)）与前端 `api.listProjectStatuses`（[api.ts](../app/src/api.ts)）、`ProjectStatus` 类型均已具备，只是没接入自定义列配置 UI。
 
 本功能为**纯前端增强，后端匹配逻辑与存储零改动**：
 
@@ -22,7 +22,7 @@ Feedback（两轮）：
 
 ### 2) 自定义列编辑简化（去掉 colKey 概念）
 - **列标识 col_key 由系统自动生成**（`genColKey()` → `col_<ts36>_<rand>`），页面不再展示/要求输入 col_key。
-  - col_key 语义：`sync.rs` 在 custom 模式下把任务 status 写成 `resolve_column_from_gh_status` 返回的 `col_key`（[db.rs:1317](app/src-tauri/src/db.rs#L1317)），Board 用 `col.colKey` 分组渲染（[Board.tsx:143-160](app/src/components/Board.tsx#L143-L160)）。它必须唯一且稳定——**编辑沿用原 key（`startEditCol` 保留 `col.colKey`），仅新增时生成新 key**，保证已落库任务不漂移。
+  - col_key 语义：`sync.rs` 在 custom 模式下把任务 status 写成 `resolve_column_from_gh_status` 返回的 `col_key`（[db.rs](../app/src-tauri/src/db.rs)），Board 用 `col.colKey` 分组渲染（[Board.tsx](../app/src/components/Board.tsx)）。它必须唯一且稳定——**编辑沿用原 key（`startEditCol` 保留 `col.colKey`），仅新增时生成新 key**，保证已落库任务不漂移。
 - 用户只需：填**列显示名称** + **下选匹配的 Project status**。
 - **匹配的下拉多选（chips）+ 自由输入**：可选项来自该账号 `list_project_statuses`（去重）；点击 chips 选中/移除；自由输入透传非标准值（兼容未同步/自定义值）；打开既有列回显已配置值为 chips。
 - 保存仍写 `matchRules`（JSON 数组），`confirmEditCol` 对 `ruleChips` 去重 `JSON.stringify`——**向后兼容**既有手填配置（打开编辑回显为 chips）。

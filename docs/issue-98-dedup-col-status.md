@@ -10,7 +10,7 @@
 
 ## 设计 / 方案
 
-改动集中在 [SettingsPanel.tsx](file:///Users/liushizhao/dev/dashboard/app/src/components/SettingsPanel.tsx)（纯前端，后端存储逻辑零改动）：
+改动集中在 [SettingsPanel.tsx](../app/src/components/SettingsPanel.tsx)（纯前端，后端存储逻辑零改动）：
 
 1. **新增解析辅助** `parseMatchRules`：把列的 `matchRules`（`JSON` 数组或旧版逗号分隔）解析成去重后的 status 字符串数组，供去重判定与既有列表展示复用。
 

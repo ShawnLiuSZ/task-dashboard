@@ -15,6 +15,7 @@ function mkTask(projectStatus: string): Task {
     status: "todo",
     projectStatus,
     assignees: "",
+    author: "",
     mentioned: false,
     latestCommentUrl: "",
     prNumber: 0,

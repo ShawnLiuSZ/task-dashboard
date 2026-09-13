@@ -21,27 +21,27 @@
 - key：`board_mode:<account_id>`
 - value：`status` / `project` / `custom`，未配置默认 `project`
 
-新增 db 层（[db.rs](file:///Users/liushizhao/dev/dashboard/app/src-tauri/src/db.rs)）：
+新增 db 层（[db.rs](../app/src-tauri/src/db.rs)）：
 - `account_board_mode_key(id)` / `get_account_board_mode(conn, id)`（空则 `project`）/ `is_valid_board_mode(mode)` / `set_account_board_mode(...)`（校验：非法值拒绝写入）
 - `Account` 结构体新增 `board_mode` 字段，`list_accounts` 逐账号填充（前端一并拿到每账号模式）。
 
 ### 同步按账号取模式
 
-[sync.rs](file:///Users/liushizhao/dev/dashboard/app/src-tauri/src/sync.rs)：`sync::run` 原来读全局 `meta.board_mode` 一次并透传给所有账号；改为在每个账号循环里读 `get_account_board_mode(conn, account.id)`，确保 `custom` 映射（`col_key` 写入）只对「该账号自己的模式为 custom」生效。
+[sync.rs](../app/src-tauri/src/sync.rs)：`sync::run` 原来读全局 `meta.board_mode` 一次并透传给所有账号；改为在每个账号循环里读 `get_account_board_mode(conn, account.id)`，确保 `custom` 映射（`col_key` 写入）只对「该账号自己的模式为 custom」生效。
 
 ### API / 命令
 
 - **移除** 全局 `set_board_mode` 命令及 `Settings.board_mode` 字段。
-- **新增** `set_account_board_mode(account_id, mode)`：[commands.rs](file:///Users/liushizhao/dev/dashboard/app/src-tauri/src/commands.rs) 先校验账号存在，再 `db::set_account_board_mode`（含合法值校验）。注册到 `invoke_handler`（[lib.rs](file:///Users/liushizhao/dev/dashboard/app/src-tauri/src/lib.rs)）。
+- **新增** `set_account_board_mode(account_id, mode)`：[commands.rs](../app/src-tauri/src/commands.rs) 先校验账号存在，再 `db::set_account_board_mode`（含合法值校验）。注册到 `invoke_handler`（[lib.rs](../app/src-tauri/src/lib.rs)）。
 - `get_settings` 不再返回全局 boardMode；前端从 `accounts[].boardMode` 取激活账号模式。
 
 ### 前端
 
-- 顶栏看板列切换下拉**移除**（[App.tsx](file:///Users/liushizhao/dev/dashboard/app/src/App.tsx)）。
+- 顶栏看板列切换下拉**移除**（[App.tsx](../app/src/App.tsx)）。
 - 有效展示方式 = 激活账号的 `boardMode`，缺失/聚合视图回退 `project`：
   `accountMap.get(activeAccountId)?.boardMode ?? "project"`。
 - 设置面板「自定义列」tab 顶部新增「看板列展示方式」：账号下拉 + 模式下拉，切换即 `set_account_board_mode` 落库；关闭设置面板时 App 重载 settings，看板即时生效。
-- 自定义列视图的任务卡片右上角显示 `project.status` 徽章：[TaskCard.tsx](file:///Users/liushizhao/dev/dashboard/app/src/components/TaskCard.tsx) 新增 `showGhStatus` 属性（仅 Board custom 分支传入）；按 `gh_status` 稳定哈希 → 复用 `repo-N` 20 色系，同状态同色。
+- 自定义列视图的任务卡片右上角显示 `project.status` 徽章：[TaskCard.tsx](../app/src/components/TaskCard.tsx) 新增 `showGhStatus` 属性（仅 Board custom 分支传入）；按 `gh_status` 稳定哈希 → 复用 `repo-N` 20 色系，同状态同色。
 
 ### 关键权衡
 

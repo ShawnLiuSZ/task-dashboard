@@ -29,3 +29,4 @@
 
 - Issue：[#228](https://github.com/ShawnLiuSZ/task-dashboard/issues/228)
 - 分支：`feature/issue-228-api-logging`
+- 后续：[#235 应用内 API 调用明细](./issue-235-in-app-api-log.md) —— 本文的埋点只到 stderr（默认静默），#235 补上「落盘 `api_logs` + 应用内日志面板可视化」，即本文「数据 / Schema 变更」中预判的「落盘日志表如需 in-app 查询再另起 issue」。

@@ -173,7 +173,7 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — 设计要点（多源拉取、归属三分、四态维护、PR 关联）与 GitHub Actions 在线打包说明
 
-- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → v0.3.15）
+- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.5.0）
 
 - [`docs/v0.3.15-pat-auth.md`](./docs/v0.3.15-pat-auth.md) — v0.3.15 PAT 认证与 visual polish 设计文档（gh 替换、卡片配色、多账号规划）
 
@@ -181,5 +181,19 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/issue-181-auto-refresh.md`](./docs/issue-181-auto-refresh.md) — 外部写入（MCP）后 App 任务界面自动刷新：聚焦/轮询/指纹跳过 + `tasks-changed` 事件
 
-> 版本 v0.3.54 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-09
+- [`docs/release-backmerge-policy.md`](./docs/release-backmerge-policy.md) — **发布回合策略**：release 合入 `main` 后必须把 `main` 回合 `develop`，避免版本号与 CHANGELOG 断档
+
+- [`docs/issue-235-in-app-api-log.md`](./docs/issue-235-in-app-api-log.md) — **应用内 API 调用明细**：`api_logs` 新表 + 可选 sink 收集器，同步/认领/状态写回的请求与返回参数可在日志面板展开查看（承接 #228 的 stderr 埋点）
+
+- [`docs/issue-237-card-creator-row.md`](./docs/issue-237-card-creator-row.md) — **看板卡片结构调整**：移除顶部账号徽章行、新增「创建人」行（`tasks.author`）、加大 `repo #编号` 字号；含 v2 重建后必须补列的迁移教训
+
+- [`docs/issue-239-doc-integrity.md`](./docs/issue-239-doc-integrity.md) — **文档完整性修复**：断链 / 不可移植 `file://` 路径 / 失效行号锚点 + v0.3.50 CHANGELOG 补录；含 `scripts/check-doc-links.py` 防回归
+
+- [`docs/perf-audit-optimization.md`](./docs/perf-audit-optimization.md) — **性能 / 安全优化批次索引**：`P0-1`…`P2-2` 编号到 issue 与落地文档的映射（`#143`–`#150`，随 v0.3.50 发布）
+
+- [`docs/issue-118-expand-platform-support.md`](./docs/issue-118-expand-platform-support.md) — **扩展平台支持**：release 矩阵显式声明 `target`，新增 macOS 双架构与 Windows ARM64 构建
+
+- [`docs/issue-119-expand-release-matrix.md`](./docs/issue-119-expand-release-matrix.md) — **扩展 Release 打包矩阵**：Linux arm64、rpm、Windows msi；并记录 `zip` 作为 Tauri 2 bundle 类型**被当日回滚**的教训
+
+> 版本 v0.5.0 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-13
 

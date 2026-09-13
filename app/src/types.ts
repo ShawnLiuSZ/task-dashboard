@@ -51,6 +51,8 @@ export interface Task {
   status: StatusKey;
   projectStatus: string;
   assignees: string;
+  /** #237：issue 创建人（GitHub author login，不含 @）；空表示未知。 */
+  author: string;
   mentioned: boolean;
   latestCommentUrl: string;
   prNumber: number;
@@ -146,6 +148,28 @@ export interface CheckUpdate {
   error: string;
 }
 
+/** #231：应用内更新检查结果（走 tauri-plugin-updater 通道，不依赖 GitHub API）。 */
+export interface AppUpdate {
+  /** 是否有可一键安装的更新。 */
+  available: boolean;
+  /** 远端最新版本号（无更新时为空）。 */
+  version: string;
+  /** 当前版本号。 */
+  current: string;
+  /** 更新说明（release notes，可能为空）。 */
+  notes: string;
+  /** 非空表示检查失败，前端据此回退到「前往下载」。 */
+  error: string;
+}
+
+/** #231：更新下载进度事件负载。 */
+export interface UpdateProgress {
+  /** 已下载字节数。 */
+  downloaded: number;
+  /** 总字节数（服务器未提供 Content-Length 时为 null）。 */
+  total: number | null;
+}
+
 /** v0.3.20+：Label→Status 映射。 */
 export interface LabelMapping {
   id: number;
@@ -211,6 +235,24 @@ export interface SyncLog {
   pruned: number;
   failedSources: string;
   errorMessage: string;
+  createdAt: number;
+}
+
+/** #235：一次 API 调用的请求/返回参数明细（同步 / 认领 / 状态写回）。 */
+export interface ApiLog {
+  id: number;
+  /** `sync` | `claim` | `status` */
+  kind: string;
+  accountId: number;
+  /** 关联的 sync_logs.id；独立写回操作为 0。 */
+  syncLogId: number;
+  method: string;
+  target: string;
+  status: number;
+  ok: boolean;
+  elapsedMs: number;
+  request: string;
+  response: string;
   createdAt: number;
 }
 

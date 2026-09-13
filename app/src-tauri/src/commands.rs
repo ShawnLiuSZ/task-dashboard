@@ -21,6 +21,8 @@ pub struct Task {
     pub status: String,
     pub project_status: String,
     pub assignees: String,
+    /// #237：issue 创建人（GitHub author login，不含 @）；空表示未知。
+    pub author: String,
     pub mentioned: bool,
     pub latest_comment_url: String,
     pub pr_number: i64,
@@ -93,7 +95,7 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
             format!(
                 "SELECT issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status,
                         assignees, mentioned, latest_comment_url, pr_number, pr_url, branch,
-                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch
+                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch, author
                  FROM tasks WHERE ownership = ?{where_extra}
                  ORDER BY candidate_done ASC, status ASC, updated_at DESC"
             ),
@@ -103,7 +105,7 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
             format!(
                 "SELECT issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status,
                         assignees, mentioned, latest_comment_url, pr_number, pr_url, branch,
-                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch
+                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch, author
                  FROM tasks WHERE 1=1{where_extra}
                  ORDER BY candidate_done ASC, status ASC, updated_at DESC"
             ),
@@ -125,6 +127,7 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
             status: r.get(8)?,
             project_status: r.get(9)?,
             assignees: r.get(10)?,
+            author: r.get(24)?,
             mentioned: r.get::<_, i64>(11).unwrap_or(0) != 0,
             latest_comment_url: r.get(12)?,
             pr_number: r.get(13)?,
@@ -314,12 +317,28 @@ pub async fn claim_issue(
     }
     // 网络写放 blocking 池（与 add_account 同款，避免占住主线程假死）。
     eprintln!("[claim] 开始认领 {key}（repo={owner}/{repo}#{number}）");
-    let remote_assignees = tauri::async_runtime::spawn_blocking(move || {
-        let client = crate::github::GitHubClient::new(pat, login.clone(), String::new())?;
-        client.add_assignee(&owner, &repo, number, &login)
+    // #235：blocking 池内建客户端并挂采集槽，把 sink 随结果一起带回来落盘。
+    let (call_result, api_calls) = tauri::async_runtime::spawn_blocking(move || {
+        let (client, sink) =
+            crate::github::GitHubClient::new_with_sink(pat, login.clone(), String::new())?;
+        let r = client.add_assignee(&owner, &repo, number, &login);
+        Ok::<_, String>((r, crate::github::drain_api_log(&sink)))
     })
     .await
     .map_err(|e| format!("认领任务异常: {e}"))??;
+    // #235：无论成败，先落盘本次请求/返回参数（kind=claim，不关联 sync_log）。
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let _ = crate::db::insert_api_logs(
+            &conn,
+            "claim",
+            account_id,
+            0,
+            crate::sync::now_secs(),
+            &api_calls,
+        );
+    }
+    let remote_assignees = call_result?;
     // 落本地：ownership→assigned，assignees 与远端合并去重。
     {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
@@ -395,21 +414,36 @@ pub async fn set_project_status(
         if pat.is_empty() {
             return Err("账号未配置 PAT".to_string());
         }
-        let client =
-            crate::github::GitHubClient::new(pat, String::new(), org.clone())?;
-        // 解析写回目标 + 选项 id；本地缺失即时补拉后重试。
-        let (target, option_id) =
-            resolve_or_refresh(&conn, &client, account_id, &org, &key, &status)?;
-        eprintln!(
-            "[proj-write] 开始写回 {key} → {status}（project={})",
-            target.project_name
+        // #235：挂采集槽 —— resolve 补拉的读调用与 mutation 都会被记录。
+        let (client, sink) =
+            crate::github::GitHubClient::new_with_sink(pat, String::new(), org.clone())?;
+        // 把「解析目标 + 写回」收进一个可失败表达式，结束后统一 drain，
+        // 这样失败路径（`?` 提前返回）也能留下请求/返回明细。
+        let write_result = (|| -> Result<(), String> {
+            // 解析写回目标 + 选项 id；本地缺失即时补拉后重试。
+            let (target, option_id) =
+                resolve_or_refresh(&conn, &client, account_id, &org, &key, &status)?;
+            eprintln!(
+                "[proj-write] 开始写回 {key} → {status}（project={})",
+                target.project_name
+            );
+            client.set_project_item_status(
+                &target.project_github_id,
+                &target.item_id,
+                &target.field_id,
+                &option_id,
+            )
+        })();
+        // #235：无论成败先落盘本次请求/返回参数（kind=status，不关联 sync_log）。
+        let _ = crate::db::insert_api_logs(
+            &conn,
+            "status",
+            account_id,
+            0,
+            crate::sync::now_secs(),
+            &crate::github::drain_api_log(&sink),
         );
-        client.set_project_item_status(
-            &target.project_github_id,
-            &target.item_id,
-            &target.field_id,
-            &option_id,
-        )?;
+        write_result?;
         // 落本地：project_status=目标名；status 走与同步同一决策（显式 label 优先等）。
         let board_mode = crate::db::get_account_board_mode(&conn, account_id);
         let label_rules = crate::db::load_label_rules(&conn).unwrap_or_default();
@@ -1137,6 +1171,120 @@ pub async fn check_latest_release() -> Result<CheckUpdate, String> {
 }
 
 // ============================================================================
+// #231：应用内自动更新（tauri-plugin-updater）
+//
+// 核心收益：更新包由应用自身进程下载（reqwest + rustls），**不经过浏览器下载通道**，
+// 因此产物不会被打上 `com.apple.quarantine`。Gatekeeper 只在存在隔离标记时介入评估，
+// 所以应用内更新全程不会触发「仍需在隐私与安全性中放行」的提示。
+// ============================================================================
+
+/// 应用内更新检查结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUpdate {
+    /// 是否有可安装的更新。
+    pub available: bool,
+    /// 远端最新版本号（无更新时为空）。
+    pub version: String,
+    /// 当前版本号。
+    pub current: String,
+    /// 更新说明（release notes，可能为空）。
+    pub notes: String,
+    /// 非空表示检查失败（未配置签名公钥 / 网络 / 解析等），前端据此回退到跳转下载。
+    pub error: String,
+}
+
+/// 下载进度事件名。
+pub const UPDATE_PROGRESS_EVENT: &str = "taskboard://update-progress";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateProgress {
+    downloaded: u64,
+    total: Option<u64>,
+}
+
+/// #231：经 Tauri updater 通道检查更新（读取 Releases 上的 `latest.json`）。
+///
+/// 与 `check_latest_release` 的分工：本命令返回**可一键安装**的更新；
+/// `check_latest_release` 是纯版本号对比，用于 updater 不可用时的兜底
+/// （引导用户跳转浏览器手动下载）。
+///
+/// 失败不抛错，而是填进 `error` 字段，便于前端静默回退而不打断用户。
+#[tauri::command]
+pub async fn check_app_update(app: AppHandle) -> Result<AppUpdate, String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let current = env!("CARGO_PKG_VERSION").to_string();
+
+    let no_update = |error: String| AppUpdate {
+        available: false,
+        version: String::new(),
+        current: current.clone(),
+        notes: String::new(),
+        error,
+    };
+
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(e) => return Ok(no_update(format!("初始化更新器失败：{e}"))),
+    };
+
+    match updater.check().await {
+        Ok(Some(u)) => Ok(AppUpdate {
+            available: true,
+            version: u.version.clone(),
+            current,
+            notes: u.body.clone().unwrap_or_default(),
+            error: String::new(),
+        }),
+        Ok(None) => Ok(no_update(String::new())),
+        Err(e) => Ok(no_update(format!("检查更新失败：{e}"))),
+    }
+}
+
+/// #231：下载并安装更新。完成后由前端调用 `restart_app` 重启以生效。
+///
+/// 下载阶段全程由应用进程发起，**不写 `com.apple.quarantine`** —— 这是免除 Gatekeeper
+/// 重复放行的关键所在。
+#[tauri::command]
+pub async fn install_app_update(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = app
+        .updater()
+        .map_err(|e| format!("初始化更新器失败：{e}"))?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| format!("检查更新失败：{e}"))?
+        .ok_or_else(|| "当前已是最新版本".to_string())?;
+
+    let handle = app.clone();
+    let mut downloaded: u64 = 0;
+    update
+        .download_and_install(
+            move |chunk, total| {
+                downloaded += chunk as u64;
+                let _ = handle.emit(
+                    UPDATE_PROGRESS_EVENT,
+                    UpdateProgress { downloaded, total },
+                );
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| format!("下载或安装更新失败：{e}"))?;
+    Ok(())
+}
+
+/// #231：重启应用，使已安装的更新生效。
+#[tauri::command]
+pub fn restart_app(app: AppHandle) {
+    app.restart();
+}
+
+// ============================================================================
 // v0.3.20+：Label→Status 映射管理
 // ============================================================================
 
@@ -1302,6 +1450,37 @@ pub fn prune_sync_logs(state: State<'_, AppState>) -> Result<usize, String> {
 pub fn clear_sync_logs(state: State<'_, AppState>) -> Result<usize, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     crate::db::clear_sync_logs(&conn)
+}
+
+// ============================================================================
+// #235：API 调用明细（同步 / 认领 / 状态写回的请求与返回参数）
+// ============================================================================
+
+/// 列出 API 调用明细（最近 N 条），按 created_at 降序。
+#[tauri::command]
+pub fn list_api_logs(
+    state: State<'_, AppState>,
+    limit: Option<i64>,
+) -> Result<Vec<crate::db::ApiLog>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    // 明细行更长（含请求/返回），上限比 sync_logs 保守。
+    let limit = limit.unwrap_or(300).max(1).min(1000);
+    crate::db::list_api_logs(&conn, limit)
+}
+
+/// 清理过期（7 天）+ 超条数上限的 API 明细。
+#[tauri::command]
+pub fn prune_api_logs(state: State<'_, AppState>) -> Result<usize, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let now = crate::sync::now_secs();
+    crate::db::prune_api_logs(&conn, now, crate::db::API_LOG_MAX_ROWS)
+}
+
+/// 清空全部 API 明细（不可恢复）。
+#[tauri::command]
+pub fn clear_api_logs(state: State<'_, AppState>) -> Result<usize, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    crate::db::clear_api_logs(&conn)
 }
 
 // ============================================================================
