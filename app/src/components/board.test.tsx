@@ -31,6 +31,7 @@ function mkTask(partial: Partial<Task> & { issueKey: string }): Task {
     status: "todo",
     projectStatus: "",
     assignees: "",
+    author: "",
     mentioned: false,
     latestCommentUrl: "",
     prNumber: 0,
@@ -234,5 +235,47 @@ describe("TaskCard 认领按钮（#214）", () => {
       </I18nProvider>,
     );
     expect(html).not.toContain("claim-btn");
+  });
+});
+
+describe("TaskCard 创建人行与顶部账号行（#237）", () => {
+  const renderCard = (partial: Partial<Task> & { issueKey: string }) =>
+    renderToStaticMarkup(
+      <I18nProvider>
+        <TaskCard task={mkTask(partial)} active={false} onSelectKey={noop} />
+      </I18nProvider>,
+    );
+
+  it("有创建人时渲染「创建人」行，并位于「分配人」行之前", () => {
+    const html = renderCard({ issueKey: "a", author: "alice", assignees: "bob" });
+    expect(html).toContain("creator-row");
+    expect(html).toContain("@alice");
+    expect(html).toContain("创建人");
+    // DOM 顺序：创建人 必须排在 分配人 之前
+    expect(html.indexOf("创建人")).toBeGreaterThan(-1);
+    expect(html.indexOf("创建人")).toBeLessThan(html.indexOf("分配人"));
+  });
+
+  it("创建人为空时不渲染该行（不留空标签行）", () => {
+    const html = renderCard({ issueKey: "a", author: "" });
+    expect(html).not.toContain("creator-row");
+    expect(html).not.toContain("创建人");
+  });
+
+  it("创建人为纯空白同样不渲染", () => {
+    expect(renderCard({ issueKey: "a", author: "   " })).not.toContain("creator-row");
+  });
+
+  it("不再渲染顶部归属账号徽章行", () => {
+    const html = renderCard({ issueKey: "a", author: "alice" });
+    expect(html).not.toContain("account-row-top");
+    expect(html).not.toContain("account-badge");
+  });
+
+  it("repo#编号 行仍完整渲染（放大字号不影响结构）", () => {
+    const html = renderCard({ issueKey: "a", repo: "fad-backend", number: 1170 });
+    expect(html).toContain("fad-backend");
+    expect(html).toContain("#1170");
+    expect(html).toContain("card-top");
   });
 });

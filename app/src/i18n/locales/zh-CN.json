@@ -88,7 +88,7 @@
   "hint.doing": "正在处理，可记录中断会话",
   "hint.processed": "做完了，待确认收尾",
   "hint.done": "确认完成，归档",
-  "card.accountTitle": "账号：{label}",
+  "card.creatorLabel": "创建人",
   "card.ghStatusTitle": "GitHub Project 状态",
   "card.ghState.open": "开启",
   "card.ghState.closed": "已关闭",

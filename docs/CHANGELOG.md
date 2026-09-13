@@ -13,6 +13,14 @@
   - **schema 变更**：新增 `api_logs` 表 + `idx_api_logs_created` / `idx_api_logs_kind`（新表，`CREATE TABLE IF NOT EXISTS` 幂等，老库启动自动建表，无 ALTER 迁移）。
   - **验证**：`cargo test --lib` 80 passed（+5 例）、`tsc --noEmit` 0 error、`npm run build` ✅、`npm test` 10 文件 79 例（`sync-logs.test.ts` 7→32）、`i18n:check` 中英各 302 key（+18）、`check-mcp-columns.py` 24 列一致。
 
+- **未发布（Unreleased）— 看板卡片结构调整（#237）**
+
+  - **#237 移除账号行 / 新增创建人行 / 加大 repo#编号 字号**：卡片第一行的「归属账号」徽章（`@liushizhao2025`）整行移除——单账号视图下每张卡片都一样，无信息量；改为展示 issue **创建人**，位置在「分配人」**上一行**；`repo #编号`（如 `fad-backend #1198`）行字号 11px → **13px**，成为扫视整列时的视觉锚点。详见 [docs/issue-237-card-creator-row.md](./issue-237-card-creator-row.md)。
+  - **实现要点**：`tasks` 表新增 `author` 列（Search API `user.login` + GraphQL `author { login }` 两路取值，缺失即空串不阻断同步）；前端创建人空/纯空白时**不渲染该行**，不留空标签行；`accountLabel` / `accounts` 死 prop 链（TaskCard → Board → App）一并清理，`card.accountTitle` i18n key 删除、新增 `card.creatorLabel`。
+  - **迁移要点**：`author` 的 `ALTER TABLE` 必须放在 `migrate_tasks_v2_rebuild` **之后**的热路径——v2 物理重建的列白名单是写死的，不含后增列，放前面会被重建丢掉（#175 同款陷阱）。
+  - **schema 变更**：`tasks` 新增 `author TEXT NOT NULL DEFAULT ''`（热路径幂等 ALTER，覆盖全部 `user_version`）。
+  - **验证**：`cargo test --lib` 80 passed、`cargo test --test db_test` 21 passed（+2 例，且已实测在缺修复时会失败）、`tsc --noEmit` 0 error、`npm run build` ✅、`npm test` 10 文件 84 例（+5）、`i18n:check` 中英各 302 key、`check-mcp-columns.py` 24 列一致。
+
 - **v0.4.0（2026-09-12）— GitHub 写回反转（#214 认领 + #215 状态）+ 记事本宽度 + 详情重做**
 
   - **写回反转（产品约束变更）**：`AGENTS.md §2.1` / `PRD.md` 从"只读 GitHub"放宽为"默认读 + 用户确认的显式写回"；同步路径本身仍只读，MCP 工具保持只写本地。PAT 需配套升级写权限（classic `repo` + `project`；Device Flow scope 已补 `project`，老 token 需重授权）。

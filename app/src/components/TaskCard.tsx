@@ -10,8 +10,6 @@ interface Props {
   /** v0.3.49 (#145)：稳定回调（父组件直接传 setState 类稳定引用），卡片内再绑定 key，
       配合 memo 避免每轮重渲染。 */
   onSelectKey: (key: string) => void;
-  /** v0.3.16+：账号标签（来自 accounts.label）。undefined/空时不显示徽章。 */
-  accountLabel?: string;
   /** v0.3.22+：仓库颜色索引（0-19），用于仓库名标签配色。 */
   repoIndex?: number;
   /** v0.3.43+：自定义列视图下，卡片右上角显示 project.status（gh_status）徽章。 */
@@ -34,12 +32,15 @@ function openLink(url: string, e: MouseEvent) {
 
 // v0.3.49 (#145+#150)：memo 包裹（props 全为稳定引用/原始值时跳过重渲染）
 // + 键盘可达（role=button/tabIndex/Enter-Space）+ 可访问名称。
-function TaskCard({ task, accountLabel, active, onSelectKey, repoIndex, showGhStatus }: Props) {
+function TaskCard({ task, active, onSelectKey, repoIndex, showGhStatus }: Props) {
   const t = useT();
   const mine = task.ownership === "assigned";
   const assigneeNames = task.assignees
     ? task.assignees.split(",").filter(Boolean)
     : [];
+  /** #237：issue 创建人；空 / 纯空白一律不渲染该行（老数据同步前不留空标签行）。
+      用 `|| ""` 兜底：该字段是与前端同批发布的新列，防旧后端返回缺字段时整板崩掉。 */
+  const creator = (task.author || "").trim();
   // #214：认领确认框与防重提交（成功靠后端 TASKS_CHANGED_EVENT 触发 App 重查）。
   const [confirmClaim, setConfirmClaim] = useState(false);
   const [claiming, setClaiming] = useState(false);
@@ -61,14 +62,7 @@ function TaskCard({ task, accountLabel, active, onSelectKey, repoIndex, showGhSt
         }
       }}
     >
-      {/* v0.3.17+：账号徽章独占卡片最顶行（repo#编号 行的上一行）。 */}
-      {accountLabel && (
-        <div className="account-row-top">
-          <span className="account-badge" title={t("card.accountTitle", { label: accountLabel ?? "" })}>
-            @{accountLabel}
-          </span>
-        </div>
-      )}
+      {/* #237：移除原「归属账号」徽章行（单账号视图下每张卡片都一样，无信息量）。 */}
 
       <div className="card-top">
         <span
@@ -100,6 +94,19 @@ function TaskCard({ task, accountLabel, active, onSelectKey, repoIndex, showGhSt
       </div>
 
       <p className="card-title">{task.title}</p>
+
+      {/* #237：创建人（issue author），位于「分配人」上一行。
+          未知时整行不渲染——老数据未同步前不应出现空标签行。 */}
+      {creator !== "" && (
+        <div className="meta-row creator-row">
+          <span className="assignee-info">
+            <span className="assignee-label">{t("card.creatorLabel")}</span>
+            <span className="assignee-names">
+              <span className="assignee-name">@{creator}</span>
+            </span>
+          </span>
+        </div>
+      )}
 
       {/* 时间上方一行：分配人 / @我 / 无人认领；分支不再展示在卡片（仅在详情中显示）。 */}
       <div className="meta-row">

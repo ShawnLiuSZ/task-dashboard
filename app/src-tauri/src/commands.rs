@@ -21,6 +21,8 @@ pub struct Task {
     pub status: String,
     pub project_status: String,
     pub assignees: String,
+    /// #237：issue 创建人（GitHub author login，不含 @）；空表示未知。
+    pub author: String,
     pub mentioned: bool,
     pub latest_comment_url: String,
     pub pr_number: i64,
@@ -93,7 +95,7 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
             format!(
                 "SELECT issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status,
                         assignees, mentioned, latest_comment_url, pr_number, pr_url, branch,
-                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch
+                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch, author
                  FROM tasks WHERE ownership = ?{where_extra}
                  ORDER BY candidate_done ASC, status ASC, updated_at DESC"
             ),
@@ -103,7 +105,7 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
             format!(
                 "SELECT issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status,
                         assignees, mentioned, latest_comment_url, pr_number, pr_url, branch,
-                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch
+                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch, author
                  FROM tasks WHERE 1=1{where_extra}
                  ORDER BY candidate_done ASC, status ASC, updated_at DESC"
             ),
@@ -125,6 +127,7 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
             status: r.get(8)?,
             project_status: r.get(9)?,
             assignees: r.get(10)?,
+            author: r.get(24)?,
             mentioned: r.get::<_, i64>(11).unwrap_or(0) != 0,
             latest_comment_url: r.get(12)?,
             pr_number: r.get(13)?,

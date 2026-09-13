@@ -51,6 +51,8 @@ export interface Task {
   status: StatusKey;
   projectStatus: string;
   assignees: string;
+  /** #237：issue 创建人（GitHub author login，不含 @）；空表示未知。 */
+  author: string;
   mentioned: boolean;
   latestCommentUrl: string;
   prNumber: number;

@@ -450,10 +450,11 @@ body {
 }
 
 .repo {
-  font-size: 11px;
+  /* #237：repo#编号 是识别任务最关键的锚点，字号 11px → 13px 以突出扫视。 */
+  font-size: 13px;
   color: var(--text-2);
   background: var(--surface-2);
-  padding: 1px 5px;
+  padding: 1px 6px;
   border-radius: 4px;
 }
 
@@ -480,7 +481,8 @@ body {
 .repo-19 { background: #fefce8; color: #a16207; }
 
 .num {
-  font-size: 11px;
+  /* #237：与 .repo 同步放大，让「repo #编号」作为一个视觉单元整体突出。 */
+  font-size: 13px;
   color: var(--text-3);
 }
 
@@ -590,15 +592,8 @@ body {
 
 /* v0.3.49 (#150)：.gh-status-row 已无引用（状态徽章回到 card-top），死码删除。 */
 
-/* v0.3.17+：账号徽章独占卡片最顶行。 */
-.account-row-top {
-  display: flex;
-  margin-bottom: 4px;
-}
-
-.account-row-top .account-badge {
-  margin-left: 0;
-}
+/* #237：原「账号徽章独占卡片最顶行」已删除（.account-row-top / .account-badge）。
+   单账号视图下每张卡片的账号标签都相同，无信息量；改由「创建人」行承载卡片元信息。 */
 
 .own {
   font-size: 10px;
@@ -627,17 +622,6 @@ body {
   color: #e23b3b;
 }
 
-/* v0.3.16+：账号徽章（卡片顶部，按归属显示）。 */
-.account-badge {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: #efe7ff;
-  color: #6a4cbf;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
 .mention-badge {
   font-size: 10px;
   padding: 1px 6px;
@@ -655,6 +639,12 @@ body {
   flex-wrap: wrap;
   margin-top: 6px;
   font-size: 11px;
+}
+
+/* #237：创建人行紧贴在「分配人」上一行，两行应读作一对，
+   故与标题保持 6px 间距，而与紧随其后的分配人行只留 2px。 */
+.creator-row + .meta-row {
+  margin-top: 2px;
 }
 
 .unassigned-tag {

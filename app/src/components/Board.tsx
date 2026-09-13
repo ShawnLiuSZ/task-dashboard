@@ -1,5 +1,5 @@
 import { memo, useMemo } from "react";
-import { COLUMNS, type Account, type AccountColumn, type ProjectStatus, type StatusKey, type Task, type BoardMode } from "../types";
+import { COLUMNS, type AccountColumn, type ProjectStatus, type StatusKey, type Task, type BoardMode } from "../types";
 import { useT } from "../i18n";
 import TaskCard from "./TaskCard";
 
@@ -7,8 +7,6 @@ interface Props {
   tasks: Task[];
   selected: string | null;
   onSelect: (key: string) => void;
-  /** v0.3.16+：账号列表（按 id），用于在卡片上显示账号徽章；空 Map 时不显示徽章。 */
-  accounts?: Map<number, Account>;
   /** v0.3.21+：看板列模式。status=四态列，project=GitHub Project Status 列。 */
   boardMode?: BoardMode;
   /** v0.3.22+：项目 Status 选项（来自 project_statuses 表，用于列排序）。 */
@@ -114,7 +112,6 @@ function Board({
   tasks,
   selected,
   onSelect,
-  accounts,
   boardMode = "project",
   projectStatuses,
   accountColumns,
@@ -169,7 +166,6 @@ function Board({
   }, [tasks]);
 
   const cardProps = (task: Task) => ({
-    accountLabel: accounts?.get(task.accountId)?.label,
     repoIndex: repoIndexMap.get(task.repo) ?? 0,
   });
 

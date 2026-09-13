@@ -592,3 +592,62 @@ fn open_db_backfills_work_branch_on_v2_db_without_it() {
         .unwrap();
     assert_eq!(n, 1);
 }
+
+/// 判断 tasks 表是否有某列。
+fn has_task_col(conn: &Connection, col: &str) -> bool {
+    conn.prepare("SELECT 1 FROM pragma_table_info('tasks') WHERE name=?1")
+        .unwrap()
+        .exists([col])
+        .unwrap()
+}
+
+#[test]
+fn open_db_backfills_author_on_v2_db_without_it() {
+    // #237 回归（与 #175 同款陷阱）：author 的 ALTER 若只写在 migrate_legacy_alters
+    // （仅 user_version<1 触发），对 user_version=2 的库永不补列。热路径幂等 ALTER 必须兜住。
+    let dir = tempdir();
+    let path = dir.join("taskboard.db");
+    db::open_db(&path).unwrap(); // 正常建库（含 author），user_version 置为 2
+
+    // 模拟 #237 之前的老库：把 author 列摘掉。
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute("ALTER TABLE tasks DROP COLUMN author", [])
+            .expect("前置：应能移除 author 列");
+        assert!(!has_task_col(&conn, "author"), "前置：author 列应已不存在");
+    }
+
+    // 再次 open_db：热路径必须幂等补回 author。
+    let conn = db::open_db(&path).unwrap();
+    assert!(has_task_col(&conn, "author"), "#237 修复后：author 列应被热路径补齐");
+}
+
+#[test]
+fn migrate_v2_rebuild_keeps_author_column() {
+    // #237 关键回归：v2 物理重建的 `tasks_new` 定义 + INSERT..SELECT 是**写死的列白名单**，
+    // 不含后来新增的列。若 author 的 ALTER 放在重建之前（或只写在 migrate_legacy_alters），
+    // 重建会把该列丢掉 → SELECT 一查就 `no such column`。
+    // 本用例走真实的重建路径（legacy `key` 布局 + user_version=0），断言重建后 author 仍在。
+    let dir = tempdir();
+    let path = dir.join("taskboard.db");
+    legacy_tasks_db(&path); // 旧 key 布局，无 author
+
+    let conn = db::open_db(&path).unwrap(); // 触发 v2 物理重建
+    assert!(
+        has_task_col(&conn, "author"),
+        "v2 重建后 author 列必须仍存在（否则重建白名单把它丢了）"
+    );
+
+    // 重建后写入 author 应可被读回（列存在且类型/默认值正确）。
+    conn.execute(
+        "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
+                            ownership, status, synced_at, account_id, author)
+         VALUES ('o/r#237','o','r',237,'t','u','open','assigned','todo',1,1,'alice');",
+        [],
+    )
+    .unwrap();
+    let a: String = conn
+        .query_row("SELECT author FROM tasks WHERE issue_key='o/r#237'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(a, "alice");
+}

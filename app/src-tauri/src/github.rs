@@ -38,6 +38,9 @@ pub struct RawTask {
     pub assignees: Vec<String>,
     #[serde(default)]
     pub labels: Vec<String>,
+    /// #237：issue 创建人（GitHub `user.login`，不含 @）。取不到时为空串。
+    #[serde(default)]
+    pub author: String,
     #[serde(default)]
     pub comments: u64,
     #[serde(default)]
@@ -97,6 +100,14 @@ impl RawTask {
                     .collect()
             })
             .unwrap_or_default();
+        // #237：Search API 的 `user` 字段即 issue 创建人（`{login: "..."}`）。
+        // 缺失不报错——创建人只用于卡片展示，属装饰性信息，不该让整条任务同步失败。
+        let author = v
+            .get("user")
+            .and_then(|u| u.get("login"))
+            .and_then(|l| l.as_str())
+            .unwrap_or("")
+            .to_string();
         Ok(RawTask {
             number: v
                 .get("number")
@@ -110,6 +121,7 @@ impl RawTask {
             repo_owner,
             assignees,
             labels,
+            author,
             comments: v.get("comments").and_then(|x| x.as_u64()).unwrap_or(0),
             is_pr: v.get("pull_request").is_some(),
         })
@@ -850,6 +862,7 @@ impl GitHubClient {
                         assignees(first:10) {{ nodes {{ login }} }}
                         labels(first:20) {{ nodes {{ name }} }}
                         comments {{ totalCount }}
+                        author {{ login }}
                       }}
                       ... on PullRequest {{
                         number title url state
@@ -938,6 +951,11 @@ impl GitHubClient {
                 }
                 // 用 owner 构造 GitHub 网页 URL（项目条目的 url 是 GraphQL node url，非网页链接）
                 let html_url = format!("https://github.com/{}/{}/issues/{}", owner, repo, num);
+                // #237：创建人。`author` 可为 null（用户已注销）→ 空串，卡片不渲染该行。
+                let author = content["author"]["login"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
                 issues.push(RawTask {
                     number: num,
                     title,
@@ -948,6 +966,7 @@ impl GitHubClient {
                     repo_owner: owner.to_string(),
                     assignees,
                     labels,
+                    author,
                     comments,
                     is_pr: false,
                 });
@@ -1641,6 +1660,8 @@ mod tests {
             "updated_at": "2026-09-04T10:00:00Z",
             "comments": 3,
             "repository_url": "https://api.github.com/repos/FoodsUp-Inc/pq-backend",
+            // #237：Search API 的 `user` 即 issue 创建人。
+            "user": {"login": "liushizhao2025", "id": 7},
             "assignees": [
                 {"login": "liushizhao2025", "id": 1},
                 {"login": "dingminggg", "id": 2}
@@ -1654,6 +1675,8 @@ mod tests {
         assert_eq!(t.url, "https://github.com/FoodsUp-Inc/pq-backend/issues/1237");
         assert_eq!(t.assignees, vec!["liushizhao2025", "dingminggg"]);
         assert_eq!(t.comments, 3);
+        // #237：创建人取自 user.login（注意 ≠ assignees[0]，两者是不同概念）。
+        assert_eq!(t.author, "liushizhao2025");
         assert!(!t.is_pr);
     }
 
@@ -1667,12 +1690,14 @@ mod tests {
             "updated_at": "2026-09-04T10:00:00Z",
             "repository_url": "https://api.github.com/repos/o/r",
             "pull_request": {"merged_at": null}
-            // 无 assignees / comments —— default 应生效
+            // 无 assignees / comments / user —— default 应生效
         });
         let t = RawTask::from_item(&item).expect("解析应成功");
         assert!(t.is_pr);
         assert!(t.assignees.is_empty());
         assert_eq!(t.comments, 0);
+        // #237：缺 user 字段不报错，创建人为空串（卡片不渲染该行）。
+        assert_eq!(t.author, "");
     }
 
     /// 回归：REST pulls 原始 item —— url 应取 html_url（网页链接），
