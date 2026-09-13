@@ -507,7 +507,6 @@ function BoardApp() {
             tasks={visible}
             selected={selected}
             onSelect={setSelected}
-            accounts={accountMap}
             boardMode={boardMode}
             projectStatuses={projectStatuses}
             accountColumns={accountColumns}
