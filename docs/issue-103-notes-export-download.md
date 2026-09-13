@@ -26,11 +26,11 @@
 | Windows | `%USERPROFILE%\Downloads`（Known Folders，尊重重定向） |
 | Linux | `$XDG_DOWNLOAD_DIR`（通常 `~/Downloads`） |
 
-### 实现（见 [commands.rs](file:///Users/liushizhao/dev/dashboard/app/src-tauri/src/commands.rs)）
+### 实现（见 [commands.rs](../app/src-tauri/src/commands.rs)）
 
 1. `export_notes(state, target_dir: Option<String>)`：`target_dir` 缺省时用下载目录；前端不传即自动获得默认下载行为。
 2. 新增私有 `resolve_export_dir(target_dir)`：优先级 **target_dir → 系统下载目录 → 应用数据目录 `notes-backup/`**；对候选目录逐个 `create_dir_all` 校验可写，全失败才走兜底；`download_dir()` 与 `target_dir` 相同项去重。
-3. 前端 [NotesPanel.tsx](file:///Users/liushizhao/dev/dashboard/app/src/components/NotesPanel.tsx) 导出成功提示本就展示 `→ {path}` 完整路径，无需改动即可告知用户文件落点。
+3. 前端 [NotesPanel.tsx](../app/src/components/NotesPanel.tsx) 导出成功提示本就展示 `→ {path}` 完整路径，无需改动即可告知用户文件落点。
 
 ### 关键权衡
 

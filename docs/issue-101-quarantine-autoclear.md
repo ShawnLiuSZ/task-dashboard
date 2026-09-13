@@ -21,7 +21,7 @@ Failed to reconnect to taskboard: MCP server taskboard connection timed out afte
 - 当前 `/Applications/TaskBoard.app/Contents/MacOS/taskboard` 确实带 `com.apple.quarantine`（Safari 下载标记）。**注意实际隔离属性在可执行文件上。**
 - **移除自身文件 quarantine 无需 sudo**：当前登录用户拥有自身 bundle，`xattr -d com.apple.quarantine <自己的文件>` 对当前用户即成功。于是 App 应用主体现有足够权限在运行时自清 quarantine。
 
-### 实现（主案，见 [lib.rs](file:///Users/liushizhao/dev/dashboard/app/src-tauri/src/lib.rs)）
+### 实现（主案，见 [lib.rs](../app/src-tauri/src/lib.rs)）
 
 在 Tauri `setup()` 启动入口、任何初始化之前：
 

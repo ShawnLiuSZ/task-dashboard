@@ -31,7 +31,7 @@ cp 真实主库 → TASKBOARD_DB=副本 ./taskboard mcp  # 发 list_my_tasks
 legacy ALTER、又不二次重建 → 该列永远缺失。
 
 **为什么不能简单把该 ALTER 移出 `migrate_legacy_alters`**：`migrate_tasks_v2_rebuild` 的
-`INSERT..SELECT` 会从旧表直接 `SELECT work_branch`（[db.rs](file:///../app/src-tauri/src/db.rs#L408-420)），
+`INSERT..SELECT` 会从旧表直接 `SELECT work_branch`（[db.rs](../app/src-tauri/src/db.rs)），
 若在 v2 重建前旧表没有该列会报错。因此正确做法是**在重建之后的高频热路径幂等补列**。
 
 **修复**：在 `open_db` 每次建连都跑的幂等区（与 `notes.label` 迁移同款，`if let Err` 忽略「已存在」）
