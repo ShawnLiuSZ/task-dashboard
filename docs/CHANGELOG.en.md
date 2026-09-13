@@ -9,6 +9,14 @@
   - **Schema change**: new `api_logs` table plus `idx_api_logs_created` / `idx_api_logs_kind` (new table via idempotent `CREATE TABLE IF NOT EXISTS`; existing DBs create it on startup, no ALTER migration).
   - **Verification**: `cargo test --lib` 80 passed (+5), `tsc --noEmit` 0 errors, `npm run build` ✅, `npm test` 10 files / 79 tests (`sync-logs.test.ts` 7→32), `i18n:check` 302 keys per locale (+18), `check-mcp-columns.py` 24 columns consistent.
 
+- **Unreleased — Board card structure rework (#237)**
+
+  - **#237 Remove account row / add creator row / enlarge repo#number**: the card's first line (the "owning account" badge, e.g. `@liushizhao2025`) is removed entirely — every card shows the same value in single-account view, so it carried no information. In its place the issue **creator** is shown, positioned on the row **above** "Assignees". The `repo #number` row (`fad-backend #1198`) goes from 11px to **13px**, making it the visual anchor when scanning a column. See [docs/issue-237-card-creator-row.md](./issue-237-card-creator-row.md).
+  - **Implementation notes**: new `author` column on `tasks` (taken from Search API `user.login` and GraphQL `author { login }`; a missing value becomes an empty string and never fails the sync). The frontend **omits the row entirely** when the creator is empty/whitespace, so no empty label row appears. The now-dead `accountLabel` / `accounts` prop chain (TaskCard → Board → App) was removed, the `card.accountTitle` i18n key deleted and `card.creatorLabel` added.
+  - **Migration note**: the `ALTER TABLE` for `author` must go on the hot path **after** `migrate_tasks_v2_rebuild` — the v2 physical rebuild's column whitelist is hard-coded and omits newly added columns, so placing it earlier would have the column dropped by the rebuild (same trap as #175).
+  - **Schema change**: `tasks` gains `author TEXT NOT NULL DEFAULT ''` (idempotent hot-path ALTER covering every `user_version`).
+  - **Verification**: `cargo test --lib` 80 passed, `cargo test --test db_test` 21 passed (+2, verified to fail when the fix is removed), `tsc --noEmit` 0 errors, `npm run build` ✅, `npm test` 10 files / 84 tests (+5), `i18n:check` 302 keys per locale, `check-mcp-columns.py` 24 columns consistent.
+
 - **v0.4.0 (2026-09-12) — GitHub write-back reversal (#214 claim + #215 status) + notes width + detail rework**
 
   - **Write-back reversal (product-constraint change)**: `AGENTS.md §2.1` / `PRD.md` relaxed from "read-only GitHub" to "read by default + explicit user-confirmed writes"; the sync path itself stays read-only and MCP tools stay local-only. PATs need matching write scopes (classic `repo` + `project`; Device Flow scope now includes `project`, old tokens must re-authorize).

@@ -185,5 +185,7 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/issue-235-in-app-api-log.md`](./docs/issue-235-in-app-api-log.md) — **应用内 API 调用明细**：`api_logs` 新表 + 可选 sink 收集器，同步/认领/状态写回的请求与返回参数可在日志面板展开查看（承接 #228 的 stderr 埋点）
 
+- [`docs/issue-237-card-creator-row.md`](./docs/issue-237-card-creator-row.md) — **看板卡片结构调整**：移除顶部账号徽章行、新增「创建人」行（`tasks.author`）、加大 `repo #编号` 字号；含 v2 重建后必须补列的迁移教训
+
 > 版本 v0.3.54 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-09
 
