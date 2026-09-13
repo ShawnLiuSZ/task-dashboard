@@ -187,5 +187,13 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/issue-237-card-creator-row.md`](./docs/issue-237-card-creator-row.md) — **看板卡片结构调整**：移除顶部账号徽章行、新增「创建人」行（`tasks.author`）、加大 `repo #编号` 字号；含 v2 重建后必须补列的迁移教训
 
+- [`docs/issue-239-doc-integrity.md`](./docs/issue-239-doc-integrity.md) — **文档完整性修复**：断链 / 不可移植 `file://` 路径 / 失效行号锚点 + v0.3.50 CHANGELOG 补录；含 `scripts/check-doc-links.py` 防回归
+
+- [`docs/perf-audit-optimization.md`](./docs/perf-audit-optimization.md) — **性能 / 安全优化批次索引**：`P0-1`…`P2-2` 编号到 issue 与落地文档的映射（`#143`–`#150`，随 v0.3.50 发布）
+
+- [`docs/issue-118-expand-platform-support.md`](./docs/issue-118-expand-platform-support.md) — **扩展平台支持**：release 矩阵显式声明 `target`，新增 macOS 双架构与 Windows ARM64 构建
+
+- [`docs/issue-119-expand-release-matrix.md`](./docs/issue-119-expand-release-matrix.md) — **扩展 Release 打包矩阵**：Linux arm64、rpm、Windows msi；并记录 `zip` 作为 Tauri 2 bundle 类型**被当日回滚**的教训
+
 > 版本 v0.3.54 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-09
 

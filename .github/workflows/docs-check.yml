@@ -1,0 +1,26 @@
+# 文档链接完整性校验（Issue #239）：PR 与 push 到 develop / main 时检查全仓库
+# markdown 的相对链接是否有效、是否混入不可移植的 file:// 绝对路径、是否残留会
+# 随时间漂移的行号锚点。
+#
+# 存在的理由：这三类缺陷在 CI 里没有任何检查会碰到（原 CI 只跑 i18n 与 MCP 列名），
+# 因此 `docs/issue-118-*.md` / `docs/perf-audit-optimization.md` 被引用了很久却从未
+# 存在，且 15 处 `file:///Users/<家目录>/...` 只在作者本机可用。本检查补上那层防回归。
+name: docs-check
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: 校验 markdown 链接（断链 / file:// / 行号锚点）
+        run: python3 scripts/check-doc-links.py
