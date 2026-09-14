@@ -14,6 +14,9 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// fetch_project_issues 返回类型：(status_map, issues, item_ids)
+pub type ProjectIssuesResult = (HashMap<String, String>, Vec<RawTask>, HashMap<String, String>);
+
 /// Search API 全局限流门间隔（毫秒）。GitHub Search API 认证后 30 req/min，
 /// 折合 1 次/2s。同一客户端实例的多线程共享此门，任意两次 search 调用间隔
 /// 不低于该值，避免并发突发触发 429（触发后的退避等待远比这更贵）。
@@ -56,7 +59,8 @@ impl RawTask {
     /// - 没有 `repo` 字段，须从 `repository_url`（`.../repos/{owner}/{repo}`）取尾段
     /// - `url` 是 API URL，网页链接在 `html_url`
     /// - `is_pr` 需由 `pull_request` 字段是否存在推断
-    /// 旧 gh+jq 管道由 JQ 投影完成这些转换，重写 reqwest 后必须等价实现。
+    ///
+    ///   旧 gh+jq 管道由 JQ 投影完成这些转换，重写 reqwest 后必须等价实现。
     pub fn from_item(v: &serde_json::Value) -> Result<RawTask, String> {
         let get_str = |key: &str| -> Result<String, String> {
             v.get(key)
@@ -647,7 +651,7 @@ impl GitHubClient {
         Ok(arr
             .iter()
             .filter_map(|c| c.get("html_url").and_then(|u| u.as_str()).map(String::from))
-            .last())
+            .next_back())
     }
 
     /// 拉取 GitHub Project「OMS Kanban」中每个 issue 的 Status 字段，
@@ -797,14 +801,12 @@ impl GitHubClient {
                             let field_name = fv["field"]["name"].as_str().unwrap_or("");
                             let val_name = fv["name"].as_str().unwrap_or("");
                             // 通用匹配：字段名含 "Status" 或 "状态"（中英文变体）
-                            if field_name.eq_ignore_ascii_case("Status")
+                            if (field_name.eq_ignore_ascii_case("Status")
                                 || field_name.contains("tatus")
-                                || field_name.contains("状态")
-                            {
-                                if !val_name.is_empty() {
+                                || field_name.contains("状态"))
+                                && !val_name.is_empty() {
                                     status = val_name.to_string();
                                 }
-                            }
                         }
                         // 诊断：打印第一个 item 的所有 field name + value
                         if map.len() < 3 {
@@ -833,12 +835,12 @@ impl GitHubClient {
 
     /// 拉取项目中全部 issue 条目的完整信息（title, state, labels, assignees 等），
     /// 用于发现「项目中有但搜索源未覆盖」的 issue，合并进同步数据。
-    /// 返回 `(status_map, discovered_issues)`。
+    /// 返回 `(status_map, discovered_issues, item_ids)`。
     pub fn fetch_project_issues(
         &self,
         project_id: &str,
         org: &str,
-    ) -> Result<(HashMap<String, String>, Vec<RawTask>, HashMap<String, String>), String> {
+    ) -> Result<ProjectIssuesResult, String> {
         let mut status_map: HashMap<String, String> = HashMap::new();
         let mut issues: Vec<RawTask> = Vec::new();
         // #215：issue_key -> project item id（写回用）。
@@ -932,14 +934,12 @@ impl GitHubClient {
                     for fv in fvs {
                         let field_name = fv["field"]["name"].as_str().unwrap_or("");
                         let val_name = fv["name"].as_str().unwrap_or("");
-                        if field_name.eq_ignore_ascii_case("Status")
+                        if (field_name.eq_ignore_ascii_case("Status")
                             || field_name.contains("tatus")
-                            || field_name.contains("状态")
-                        {
-                            if !val_name.is_empty() {
+                            || field_name.contains("状态"))
+                            && !val_name.is_empty() {
                                 status = val_name.to_string();
                             }
-                        }
                     }
                 }
                 if !status.is_empty() {
@@ -1270,9 +1270,7 @@ impl GitHubClient {
             return None;
         }
         // 至少形如 owner/repo/issues/n（多一段才可信，避免错切）。
-        if segs.next().is_none() {
-            return None;
-        }
+        segs.next()?;
         Some(owner)
     }
 

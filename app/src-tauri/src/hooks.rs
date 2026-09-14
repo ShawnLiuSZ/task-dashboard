@@ -643,7 +643,8 @@ fn taskboard_mcp_kv(exe: &str) -> String {
 /// - 严格 JSON → 走 merge_mcp_value 整体解析后 pretty 回写；
 /// - JSONC（含注释）→ 字符串手术（mcp 对象内追加 / 顶层新增 mcp / 陈旧 ours 原位更新）；
 /// - 他人条目 → 保留 + notice；形状无法识别 → Err（调用方回退手动指引）。
-/// 返回 (changed, target_display, notice)。
+///
+///   返回 (changed, target_display, notice)。
 fn merge_global_opencode_mcp(
     home: &Path,
     exe: &str,

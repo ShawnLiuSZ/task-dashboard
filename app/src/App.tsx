@@ -351,7 +351,6 @@ function BoardApp() {
   // 筛选被手动改动后，同步提示即过期（用户正在自行处理）。
   useEffect(() => {
     setHiddenAfterSync(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, repo, ownership]);
 
   // v0.3.16+：切换激活账号（单账号视图）。

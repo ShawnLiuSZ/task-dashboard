@@ -4,6 +4,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::github;
 
+/// 单个 Project 的同步结果：(project_id, status_field, status_map, issues, item_ids)
+type FetchedProject = (
+    String,
+    github::StatusField,
+    std::collections::HashMap<String, String>,
+    Vec<github::RawTask>,
+    std::collections::HashMap<String, String>,
+);
+
 pub fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -38,9 +47,7 @@ fn map_project_status(raw: &str) -> Option<&'static str> {
         Some("doing")
     } else if raw.contains("待开发") || raw.contains("需求") || raw.contains("规划") {
         Some("todo")
-    } else if raw.contains("取消") {
-        Some("done")
-    } else if raw.contains("完成") || raw.contains("上线") {
+    } else if raw.contains("取消") || raw.contains("完成") || raw.contains("上线") {
         Some("done")
     } else {
         None
@@ -197,8 +204,9 @@ struct PendingUpsert {
 /// - key 仍为 `repo#number`（PRIMARY KEY 不变）。多账号下同 key 会被后写入者覆盖——
 ///   这是 v0.3.16 的已知限制（设计文档 3.1 节确认）。单账号视图（默认）下不会出现冲突。
 /// - 单账号内仍走 5 源合并 + PR 关联 + Project Status 联动，与 v0.3.15 逻辑等价。
+///
 /// #235：`sync_account` 薄包装 —— 建客户端、挂采集槽，并在**无论成败**后
-/// 把本次同步实际发生的 API 调用（请求/返回参数）落盘。
+///   把本次同步实际发生的 API 调用（请求/返回参数）落盘。
 ///
 /// 之所以放在包装层而不是 body 内：body 里遍布 `?` 早期返回，只有在这里
 /// drain 才能保证失败路径也留下明细。
@@ -267,13 +275,7 @@ fn sync_account_inner(
     // DB 写入仍串行（同一连接）。线程 panic 按该项目失败处理（gid 为空即跳过）。
     // fetch_project_issues 返回 status_map、项目中发现的完整 issue 列表与条目 id，
     // 用于将「项目中有但搜索源未覆盖」的 issue 合并进同步数据（#215：item id 落库供写回）。
-    let fetched_projects: Vec<(
-        String,
-        github::StatusField,
-        std::collections::HashMap<String, String>,
-        Vec<github::RawTask>,
-        std::collections::HashMap<String, String>,
-    )> = std::thread::scope(|s| {
+    let fetched_projects: Vec<FetchedProject> = std::thread::scope(|s| {
         let handles: Vec<_> = project_ids
             .iter()
             .map(|gid| {
@@ -726,7 +728,7 @@ fn sync_account_inner(
                 rusqlite::params![account.id, now],
             )
             .map_err(|e| format!("标记候选已完成失败: {}", e))?;
-        candidate_done = n as usize;
+        candidate_done = n;
         if candidate_done > 0 {
             crate::tlog!("[sync] 标记 {} 个任务为候选已完成", candidate_done);
         }

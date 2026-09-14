@@ -505,7 +505,7 @@ fn resolve_or_refresh(
     }
     eprintln!("[proj-write] {key} 本地无写回 ID，即时补拉（主项目优先）…");
     let mut projects = crate::db::list_projects(conn, account_id)?;
-    projects.sort_by(|a, b| b.number_of_items.cmp(&a.number_of_items));
+    projects.sort_by_key(|b| std::cmp::Reverse(b.number_of_items));
     if projects.is_empty() {
         return Err("该账号下没有 Project（先同步一次拉取项目）".to_string());
     }
@@ -1433,7 +1433,7 @@ pub fn list_project_statuses(state: State<'_, AppState>, account_id: i64) -> Res
 #[tauri::command]
 pub fn list_sync_logs(state: State<'_, AppState>, limit: Option<i64>) -> Result<Vec<crate::db::SyncLog>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let limit = limit.unwrap_or(50).max(1).min(500);
+    let limit = limit.unwrap_or(50).clamp(1, 500);
     crate::db::list_sync_logs(&conn, limit)
 }
 
@@ -1464,7 +1464,7 @@ pub fn list_api_logs(
 ) -> Result<Vec<crate::db::ApiLog>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     // 明细行更长（含请求/返回），上限比 sync_logs 保守。
-    let limit = limit.unwrap_or(300).max(1).min(1000);
+    let limit = limit.unwrap_or(300).clamp(1, 1000);
     crate::db::list_api_logs(&conn, limit)
 }
 
@@ -1700,7 +1700,7 @@ pub fn save_account_columns(
 
 /// `now_secs` 按秒格式化为指定 `strftime` 模式（用于导出文件名）。
 fn time_str(ts: i64, fmt: &str) -> String {
-    let secs = ts as i64;
+    let secs = ts;
     let days = secs.div_euclid(86400);
     let rem = secs.rem_euclid(86400);
     let (y, m, d) = civil_from_days(days);

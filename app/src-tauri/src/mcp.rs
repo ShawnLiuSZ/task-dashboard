@@ -544,9 +544,9 @@ fn tools_list() -> Value {
 
 fn handle(conn: &Connection, msg: &Value) -> Option<Value> {
     let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
-    let id = match msg.get("id") {
-        Some(v) => v.clone(),
-        None => return None, // 通知（无 id）不需要回复
+    let id = {
+        let v = msg.get("id")?;
+        v.clone()
     };
     match method {
         "initialize" => Some(json!({
@@ -727,11 +727,7 @@ pub fn run() {
     let mut stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     let mut handled = 0u32;
-    loop {
-        let (msg, framing) = match read_message(&mut stdin) {
-            Some(m) => m,
-            None => break, // EOF：客户端断开
-        };
+    while let Some((msg, framing)) = read_message(&mut stdin) {
         if let Some(resp) = handle(&conn, &msg) {
             write_message(&mut stdout, &resp, framing);
         }
