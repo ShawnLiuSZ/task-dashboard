@@ -47,7 +47,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "ZFc1MGNuVnpkR1ZrSUdOdmJXMWxiblE2SUcxcGJtbHphV2R1SUhCMVlteHBZeUJyWlhrNklFSTBNVVpDUTBRM1FUVXlNemN5UlVRS1VsZFVkR05wVDJ3eE4zZG1kRWhvVG1GNFZIY3JLMHBDYjA5bk9GVm1ZM0pHU0doMFdFdzRORFV4UW5WRk0yMWxkV3BOZDFFeVowZ0s=",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI0MUZCQ0Q3QTUyMzcyRUQKUldUdGNpT2wxN3dmdEhoTmF4VHcrK0pCb09nOFVmY3JGSGh0WEw4NDUxQnVFM21ldWpNd1EyZ0gK",
       "endpoints": [
         "https://github.com/ShawnLiuSZ/task-dashboard/releases/latest/download/latest.json"
       ]
