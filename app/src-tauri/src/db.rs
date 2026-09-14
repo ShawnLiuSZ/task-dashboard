@@ -293,9 +293,12 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
     // 兼容 user_version 丢值/旧库直接建的场景——重建后 key 列消失，幂等不重复执行。
     // 顺序依赖：migrate_legacy_alters 必须先跑，保证老表已补齐 gh_status/assignees
     // 等列，重建的 INSERT..SELECT 才能读到。
-    if tasks_uses_legacy_key(&conn) && migrate_tasks_v2_rebuild(&conn).is_ok() {
-        let _ = conn.pragma_update(None, "user_version", 2);
-    } else if schema_ver < 1 {
+    let needs_v2 = if tasks_uses_legacy_key(&conn) {
+        migrate_tasks_v2_rebuild(&conn).is_ok()
+    } else {
+        schema_ver < 1
+    };
+    if needs_v2 {
         let _ = conn.pragma_update(None, "user_version", 2);
     }
     // 以下默认设置与各版本表级迁移（每次建连都跑，全部幂等；列补齐已由上面的版本门控处理）。
@@ -1600,6 +1603,7 @@ pub fn insert_sync_log(
 }
 
 /// 更新同步日志（同步完成时调用）。
+#[allow(clippy::too_many_arguments)]
 pub fn update_sync_log(
     conn: &Connection,
     id: i64,

@@ -62,7 +62,7 @@ pub fn iso8601_to_secs(s: &str) -> i64 {
     let h = time_parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
     let mi = time_parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
     let sec = time_parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-    if y < 1970 || m < 1 || m > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || sec > 59 {
+    if y < 1970 || !(1..=12).contains(&m) || !(1..=31).contains(&d) || h > 23 || mi > 59 || sec > 59 {
         return 0;
     }
     // 1970-01-01 起算的天数（Gregorian，无历法库依赖）
