@@ -126,6 +126,10 @@ npm run tauri signer generate -- -w ~/.tauri/taskboard-updater.key
 - **私钥务必离线备份** —— 丢失后已安装的客户端将无法再收到任何更新
 - 公钥内容填入 `tauri.conf.json` 的 `plugins.updater.pubkey`（替换占位符 `__REPLACE_WITH_TAURI_SIGNER_PUBLIC_KEY__`）
 
+> ✅ 已落地（2026-09-14）：`tauri.conf.json` 的 `pubkey` 占位符已替换为本机生成的 minisign 公钥
+> `~/.tauri/taskboard-updater.key.pub` 的 base64。首次发版失败根因是 GitHub Secret
+> `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 未配置，属 CI 密钥配置问题，与代码无关。
+
 ### 3. 配置 GitHub Secrets
 
 | Secret | 来源 |

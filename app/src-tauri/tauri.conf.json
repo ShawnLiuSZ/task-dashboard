@@ -47,7 +47,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "__REPLACE_WITH_TAURI_SIGNER_PUBLIC_KEY__",
+      "pubkey": "ZFc1MGNuVnpkR1ZrSUdOdmJXMWxiblE2SUcxcGJtbHphV2R1SUhCMVlteHBZeUJyWlhrNklERTNOVUl4UkRSRlJEQkVNelV4UXpJS1VsZFVRMVZrVUZGVWFERmlSamxYYVZGVGNXWTBTblpVTkZaTFNuUlNjRWxEZDJ0cmMweDZhR2h1V1ZSRmFXbDBOekozWjIwM1ExVUs=",
       "endpoints": [
         "https://github.com/ShawnLiuSZ/task-dashboard/releases/latest/download/latest.json"
       ]
