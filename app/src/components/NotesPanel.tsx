@@ -217,6 +217,46 @@ export default function NotesPanel() {
     void loadNotes();
   }, [loadNotes]);
 
+  // 排序：优先级 urgent(0) > high(1) > medium(2) > low(3)；同优先级按倒序创建时间。
+  const sortedNotes = useMemo(() => {
+    const prio: Record<NoteLabel, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
+    return [...notes].sort((a, b) => {
+      const pd = prio[a.label] - prio[b.label];
+      return pd !== 0 ? pd : b.createdAt - a.createdAt;
+    });
+  }, [notes]);
+
+  // 按日期分组（今天 / 昨日 / M月D日），组内保持优先级+时间排序。
+  const groupedNotes = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const fmtDateKey = (ts: number) => {
+      const d = new Date(ts * 1000);
+      d.setHours(0, 0, 0, 0);
+      return d.getTime();
+    };
+    const groups = new Map<number, Note[]>();
+    for (const note of sortedNotes) {
+      const key = fmtDateKey(note.createdAt);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(note);
+    }
+    return Array.from(groups.entries())
+      .sort((a, b) => b[0] - a[0])
+      .map(([key, items]) => {
+        const diffDays = Math.round((today.getTime() - key) / 86400000);
+        let title: string;
+        if (diffDays === 0) title = t('notes.group.today');
+        else if (diffDays === 1) title = t('notes.group.yesterday');
+        else {
+          const d = new Date(items[0].createdAt * 1000);
+          title = t('notes.group.date', { m: d.getMonth() + 1, d: d.getDate() });
+        }
+        return { key, title, items };
+      });
+  }, [sortedNotes, t]);
+
+
   const handleAdd = useCallback(async () => {
     const content = draft.trim();
     if (!content) return;
@@ -474,7 +514,10 @@ export default function NotesPanel() {
               <span>{t('notes.emptySub')}</span>
             </div>
           ) : (
-            notes.map((note) => {
+            groupedNotes.map((group) => (
+              <section key={group.key} className="notes-group">
+                <div className="notes-group-title">{group.title}</div>
+                {group.items.map((note) => {
               const opt = labelOf(labels, note.label);
               const accent = { '--note-accent': opt.color } as CSSProperties;
 
@@ -597,7 +640,9 @@ export default function NotesPanel() {
                   </footer>
                 </article>
               );
-            })
+                })}
+              </section>
+            ))
           )}
         </div>
       </div>

@@ -103,6 +103,13 @@ body {
   flex: 0 0 auto;
 }
 
+/* #259：顶栏品牌名。 */
+.app-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
 /* 顶部栏按钮内联图标：默认与文字同排，窄窗口下隐藏文字仅留图标。 */
 .btn .btn-icon {
   flex: 0 0 auto;
@@ -1708,15 +1715,106 @@ button.unassigned-tag:disabled {
   overflow: auto;
 }
 
-/* v0.3.24+：主布局（记事本 + 看板）。
- * 用 grid：记事本列在第 1 列、永远不动；看板在第 2 列、独自横向滚动。
- * 这样横向滚动条只会出现在「记事本列右边」——避免滚动条穿过 panel 下方。 */
-.main-layout {
-  /* #202：flex row（代替 grid auto 1fr）：记事本按容器百分比宽可靠解析，
-     看板区 flex:1 占剩余。 */
+/* #259：左右分栏主布局（左侧 Sidebar + 右侧主区）。
+ * 顶栏在上；banner 在 app-shell 之上全局展示；app-shell 独占剩余高度。 */
+.app-shell {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
+}
+
+/* ---- 左侧固定导航 ---- */
+.sidebar {
+  flex: 0 0 200px;
+  width: 200px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 0.5px solid var(--border);
+  padding: 10px 8px 8px;
+  overflow-y: auto;
+}
+
+.sidebar-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 0.5px solid var(--border);
+}
+
+.sidebar-group:last-of-type {
+  border-bottom: none;
+}
+
+.sidebar-group-title {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 2px 10px 4px;
+}
+
+.sidebar-empty {
+  padding: 2px 10px 4px;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sidebar-item:hover {
+  background: var(--surface-2);
+}
+
+.sidebar-item.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.sidebar-icon {
+  flex: 0 0 auto;
+}
+
+.sidebar-item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 0.5px solid var(--border);
+}
+
+/* 账号过多时滚动；分组标题与底部固定不跟随滚动。 */
+.sidebar-group.accounts {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* ---- 右侧主区（按 Sidebar 选中项条件渲染） ---- */
+.main-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -1729,6 +1827,153 @@ button.unassigned-tag:disabled {
   overflow-x: auto;
   overflow-y: hidden;
   padding: 0 16px 16px;
+}
+
+/* 记事本作为主区「页面」：全高 flex 容器，红框区域撑满 app 高度。 */
+.notes-page {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+  padding: 0;
+}
+
+.notes-page .notes-panel {
+  margin: 0;
+  border-radius: 0;
+  position: relative;
+  left: auto;
+  box-shadow: none;
+  border: none;
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  min-height: 0;
+}
+
+/* notes-page 下隐藏 resizer（面板已占满，无需调宽）。 */
+.notes-page .notes-resizer {
+  display: none;
+}
+
+/* 日期分组 */
+.notes-group {
+  margin-bottom: 4px;
+}
+
+.notes-group-title {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-3);
+  padding: 10px 4px 4px;
+  border-bottom: 0.5px solid var(--border);
+  margin-bottom: 2px;
+}
+
+/* 内嵌面板容器：承接 Settings/Accounts/SyncLogs 的 modal 结构，去掉遮罩与居中。 */
+.panel-page {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  padding: 16px;
+}
+
+.panel-page .modal-mask {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  z-index: auto;
+  align-items: stretch;
+  padding: 0;
+}
+
+.panel-page .modal {
+  width: 100%;
+  max-height: none;
+  height: 100%;
+}
+
+/* 内嵌后去掉弹窗时代的尺寸约束，让面板铺满主区。 */
+.panel-page .sync-logs-modal {
+  width: 100%;
+  max-width: none;
+}
+
+.panel-page .sync-logs-body {
+  max-height: none;
+  flex: 1 1 auto;
+}
+
+/* #259：Agent 接入面板（非 modal 页面，自带页头与滚动区）。 */
+.panel-page-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+  border-bottom: 0.5px solid var(--border);
+}
+
+.panel-page-title {
+  flex: 1 1 auto;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.agent-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.agent-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.agent-tools-table,
+.agent-trigger-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.agent-tools-table th,
+.agent-tools-table td,
+.agent-trigger-table td {
+  border: 0.5px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.agent-tools-table th {
+  background: var(--surface-2);
+  font-weight: 500;
+}
+
+.agent-tools-table .mono,
+.agent-trigger-table .mono {
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+}
+
+.agent-trigger-table {
+  max-width: 640px;
 }
 
 /* v0.3.24+：记事本面板（与看板列同构：320px / surface-2 / 10px 圆角） */

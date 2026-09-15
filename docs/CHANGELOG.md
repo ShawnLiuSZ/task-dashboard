@@ -6,7 +6,11 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **未发布（Unreleased）— 检查更新双通道并发（#256）**
+- **未发布（Unreleased）— 左右分栏布局 + Agent 接入面板（#259）**
+
+  - **#259 左右分栏重构**：新增左侧固定 Sidebar（200px）承载全部功能入口——记事本 / 账号列表（点选切换 + 添加账号）/ 设置 / Agent 接入 / 同步日志 / 账号登录 / 底部关于。顶栏从「账号下拉 + 4 按钮 + 同步」精简为「品牌 + 总条数 + 上次同步 + 立即同步」。设置 / 账号 / 同步日志由 Modal 改为**主区内嵌全高页面**（面板组件零侵入，靠 `.panel-page` 容器 + CSS 覆盖）；NotesPanel 改为主区「页面」，选中才渲染。详见 [docs/issue-259-sidebar-nav.md](./issue-259-sidebar-nav.md)。
+  - **做法**：`activeModal` 状态废弃，改 `nav`（`notes | board | settings | agents | synclogs | accounts`）+ 独立 `showAbout`（关于保留 Modal）；账号切换复用 `handleSwitchAccount` 并切回看板；新增 `Sidebar.tsx`、`AgentPanel.tsx` 两个组件；`main-layout` CSS 废弃由 `app-shell` + `main-content` 替代。纯前端改动，SQLite / Rust 零改动。
+  - **验证**：`tsc --noEmit` 0 error、`npm run build` ✅、`npm test` 12 文件 99 例、`i18n:check` 中英各 334 key、`check-doc-links.py` ✅。真机手动 QA 待补充。
 
   - **#256 检查更新慢且失败原因不可见**：v0.5.0 的「检查更新」是串行的——先等 tauri updater 通道（该通道无内置超时，弱网下 hang 很久），失败后才走 GitHub API fallback，总耗时是加和；且 updater 的失败原因被静默吞掉，用户只看到「很慢才出现的『前往下载』按钮」。实测用户环境：v0.5.0 + macOS Apple Silicon。详见 [docs/issue-256-update-check.md](./issue-256-update-check.md)。
   - **做法**：双通道同时发起、分阶段展示——fallback 先到先显示手动下载（不等慢的 updater），updater 到达后升级为一键更新或附带失败原因；单路超时封顶（fallback 30s / updater 90s）。只改前端（新纯模块 `src/utils/updateCheck.ts` + `AboutPanel`），零新依赖、Rust 零改动。
