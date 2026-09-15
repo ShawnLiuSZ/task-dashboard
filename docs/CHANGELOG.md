@@ -6,6 +6,22 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.5.1（2026-09-15）— 修好既有 CI（#252）+ 未同步 issue 按需拉取（#250）+ 同步日志表格横向滚动（#248）**
+
+  - **#252 `quality-check.yml` 恢复全绿**：#246 引入该 workflow 时留下两类既有失败 —— `Frontend Lint` 的 `format:check` 报 **29 个文件**未格式化（`.prettierrc` 加了但 `npm run format` 从未跑）；`Rust Clippy` / `Rust Tests` 缺 Tauri 的 Linux 系统库（`glib-sys` / `gio-sys` / `gobject-sys` 在 build script 阶段 pkg-config 失败）。两者都已在 `develop` 上红了很久，让每个新 PR 的 CI 都必然红（#249、#251 均被挡）。详见 [docs/issue-252-ci-green.md](./issue-252-ci-green.md)。
+  - **做法**：格式化单独一个 commit，并用「构建产物 sha256 逐字节一致」证明零语义影响（比测试通过更强的证据）；系统库**不复制第三遍**，抽成 composite action `.github/actions/install-linux-deps`，`release.yml` 与 `quality-check.yml` 的两个 Rust job 共用同一份清单（`runner.os` 判断放在 action 内部）。
+  - **注**：`npm run lint`（ESLint）一直是通过的（`--max-warnings 20` 未触发，实际 17 条 warning），本次未动 ESLint 配置；亦未把 Rust job 挪到 macOS runner（计费约 10 倍，且 release 矩阵已覆盖 Linux）。
+  - **验证**：`format:check` 29 → 0、格式化前后产物哈希一致、`tsc --noEmit` 0 error、`npm test` 11 文件 88 例、`npm run lint` exit 0、`i18n:check` 各 302 key、5 个 workflow + action.yml YAML 合法且断言两个 Rust job 均引用该 action。CI 结果以本 PR 运行为准。
+
+  - **#250 消除写状态时的「任务不存在」**：`tasks` 表只由同步单向填充，而 MCP 工具是纯本地 SQL，于是**刚创建、还没同步到的 issue** 会让所有写路径报「任务不存在」（实测：issue 建于 10:26，10:52 调用 `update_task_status` 仍失败）。现在未命中时会**按需拉取该单个 issue** 并落库，再执行原操作；只读 GitHub（单次 `GET`）、不触发全量同步、已存在的任务零额外请求。返回体新增 `pulled` 标记（`get_task_status` 另有 `reason`）。详见 [docs/issue-250-ondemand-issue-pull.md](./issue-250-ondemand-issue-pull.md)。
+  - **实现要点**：把同步内联的 upsert 抽成 `db::TaskUpsert` + `db::write_task`（两种模式共用同一份列清单与参数绑定）；按需拉取用 `InsertIfAbsent`（`ON CONFLICT DO NOTHING`）——单 issue REST 拿不到 `project_status` / `mentioned` / `pr_*`，用覆盖模式会把同步刚写好的值清空。拉取必须在写入**之前**（自定义列的校验要读该行 `account_id`）。`parse_issue_ref` 原先会丢掉 owner（拉取需要 owner+repo），已下沉到共用解析器；Rust 侧新增 `on_demand.rs`、`github.rs::fetch_issue`（404 → `Ok(None)`）。
+  - **真机发现的两个坑（单测测不到，已补测试固化）**：① 账号匹配必须同时看 `org` 与 `login`——实测 task-dashboard 所属账号 `org` 是**空串**（个人命名空间），只按 org 匹配会让本功能对该仓库完全不可用；② 「API 请求用的 owner」与「落库的 `owner` 列」是两回事（后者与同步一致写 `account.org`），不区分会拼出 `/repos//repo/...`。另外 `repo#N` 不带 owner 时 404 不代表 issue 不存在，错误文案会带上实际查询目标与改写提示。
+  - **无 schema 变更**：未改 `tasks` 表结构，无需迁移。
+  - **验证**：`cargo test --lib` 93 passed（+11）、`cargo test --test db_test` 21 passed、Clippy 零警告、`python3 -m unittest discover -s mcp_server` 26 passed（新增 `mcp_server/test_server.py`，并接入 `mcp-schema-check.yml`）、`tsc --noEmit` 0 error、`npm test` 10 文件 84 例、`check-mcp-columns.py` 24 列、`check-doc-links.py` ✅。另有**真机端到端验证**（数据库副本 + 真实 PAT）：未同步 issue 写状态返回 `pulled:true`、再次调用 `pulled:false`、落库字段与真实 GitHub 响应一致、失败路径文案带原因（结果见知识库文档）。
+
+  - **#248 两个页签的右侧列被静默裁切**：`.sync-logs-table-wrap` 用 `overflow: hidden`，溢出列被直接裁掉且**不产生任何滚动条**——「同步记录」的错误列、「API 明细」的明细列，恰好是 `#161` / `#235` 新增的交互入口，默认窗口（1180×760）下等于功能不可用。改为 `overflow: auto`；同时把 `.sync-logs-body` 改为纵向 flex 列、容器补 `min-height: 0`，使**横纵滚动条同处一个视口**——只改 `overflow-x` 是不够的，横向滚动条会落在整张表格底部（40 行日志时位于可视区下方 **1029px**），必须先滚到底才够得着。详见 [docs/issue-248-synclogs-hscroll.md](./issue-248-synclogs-hscroll.md)。
+  - **验证**：`tsc --noEmit` 0 error、`npm run build` ✅、`npm test` 11 文件 88 例（新增 `src/styles.test.ts` 4 例，且已反向验证——把 `overflow` 改回 `hidden` 即失败）、`i18n:check` 中英各 302 key、`check-doc-links.py` ✅。为让测试读到真实 CSS 文本，`vitest.config.ts` 开启 `css: true`（默认 `css: false` 会把 CSS 打桩成空串）并新增 `src/vite-env.d.ts` 提供 `?raw` 类型——**零新增依赖**，改用 Vite `?raw` 而非 `node:fs`（后者需要 `@types/node`，本仓库未安装，CI 会报 TS2307）。
+
 - **v0.5.0（2026-09-13）— macOS 免重复放行 + 应用内自动更新（#231/#232）+ 应用内 API 调用明细（#235）+ 看板卡片调整（#237）+ 文档完整性（#239）**
 
   - **#231/#232 macOS 更新免除重复 Gatekeeper 放行 + 应用内自动更新**：根因是 ad-hoc 签名（`signingIdentity="-"`）的 designated requirement 直接绑定 `cdhash`，**每次构建都会变**，系统因此把每个新版本视为从未批准过的全新应用，放行记录永远命中不了。改为用**固定自签名证书**签名让 DR 恒定（首次放行后长期复用），并接入 `tauri-plugin-updater` 走应用内更新——更新包由**应用自身进程**下载，产物天然不带 `com.apple.quarantine`，Gatekeeper 完全不参与。同时修掉 #101 隔离标记自清长期空转：标记落在 **bundle 根目录**，原实现只清 `current_exe()`，`xattr -dr` 不向上越级，故 `has_quarantine(exe)` 恒为 false 提前返回；现同时清理 bundle 根与可执行文件。新增 `check_app_update` / `install_app_update` / `restart_app` 命令与 `taskboard://update-progress` 事件；About 页「检查更新」优先走应用内更新，失败**静默回退**为原版本号对比 + 跳转下载。详见 [docs/issue-231-macos-gatekeeper-update.md](./issue-231-macos-gatekeeper-update.md)。

@@ -293,9 +293,12 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
     // 兼容 user_version 丢值/旧库直接建的场景——重建后 key 列消失，幂等不重复执行。
     // 顺序依赖：migrate_legacy_alters 必须先跑，保证老表已补齐 gh_status/assignees
     // 等列，重建的 INSERT..SELECT 才能读到。
-    if tasks_uses_legacy_key(&conn) && migrate_tasks_v2_rebuild(&conn).is_ok() {
-        let _ = conn.pragma_update(None, "user_version", 2);
-    } else if schema_ver < 1 {
+    let needs_v2 = if tasks_uses_legacy_key(&conn) {
+        migrate_tasks_v2_rebuild(&conn).is_ok()
+    } else {
+        schema_ver < 1
+    };
+    if needs_v2 {
         let _ = conn.pragma_update(None, "user_version", 2);
     }
     // 以下默认设置与各版本表级迁移（每次建连都跑，全部幂等；列补齐已由上面的版本门控处理）。
@@ -1556,6 +1559,149 @@ pub fn load_existing_tasks(
     Ok(out)
 }
 
+/// 一条待写入 `tasks` 的行内容。
+///
+/// v0.4.1 (#250)：由 `sync.rs` 内联的 `PendingUpsert` 抽出，供**同步**与
+/// **按需拉取单个 issue** 复用同一份列清单/参数绑定——避免第二份实现分叉
+/// （#147 的教训正是「两边各写一遍，逻辑已分叉」）。
+///
+/// `owner` / `account_id` 属于行的归属，随结构一起携带：同步时是全量拉取的目标账号，
+/// 按需拉取时是按 ref 的 owner（匹配 `accounts.org`）或默认账号选出的账号。
+#[derive(Debug, Clone, Default)]
+pub struct TaskUpsert {
+    /// 稳定业务引用，值 = `repo#number`。
+    pub issue_key: String,
+    /// 归属账号的 `org`（写入 `tasks.owner`）。
+    pub owner: String,
+    /// 归属账号 id（`tasks.account_id`，与 `(repo, number)` 共同构成唯一键）。
+    pub account_id: i64,
+    pub repo: String,
+    pub number: i64,
+    pub title: String,
+    pub url: String,
+    pub issue_state: String,
+    pub ownership: String,
+    pub status: String,
+    pub project_status: String,
+    pub assignees: String,
+    pub labels: String,
+    /// #237：issue 创建人（GitHub author login，不含 @）。
+    pub author: String,
+    pub done_at: i64,
+    pub mentioned: i64,
+    pub comments_count: i64,
+    pub latest_comment_url: String,
+    pub pr_number: i64,
+    pub pr_url: String,
+    pub branch: String,
+    pub updated_at: i64,
+    /// 调用方据此统计「新增 / 更新」，**不参与 SQL**。
+    pub exists: bool,
+}
+
+/// `tasks` 插入的列清单与值占位符。
+///
+/// 两种写入模式共用本常量做前缀，**列清单只有这一份**——新增/改名列时不可能只改一边。
+/// 占位符编号：`?1`–`?19` 为行内容，`?20` 为 `updated_at`，`?21` 为 `synced_at`(now)，
+/// `?22` 为 `account_id`，`?23` 为 `author`。
+const TASK_INSERT_HEAD: &str = "INSERT INTO tasks
+   (issue_key, owner, repo, number, title, url, issue_state, ownership,
+    status, project_status, assignees, labels, done_at, mentioned, comments_count,
+    latest_comment_url, pr_number, pr_url, branch, candidate_done, stale, updated_at, synced_at,
+    account_id, author)
+  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 0, 0, ?20, ?21, ?22, ?23)";
+
+/// 冲突时**覆盖**：同步路径用（该账号的数据是刚拉取的权威值）。
+const TASK_CONFLICT_UPDATE: &str = "ON CONFLICT(repo, number, account_id) DO UPDATE SET
+    title = excluded.title,
+    repo = excluded.repo,
+    issue_state = excluded.issue_state,
+    ownership = excluded.ownership,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    candidate_done = 0,
+    stale = 0,
+    project_status = excluded.project_status,
+    assignees = excluded.assignees,
+    labels = excluded.labels,
+    status = excluded.status,
+    done_at = CASE
+      WHEN excluded.status = 'done' AND done_at = 0 THEN ?20
+      WHEN excluded.status <> 'done' THEN 0
+      ELSE done_at
+    END,
+    mentioned = excluded.mentioned,
+    comments_count = excluded.comments_count,
+    latest_comment_url = excluded.latest_comment_url,
+    pr_number = excluded.pr_number,
+    pr_url = excluded.pr_url,
+    branch = excluded.branch,
+    account_id = excluded.account_id,
+    author = excluded.author";
+
+/// 冲突时**不动**：按需拉取路径用。
+///
+/// 按需拉取只有单个 issue 的 REST 数据，`project_status`（需 GraphQL）、`mentioned`、
+/// `pr_number` 等字段拿不到；若以覆盖模式写入，会把同步刚写好的这些值清空。
+/// 用 `DO NOTHING` 则「行已存在」时零副作用，天然幂等。
+const TASK_CONFLICT_NOTHING: &str = "ON CONFLICT(repo, number, account_id) DO NOTHING";
+
+/// 写入模式，见 [`write_task`]。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskWriteMode {
+    /// 冲突则覆盖（同步路径）。
+    Upsert,
+    /// 冲突则不动（按需拉取路径；绝不覆盖既有行）。
+    InsertIfAbsent,
+}
+
+/// 幂等写入一条任务行。唯一键为 `(repo, number, account_id)`。
+///
+/// `now` 用于 `synced_at`，以及 `done_at` 的补写（`done` 且原值为 0 时）。
+/// 返回 SQLite 报告的影响行数：`InsertIfAbsent` 模式下 **0 表示该行已存在**
+/// （调用方据此判断「无需新写」）。
+pub fn write_task(
+    conn: &Connection,
+    t: &TaskUpsert,
+    now: i64,
+    mode: TaskWriteMode,
+) -> Result<usize, String> {
+    let conflict = match mode {
+        TaskWriteMode::Upsert => TASK_CONFLICT_UPDATE,
+        TaskWriteMode::InsertIfAbsent => TASK_CONFLICT_NOTHING,
+    };
+    let sql = format!("{TASK_INSERT_HEAD}\n  {conflict}");
+    conn.execute(
+        &sql,
+        rusqlite::params![
+            t.issue_key,
+            t.owner,
+            t.repo,
+            t.number,
+            t.title,
+            t.url,
+            t.issue_state,
+            t.ownership,
+            t.status,
+            t.project_status,
+            t.assignees,
+            t.labels,
+            t.done_at,
+            t.mentioned,
+            t.comments_count,
+            t.latest_comment_url,
+            t.pr_number,
+            t.pr_url,
+            t.branch,
+            t.updated_at,
+            now,
+            t.account_id,
+            t.author,
+        ],
+    )
+    .map_err(|e| format!("写入任务失败: {e}"))
+}
+
 // ============================================================================
 // v0.3.23+：同步日志管理
 // ============================================================================
@@ -1600,6 +1746,7 @@ pub fn insert_sync_log(
 }
 
 /// 更新同步日志（同步完成时调用）。
+#[allow(clippy::too_many_arguments)]
 pub fn update_sync_log(
     conn: &Connection,
     id: i64,

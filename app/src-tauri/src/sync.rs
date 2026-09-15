@@ -4,6 +4,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::github;
 
+/// 单个 Project 的同步结果：(project_id, status_field, status_map, issues, item_ids)
+type FetchedProject = (
+    String,
+    github::StatusField,
+    std::collections::HashMap<String, String>,
+    Vec<github::RawTask>,
+    std::collections::HashMap<String, String>,
+);
+
 pub fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -38,9 +47,7 @@ fn map_project_status(raw: &str) -> Option<&'static str> {
         Some("doing")
     } else if raw.contains("待开发") || raw.contains("需求") || raw.contains("规划") {
         Some("todo")
-    } else if raw.contains("取消") {
-        Some("done")
-    } else if raw.contains("完成") || raw.contains("上线") {
+    } else if raw.contains("取消") || raw.contains("完成") || raw.contains("上线") {
         Some("done")
     } else {
         None
@@ -160,35 +167,17 @@ struct AccountSyncResult {
     failed_sources: Vec<String>,
 }
 
-/// v0.3.49 (#144)：计算阶段产出的单任务写行。
-///
-/// 计算（含评论回源等网络 I/O）与写入分离：循环只产出行、不写库；
-/// 写入阶段包在一个事务里一次提交，且写事务不横跨网络 I/O
-/// （避免长持写锁阻塞 UI 独立连接的读写）。
-struct PendingUpsert {
-    key: String,
-    repo: String,
-    number: i64,
-    title: String,
-    url: String,
-    state: String,
-    ownership: String,
-    final_status: String,
-    gh_status_raw: String,
-    assignees_csv: String,
-    labels_csv: String,
-    /// #237：issue 创建人（GitHub author login，不含 @）。
-    author: String,
-    done_at_val: i64,
-    mentioned_val: i64,
-    comments_count: i64,
-    latest_comment_url: String,
-    pr_number: i64,
-    pr_url: String,
-    branch: String,
-    updated_at: i64,
-    exists: bool,
-}
+// v0.3.49 (#144)：计算阶段产出的单任务写行 —— 结构体定义见 `crate::db::TaskUpsert`。
+//
+// 计算（含评论回源等网络 I/O）与写入分离：循环只产出行、不写库；
+// 写入阶段包在一个事务里一次提交，且写事务不横跨网络 I/O
+// （避免长持写锁阻塞 UI 独立连接的读写）。
+//
+// v0.4.1 (#250)：结构体已抽到 `crate::db::TaskUpsert`，与「按需拉取单个 issue」
+// 共用同一份列清单与参数绑定；本模块只做「计算 → 交给 `db::write_task` 写入」。
+// 字段名随抽取统一（`key`→`issue_key`、`state`→`issue_state`、`final_status`→`status`、
+// `gh_status_raw`→`project_status`、`assignees_csv`→`assignees`、`labels_csv`→`labels`、
+// `done_at_val`→`done_at`、`mentioned_val`→`mentioned`）。
 
 /// v0.3.16+：单账号同步核心逻辑。返回该账号的 added / updated / 等。
 ///
@@ -197,8 +186,9 @@ struct PendingUpsert {
 /// - key 仍为 `repo#number`（PRIMARY KEY 不变）。多账号下同 key 会被后写入者覆盖——
 ///   这是 v0.3.16 的已知限制（设计文档 3.1 节确认）。单账号视图（默认）下不会出现冲突。
 /// - 单账号内仍走 5 源合并 + PR 关联 + Project Status 联动，与 v0.3.15 逻辑等价。
+///
 /// #235：`sync_account` 薄包装 —— 建客户端、挂采集槽，并在**无论成败**后
-/// 把本次同步实际发生的 API 调用（请求/返回参数）落盘。
+///   把本次同步实际发生的 API 调用（请求/返回参数）落盘。
 ///
 /// 之所以放在包装层而不是 body 内：body 里遍布 `?` 早期返回，只有在这里
 /// drain 才能保证失败路径也留下明细。
@@ -267,13 +257,7 @@ fn sync_account_inner(
     // DB 写入仍串行（同一连接）。线程 panic 按该项目失败处理（gid 为空即跳过）。
     // fetch_project_issues 返回 status_map、项目中发现的完整 issue 列表与条目 id，
     // 用于将「项目中有但搜索源未覆盖」的 issue 合并进同步数据（#215：item id 落库供写回）。
-    let fetched_projects: Vec<(
-        String,
-        github::StatusField,
-        std::collections::HashMap<String, String>,
-        Vec<github::RawTask>,
-        std::collections::HashMap<String, String>,
-    )> = std::thread::scope(|s| {
+    let fetched_projects: Vec<FetchedProject> = std::thread::scope(|s| {
         let handles: Vec<_> = project_ids
             .iter()
             .map(|gid| {
@@ -491,7 +475,7 @@ fn sync_account_inner(
         .map_err(|e| format!("预加载既有任务失败: {e}"))?;
 
     // 计算阶段：网络回源 + 纯内存匹配，只产出行，不写库。
-    let mut pending: Vec<PendingUpsert> = Vec::with_capacity(raw.len());
+    let mut pending: Vec<crate::db::TaskUpsert> = Vec::with_capacity(raw.len());
     let mut comment_budget: usize = 12;
     for t in &raw {
         if t.is_pr {
@@ -589,21 +573,23 @@ fn sync_account_inner(
                 (existing_comments, existing_comment_url.to_string())
             };
 
-        pending.push(PendingUpsert {
-            key,
+        pending.push(crate::db::TaskUpsert {
+            issue_key: key,
+            owner: account.org.clone(),
+            account_id: account.id,
             repo: t.repo.clone(),
             number: t.number,
             title: t.title.clone(),
             url: t.url.clone(),
-            state: t.state.clone(),
+            issue_state: t.state.clone(),
             ownership: ownership.to_string(),
-            final_status,
-            gh_status_raw,
-            assignees_csv,
-            labels_csv,
+            status: final_status,
+            project_status: gh_status_raw,
+            assignees: assignees_csv,
+            labels: labels_csv,
             author: t.author.clone(),
-            done_at_val,
-            mentioned_val,
+            done_at: done_at_val,
+            mentioned: mentioned_val,
             comments_count,
             latest_comment_url,
             pr_number,
@@ -626,66 +612,9 @@ fn sync_account_inner(
         tx.execute("UPDATE tasks SET stale = 1 WHERE account_id = ?1", [account.id])
             .map_err(|e| format!("标记陈旧任务失败: {e}"))?;
         for row in &pending {
-            tx.execute(
-                "INSERT INTO tasks
-                   (issue_key, owner, repo, number, title, url, issue_state, ownership,
-                    status, project_status, assignees, labels, done_at, mentioned, comments_count,
-                    latest_comment_url, pr_number, pr_url, branch, candidate_done, stale, updated_at, synced_at,
-                    account_id, author)
-                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 0, 0, ?20, ?21, ?22, ?23)
-                  ON CONFLICT(repo, number, account_id) DO UPDATE SET
-                    title = excluded.title,
-                    repo = excluded.repo,
-                    issue_state = excluded.issue_state,
-                    ownership = excluded.ownership,
-                    updated_at = excluded.updated_at,
-                    synced_at = excluded.synced_at,
-                    candidate_done = 0,
-                    stale = 0,
-                    project_status = excluded.project_status,
-                    assignees = excluded.assignees,
-                    labels = excluded.labels,
-                    status = excluded.status,
-                    done_at = CASE
-                      WHEN excluded.status = 'done' AND done_at = 0 THEN ?20
-                      WHEN excluded.status <> 'done' THEN 0
-                      ELSE done_at
-                    END,
-                    mentioned = excluded.mentioned,
-                    comments_count = excluded.comments_count,
-                    latest_comment_url = excluded.latest_comment_url,
-                    pr_number = excluded.pr_number,
-                    pr_url = excluded.pr_url,
-                    branch = excluded.branch,
-                    account_id = excluded.account_id,
-                    author = excluded.author",
-                rusqlite::params![
-                    row.key,
-                    account.org,
-                    row.repo,
-                    row.number,
-                    row.title,
-                    row.url,
-                    row.state,
-                    row.ownership,
-                    row.final_status,
-                    row.gh_status_raw,
-                    row.assignees_csv,
-                    row.labels_csv,
-                    row.done_at_val,
-                    row.mentioned_val,
-                    row.comments_count,
-                    row.latest_comment_url,
-                    row.pr_number,
-                    row.pr_url,
-                    row.branch,
-                    row.updated_at,
-                    now,
-                    account.id,
-                    row.author,
-                ],
-            )
-            .map_err(|e| format!("写入任务失败: {e}"))?;
+            // v0.4.1 (#250)：写入走 db::write_task（与「按需拉取单个 issue」共用同一份
+            // 列清单与参数绑定）。同步路径是权威数据 → Upsert（冲突则覆盖）。
+            crate::db::write_task(&tx, row, now, crate::db::TaskWriteMode::Upsert)?;
 
             if row.exists {
                 updated += 1;
@@ -726,7 +655,7 @@ fn sync_account_inner(
                 rusqlite::params![account.id, now],
             )
             .map_err(|e| format!("标记候选已完成失败: {}", e))?;
-        candidate_done = n as usize;
+        candidate_done = n;
         if candidate_done > 0 {
             crate::tlog!("[sync] 标记 {} 个任务为候选已完成", candidate_done);
         }

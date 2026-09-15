@@ -173,7 +173,7 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — 设计要点（多源拉取、归属三分、四态维护、PR 关联）与 GitHub Actions 在线打包说明
 
-- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.5.0）
+- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.5.1）
 
 - [`docs/v0.3.15-pat-auth.md`](./docs/v0.3.15-pat-auth.md) — v0.3.15 PAT 认证与 visual polish 设计文档（gh 替换、卡片配色、多账号规划）
 
@@ -189,11 +189,17 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/issue-239-doc-integrity.md`](./docs/issue-239-doc-integrity.md) — **文档完整性修复**：断链 / 不可移植 `file://` 路径 / 失效行号锚点 + v0.3.50 CHANGELOG 补录；含 `scripts/check-doc-links.py` 防回归
 
+- [`docs/issue-252-ci-green.md`](./docs/issue-252-ci-green.md) — **修好既有 CI**：prettier 全量格式化（以产物 sha256 不变证明零影响）+ 把 Tauri 的 Linux 系统依赖抽成 composite action，`quality-check.yml` 四个 job 恢复全绿
+
+- [`docs/issue-250-ondemand-issue-pull.md`](./docs/issue-250-ondemand-issue-pull.md) — **未同步 issue 按需拉取**：MCP 写路径命中「任务不存在」时下拉单个 issue 落库（只读 GitHub、不触发全量同步）；含 owner 匹配与 `DO NOTHING` 落库的取舍、真机验证记录
+
+- [`docs/issue-248-synclogs-hscroll.md`](./docs/issue-248-synclogs-hscroll.md) — **同步日志表格横向滚动**：容器 `overflow: hidden` 静默裁掉右侧列（错误 / 明细）；滚动职责收敛到紧贴表格的容器，含 `src/styles.test.ts` 静态回归测试
+
 - [`docs/perf-audit-optimization.md`](./docs/perf-audit-optimization.md) — **性能 / 安全优化批次索引**：`P0-1`…`P2-2` 编号到 issue 与落地文档的映射（`#143`–`#150`，随 v0.3.50 发布）
 
 - [`docs/issue-118-expand-platform-support.md`](./docs/issue-118-expand-platform-support.md) — **扩展平台支持**：release 矩阵显式声明 `target`，新增 macOS 双架构与 Windows ARM64 构建
 
 - [`docs/issue-119-expand-release-matrix.md`](./docs/issue-119-expand-release-matrix.md) — **扩展 Release 打包矩阵**：Linux arm64、rpm、Windows msi；并记录 `zip` 作为 Tauri 2 bundle 类型**被当日回滚**的教训
 
-> 版本 v0.5.0 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-13
+> 版本 v0.5.1 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-15
 

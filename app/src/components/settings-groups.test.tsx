@@ -1,12 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderToStaticMarkup } from "react-dom/server";
-import SettingsPanel from "./SettingsPanel";
-import { I18nProvider } from "../i18n";
-import type { Settings } from "../types";
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderToStaticMarkup } from 'react-dom/server';
+import SettingsPanel from './SettingsPanel';
+import { I18nProvider } from '../i18n';
+import type { Settings } from '../types';
 
 beforeEach(() => {
-  vi.stubGlobal("localStorage", {
-    getItem: () => "zh-CN",
+  vi.stubGlobal('localStorage', {
+    getItem: () => 'zh-CN',
     setItem: () => {},
     removeItem: () => {},
   });
@@ -20,38 +20,38 @@ const noop = () => {};
 function mkSettings(): Settings {
   return {
     scheduleMinutes: 60,
-    ghPath: "",
-    login: "",
-    org: "",
+    ghPath: '',
+    login: '',
+    org: '',
     lastSyncAt: 0,
-    dbPath: "",
+    dbPath: '',
     hasPat: false,
-    lastSyncError: "",
+    lastSyncError: '',
     activeAccountId: 0,
-    viewMode: "single",
+    viewMode: 'single',
     accounts: [],
-    oauthClientId: "",
+    oauthClientId: '',
   };
 }
 
-describe("Agent 分组下拉（#207）", () => {
-  it("未查询时可接入/手动两组标题为可点开关且默认展开", () => {
+describe('Agent 分组下拉（#207）', () => {
+  it('未查询时可接入/手动两组标题为可点开关且默认展开', () => {
     const html = renderToStaticMarkup(
       <I18nProvider>
         <SettingsPanel settings={mkSettings()} onSaved={noop} onClose={noop} />
       </I18nProvider>,
     );
     // SSR 不跑 effect，hooksStatus 为 null：支持的一键 agent 进可接入，不支持的进手动配置
-    expect(html).toContain("hook-group-toggle");
+    expect(html).toContain('hook-group-toggle');
     expect(html).toContain('aria-expanded="true"');
     // 行默认可见（未收起）
-    expect(html).toContain("Claude Code");
+    expect(html).toContain('Claude Code');
   });
 
-  it("存档收起态下对应组收起、行不可见", () => {
-    vi.stubGlobal("localStorage", {
+  it('存档收起态下对应组收起、行不可见', () => {
+    vi.stubGlobal('localStorage', {
       getItem: (k: string) =>
-        k === "settings.hooks.groupsCollapsed" ? '{"manual":true}' : "zh-CN",
+        k === 'settings.hooks.groupsCollapsed' ? '{"manual":true}' : 'zh-CN',
       setItem: () => {},
       removeItem: () => {},
     });
@@ -66,13 +66,13 @@ describe("Agent 分组下拉（#207）", () => {
   });
 });
 
-describe("自定义列映射页签（#226）", () => {
-  it("暂关闭：无入口", () => {
+describe('自定义列映射页签（#226）', () => {
+  it('暂关闭：无入口', () => {
     const html = renderToStaticMarkup(
       <I18nProvider>
         <SettingsPanel settings={mkSettings()} onSaved={noop} onClose={noop} />
       </I18nProvider>,
     );
-    expect(html).not.toContain("自定义列映射");
+    expect(html).not.toContain('自定义列映射');
   });
 });

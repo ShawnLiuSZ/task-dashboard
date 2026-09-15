@@ -1,0 +1,28 @@
+# 安装 Tauri 在 Linux 上编译 / 打包所需的系统依赖。
+#
+# 抽成 composite action 的理由（#252）：「需要这些库」的工作流不止一个，
+# 而同一份 apt 清单散落多处时必然漏装 —— quality-check.yml 的两个 Rust job 就是因为
+# 只写了 `runs-on: ubuntu-latest` 而没装库，导致 `cargo clippy --lib` / `cargo test --lib`
+# 连编译都过不去（build script 阶段 `pkg-config --libs glib-2.0` 失败，
+# 报 `failed to run custom build command for glib-sys / gio-sys / gobject-sys`）。
+#
+# 非 Linux runner 自动跳过（把 runner.os 判断放在 action 内部，调用方无需重复写 if）。
+name: Install Linux dependencies
+description: 安装 Tauri 在 Linux 上编译 / 打包所需的系统依赖（apt）
+
+runs:
+  using: composite
+  steps:
+    - name: apt-get install Tauri Linux deps
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libwebkit2gtk-4.1-dev \
+          libgtk-3-dev \
+          libayatana-appindicator3-dev \
+          librsvg2-dev \
+          patchelf \
+          xdg-utils \
+          rpm

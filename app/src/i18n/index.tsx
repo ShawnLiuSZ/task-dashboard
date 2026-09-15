@@ -1,13 +1,6 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
-import zhCN from "./locales/zh-CN.json";
-import enUS from "./locales/en-US.json";
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import zhCN from './locales/zh-CN.json';
+import enUS from './locales/en-US.json';
 
 /**
  * 轻量 i18n（Issue #7）：
@@ -16,33 +9,33 @@ import enUS from "./locales/en-US.json";
  * - t(key, params) 支持 {name} 占位符。
  */
 
-export type Lang = "zh-CN" | "en-US";
-export type LangMode = "auto" | Lang;
+export type Lang = 'zh-CN' | 'en-US';
+export type LangMode = 'auto' | Lang;
 
-const STORAGE_KEY = "taskboard.lang";
+const STORAGE_KEY = 'taskboard.lang';
 
 const DICTS: Record<Lang, Record<string, string>> = {
-  "zh-CN": zhCN as Record<string, string>,
-  "en-US": enUS as Record<string, string>,
+  'zh-CN': zhCN as Record<string, string>,
+  'en-US': enUS as Record<string, string>,
 };
 
 function readMode(): LangMode {
   try {
     const v = localStorage.getItem(STORAGE_KEY);
-    if (v === "auto" || v === "zh-CN" || v === "en-US") return v;
+    if (v === 'auto' || v === 'zh-CN' || v === 'en-US') return v;
   } catch {
     /* localStorage 不可用时回落 auto */
   }
-  return "auto";
+  return 'auto';
 }
 
 /** auto 模式下按系统语言解析（zh 开头 → 中文，否则英文）。 */
 export function resolveLang(mode: LangMode): Lang {
-  if (mode !== "auto") return mode;
+  if (mode !== 'auto') return mode;
   try {
-    return navigator.language?.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US";
+    return navigator.language?.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US';
   } catch {
-    return "zh-CN";
+    return 'zh-CN';
   }
 }
 
@@ -74,7 +67,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   const t = useCallback(
     (key: string, params?: Record<string, string | number>): string => {
-      let s = DICTS[lang][key] ?? DICTS["zh-CN"][key];
+      let s = DICTS[lang][key] ?? DICTS['zh-CN'][key];
       if (s === undefined) {
         console.warn(`[i18n] missing key: ${key} (${lang})`);
         return key;
@@ -95,19 +88,19 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
 export function useI18n(): I18nValue {
   const v = useContext(I18nContext);
-  if (!v) throw new Error("useI18n 必须在 <I18nProvider> 内使用");
+  if (!v) throw new Error('useI18n 必须在 <I18nProvider> 内使用');
   return v;
 }
 
 /** 便捷取 t（不需要 mode/setMode 的组件用这个，减少样板）。 */
-export function useT(): I18nValue["t"] {
+export function useT(): I18nValue['t'] {
   return useI18n().t;
 }
 
 /** 本地化时间格式：ts 为秒级时间戳或 ISO 字符串；0/空 显示「从未 / Never」。 */
 export function fmtTime(ts: number | string | null, lang: Lang): string {
-  if (!ts) return lang === "en-US" ? "Never" : "从未";
-  const d = typeof ts === "number" ? new Date(ts * 1000) : new Date(ts);
-  const pad = (n: number) => String(n).padStart(2, "0");
+  if (!ts) return lang === 'en-US' ? 'Never' : '从未';
+  const d = typeof ts === 'number' ? new Date(ts * 1000) : new Date(ts);
+  const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }

@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { api, openExternal } from "../api";
-import { AGENTS, agentLabel } from "../agents";
-import { type ProjectStatus, type Task } from "../types";
-import { fmtTime, useI18n } from "../i18n";
-import ConfirmDialog from "./ConfirmDialog";
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { api, openExternal } from '../api';
+import { AGENTS, agentLabel } from '../agents';
+import { type ProjectStatus, type Task } from '../types';
+import { fmtTime, useI18n } from '../i18n';
+import ConfirmDialog from './ConfirmDialog';
 
 interface Props {
   task: Task;
@@ -16,11 +16,11 @@ interface Props {
 export default function DetailPanel({ task, onClose, onChanged, projectStatuses }: Props) {
   const { t, lang } = useI18n();
   const [busy, setBusy] = useState(false);
-  const [sessionInput, setSessionInput] = useState(task.sessionId ?? "");
-  const [agent, setAgent] = useState(task.sessionAgent ?? "claude-code");
+  const [sessionInput, setSessionInput] = useState(task.sessionId ?? '');
+  const [agent, setAgent] = useState(task.sessionAgent ?? 'claude-code');
   const [err, setErr] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [handoff, setHandoff] = useState(task.handoff ?? "");
+  const [handoff, setHandoff] = useState(task.handoff ?? '');
   // #215：待确认的目标 Project 状态（确认框 → set_project_status 写回）。
   const [pendingStatus, setPendingStatus] = useState<string | null>(null);
   // 「已复制」提示的复位定时器：组件的卸载（切换任务、关闭面板）时需清理，
@@ -36,7 +36,7 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
   // closed→done，有原文取原文，空→unclassified。详情状态区永远以此为准，
   // 不跟随 custom 列展示方式。
   const currentProjectStatus =
-    task.issueState === "closed" ? "done" : task.projectStatus?.trim() || "unclassified";
+    task.issueState === 'closed' ? 'done' : task.projectStatus?.trim() || 'unclassified';
   // 选项 = projectStatuses 名称；当前值不在其中时前置，保证永远可见且默认选中。
   const projectStatusOptions = useMemo(() => {
     const names = (projectStatuses ?? []).map((ps) => ps.name);
@@ -44,7 +44,7 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
     return names;
   }, [projectStatuses, currentProjectStatus]);
   const projectStatusLabel = (name: string) =>
-    name === "done" ? t("status.done") : name === "unclassified" ? t("detail.unlabeled") : name;
+    name === 'done' ? t('status.done') : name === 'unclassified' ? t('detail.unlabeled') : name;
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -84,7 +84,7 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
       aria-modal="true"
       aria-label={`${task.repo}#${task.number}`}
       onKeyDown={(e) => {
-        if (e.key === "Escape") onClose();
+        if (e.key === 'Escape') onClose();
       }}
     >
       <div className="detail-head">
@@ -93,30 +93,30 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
           <span className="num">#{task.number}</span>
         </div>
         <button className="btn ghost" onClick={onClose}>
-          {t("btn.close")}
+          {t('btn.close')}
         </button>
       </div>
 
       <h2 className="detail-title">{task.title}</h2>
 
       <div className="tags">
-        <span className={`own own-${task.ownership}`}>
-          {t(`ownership.${task.ownership}`)}
+        <span className={`own own-${task.ownership}`}>{t(`ownership.${task.ownership}`)}</span>
+        {task.candidateDone && <span className="candidate-tag">{t('detail.closedPending')}</span>}
+        <span className="muted small">
+          {t('detail.updatedAt', { time: fmtTime(task.updatedAt, lang) })}
         </span>
-        {task.candidateDone && <span className="candidate-tag">{t("detail.closedPending")}</span>}
-        <span className="muted small">{t("detail.updatedAt", { time: fmtTime(task.updatedAt, lang) })}</span>
       </div>
 
       <section className="detail-block">
-        <div className="block-title">{t("detail.statusTitle")}</div>
+        <div className="block-title">{t('detail.statusTitle')}</div>
         {/* #215：GitHub 状态行可点（确认框 → 写回远端 Status）。
             #200 去掉了四态手动入口，此处是唯一的状态切换入口。 */}
-        <div className="muted small">{t("detail.projectStatus")}</div>
+        <div className="muted small">{t('detail.projectStatus')}</div>
         <div className="seg project-status-seg">
           {projectStatusOptions.map((name) => (
             <button
               key={name}
-              className={`seg-btn${name === currentProjectStatus ? " on" : ""}`}
+              className={`seg-btn${name === currentProjectStatus ? ' on' : ''}`}
               disabled={busy || name === currentProjectStatus}
               title={projectStatusLabel(name)}
               onClick={() => setPendingStatus(name)}
@@ -129,7 +129,7 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
       {/* #215：状态写回二次确认（失败在详情内横幅展示；成功重查）。 */}
       {pendingStatus !== null && (
         <ConfirmDialog
-          message={t("detail.projectStatusConfirm", { name: projectStatusLabel(pendingStatus) })}
+          message={t('detail.projectStatusConfirm', { name: projectStatusLabel(pendingStatus) })}
           onCancel={() => setPendingStatus(null)}
           onConfirm={() => {
             const name = pendingStatus;
@@ -140,7 +140,7 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
       )}
 
       <section className="detail-block">
-        <div className="block-title">{t("detail.sessionTitle")}</div>
+        <div className="block-title">{t('detail.sessionTitle')}</div>
         <div className="row">
           <input
             className="input"
@@ -160,33 +160,29 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
           <button
             className="btn"
             disabled={busy || !sessionInput.trim()}
-            onClick={() =>
-              run(() => api.recordSession(task.issueKey, sessionInput.trim(), agent))
-            }
+            onClick={() => run(() => api.recordSession(task.issueKey, sessionInput.trim(), agent))}
           >
-            {t("btn.record")}
+            {t('btn.record')}
           </button>
           <button
             className="btn"
             disabled={busy || !task.sessionId}
             onClick={() => run(() => api.clearSession(task.issueKey))}
           >
-            {t("btn.clear")}
+            {t('btn.clear')}
           </button>
           <button
             className="btn"
             disabled={!task.sessionId}
-            onClick={() => task.sessionId && copyToClipboard(task.sessionId, "session")}
+            onClick={() => task.sessionId && copyToClipboard(task.sessionId, 'session')}
           >
-            {copiedKey === "session" ? t("btn.copied") : t("btn.copy")}
+            {copiedKey === 'session' ? t('btn.copied') : t('btn.copy')}
           </button>
         </div>
         {task.sessionId && (
           <div className="muted small">
-            {t("detail.recordedAt", {
-              agent: task.sessionAgent
-                ? agentLabel(task.sessionAgent, t)
-                : t("detail.unlabeled"),
+            {t('detail.recordedAt', {
+              agent: task.sessionAgent ? agentLabel(task.sessionAgent, t) : t('detail.unlabeled'),
               time: fmtTime(task.sessionAt ?? 0, lang),
             })}
           </div>
@@ -194,11 +190,11 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
       </section>
 
       <section className="detail-block">
-        <div className="block-title">{t("detail.handoffTitle")}</div>
+        <div className="block-title">{t('detail.handoffTitle')}</div>
         <textarea
           className="input wide"
           rows={3}
-          placeholder={t("detail.handoffPlaceholder")}
+          placeholder={t('detail.handoffPlaceholder')}
           value={handoff}
           onChange={(e) => setHandoff(e.target.value)}
         />
@@ -208,17 +204,17 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
             disabled={busy || !handoff.trim()}
             onClick={() => run(() => api.recordHandoff(task.issueKey, handoff.trim()))}
           >
-            {t("btn.save")}
+            {t('btn.save')}
           </button>
           {task.handoff && handoff.trim() !== task.handoff && (
-            <button className="btn ghost" onClick={() => setHandoff(task.handoff ?? "")}>
-              {t("btn.revert")}
+            <button className="btn ghost" onClick={() => setHandoff(task.handoff ?? '')}>
+              {t('btn.revert')}
             </button>
           )}
         </div>
         {task.handoff && (
           <div className="muted small top-gap">
-            {t("detail.handoffSaved", { n: task.handoff.length })}
+            {t('detail.handoffSaved', { n: task.handoff.length })}
           </div>
         )}
       </section>
@@ -227,69 +223,63 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
         <div className="block-title">GitHub</div>
         <div className="row">
           <button className="btn" onClick={() => openExternal(task.url)}>
-            {t("detail.openInBrowser")}
+            {t('detail.openInBrowser')}
           </button>
-          <button
-            className="btn ghost"
-            onClick={() => copyToClipboard(task.url, "url")}
-          >
-            {copiedKey === "url" ? t("btn.copied") : t("btn.copy")}
+          <button className="btn ghost" onClick={() => copyToClipboard(task.url, 'url')}>
+            {copiedKey === 'url' ? t('btn.copied') : t('btn.copy')}
           </button>
           {task.prNumber > 0 && task.prUrl && (
             <>
               <button className="btn" onClick={() => openExternal(task.prUrl)}>
                 PR #{task.prNumber}
               </button>
-              <button
-                className="btn ghost"
-                onClick={() => copyToClipboard(task.prUrl, "pr")}
-              >
-                {copiedKey === "pr" ? t("btn.copied") : t("btn.copy")}
+              <button className="btn ghost" onClick={() => copyToClipboard(task.prUrl, 'pr')}>
+                {copiedKey === 'pr' ? t('btn.copied') : t('btn.copy')}
               </button>
             </>
           )}
           {task.latestCommentUrl && (
             <button className="btn" onClick={() => openExternal(task.latestCommentUrl)}>
-              {t("detail.latestComment")}
+              {t('detail.latestComment')}
             </button>
           )}
         </div>
         <div className="muted small top-gap">
           {task.assignees
-            ? t("detail.assignees", {
+            ? t('detail.assignees', {
                 list: task.assignees
-                  .split(",")
+                  .split(',')
                   .filter(Boolean)
                   .map((a) => `@${a}`)
-                  .join(" "),
+                  .join(' '),
               })
-            : t("ownership.notassignee")}
-          {task.mentioned && ` · ${t("detail.mentionedSuffix")}`}
+            : t('ownership.notassignee')}
+          {task.mentioned && ` · ${t('detail.mentionedSuffix')}`}
         </div>
         {task.branch && (
           <div className="branch-line top-gap">
-            <span>{t("detail.branch", { branch: task.branch })}</span>
+            <span>{t('detail.branch', { branch: task.branch })}</span>
             <button
               className="btn ghost small inline"
-              onClick={() => copyToClipboard(task.branch, "branch")}
+              onClick={() => copyToClipboard(task.branch, 'branch')}
             >
-              {copiedKey === "branch" ? t("btn.copied") : t("btn.copy")}
+              {copiedKey === 'branch' ? t('btn.copied') : t('btn.copy')}
             </button>
           </div>
         )}
         {/* #193：agent 工作分支（与 PR 分支不同时才展示，避免重复）。 */}
         {task.workBranch && task.workBranch !== task.branch && (
           <div className="branch-line top-gap">
-            <span>{t("detail.workBranch", { branch: task.workBranch })}</span>
+            <span>{t('detail.workBranch', { branch: task.workBranch })}</span>
             <button
               className="btn ghost small inline"
-              onClick={() => copyToClipboard(task.workBranch, "workBranch")}
+              onClick={() => copyToClipboard(task.workBranch, 'workBranch')}
             >
-              {copiedKey === "workBranch" ? t("btn.copied") : t("btn.copy")}
+              {copiedKey === 'workBranch' ? t('btn.copied') : t('btn.copy')}
             </button>
           </div>
         )}
-        <div className="muted small top-gap">{t("detail.localOnly")}</div>
+        <div className="muted small top-gap">{t('detail.localOnly')}</div>
       </section>
 
       {err && <div className="banner error">{err}</div>}

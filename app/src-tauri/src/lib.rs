@@ -17,6 +17,8 @@ mod github;
 mod hooks;
 mod mcp;
 mod oauth;
+// v0.4.1 (#250)：本地未命中时按需拉取单个 issue（MCP 写路径用）。
+mod on_demand;
 mod sync;
 
 /// 从可执行文件路径上溯定位 `.app` bundle 根目录。
@@ -307,7 +309,7 @@ pub fn run() {
             // #206：不再启动自动注册全局 hooks——接入一律由用户在设置页手动一键安装。
             let handle = app.handle().clone();
             let conn = db::init(&handle).map_err(|e| {
-                Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
+                Box::new(std::io::Error::other(e))
                     as Box<dyn std::error::Error>
             })?;
             app.manage(AppState {

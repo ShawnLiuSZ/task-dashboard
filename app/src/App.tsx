@@ -1,17 +1,24 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { api, onSynced, onTasksChanged, TASKBOARD_ERROR_EVENT } from "./api";
-import { taskListSignature } from "./utils/taskSig";
-import { coalescedLoad, createLoadCoalescer } from "./utils/coalescedLoad";
-import { countHiddenChanged, snapshotTasks } from "./utils/syncHint";
-import { fmtTime, I18nProvider, useI18n } from "./i18n";
-import Board from "./components/Board";
-import DetailPanel from "./components/DetailPanel";
-import SettingsPanel from "./components/SettingsPanel";
-import AboutPanel from "./components/AboutPanel";
-import AccountsPanel from "./components/AccountsPanel";
-import SyncLogsPanel from "./components/SyncLogsPanel";
-import NotesPanel from "./components/NotesPanel";
-import type { Account, AccountColumn, BoardMode, ProjectStatus, Settings as SettingsT, Task } from "./types";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { api, onSynced, onTasksChanged, TASKBOARD_ERROR_EVENT } from './api';
+import { taskListSignature } from './utils/taskSig';
+import { coalescedLoad, createLoadCoalescer } from './utils/coalescedLoad';
+import { countHiddenChanged, snapshotTasks } from './utils/syncHint';
+import { fmtTime, I18nProvider, useI18n } from './i18n';
+import Board from './components/Board';
+import DetailPanel from './components/DetailPanel';
+import SettingsPanel from './components/SettingsPanel';
+import AboutPanel from './components/AboutPanel';
+import AccountsPanel from './components/AccountsPanel';
+import SyncLogsPanel from './components/SyncLogsPanel';
+import NotesPanel from './components/NotesPanel';
+import type {
+  Account,
+  AccountColumn,
+  BoardMode,
+  ProjectStatus,
+  Settings as SettingsT,
+  Task,
+} from './types';
 
 export default function App() {
   return (
@@ -27,10 +34,12 @@ function BoardApp() {
   const [syncing, setSyncing] = useState(false);
   const [settings, setSettings] = useState<SettingsT | null>(null);
   // 互斥弹窗状态：同一时刻仅显示一个（设置/关于/账号/同步日志）。
-  const [activeModal, setActiveModal] = useState<"settings" | "about" | "accounts" | "synclogs" | null>(null);
-  const [ownership, setOwnership] = useState("");
-  const [query, setQuery] = useState("");
-  const [repo, setRepo] = useState("");
+  const [activeModal, setActiveModal] = useState<
+    'settings' | 'about' | 'accounts' | 'synclogs' | null
+  >(null);
+  const [ownership, setOwnership] = useState('');
+  const [query, setQuery] = useState('');
+  const [repo, setRepo] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<string | null>(null);
   // #178：上次同步中新变、但被当前筛选藏住的任务数（>0 时给提示+一键清除）。
@@ -58,12 +67,12 @@ function BoardApp() {
   // - 'all'    → 0（聚合全部账号）
   const accountFilter = useMemo<number | null>(() => {
     if (!settings) return null;
-    return settings.viewMode === "all" ? 0 : settings.activeAccountId;
+    return settings.viewMode === 'all' ? 0 : settings.activeAccountId;
   }, [settings]);
 
   // #181：无变化跳过 setState。本地写入不更新 updated_at，
   // 指纹覆盖 status / session / handoff 等字段（见 utils/taskSig）。
-  const tasksSig = useRef("");
+  const tasksSig = useRef('');
   const loadCoalescer = useRef(createLoadCoalescer());
   // 最新筛选快照（供定时/事件触发的重查使用，避免闭包过期）。
   const filterRef = useRef({ ownership, accountId: accountFilter });
@@ -114,7 +123,7 @@ function BoardApp() {
       // viewMode="all" 时聚合所有账号的 project_statuses，按字母序合并去重
       // （聚合视图下每个账号可能属于不同项目，无法用单一 order_index）
       // v0.3.49 (#145)：并行拉取 + 单账号失败隔离（该账号列缺失不断整板）。
-      if (settings.viewMode === "all") {
+      if (settings.viewMode === 'all') {
         const accounts = settings.accounts ?? [];
         const results = await Promise.all(
           accounts
@@ -154,7 +163,7 @@ function BoardApp() {
       setProjectStatuses(best);
     } catch (e) {
       // 项目状态决定看板列，失败必须可见，否则列静默缺失用户无从判断。
-      console.warn("加载项目状态选项失败:", e);
+      console.warn('加载项目状态选项失败:', e);
       setError(String(e));
     }
   }, [settings]);
@@ -169,7 +178,7 @@ function BoardApp() {
         return;
       }
 
-      if (settings.viewMode === "all") {
+      if (settings.viewMode === 'all') {
         // 聚合视图：合并所有账号的自定义列（按 col_key 去重）
         // v0.3.49 (#145)：并行拉取 + 单账号失败隔离。
         const accounts = (settings.accounts ?? []).filter((a) => a.id);
@@ -195,7 +204,7 @@ function BoardApp() {
       const cols = await api.listAccountColumns(activeId);
       setAccountColumns(cols.sort((a, b) => a.orderIndex - b.orderIndex));
     } catch (e) {
-      console.warn("加载自定义列配置失败:", e);
+      console.warn('加载自定义列配置失败:', e);
       // 同上：自定义列缺失会让看板列不完整，失败需可见。
       setError(String(e));
     }
@@ -212,10 +221,10 @@ function BoardApp() {
       void load();
       void loadSettings();
       // loadProjectStatuses 依赖 settings，下面的 useEffect 会在 settings 变化时自动触发
-      const warn = r.warning ? ` · ⚠️ ${r.warning}` : "";
-      const prune = r.pruned > 0 ? ` · ${t("sync.pruned", { n: r.pruned })}` : "";
+      const warn = r.warning ? ` · ⚠️ ${r.warning}` : '';
+      const prune = r.pruned > 0 ? ` · ${t('sync.pruned', { n: r.pruned })}` : '';
       setLastResult(
-        `${t("sync.result", { added: r.added, updated: r.updated, done: r.candidateDone })}${prune}${warn}`,
+        `${t('sync.result', { added: r.added, updated: r.updated, done: r.candidateDone })}${prune}${warn}`,
       );
     }).then((f) => {
       if (cancelled) {
@@ -249,12 +258,12 @@ function BoardApp() {
       if (!document.hidden) void load();
     };
     const onFocus = () => void load();
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', refresh);
     const timer = window.setInterval(refresh, 20000);
     return () => {
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', refresh);
       window.clearInterval(timer);
     };
   }, [load]);
@@ -267,10 +276,7 @@ function BoardApp() {
   }, [settings, loadProjectStatuses, loadAccountColumns]);
 
   // 仓库列表（去重排序），用于仓库筛选下拉。
-  const repos = useMemo(
-    () => [...new Set(tasks.map((t) => t.repo))].sort(),
-    [tasks],
-  );
+  const repos = useMemo(() => [...new Set(tasks.map((t) => t.repo))].sort(), [tasks]);
 
   // v0.3.16+：账号 id → Account 的映射，传给 Board 在卡片上显示账号徽章。
   const accountMap = useMemo(() => {
@@ -284,9 +290,9 @@ function BoardApp() {
   // v0.3.43+：看板列展示方式为「每账号」配置。单账号视图取激活账号的 boardMode；
   // 聚合视图（暂隐藏，未配置按账号展开）与账号缺失时回退到 project（默认）。
   const boardMode = useMemo<BoardMode>(() => {
-    if (!settings) return "project";
-    if (settings.viewMode === "all") return "project";
-    return accountMap.get(settings.activeAccountId)?.boardMode ?? "project";
+    if (!settings) return 'project';
+    if (settings.viewMode === 'all') return 'project';
+    return accountMap.get(settings.activeAccountId)?.boardMode ?? 'project';
   }, [settings, accountMap]);
 
   // 前端实时过滤：归属由后端 list_tasks 已筛；此处叠加 仓库 + 关键词（仓库/编号/标题）。
@@ -315,10 +321,10 @@ function BoardApp() {
     const before = snapshotTasks(beforePool);
     try {
       const r = await api.syncNow();
-      const warn = r.warning ? ` · ⚠️ ${r.warning}` : "";
-      const prune = r.pruned > 0 ? ` · ${t("sync.pruned", { n: r.pruned })}` : "";
+      const warn = r.warning ? ` · ⚠️ ${r.warning}` : '';
+      const prune = r.pruned > 0 ? ` · ${t('sync.pruned', { n: r.pruned })}` : '';
       setLastResult(
-        `${t("sync.result", { added: r.added, updated: r.updated, done: r.candidateDone })}${prune}${warn}`,
+        `${t('sync.result', { added: r.added, updated: r.updated, done: r.candidateDone })}${prune}${warn}`,
       );
       const fresh = await api.listTasks(ownership || undefined, accountFilter);
       applyTasks(fresh);
@@ -336,9 +342,9 @@ function BoardApp() {
 
   // #178：一键清除全部筛选（含后端归属维度，需重查；旧工具栏重置漏了这步）。
   const clearAllFilters = useCallback(async () => {
-    setQuery("");
-    setRepo("");
-    setOwnership("");
+    setQuery('');
+    setRepo('');
+    setOwnership('');
     setHiddenAfterSync(0);
     try {
       applyTasks(await api.listTasks(undefined, accountFilter));
@@ -351,7 +357,6 @@ function BoardApp() {
   // 筛选被手动改动后，同步提示即过期（用户正在自行处理）。
   useEffect(() => {
     setHiddenAfterSync(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, repo, ownership]);
 
   // v0.3.16+：切换激活账号（单账号视图）。
@@ -383,50 +388,143 @@ function BoardApp() {
             value={settings?.activeAccountId ?? 0}
             onChange={(e) => void handleSwitchAccount(Number(e.target.value))}
             title={
-              settings?.viewMode === "all"
-                ? t("topbar.switchAccountAll")
-                : t("topbar.switchAccount")
+              settings?.viewMode === 'all'
+                ? t('topbar.switchAccountAll')
+                : t('topbar.switchAccount')
             }
-            disabled={settings?.viewMode === "all"}
+            disabled={settings?.viewMode === 'all'}
           >
             {(settings?.accounts ?? []).length === 0 && (
-              <option value={0}>{t("topbar.noAccounts")}</option>
+              <option value={0}>{t('topbar.noAccounts')}</option>
             )}
             {(settings?.accounts ?? []).map((a) => (
               <option key={a.id} value={a.id}>
                 @{a.login}
-                {a.org ? ` (${a.org})` : ""}
+                {a.org ? ` (${a.org})` : ''}
               </option>
             ))}
           </select>
-          <span className="muted">
-            {t("topbar.totalCount", { n: visible.length })}
-          </span>
+          <span className="muted">{t('topbar.totalCount', { n: visible.length })}</span>
         </div>
 
         <div className="topbar-right">
           <span className="muted small">
-            {t("topbar.lastSync", { time: fmtTime(settings?.lastSyncAt ?? 0, lang) })}
+            {t('topbar.lastSync', { time: fmtTime(settings?.lastSyncAt ?? 0, lang) })}
           </span>
-<button className="btn" onClick={() => setActiveModal(activeModal === "about" ? null : "about")} title={t("btn.about")}>
-            <svg className="btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-            <span className="btn-label">{t("btn.about")}</span>
+          <button
+            className="btn"
+            onClick={() => setActiveModal(activeModal === 'about' ? null : 'about')}
+            title={t('btn.about')}
+          >
+            <svg
+              className="btn-icon"
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 16v-4" />
+              <path d="M12 8h.01" />
+            </svg>
+            <span className="btn-label">{t('btn.about')}</span>
           </button>
-          <button className="btn" onClick={() => setActiveModal(activeModal === "settings" ? null : "settings")} title={t("btn.settings")}>
-            <svg className="btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
-            <span className="btn-label">{t("btn.settings")}</span>
+          <button
+            className="btn"
+            onClick={() => setActiveModal(activeModal === 'settings' ? null : 'settings')}
+            title={t('btn.settings')}
+          >
+            <svg
+              className="btn-icon"
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+            </svg>
+            <span className="btn-label">{t('btn.settings')}</span>
           </button>
-          <button className="btn" onClick={() => setActiveModal(activeModal === "accounts" ? null : "accounts")} title={t("btn.accounts")}>
-            <svg className="btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-            <span className="btn-label">{t("btn.accounts")}</span>
+          <button
+            className="btn"
+            onClick={() => setActiveModal(activeModal === 'accounts' ? null : 'accounts')}
+            title={t('btn.accounts')}
+          >
+            <svg
+              className="btn-icon"
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+              <circle cx="12" cy="7" r="4" />
+            </svg>
+            <span className="btn-label">{t('btn.accounts')}</span>
           </button>
-          <button className="btn" onClick={() => setActiveModal(activeModal === "synclogs" ? null : "synclogs")} title={t("syncLogs.title")}>
-            <svg className="btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>
-            <span className="btn-label">{t("syncLogs.title")}</span>
+          <button
+            className="btn"
+            onClick={() => setActiveModal(activeModal === 'synclogs' ? null : 'synclogs')}
+            title={t('syncLogs.title')}
+          >
+            <svg
+              className="btn-icon"
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+              <path d="M14 2v6h6" />
+              <path d="M16 13H8" />
+              <path d="M16 17H8" />
+              <path d="M10 9H8" />
+            </svg>
+            <span className="btn-label">{t('syncLogs.title')}</span>
           </button>
-          <button className="btn primary" onClick={doSync} disabled={syncing} title={syncing ? t("btn.syncing") : t("btn.syncNow")}>
-            <svg className="btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
-            <span className="btn-label">{syncing ? t("btn.syncing") : t("btn.syncNow")}</span>
+          <button
+            className="btn primary"
+            onClick={doSync}
+            disabled={syncing}
+            title={syncing ? t('btn.syncing') : t('btn.syncNow')}
+          >
+            <svg
+              className="btn-icon"
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+              <path d="M21 3v6h-6" />
+            </svg>
+            <span className="btn-label">{syncing ? t('btn.syncing') : t('btn.syncNow')}</span>
           </button>
         </div>
       </header>
@@ -434,7 +532,7 @@ function BoardApp() {
       <div className="toolbar">
         <input
           className="input"
-          placeholder={t("search.placeholder")}
+          placeholder={t('search.placeholder')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -442,9 +540,9 @@ function BoardApp() {
           className="select"
           value={repo}
           onChange={(e) => setRepo(e.target.value)}
-          title={t("filter.byRepo")}
+          title={t('filter.byRepo')}
         >
-          <option value="">{t("filter.allRepos")}</option>
+          <option value="">{t('filter.allRepos')}</option>
           {repos.map((r) => (
             <option key={r} value={r}>
               {r}
@@ -460,12 +558,12 @@ function BoardApp() {
             setOwnership(v);
             void loadWith(v, accountFilter);
           }}
-          title={t("filter.byOwnership")}
+          title={t('filter.byOwnership')}
         >
-          <option value="">{t("filter.allOwnership")}</option>
-          <option value="assigned">{t("ownership.assigned")}</option>
-          <option value="notassignee">{t("ownership.notassignee")}</option>
-          <option value="assigned-others">{t("ownership.assigned-others")}</option>
+          <option value="">{t('filter.allOwnership')}</option>
+          <option value="assigned">{t('ownership.assigned')}</option>
+          <option value="notassignee">{t('ownership.notassignee')}</option>
+          <option value="assigned-others">{t('ownership.assigned-others')}</option>
         </select>
         {(query || repo || ownership) && (
           <button
@@ -473,14 +571,13 @@ function BoardApp() {
             onClick={() => {
               void clearAllFilters();
             }}
-            title={t("filter.clear")}
+            title={t('filter.clear')}
           >
-            {t("btn.reset")}
+            {t('btn.reset')}
           </button>
         )}
 
         {/* v0.3.43+：看板列展示方式已改为「每账号」在设置面板配置，此处不再提供切换下拉。 */}
-
       </div>
 
       {(error || lastResult) && (
@@ -492,9 +589,9 @@ function BoardApp() {
       {!error && hiddenAfterSync > 0 && (query || repo || ownership) && (
         <div className="banner-row">
           <div className="banner warn">
-            {t("sync.filterHidesNew", { n: hiddenAfterSync })}{" "}
+            {t('sync.filterHidesNew', { n: hiddenAfterSync })}{' '}
             <button className="btn ghost small" onClick={() => void clearAllFilters()}>
-              {t("btn.reset")}
+              {t('btn.reset')}
             </button>
           </div>
         </div>
@@ -519,7 +616,7 @@ function BoardApp() {
           <div
             className="detail-backdrop"
             onClick={() => setSelected(null)}
-            title={t("detail.clickBackdropClose")}
+            title={t('detail.clickBackdropClose')}
           />
           <DetailPanel
             key={selectedTask.issueKey}
@@ -533,7 +630,7 @@ function BoardApp() {
         </>
       )}
 
-      {activeModal === "settings" && settings && (
+      {activeModal === 'settings' && settings && (
         <SettingsPanel
           settings={settings}
           onSaved={(s) => {
@@ -549,7 +646,7 @@ function BoardApp() {
         />
       )}
 
-      {activeModal === "accounts" && settings && (
+      {activeModal === 'accounts' && settings && (
         <AccountsPanel
           settings={settings}
           onClose={() => setActiveModal(null)}
@@ -559,17 +656,9 @@ function BoardApp() {
         />
       )}
 
-{activeModal === "about" && (
-        <AboutPanel
-          onClose={() => setActiveModal(null)}
-        />
-      )}
+      {activeModal === 'about' && <AboutPanel onClose={() => setActiveModal(null)} />}
 
-      {activeModal === "synclogs" && (
-        <SyncLogsPanel
-          onClose={() => setActiveModal(null)}
-        />
-      )}
+      {activeModal === 'synclogs' && <SyncLogsPanel onClose={() => setActiveModal(null)} />}
     </div>
   );
 }
