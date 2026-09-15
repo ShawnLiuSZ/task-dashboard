@@ -2,6 +2,12 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — Concurrent dual-channel update check (#256)**
+
+  - **#256 Slow update check with invisible failure cause**: v0.5.0's check was sequential — it awaited the tauri updater channel first (no built-in timeout, hangs long on weak networks) and only then ran the GitHub API fallback, so total latency was the sum; the updater's error was also swallowed silently, leaving only a late "Go to download" button. Observed on v0.5.0 + macOS Apple Silicon. See [docs/issue-256-update-check.md](./issue-256-update-check.md).
+  - **How**: both channels concurrently with a 30s per-channel cap (latency becomes the max); one-click update still preferred when the updater channel works; the fallback's version verdict is authoritative; the updater failure reason is shown next to the manual download. Frontend only (new pure module `src/utils/updateCheck.ts` + `AboutPanel`), no new dependencies, no Rust changes.
+  - **Verification**: 11 new unit tests (8 decision + 3 timeout-settling), `npm test` 12 files / 99 tests, `tsc --noEmit` 0 errors, `i18n:check` 305 keys per locale. Real-machine re-verification awaits a release containing this fix (v0.5.0's old panel can't be changed in place — one manual install of the new version needed).
+
 - **v0.5.1 (2026-09-15) — Existing CI fixed (#252) + on-demand pull for not-yet-synced issues (#250) + horizontal scrolling for sync-log tables (#248)**
 
   - **#252 `quality-check.yml` is green again**: when #246 introduced that workflow it left two pre-existing failures — `Frontend Lint`'s `format:check` reported **29 unformatted files** (`.prettierrc` was added but `npm run format` was never run), and `Rust Clippy` / `Rust Tests` lacked Tauri's Linux system libraries (`glib-sys` / `gio-sys` / `gobject-sys` fail pkg-config during their build scripts). Both had been red on `develop` for a while, making every new PR's CI red by construction (#249 and #251 were both blocked). See [docs/issue-252-ci-green.md](./issue-252-ci-green.md).

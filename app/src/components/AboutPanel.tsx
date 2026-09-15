@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, onUpdateProgress, openExternal } from '../api';
 import { useI18n } from '../i18n';
+import {
+  UPDATE_CHECK_TIMEOUT_MS,
+  decideUpdateState,
+  settleWithTimeout,
+} from '../utils/updateCheck';
 
 interface Props {
   onClose: () => void;
@@ -21,6 +26,8 @@ type State =
       notes: string;
       /** 非空表示应用内更新不可用，退化为前往 Releases 手动下载。 */
       manualUrl?: string;
+      /** #256：手动下载时附带 updater 通道失败原因（不再静默吞掉）。 */
+      updaterNote?: string;
     }
   | { phase: 'installing'; percent: number | null }
   | { phase: 'installed'; version: string }
@@ -69,46 +76,59 @@ export default function AboutPanel({ onClose }: Props) {
 
   /**
    * #231：优先走应用内更新通道（tauri-plugin-updater）。
+   * #256：双通道并发 + 单路超时封顶——updater 通道无内置超时，串行等待时弱网下
+   * hang 很久才失败，总耗时是加和；并发后取最大，且失败原因会展示出来。
    *
-   * 该通道不可用时（尚未配置签名公钥、或 Releases 上还没有 latest.json）回退为
-   * 纯版本号对比 + 跳转 Releases 手动下载，避免「检查更新」整体失效。
+   * 该通道不可用时（尚未配置签名公钥、或 Releases 上还没有 latest.json、或超时）
+   * 回退为纯版本号对比 + 跳转 Releases 手动下载，避免「检查更新」整体失效。
    */
   const check = useCallback(async () => {
     setState({ phase: 'loading' });
     try {
-      const u = await api.checkAppUpdate();
-      if (!u.error) {
-        setState(
-          u.available
-            ? {
-                phase: 'available',
-                version: u.version,
-                current: u.current,
-                notes: u.notes,
-              }
-            : { phase: 'upToDate', current: u.current },
-        );
-        return;
-      }
-
-      const d = await api.checkLatestRelease();
-      if (d.error) {
-        setState({ phase: 'error', message: d.error });
-      } else if (d.upToDate) {
-        setState({ phase: 'upToDate', current: d.current });
-      } else {
+      const [u, d] = await Promise.all([
+        settleWithTimeout(api.checkAppUpdate(), UPDATE_CHECK_TIMEOUT_MS),
+        settleWithTimeout(api.checkLatestRelease(), UPDATE_CHECK_TIMEOUT_MS),
+      ]);
+      const decision = decideUpdateState(u, d);
+      if (decision.phase === 'available' && !decision.manualUrl) {
         setState({
           phase: 'available',
-          version: d.latest,
-          current: d.current,
-          notes: '',
-          manualUrl: d.url,
+          version: decision.version,
+          current: decision.current,
+          notes: decision.notes,
         });
+        return;
       }
+      if (decision.phase === 'available') {
+        const issue = decision.updaterIssue;
+        setState({
+          phase: 'available',
+          version: decision.version,
+          current: decision.current,
+          notes: decision.notes,
+          manualUrl: decision.manualUrl,
+          updaterNote: issue
+            ? issue.kind === 'timeout'
+              ? t('about.updaterTimeout')
+              : t('about.updaterUnavailable', { reason: issue.message })
+            : undefined,
+        });
+        return;
+      }
+      if (decision.phase === 'upToDate') {
+        setState({ phase: 'upToDate', current: decision.current });
+        return;
+      }
+      setState({
+        phase: 'error',
+        message: decision.message
+          ? t('about.error', { error: decision.message })
+          : t('about.checkTimeout'),
+      });
     } catch (e) {
       setState({ phase: 'error', message: String(e) });
     }
-  }, []);
+  }, [t]);
 
   /** #231：下载并安装更新，完成后引导用户重启生效。 */
   const install = useCallback(async (target: string) => {
@@ -216,6 +236,7 @@ export default function AboutPanel({ onClose }: Props) {
                   {state.notes}
                 </p>
               )}
+              {state.updaterNote && <p className="muted small">{state.updaterNote}</p>}
               {state.manualUrl ? (
                 <button
                   className="btn primary"
