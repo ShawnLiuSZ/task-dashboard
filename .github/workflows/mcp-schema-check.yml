@@ -4,6 +4,10 @@
 #
 # 存在的理由：#155 把 tasks.key 改名为 issue_key 后 Python MCP 没跟上，读路径整体
 # 失效却无任何 CI 能发现（Python MCP 不参与 Tauri 构建）。本检查补上那层防回归。
+#
+# v0.4.1 (#250)：同 job 追加 Python MCP 单测（标准库 unittest，零依赖）。Python MCP 的
+# 逻辑同样不参与 Tauri 构建，只靠人工 review 兜不住；「按需拉取」那套账号选择 / 字段
+# 映射 / 不发请求契约由 `mcp_server/test_server.py` 守住。
 name: mcp-schema-check
 
 on:
@@ -23,3 +27,6 @@ jobs:
 
       - name: 校验 MCP 列清单与 tasks 表 schema 一致
         run: python3 scripts/check-mcp-columns.py
+
+      - name: Python MCP 单测
+        run: python3 -m unittest discover -s mcp_server -p 'test_*.py' -v
