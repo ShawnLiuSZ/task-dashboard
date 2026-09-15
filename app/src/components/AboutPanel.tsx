@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import { api, onUpdateProgress, openExternal } from "../api";
-import { useI18n } from "../i18n";
+import { useCallback, useEffect, useState } from 'react';
+import { api, onUpdateProgress, openExternal } from '../api';
+import { useI18n } from '../i18n';
 
 interface Props {
   onClose: () => void;
@@ -11,32 +11,32 @@ interface Props {
  * #231 扩展 available / installing / installed 三个阶段，用于承载应用内更新流程。
  */
 type State =
-  | { phase: "idle" }
-  | { phase: "loading" }
-  | { phase: "upToDate"; current: string }
+  | { phase: 'idle' }
+  | { phase: 'loading' }
+  | { phase: 'upToDate'; current: string }
   | {
-      phase: "available";
+      phase: 'available';
       version: string;
       current: string;
       notes: string;
       /** 非空表示应用内更新不可用，退化为前往 Releases 手动下载。 */
       manualUrl?: string;
     }
-  | { phase: "installing"; percent: number | null }
-  | { phase: "installed"; version: string }
-  | { phase: "error"; message: string };
+  | { phase: 'installing'; percent: number | null }
+  | { phase: 'installed'; version: string }
+  | { phase: 'error'; message: string };
 
 /** 按当前安装平台返回 taskboard 二进制的默认路径（与 README 一致）。 */
 function getMcpCommand(): string {
   const ua = navigator.userAgent.toLowerCase();
-  if (ua.includes("mac")) {
-    return "/Applications/TaskBoard.app/Contents/MacOS/taskboard";
+  if (ua.includes('mac')) {
+    return '/Applications/TaskBoard.app/Contents/MacOS/taskboard';
   }
-  if (ua.includes("win")) {
-    return "C:\\Program Files\\TaskBoard\\taskboard.exe";
+  if (ua.includes('win')) {
+    return 'C:\\Program Files\\TaskBoard\\taskboard.exe';
   }
   // Linux / 其他
-  return "/usr/bin/taskboard";
+  return '/usr/bin/taskboard';
 }
 
 /** MCP 接入配置片段（与 README 一致，代码块非翻译）。 */
@@ -56,14 +56,14 @@ function buildMcpSnippet(): string {
 /** v0.3.19+「关于」弹窗：展示当前版本号 + 检查更新入口。 */
 export default function AboutPanel({ onClose }: Props) {
   const { t } = useI18n();
-  const [version, setVersion] = useState<string>("");
-  const [state, setState] = useState<State>({ phase: "idle" });
+  const [version, setVersion] = useState<string>('');
+  const [state, setState] = useState<State>({ phase: 'idle' });
 
   const loadVersion = useCallback(async () => {
     try {
       setVersion(await api.getAppVersion());
     } catch {
-      setVersion("?");
+      setVersion('?');
     }
   }, []);
 
@@ -74,50 +74,50 @@ export default function AboutPanel({ onClose }: Props) {
    * 纯版本号对比 + 跳转 Releases 手动下载，避免「检查更新」整体失效。
    */
   const check = useCallback(async () => {
-    setState({ phase: "loading" });
+    setState({ phase: 'loading' });
     try {
       const u = await api.checkAppUpdate();
       if (!u.error) {
         setState(
           u.available
             ? {
-                phase: "available",
+                phase: 'available',
                 version: u.version,
                 current: u.current,
                 notes: u.notes,
               }
-            : { phase: "upToDate", current: u.current },
+            : { phase: 'upToDate', current: u.current },
         );
         return;
       }
 
       const d = await api.checkLatestRelease();
       if (d.error) {
-        setState({ phase: "error", message: d.error });
+        setState({ phase: 'error', message: d.error });
       } else if (d.upToDate) {
-        setState({ phase: "upToDate", current: d.current });
+        setState({ phase: 'upToDate', current: d.current });
       } else {
         setState({
-          phase: "available",
+          phase: 'available',
           version: d.latest,
           current: d.current,
-          notes: "",
+          notes: '',
           manualUrl: d.url,
         });
       }
     } catch (e) {
-      setState({ phase: "error", message: String(e) });
+      setState({ phase: 'error', message: String(e) });
     }
   }, []);
 
   /** #231：下载并安装更新，完成后引导用户重启生效。 */
   const install = useCallback(async (target: string) => {
-    setState({ phase: "installing", percent: null });
+    setState({ phase: 'installing', percent: null });
     try {
       await api.installAppUpdate();
-      setState({ phase: "installed", version: target });
+      setState({ phase: 'installed', version: target });
     } catch (e) {
-      setState({ phase: "error", message: String(e) });
+      setState({ phase: 'error', message: String(e) });
     }
   }, []);
 
@@ -131,19 +131,15 @@ export default function AboutPanel({ onClose }: Props) {
     let unlisten: (() => void) | undefined;
     void onUpdateProgress((p) => {
       const percent =
-        p.total && p.total > 0
-          ? Math.min(100, Math.floor((p.downloaded / p.total) * 100))
-          : null;
-      setState((prev) =>
-        prev.phase === "installing" ? { phase: "installing", percent } : prev,
-      );
+        p.total && p.total > 0 ? Math.min(100, Math.floor((p.downloaded / p.total) * 100)) : null;
+      setState((prev) => (prev.phase === 'installing' ? { phase: 'installing', percent } : prev));
     }).then((fn) => {
       unlisten = fn;
     });
     return () => unlisten?.();
   }, []);
 
-  const busy = state.phase === "loading" || state.phase === "installing";
+  const busy = state.phase === 'loading' || state.phase === 'installing';
 
   return (
     <div className="modal-mask" onClick={onClose}>
@@ -152,73 +148,71 @@ export default function AboutPanel({ onClose }: Props) {
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label={t("about.title")}
+        aria-label={t('about.title')}
         onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
+          if (e.key === 'Escape') onClose();
         }}
       >
-        <h3 className="modal-title">{t("about.title")}</h3>
+        <h3 className="modal-title">{t('about.title')}</h3>
 
         <div className="about-body">
           <div className="field readonly">
-            <label>{t("about.versionLabel")}</label>
+            <label>{t('about.versionLabel')}</label>
             <div className="muted small">v{version}</div>
           </div>
 
-          <p className="muted small about-intro">{t("about.intro")}</p>
+          <p className="muted small about-intro">{t('about.intro')}</p>
 
           <section className="about-section">
-            <h4>{t("about.capsTitle")}</h4>
+            <h4>{t('about.capsTitle')}</h4>
             <ul className="about-caps">
-              <li>{t("about.cap.kanban")}</li>
-              <li>{t("about.cap.sync")}</li>
-              <li>{t("about.cap.session")}</li>
-              <li>{t("about.cap.i18n")}</li>
+              <li>{t('about.cap.kanban')}</li>
+              <li>{t('about.cap.sync')}</li>
+              <li>{t('about.cap.session')}</li>
+              <li>{t('about.cap.i18n')}</li>
             </ul>
           </section>
 
           <section className="about-section">
-            <h4>{t("about.dataTitle")}</h4>
-            <code className="about-data-path">{t("about.dataPath")}</code>
+            <h4>{t('about.dataTitle')}</h4>
+            <code className="about-data-path">{t('about.dataPath')}</code>
           </section>
 
           <section className="about-section">
-            <h4>{t("about.mcpTitle")}</h4>
-            <p className="muted small">{t("about.mcpDesc")}</p>
+            <h4>{t('about.mcpTitle')}</h4>
+            <p className="muted small">{t('about.mcpDesc')}</p>
             <pre className="about-code">{buildMcpSnippet()}</pre>
-            <p className="muted small">{t("about.mcpFallback")}</p>
+            <p className="muted small">{t('about.mcpFallback')}</p>
           </section>
 
           <div className="about-repo-row" style={{ marginTop: 4 }}>
-            <span className="muted small">{t("about.repoPath")}</span>
+            <span className="muted small">{t('about.repoPath')}</span>
             <button
               className="about-repo-link"
               title="https://github.com/ShawnLiuSZ/task-dashboard"
-              onClick={() => openExternal("https://github.com/ShawnLiuSZ/task-dashboard")}
+              onClick={() => openExternal('https://github.com/ShawnLiuSZ/task-dashboard')}
             >
               ShawnLiuSZ/task-dashboard ↗
             </button>
           </div>
 
-          {state.phase === "loading" && (
-            <div className="about-status">{t("about.checking")}</div>
-          )}
+          {state.phase === 'loading' && <div className="about-status">{t('about.checking')}</div>}
 
-          {state.phase === "upToDate" && (
+          {state.phase === 'upToDate' && (
             <div className="about-status up-to-date">
-              {"✅"} {t("about.upToDate", { version: state.current })}
+              {'✅'} {t('about.upToDate', { version: state.current })}
             </div>
           )}
 
-          {state.phase === "available" && (
+          {state.phase === 'available' && (
             <div className="about-status has-update">
-              {"✨"}{" "}
-              {t("about.updateAvailable", {
+              {'✨'}{' '}
+              {t('about.updateAvailable', {
                 latest: state.version,
                 current: state.current,
               })}
               {state.notes && (
-                <p className="muted small" style={{ whiteSpace: "pre-wrap" }}>
+                <p className="muted small" style={{ whiteSpace: 'pre-wrap' }}>
                   {state.notes}
                 </p>
               )}
@@ -228,7 +222,7 @@ export default function AboutPanel({ onClose }: Props) {
                   style={{ marginTop: 6 }}
                   onClick={() => openExternal(state.manualUrl as string)}
                 >
-                  {t("about.download")} ↗
+                  {t('about.download')} ↗
                 </button>
               ) : (
                 <button
@@ -236,46 +230,44 @@ export default function AboutPanel({ onClose }: Props) {
                   style={{ marginTop: 6 }}
                   onClick={() => void install(state.version)}
                 >
-                  {t("about.install")}
+                  {t('about.install')}
                 </button>
               )}
             </div>
           )}
 
-          {state.phase === "installing" && (
+          {state.phase === 'installing' && (
             <div className="about-status">
               {state.percent === null
-                ? t("about.installing")
-                : t("about.progress", { percent: state.percent })}
+                ? t('about.installing')
+                : t('about.progress', { percent: state.percent })}
             </div>
           )}
 
-          {state.phase === "installed" && (
+          {state.phase === 'installed' && (
             <div className="about-status has-update">
-              {"✅"} {t("about.installed", { version: state.version })}
+              {'✅'} {t('about.installed', { version: state.version })}
               <button
                 className="btn primary"
                 style={{ marginTop: 6 }}
                 onClick={() => void api.restartApp()}
               >
-                {t("about.restart")}
+                {t('about.restart')}
               </button>
             </div>
           )}
 
-          {state.phase === "error" && (
-            <div className="about-status error">
-              {t("about.error", { error: state.message })}
-            </div>
+          {state.phase === 'error' && (
+            <div className="about-status error">{t('about.error', { error: state.message })}</div>
           )}
         </div>
 
         <div className="modal-actions">
           <button className="btn" onClick={onClose}>
-            {t("btn.close")}
+            {t('btn.close')}
           </button>
           <button className="btn primary" onClick={check} disabled={busy}>
-            {state.phase === "loading" ? t("about.checking") : t("about.checkUpdate")}
+            {state.phase === 'loading' ? t('about.checking') : t('about.checkUpdate')}
           </button>
         </div>
       </div>

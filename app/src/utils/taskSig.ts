@@ -1,7 +1,7 @@
-import type { Task } from "../types";
+import type { Task } from '../types';
 
-const FIELD_SEP = " | ";
-const ROW_SEP = " || ";
+const FIELD_SEP = ' | ';
+const ROW_SEP = ' || ';
 
 /**
  * #181：任务列表指纹，用于「无变化跳过 setState」。
@@ -24,8 +24,8 @@ export function taskListSignature(tasks: Task[]): string {
           t.status,
           t.ownership,
           t.title,
-          t.sessionId ?? "",
-          t.sessionAgent ?? "",
+          t.sessionId ?? '',
+          t.sessionAgent ?? '',
           t.sessionAt ?? 0,
           t.handoff,
           t.workBranch,

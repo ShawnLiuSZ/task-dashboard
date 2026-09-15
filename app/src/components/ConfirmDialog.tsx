@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { useI18n } from "../i18n";
+import { useEffect } from 'react';
+import { useI18n } from '../i18n';
 
 interface Props {
   /** 确认提示语。 */
@@ -28,10 +28,10 @@ export default function ConfirmDialog({
   // Esc 关闭等价于取消
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
+      if (e.key === 'Escape') onCancel();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [onCancel]);
 
   return (
@@ -46,10 +46,10 @@ export default function ConfirmDialog({
         <p className="confirm-message">{message}</p>
         <div className="modal-actions">
           <button className="btn" onClick={onCancel}>
-            {cancelLabel ?? t("btn.cancel")}
+            {cancelLabel ?? t('btn.cancel')}
           </button>
           <button className="btn primary danger" onClick={onConfirm} autoFocus>
-            {confirmLabel ?? t("btn.confirm")}
+            {confirmLabel ?? t('btn.confirm')}
           </button>
         </div>
       </div>

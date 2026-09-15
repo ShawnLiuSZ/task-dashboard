@@ -1,7 +1,14 @@
-import { memo, useMemo } from "react";
-import { COLUMNS, type AccountColumn, type ProjectStatus, type StatusKey, type Task, type BoardMode } from "../types";
-import { useT } from "../i18n";
-import TaskCard from "./TaskCard";
+import { memo, useMemo } from 'react';
+import {
+  COLUMNS,
+  type AccountColumn,
+  type ProjectStatus,
+  type StatusKey,
+  type Task,
+  type BoardMode,
+} from '../types';
+import { useT } from '../i18n';
+import TaskCard from './TaskCard';
 
 interface Props {
   tasks: Task[];
@@ -18,12 +25,12 @@ interface Props {
 // GitHub Project Status 原文到显示用键的映射（用于分组去重）。
 function groupByProjectStatus(tasks: Task[]): Map<string, Task[]> {
   const map = new Map<string, Task[]>();
-  map.set("done", []);
-  map.set("unclassified", []);
+  map.set('done', []);
+  map.set('unclassified', []);
 
   for (const task of tasks) {
-    if (task.issueState === "closed") {
-      map.get("done")?.push(task);
+    if (task.issueState === 'closed') {
+      map.get('done')?.push(task);
       continue;
     }
     if (task.projectStatus && task.projectStatus.trim()) {
@@ -31,17 +38,14 @@ function groupByProjectStatus(tasks: Task[]): Map<string, Task[]> {
       if (!map.has(key)) map.set(key, []);
       map.get(key)?.push(task);
     } else {
-      map.get("unclassified")?.push(task);
+      map.get('unclassified')?.push(task);
     }
   }
   return map;
 }
 
 // 按 project_statuses 表的 order_index 排序；无表数据时回退到字母序（稳定可预测）。
-function sortProjectStatusKeys(
-  keys: string[],
-  projectStatuses?: ProjectStatus[],
-): string[] {
+function sortProjectStatusKeys(keys: string[], projectStatuses?: ProjectStatus[]): string[] {
   if (!projectStatuses || projectStatuses.length === 0) {
     // 无 project_statuses 表数据时，按字母序排序，避免返回 tasks 遍历顺序导致的不稳定渲染
     return [...keys].sort((a, b) => a.localeCompare(b));
@@ -73,7 +77,7 @@ export function extractUnmappedStatuses(tasks: Task[]): { value: string; count: 
   return [...counts.entries()].map(([value, count]) => ({ value, count }));
 }
 
-export type BoardViewKind = "project" | "custom" | "fourstate";
+export type BoardViewKind = 'project' | 'custom' | 'fourstate';
 
 /** v0.3.51 (#159)：根据看板模式与自定义列配置决定实际渲染视图。
  * custom 模式未配置任何自定义列时回退到 project 视图，避免误导性的四态列；
@@ -82,11 +86,11 @@ export function resolveBoardView(
   boardMode: BoardMode,
   accountColumns: AccountColumn[] | undefined,
 ): BoardViewKind {
-  if (boardMode === "custom") {
-    return accountColumns && accountColumns.length > 0 ? "custom" : "project";
+  if (boardMode === 'custom') {
+    return accountColumns && accountColumns.length > 0 ? 'custom' : 'project';
   }
-  if (boardMode === "project" || boardMode === "status") return "project";
-  return "fourstate";
+  if (boardMode === 'project' || boardMode === 'status') return 'project';
+  return 'fourstate';
 }
 
 /** v0.3.51 (#159)：自定义列分组——任务 status 命中列 colKey 归入对应组，未命中进 unmatched。 */
@@ -112,7 +116,7 @@ function Board({
   tasks,
   selected,
   onSelect,
-  boardMode = "project",
+  boardMode = 'project',
   projectStatuses,
   accountColumns,
 }: Props) {
@@ -132,8 +136,8 @@ function Board({
     // 以 project_statuses 表为准，确保所有状态列都展示（即使无任务）
     if (projectStatuses && projectStatuses.length > 0) {
       const keys = projectStatuses.map((ps) => ps.name);
-      if ((grouped.get("done") ?? []).length > 0) keys.push("done");
-      if ((grouped.get("unclassified") ?? []).length > 0) keys.push("unclassified");
+      if ((grouped.get('done') ?? []).length > 0) keys.push('done');
+      if ((grouped.get('unclassified') ?? []).length > 0) keys.push('unclassified');
       return keys;
     }
     // 无 project_statuses 时回退：只展示有任务的列
@@ -160,7 +164,7 @@ function Board({
     for (const task of tasks) {
       const arr = m.get(task.status as StatusKey);
       if (arr) arr.push(task);
-      else m.get("todo")?.push(task);
+      else m.get('todo')?.push(task);
     }
     return m;
   }, [tasks]);
@@ -172,18 +176,28 @@ function Board({
   // v0.3.43+: "status" (legacy) gracefully degrades to "project"
   // v0.3.51 (#159): custom 模式未配置自定义列时回退到 project 列，避免误导性的四态列
   const view = resolveBoardView(boardMode, accountColumns);
-  if (view === "project") {
+  if (view === 'project') {
     // GitHub Project Status 列视图
     return (
       <div className="board">
         {projectKeys.map((key) => {
           const items = grouped.get(key) ?? [];
-          const colorIdx = key === "done" ? -1 : key === "unclassified" ? -1 : (statusIndexMap.get(key) ?? -1);
+          const colorIdx =
+            key === 'done' ? -1 : key === 'unclassified' ? -1 : (statusIndexMap.get(key) ?? -1);
 
-          const title = key === "done" ? t("status.done") : key === "unclassified" ? t("detail.unlabeled") : key;
+          const title =
+            key === 'done'
+              ? t('status.done')
+              : key === 'unclassified'
+                ? t('detail.unlabeled')
+                : key;
 
           return (
-            <section key={key} aria-label={title} className={`column column-status-${((colorIdx % 20) + 20) % 20}`}>
+            <section
+              key={key}
+              aria-label={title}
+              className={`column column-status-${((colorIdx % 20) + 20) % 20}`}
+            >
               <div className="column-head">
                 <span className={`dot dot-status-${((colorIdx % 20) + 20) % 20}`} />
                 <span className="column-title">{title}</span>
@@ -208,7 +222,7 @@ function Board({
     );
   }
 
-  if (view === "custom") {
+  if (view === 'custom') {
     // 自定义列视图（按账号配置渲染）；此处 view 为 custom 时 accountColumns 非空
     const { groups, unmatched } = customGroups;
     const cols = accountColumns ?? [];
@@ -217,7 +231,11 @@ function Board({
         {cols.map((col, idx) => {
           const items = groups.get(col.colKey) ?? [];
           return (
-            <section key={col.colKey} aria-label={col.colName} className={`column column-status-${idx % 20}`}>
+            <section
+              key={col.colKey}
+              aria-label={col.colName}
+              className={`column column-status-${idx % 20}`}
+            >
               <div className="column-head">
                 <span className={`dot dot-status-${idx % 20}`} />
                 <span className="column-title">{col.colName}</span>
@@ -241,22 +259,25 @@ function Board({
         })}
         {/* 未匹配任务列 */}
         {unmatched.length > 0 && (
-          <section aria-label={t("detail.unlabeled")} className="column column-unclassified">
+          <section aria-label={t('detail.unlabeled')} className="column column-unclassified">
             <div className="column-head">
               <span className="dot dot-unclassified" />
-              <span className="column-title">{t("detail.unlabeled")}</span>
+              <span className="column-title">{t('detail.unlabeled')}</span>
               <span className="count">{unmatched.length}</span>
             </div>
             {(() => {
               // v0.3.51 (#165)：提示未映射的 project_status 值，帮助用户定位漏配/错配的列
               const unmapped = extractUnmappedStatuses(unmatched);
               if (unmapped.length === 0) return null;
-              const all = unmapped.map((u) => `${u.value}(${u.count})`).join("、");
-              const shown = unmapped.slice(0, 3).map((u) => `${u.value}(${u.count})`).join("、");
+              const all = unmapped.map((u) => `${u.value}(${u.count})`).join('、');
+              const shown = unmapped
+                .slice(0, 3)
+                .map((u) => `${u.value}(${u.count})`)
+                .join('、');
               return (
                 <div className="unmapped-hint" title={all} aria-label={all}>
-                  {t("board.unmappedHint")}: {shown}
-                  {unmapped.length > 3 ? ` +${unmapped.length - 3}` : ""}
+                  {t('board.unmappedHint')}: {shown}
+                  {unmapped.length > 3 ? ` +${unmapped.length - 3}` : ''}
                 </div>
               );
             })()}
@@ -284,7 +305,11 @@ function Board({
       {COLUMNS.map((col) => {
         const items = statusGroups.get(col.key) ?? [];
         return (
-          <section key={col.key} aria-label={t(`status.${col.key}`)} className={`column column-${col.key}`}>
+          <section
+            key={col.key}
+            aria-label={t(`status.${col.key}`)}
+            className={`column column-${col.key}`}
+          >
             <div className="column-head">
               <span className={`dot dot-${col.key}`} />
               <span className="column-title">{t(`status.${col.key}`)}</span>
@@ -299,7 +324,7 @@ function Board({
                   {...cardProps(task)}
                   active={task.issueKey === selected}
                   onSelectKey={onSelect}
-                  showGhStatus={boardMode === "custom"}
+                  showGhStatus={boardMode === 'custom'}
                 />
               ))}
             </div>
