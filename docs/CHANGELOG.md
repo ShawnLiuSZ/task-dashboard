@@ -6,6 +6,14 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 未同步的 issue 按需拉取（#250）**
+
+  - **#250 消除写状态时的「任务不存在」**：`tasks` 表只由同步单向填充，而 MCP 工具是纯本地 SQL，于是**刚创建、还没同步到的 issue** 会让所有写路径报「任务不存在」（实测：issue 建于 10:26，10:52 调用 `update_task_status` 仍失败）。现在未命中时会**按需拉取该单个 issue** 并落库，再执行原操作；只读 GitHub（单次 `GET`）、不触发全量同步、已存在的任务零额外请求。返回体新增 `pulled` 标记（`get_task_status` 另有 `reason`）。详见 [docs/issue-250-ondemand-issue-pull.md](./issue-250-ondemand-issue-pull.md)。
+  - **实现要点**：把同步内联的 upsert 抽成 `db::TaskUpsert` + `db::write_task`（两种模式共用同一份列清单与参数绑定）；按需拉取用 `InsertIfAbsent`（`ON CONFLICT DO NOTHING`）——单 issue REST 拿不到 `project_status` / `mentioned` / `pr_*`，用覆盖模式会把同步刚写好的值清空。拉取必须在写入**之前**（自定义列的校验要读该行 `account_id`）。`parse_issue_ref` 原先会丢掉 owner（拉取需要 owner+repo），已下沉到共用解析器；Rust 侧新增 `on_demand.rs`、`github.rs::fetch_issue`（404 → `Ok(None)`）。
+  - **真机发现的两个坑（单测测不到，已补测试固化）**：① 账号匹配必须同时看 `org` 与 `login`——实测 task-dashboard 所属账号 `org` 是**空串**（个人命名空间），只按 org 匹配会让本功能对该仓库完全不可用；② 「API 请求用的 owner」与「落库的 `owner` 列」是两回事（后者与同步一致写 `account.org`），不区分会拼出 `/repos//repo/...`。另外 `repo#N` 不带 owner 时 404 不代表 issue 不存在，错误文案会带上实际查询目标与改写提示。
+  - **无 schema 变更**：未改 `tasks` 表结构，无需迁移。
+  - **验证**：`cargo test --lib` 93 passed（+11）、`cargo test --test db_test` 21 passed、Clippy 零警告、`python3 -m unittest discover -s mcp_server` 26 passed（新增 `mcp_server/test_server.py`，并接入 `mcp-schema-check.yml`）、`tsc --noEmit` 0 error、`npm test` 10 文件 84 例、`check-mcp-columns.py` 24 列、`check-doc-links.py` ✅。另有**真机端到端验证**（数据库副本 + 真实 PAT）：未同步 issue 写状态返回 `pulled:true`、再次调用 `pulled:false`、落库字段与真实 GitHub 响应一致、失败路径文案带原因（结果见知识库文档）。
+
 - **未发布（Unreleased）— 应用内 API 调用明细（#235）**
 
   - **#235 请求/返回参数落盘 + 应用内可查**：新增 `api_logs` 表（`kind` / `method` / `target` / `status` / `ok` / `elapsed_ms` / `request` / `response`），把同步、领取任务（`claim_issue`）、更新状态（`set_project_status`）三路 GitHub API 调用的**请求参数与返回参数**落盘。同步日志面板改为**双页签**（「同步记录」/「API 明细」），明细页签支持按类型筛选、逐行展开查看请求与返回。承接 [#228](./issue-228-api-logging.md) 的 stderr 埋点（默认静默、终端可见），补齐「落盘 + UI 可视化」。详见 [docs/issue-235-in-app-api-log.md](./issue-235-in-app-api-log.md)。
