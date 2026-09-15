@@ -1,7 +1,8 @@
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from 'vitest';
+// 用 Vite 的 `?raw` 拿源码文本，而不是 `node:fs` —— 后者需要 `@types/node`，
+// 而 CI（`npm ci` + `tsc --noEmit`）里并没有该类型包，会报 TS2307。
+import stylesRaw from './styles.css?raw';
+import panelRaw from './components/SyncLogsPanel.tsx?raw';
 
 /**
  * 同步日志面板的横向滚动回归测试。
@@ -16,44 +17,39 @@ import { describe, expect, it } from "vitest";
  * `scripts/check-mcp-columns.py` / `scripts/check-doc-links.py` 同一思路。
  */
 
-const here = dirname(fileURLToPath(import.meta.url));
 // 剥离注释：断言只针对声明本身，避免注释里提到写法（如「原先用 overflow: hidden」）就被命中。
-const styles = readFileSync(resolve(here, "styles.css"), "utf8").replace(
-  /\/\*[\s\S]*?\*\//g,
-  "",
-);
-const panel = readFileSync(resolve(here, "components/SyncLogsPanel.tsx"), "utf8");
+const styles = stylesRaw.replace(/\/\*[\s\S]*?\*\//g, '');
 
 /** 取出某选择器的全部声明块（同一选择器可能出现在分组合并规则中，故返回数组）。 */
 function decls(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`(?:^|[},])\\s*${escaped}\\s*\\{([^}]*)\\}`, "gm");
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(?:^|[},])\\s*${escaped}\\s*\\{([^}]*)\\}`, 'gm');
   const hits = [...styles.matchAll(re)].map((m) => m[1]);
   expect(hits.length, `styles.css 中找不到规则 ${selector}`).toBeGreaterThan(0);
-  return hits.join("\n");
+  return hits.join('\n');
 }
 
-describe("同步日志表格横向滚动", () => {
-  it("表格容器不得用 overflow: hidden —— 否则溢出列被裁且不产生滚动条", () => {
-    const d = decls(".sync-logs-table-wrap");
+describe('同步日志表格横向滚动', () => {
+  it('表格容器不得用 overflow: hidden —— 否则溢出列被裁且不产生滚动条', () => {
+    const d = decls('.sync-logs-table-wrap');
     expect(d).not.toMatch(/overflow\s*:\s*hidden/);
     expect(d).toMatch(/overflow\s*:\s*auto/);
   });
 
-  it("容器成为受约束的滚动区：flex 列 + min-height: 0", () => {
+  it('容器成为受约束的滚动区：flex 列 + min-height: 0', () => {
     // 两者缺一不可：没有 min-height: 0，flex 项的 auto 最小高度会阻止收缩，
     // 容器被表格撑到完整高度，横向滚动条就会落到可视区之外（需先纵向滚到底）。
-    expect(decls(".sync-logs-table-wrap")).toMatch(/min-height\s*:\s*0/);
-    const body = decls(".sync-logs-body");
+    expect(decls('.sync-logs-table-wrap')).toMatch(/min-height\s*:\s*0/);
+    const body = decls('.sync-logs-body');
     expect(body).toMatch(/display\s*:\s*flex/);
     expect(body).toMatch(/flex-direction\s*:\s*column/);
   });
 
-  it("筛选行不参与收缩，避免被表格挤扁", () => {
-    expect(decls(".sync-logs-filter")).toMatch(/flex-shrink\s*:\s*0/);
+  it('筛选行不参与收缩，避免被表格挤扁', () => {
+    expect(decls('.sync-logs-filter')).toMatch(/flex-shrink\s*:\s*0/);
   });
 
-  it("「同步记录」与「API 明细」共用同一容器 ⇒ 该修复须同时覆盖两个页签", () => {
-    expect(panel.match(/sync-logs-table-wrap/g) ?? []).toHaveLength(2);
+  it('「同步记录」与「API 明细」共用同一容器 ⇒ 该修复须同时覆盖两个页签', () => {
+    expect(panelRaw.match(/sync-logs-table-wrap/g) ?? []).toHaveLength(2);
   });
 });
