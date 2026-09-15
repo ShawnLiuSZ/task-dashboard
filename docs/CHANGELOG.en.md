@@ -2,6 +2,11 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — Horizontal scrolling for the sync-log tables (#248)**
+
+  - **#248 Right-hand columns were silently clipped in both tabs**: `overflow: hidden` on `.sync-logs-table-wrap` cut overflowing columns off and produced **no scrollbar whatsoever** — the "Error" column in "Sync records" and the "Details" column in "API details", which are exactly the interactive entry points added by `#161` / `#235`, were unusable at the default window size (1180×760). Now `overflow: auto`; `.sync-logs-body` becomes a column flex container and the wrapper gains `min-height: 0`, so **both scrollbars share one viewport**. Changing `overflow-x` alone is not enough: the horizontal scrollbar would sit at the bottom of the full table (1029px below the fold with 40 rows), unreachable without scrolling all the way down. See [docs/issue-248-synclogs-hscroll.md](./issue-248-synclogs-hscroll.md).
+  - **Verification**: `tsc --noEmit` 0 errors, `npm run build` ✅, `npm test` 11 files / 88 tests (new `src/styles.test.ts`, 4 cases, reverse-verified — reverting `overflow` to `hidden` fails them), `i18n:check` 302 keys per locale, `check-doc-links.py` ✅.
+
 - **Unreleased — In-app API call details (#235)**
 
   - **#235 Request/response parameters persisted, visible in-app**: new `api_logs` table (`kind` / `method` / `target` / `status` / `ok` / `elapsed_ms` / `request` / `response`) records the **request and response parameters** of all three GitHub API call paths: sync, claim (`claim_issue`), and status write-back (`set_project_status`). The sync-log panel becomes **two tabs** ("Sync records" / "API details"); the details tab supports type filtering and per-row expansion showing request and response. This continues [#228](./issue-228-api-logging.md) (stderr instrumentation, silent by default, terminal-only) by adding persistence and in-app visualization. See [docs/issue-235-in-app-api-log.md](./issue-235-in-app-api-log.md).
