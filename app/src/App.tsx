@@ -42,6 +42,8 @@ function BoardApp() {
   const [repo, setRepo] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<string | null>(null);
+  const [lastWarning, setLastWarning] = useState<string | null>(null);
+  // #258：部分失败 warning 与成功结果互斥展示（琥珀色 warn vs 绿色 ok）。
   // #178：上次同步中新变、但被当前筛选藏住的任务数（>0 时给提示+一键清除）。
   const [hiddenAfterSync, setHiddenAfterSync] = useState(0);
   const [projectStatuses, setProjectStatuses] = useState<ProjectStatus[]>([]);
@@ -55,12 +57,27 @@ function BoardApp() {
     return () => window.removeEventListener(TASKBOARD_ERROR_EVENT, handler);
   }, []);
 
-  // 同步结果 banner 4 秒后自动消失（错误 banner 不受影响，由下次操作覆盖）。
+  // 同步结果 / 部分失败 banner 4 秒后自动消失（错误 banner 不受影响，由下次操作覆盖）。
   useEffect(() => {
-    if (!lastResult) return;
-    const t = setTimeout(() => setLastResult(null), 4000);
+    if (!lastResult && !lastWarning) return;
+    const t = setTimeout(() => {
+      setLastResult(null);
+      setLastWarning(null);
+    }, 4000);
     return () => clearTimeout(t);
-  }, [lastResult]);
+  }, [lastResult, lastWarning]);
+
+  // #258：同步结果分级展示——warning 非空（部分账号/数据源失败）走琥珀色 warn
+  // banner，不再混进绿色成功 banner；两者互斥展示。
+  const showSyncResult = (base: string, warning: string) => {
+    if (warning) {
+      setLastResult(null);
+      setLastWarning(`${base} · ⚠️ ${warning}`);
+    } else {
+      setLastWarning(null);
+      setLastResult(base);
+    }
+  };
 
   // v0.3.16+：根据当前 viewMode + activeAccountId 计算 listTasks 用的 accountId 参数。
   // - 'single' → activeAccountId（单账号视图）
@@ -221,10 +238,10 @@ function BoardApp() {
       void load();
       void loadSettings();
       // loadProjectStatuses 依赖 settings，下面的 useEffect 会在 settings 变化时自动触发
-      const warn = r.warning ? ` · ⚠️ ${r.warning}` : '';
       const prune = r.pruned > 0 ? ` · ${t('sync.pruned', { n: r.pruned })}` : '';
-      setLastResult(
-        `${t('sync.result', { added: r.added, updated: r.updated, done: r.candidateDone })}${prune}${warn}`,
+      showSyncResult(
+        `${t('sync.result', { added: r.added, updated: r.updated, done: r.candidateDone })}${prune}`,
+        r.warning,
       );
     }).then((f) => {
       if (cancelled) {
@@ -321,10 +338,10 @@ function BoardApp() {
     const before = snapshotTasks(beforePool);
     try {
       const r = await api.syncNow();
-      const warn = r.warning ? ` · ⚠️ ${r.warning}` : '';
       const prune = r.pruned > 0 ? ` · ${t('sync.pruned', { n: r.pruned })}` : '';
-      setLastResult(
-        `${t('sync.result', { added: r.added, updated: r.updated, done: r.candidateDone })}${prune}${warn}`,
+      showSyncResult(
+        `${t('sync.result', { added: r.added, updated: r.updated, done: r.candidateDone })}${prune}`,
+        r.warning,
       );
       const fresh = await api.listTasks(ownership || undefined, accountFilter);
       applyTasks(fresh);
@@ -580,10 +597,11 @@ function BoardApp() {
         {/* v0.3.43+：看板列展示方式已改为「每账号」在设置面板配置，此处不再提供切换下拉。 */}
       </div>
 
-      {(error || lastResult) && (
+      {(error || lastResult || lastWarning) && (
         <div className="banner-row">
           {error && <div className="banner error">{error}</div>}
-          {!error && lastResult && <div className="banner ok">{lastResult}</div>}
+          {!error && lastWarning && <div className="banner warn">{lastWarning}</div>}
+          {!error && !lastWarning && lastResult && <div className="banner ok">{lastResult}</div>}
         </div>
       )}
       {!error && hiddenAfterSync > 0 && (query || repo || ownership) && (
