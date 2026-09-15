@@ -2,6 +2,13 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — Existing CI fixed (#252)**
+
+  - **#252 `quality-check.yml` is green again**: when #246 introduced that workflow it left two pre-existing failures — `Frontend Lint`'s `format:check` reported **29 unformatted files** (`.prettierrc` was added but `npm run format` was never run), and `Rust Clippy` / `Rust Tests` lacked Tauri's Linux system libraries (`glib-sys` / `gio-sys` / `gobject-sys` fail pkg-config during their build scripts). Both had been red on `develop` for a while, making every new PR's CI red by construction (#249 and #251 were both blocked). See [docs/issue-252-ci-green.md](./issue-252-ci-green.md).
+  - **How**: the formatting is a standalone commit, and its semantic neutrality is proven by the **built artifacts having byte-identical sha256 before and after** (stronger evidence than passing tests). The system libraries were **not copied a third time** — they were extracted into the composite action `.github/actions/install-linux-deps`, shared by `release.yml` and both Rust jobs in `quality-check.yml` (the `runner.os` guard lives inside the action).
+  - **Notes**: `npm run lint` (ESLint) was always passing (`--max-warnings 20` was never triggered; only 17 warnings), so no ESLint config was touched; the Rust jobs were not moved to a macOS runner (roughly 10× the cost, and the release matrix already covers Linux).
+  - **Verification**: `format:check` 29 → 0, identical artifact hashes before/after formatting, `tsc --noEmit` 0 errors, `npm test` 11 files / 88 tests, `npm run lint` exit 0, `i18n:check` 302 keys per locale, all 5 workflows + action.yml parse as valid YAML with an assertion that both Rust jobs reference the action. CI results are confirmed by this PR's run.
+
 - **Unreleased — On-demand pull for not-yet-synced issues (#250)**
 
   - **#250 Eliminates the "task not found" dead end on write**: the `tasks` table is filled only by one-way sync while the MCP tools are pure local SQL, so an issue that was **just created and not yet synced** made every write path fail with "task not found" (observed: issue created at 10:26, `update_task_status` still failing at 10:52). A local miss now **pulls that single issue on demand**, stores it, and retries the original operation. It only reads GitHub (one `GET`), never triggers a full sync, and costs zero extra requests for tasks that already exist. Responses gain a `pulled` flag (`get_task_status` also gains `reason`). See [docs/issue-250-ondemand-issue-pull.md](./issue-250-ondemand-issue-pull.md).
