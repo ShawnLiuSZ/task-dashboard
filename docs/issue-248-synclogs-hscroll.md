@@ -107,9 +107,15 @@
 |---|---|
 | `npx tsc --noEmit` | 0 error |
 | `npm test` | 11 文件 88 例通过（新增 `src/styles.test.ts` 4 例） |
+| `npx eslint src/styles.test.ts src/vite-env.d.ts vitest.config.ts` | 0 problem |
 | `npm run build` | ✅ `dist/assets/index-BKrHbFZ_.css` 27.93 kB |
 | `npm run i18n:check` | 中英各 302 key 一致 |
 | `python3 scripts/check-doc-links.py` | ✅（本文件新增后仍须通过） |
+
+> `npm run lint` / `npm run format:check` 在**改动前**即失败（`src/i18n/index.tsx` 17 条
+> `react-refresh` warning；30 个文件不符合 prettier，含 `src/main.tsx`、`src/styles.css` 等
+> 本次未触碰的文件），属 #246 新增 CI 的既有问题，与本 issue 无关；本次只保证**新增文件**
+> 自身干净（`styles.css` 在 HEAD 上就不符合 prettier，重排它会产生上千行无关改动，故不动）。
 
 ### 回归测试（`app/src/styles.test.ts`）
 
@@ -124,6 +130,19 @@
 
 **反向验证**：把 `overflow` 改回 `hidden`，测试立刻失败（2 failed）；还原后全绿。
 断言前会剥离 CSS 注释，避免注释里提到写法就误命中。
+
+#### 测试基建变更（随本次一并引入）
+
+| 文件 | 变更 | 原因 |
+|---|---|---|
+| `app/src/styles.test.ts` | 新增 | 静态断言 `styles.css` 声明 |
+| `app/src/vite-env.d.ts` | 新增（`/// <reference types="vite/client" />`） | 给 `?raw` 导入提供类型，且**不引入 `@types/node`** |
+| `app/vitest.config.ts` | 新增 `css: true` | 默认 `css: false` 会把 CSS 模块打桩成**空串**，`styles.css?raw` 取不到内容（此坑已实测） |
+
+**为什么不用 `node:fs` 读文件**：那需要 `@types/node`，而它不是本仓库的依赖（`npm ci` 后
+`node_modules/@types/` 下没有 `node`），`tsc --noEmit` 会报 3 条 TS2307 —— CI 上已实际失败过一次。
+改用 Vite 原生 `?raw` 导入后**零新增依赖**，且不存在本地/CI 环境差异
+（此前本地能过只是因为 node_modules 里残留了 extraneous 的 `@types/node`，`npm ci` 一跑就暴露）。
 
 ### 视觉验证（隔离复现页）
 
