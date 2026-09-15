@@ -36,7 +36,7 @@ type State =
   | { phase: 'error'; message: string };
 
 /** 按当前安装平台返回 taskboard 二进制的默认路径（与 README 一致）。 */
-function getMcpCommand(): string {
+export function getMcpCommand(): string {
   const ua = navigator.userAgent.toLowerCase();
   if (ua.includes('mac')) {
     return '/Applications/TaskBoard.app/Contents/MacOS/taskboard';
@@ -49,7 +49,7 @@ function getMcpCommand(): string {
 }
 
 /** MCP 接入配置片段（与 README 一致，代码块非翻译）。 */
-function buildMcpSnippet(): string {
+export function buildMcpSnippet(): string {
   const cmd = getMcpCommand();
   return `{
   "mcpServers": {

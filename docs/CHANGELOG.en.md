@@ -2,6 +2,12 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — Left-right layout + Agent Setup panel (#259)**
+
+  - **#259 Left-right layout refactor**: a new fixed left Sidebar (200px) hosts every entry point — Notes / account list (click-to-switch + add account) / Settings / Agent Setup / Sync Logs / Account Login / About in the footer. The topbar shrank from "account dropdown + 4 buttons + sync" to "brand + total count + last-sync time + sync now". Settings / Accounts / Sync Logs moved from modals to **full-height embedded pages** in the main area (zero changes inside the panel components — handled by the `.panel-page` container + CSS overrides); NotesPanel became a main-area "page", rendered only when selected. See [docs/issue-259-sidebar-nav.md](./issue-259-sidebar-nav.md).
+  - **How**: the `activeModal` state was replaced with `nav` (`notes | board | settings | agents | synclogs | accounts`) plus a standalone `showAbout` (About stays a modal); account switching reuses `handleSwitchAccount` and returns to the board view; two new components (`Sidebar.tsx`, `AgentPanel.tsx`); the `main-layout` CSS was replaced by `app-shell` + `main-content`. Frontend only — SQLite / Rust untouched.
+  - **Verification**: `tsc --noEmit` 0 errors, `npm run build` ✅, `npm test` 12 files / 99 tests, `i18n:check` 334 keys per locale, `check-doc-links.py` ✅. Real-machine manual QA pending.
+
 - **Unreleased — Concurrent dual-channel update check (#256)**
 
   - **#256 Slow update check with invisible failure cause**: v0.5.0's check was sequential — it awaited the tauri updater channel first (no built-in timeout, hangs long on weak networks) and only then ran the GitHub API fallback, so total latency was the sum; the updater's error was also swallowed silently, leaving only a late "Go to download" button. Observed on v0.5.0 + macOS Apple Silicon. See [docs/issue-256-update-check.md](./issue-256-update-check.md).

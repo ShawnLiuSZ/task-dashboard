@@ -67,6 +67,7 @@ const ICON = {
 
 /** 收起状态持久化键（本地偏好，不入数据库）。 */
 const COLLAPSED_KEY = 'notes.collapsed';
+const ADD_COL_COLLAPSED_KEY = 'notes.addColCollapsed';
 
 /** 宽度百分比持久化键（本地偏好，不入数据库）。范围 25–50，默认 25。 */
 const WIDTH_KEY = 'notes.widthPct';
@@ -188,6 +189,14 @@ export default function NotesPanel() {
   // #202：展开态宽度（占主区百分比），拖拽/键盘调整后持久化。
   const [widthPct, setWidthPct] = useState(readNotesWidthPct);
 
+  // 添加列（左栏）收起状态——独立于面板整体收起。
+  const [addColCollapsed, setAddColCollapsed] = useState(
+    () => localStorage.getItem(ADD_COL_COLLAPSED_KEY) === '1',
+  );
+  useEffect(() => {
+    localStorage.setItem(ADD_COL_COLLAPSED_KEY, addColCollapsed ? '1' : '0');
+  }, [addColCollapsed]);
+
   const draftRef = useAutoSize(draft);
   const editRef = useAutoSize(editDraft);
 
@@ -216,6 +225,124 @@ export default function NotesPanel() {
   useEffect(() => {
     void loadNotes();
   }, [loadNotes]);
+
+  // 排序：优先级 urgent(0) > high(1) > medium(2) > low(3)；同优先级按倒序创建时间。
+  const sortedNotes = useMemo(() => {
+    const prio: Record<NoteLabel, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
+    return [...notes].sort((a, b) => {
+      const pd = prio[a.label] - prio[b.label];
+      return pd !== 0 ? pd : b.createdAt - a.createdAt;
+    });
+  }, [notes]);
+
+  // 按日期分组（今天 / 昨日 / M月D日），组内保持优先级+时间排序。
+  const groupedNotes = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const fmtDateKey = (ts: number) => {
+      const d = new Date(ts * 1000);
+      d.setHours(0, 0, 0, 0);
+      return d.getTime();
+    };
+    const groups = new Map<number, Note[]>();
+    for (const note of sortedNotes) {
+      const key = fmtDateKey(note.createdAt);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(note);
+    }
+    return Array.from(groups.entries())
+      .sort((a, b) => b[0] - a[0])
+      .map(([key, items]) => {
+        const diffDays = Math.round((today.getTime() - key) / 86400000);
+        let title: string;
+        if (diffDays === 0) title = t('notes.group.today');
+        else if (diffDays === 1) title = t('notes.group.yesterday');
+        else {
+          const d = new Date(items[0].createdAt * 1000);
+          title = t('notes.group.date', { m: d.getMonth() + 1, d: d.getDate() });
+        }
+        return { key, title, items };
+      });
+  }, [sortedNotes, t]);
+
+  // 按优先级分列（右侧横向 card 列用），列内按创建时间倒序。
+  const priorityColumns = useMemo(() => {
+    const prioOrder: NoteLabel[] = ['urgent', 'high', 'medium', 'low'];
+    const byPrio = new Map<NoteLabel, Note[]>();
+    for (const n of sortedNotes) {
+      if (!byPrio.has(n.label)) byPrio.set(n.label, []);
+      byPrio.get(n.label)!.push(n);
+    }
+    return prioOrder.map((p) => ({
+      label: p,
+      items: byPrio.get(p) ?? [],
+      opt: labelOf(labels, p),
+    }));
+  }, [sortedNotes, labels]);
+
+  const renderNoteCard = (note: Note) => {
+    const opt = labelOf(labels, note.label);
+    const accent = { '--note-accent': opt.color } as CSSProperties;
+    if (confirmId === note.id) {
+      return (
+        <article key={note.id} className="note-card confirming" style={accent}>
+          <p className="note-confirm-text">{t('notes.deleteConfirm')}</p>
+          <div className="note-confirm-actions">
+            <button type="button" className="btn small danger" onClick={() => void handleDelete(note.id)}>{t('btn.delete')}</button>
+            <button type="button" className="btn small ghost" onClick={() => setConfirmId(null)}>{t('btn.cancel')}</button>
+          </div>
+        </article>
+      );
+    }
+    if (editingId === note.id) {
+      return (
+        <article key={note.id} className="note-card editing" style={accent}>
+          <textarea ref={editRef} className="note-textarea" value={editDraft} rows={1} autoFocus
+            onChange={(e) => setEditDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') { e.preventDefault(); setEditingId(null); setEditDraft(''); }
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void handleSave(); }
+            }}
+          />
+          <div className="note-edit-foot">
+            <span className="note-hint">{t('notes.editHint')}</span>
+            <div className="note-edit-actions">
+              <button type="button" className="btn small ghost" onClick={() => { setEditingId(null); setEditDraft(''); }} disabled={saving}>{t('btn.cancel')}</button>
+              <button type="button" className="btn small primary" onClick={() => void handleSave()} disabled={saving || !editDraft.trim()}>{saving ? t('notes.saving') : t('btn.save')}</button>
+            </div>
+          </div>
+        </article>
+      );
+    }
+    return (
+      <article key={note.id} className="note-card" style={accent}>
+        <p className="note-content">{note.content}</p>
+        <footer className="note-foot">
+          <button type="button" className="note-tag" title={t('notes.toggleTag')}
+            onClick={() => {
+              const idx = labels.findIndex((l) => l.value === note.label);
+              void handleLabelChange(note.id, labels[(idx + 1) % labels.length].value);
+            }}
+          >
+            <span className="note-dot" />{opt.label}
+          </button>
+          <time className="note-time" title={fullTime(note.createdAt)}>
+            {relTime(note.createdAt, t)}{note.updatedAt > note.createdAt && t('notes.editedSuffix')}
+          </time>
+          <div className="note-tools">
+            <button type="button" className="note-tool" title={t('notes.editTitle')}
+              onClick={() => { setEditingId(note.id); setEditDraft(note.content); }}>
+              <Icon d={ICON.pencil} size={13} />
+            </button>
+            <button type="button" className="note-tool danger" title={t('notes.deleteTitle')}
+              onClick={() => setConfirmId(note.id)}>
+              <Icon d={ICON.trash} size={13} />
+            </button>
+          </div>
+        </footer>
+      </article>
+    );
+  };
 
   const handleAdd = useCallback(async () => {
     const content = draft.trim();
@@ -404,200 +531,96 @@ export default function NotesPanel() {
       </header>
 
       <div className="notes-body">
-        {notice && (
-          <div className="note-notice" role="status">
-            <span>{notice}</span>
-            <button
-              type="button"
-              className="note-tool"
-              title={t('notes.closeTitle')}
-              onClick={() => setNotice(null)}
-            >
-              <Icon d={ICON.close} size={12} />
-            </button>
-          </div>
-        )}
-        {error && (
-          <div className="note-error" role="alert">
-            <span>{error}</span>
-            <button
-              type="button"
-              className="note-tool"
-              title={t('notes.closeTitle')}
-              onClick={() => setError(null)}
-            >
-              <Icon d={ICON.close} size={12} />
-            </button>
+        {/* 左侧：添加列（composer + 日期分组列表） */}
+        {!addColCollapsed && (
+          <div className="notes-add-col">
+            <div className="notes-add-col-inner">
+              {notice && (
+                <div className="note-notice" role="status">
+                  <span>{notice}</span>
+                  <button type="button" className="note-tool" title={t('notes.closeTitle')} onClick={() => setNotice(null)}>
+                    <Icon d={ICON.close} size={12} />
+                  </button>
+                </div>
+              )}
+              {error && (
+                <div className="note-error" role="alert">
+                  <span>{error}</span>
+                  <button type="button" className="note-tool" title={t('notes.closeTitle')} onClick={() => setError(null)}>
+                    <Icon d={ICON.close} size={12} />
+                  </button>
+                </div>
+              )}
+
+              <div className="note-composer">
+                <textarea ref={draftRef} className="note-textarea"
+                  placeholder={t('notes.composer.placeholder')}
+                  value={draft} rows={1}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !adding && draft.trim()) {
+                      e.preventDefault(); void handleAdd();
+                    }
+                  }}
+                />
+                <div className="note-composer-foot">
+                  <LabelPicker value={draftLabel} onChange={setDraftLabel} />
+                  <button type="button" className="btn primary" onClick={() => void handleAdd()} disabled={adding || !draft.trim()}>
+                    {!adding && <Icon d={ICON.plus} size={13} />}
+                    {adding ? t('notes.adding') : t('notes.add')}
+                  </button>
+                </div>
+              </div>
+
+              {/* 日期分组列表 */}
+              <div className="notes-date-list">
+                {loading ? (
+                  <div className="notes-placeholder">{t('notes.loading')}</div>
+                ) : notes.length === 0 ? (
+                  <div className="notes-empty">
+                    <span className="notes-empty-icon"><Icon d={ICON.notebook} size={22} /></span>
+                    <p>{t('notes.emptyTitle')}</p>
+                    <span>{t('notes.emptySub')}</span>
+                  </div>
+                ) : groupedNotes.map((group) => (
+                  <section key={group.key} className="notes-group">
+                    <div className="notes-group-title">{group.title}</div>
+                    {group.items.map(renderNoteCard)}
+                  </section>
+                ))}
+              </div>
+            </div>
           </div>
         )}
 
-        {/* 新建 */}
-        <div className="note-composer">
-          <textarea
-            ref={draftRef}
-            className="note-textarea"
-            placeholder={t('notes.composer.placeholder')}
-            value={draft}
-            rows={1}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !adding && draft.trim()) {
-                e.preventDefault();
-                void handleAdd();
-              }
-            }}
-          />
-          <div className="note-composer-foot">
-            <LabelPicker value={draftLabel} onChange={setDraftLabel} />
-            <button
-              type="button"
-              className="btn primary"
-              onClick={() => void handleAdd()}
-              disabled={adding || !draft.trim()}
-            >
-              {!adding && <Icon d={ICON.plus} size={13} />}
-              {adding ? t('notes.adding') : t('notes.add')}
+        {/* 右侧：横向 card 列（按优先级分组） */}
+        <div className="notes-card-cols">
+          {addColCollapsed && (
+            <button type="button" className="notes-add-col-open" title={t('notes.expandAddCol')}
+              onClick={() => setAddColCollapsed(false)}>
+              <Icon d={ICON.plus} size={13} />
             </button>
-          </div>
-        </div>
-
-        {/* 列表 */}
-        <div className="notes-list">
+          )}
           {loading ? (
             <div className="notes-placeholder">{t('notes.loading')}</div>
-          ) : notes.length === 0 ? (
+          ) : priorityColumns.every((c) => c.items.length === 0) ? (
             <div className="notes-empty">
-              <span className="notes-empty-icon">
-                <Icon d={ICON.notebook} size={22} />
-              </span>
+              <span className="notes-empty-icon"><Icon d={ICON.notebook} size={22} /></span>
               <p>{t('notes.emptyTitle')}</p>
               <span>{t('notes.emptySub')}</span>
             </div>
           ) : (
-            notes.map((note) => {
-              const opt = labelOf(labels, note.label);
-              const accent = { '--note-accent': opt.color } as CSSProperties;
-
-              if (confirmId === note.id) {
-                return (
-                  <article key={note.id} className="note-card confirming" style={accent}>
-                    <p className="note-confirm-text">{t('notes.deleteConfirm')}</p>
-                    <div className="note-confirm-actions">
-                      <button
-                        type="button"
-                        className="btn small danger"
-                        onClick={() => void handleDelete(note.id)}
-                      >
-                        {t('btn.delete')}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn small ghost"
-                        onClick={() => setConfirmId(null)}
-                      >
-                        {t('btn.cancel')}
-                      </button>
-                    </div>
-                  </article>
-                );
-              }
-
-              if (editingId === note.id) {
-                return (
-                  <article key={note.id} className="note-card editing" style={accent}>
-                    <textarea
-                      ref={editRef}
-                      className="note-textarea"
-                      value={editDraft}
-                      rows={1}
-                      autoFocus
-                      onChange={(e) => setEditDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Escape') {
-                          e.preventDefault();
-                          setEditingId(null);
-                          setEditDraft('');
-                        }
-                        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                          e.preventDefault();
-                          void handleSave();
-                        }
-                      }}
-                    />
-                    <div className="note-edit-foot">
-                      <span className="note-hint">{t('notes.editHint')}</span>
-                      <div className="note-edit-actions">
-                        <button
-                          type="button"
-                          className="btn small ghost"
-                          onClick={() => {
-                            setEditingId(null);
-                            setEditDraft('');
-                          }}
-                          disabled={saving}
-                        >
-                          {t('btn.cancel')}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn small primary"
-                          onClick={() => void handleSave()}
-                          disabled={saving || !editDraft.trim()}
-                        >
-                          {saving ? t('notes.saving') : t('btn.save')}
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                );
-              }
-
-              return (
-                <article key={note.id} className="note-card" style={accent}>
-                  <p className="note-content">{note.content}</p>
-                  <footer className="note-foot">
-                    <button
-                      type="button"
-                      className="note-tag"
-                      title={t('notes.toggleTag')}
-                      onClick={() => {
-                        const idx = labels.findIndex((l) => l.value === note.label);
-                        const next = labels[(idx + 1) % labels.length];
-                        void handleLabelChange(note.id, next.value);
-                      }}
-                    >
-                      <span className="note-dot" />
-                      {opt.label}
-                    </button>
-                    <time className="note-time" title={fullTime(note.createdAt)}>
-                      {relTime(note.createdAt, t)}
-                      {note.updatedAt > note.createdAt && t('notes.editedSuffix')}
-                    </time>
-                    <div className="note-tools">
-                      <button
-                        type="button"
-                        className="note-tool"
-                        title={t('notes.editTitle')}
-                        onClick={() => {
-                          setEditingId(note.id);
-                          setEditDraft(note.content);
-                        }}
-                      >
-                        <Icon d={ICON.pencil} size={13} />
-                      </button>
-                      <button
-                        type="button"
-                        className="note-tool danger"
-                        title={t('notes.deleteTitle')}
-                        onClick={() => setConfirmId(note.id)}
-                      >
-                        <Icon d={ICON.trash} size={13} />
-                      </button>
-                    </div>
-                  </footer>
-                </article>
-              );
-            })
+            priorityColumns.map((col) => (
+              <div key={col.label} className="note-col" style={{ '--col-accent': col.opt.color } as CSSProperties}>
+                <div className="note-col-head">
+                  <span className="note-col-count">{col.items.length}</span>
+                  <span>{col.opt.label}</span>
+                </div>
+                <div className="note-col-body">
+                  {col.items.map(renderNoteCard)}
+                </div>
+              </div>
+            ))
           )}
         </div>
       </div>
