@@ -6,6 +6,12 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 检查更新双通道并发（#256）**
+
+  - **#256 检查更新慢且失败原因不可见**：v0.5.0 的「检查更新」是串行的——先等 tauri updater 通道（该通道无内置超时，弱网下 hang 很久），失败后才走 GitHub API fallback，总耗时是加和；且 updater 的失败原因被静默吞掉，用户只看到「很慢才出现的『前往下载』按钮」。实测用户环境：v0.5.0 + macOS Apple Silicon。详见 [docs/issue-256-update-check.md](./issue-256-update-check.md)。
+  - **做法**：双通道同时发起、分阶段展示——fallback 先到先显示手动下载（不等慢的 updater），updater 到达后升级为一键更新或附带失败原因；单路超时封顶（fallback 30s / updater 90s）。只改前端（新纯模块 `src/utils/updateCheck.ts` + `AboutPanel`），零新依赖、Rust 零改动。
+  - **验证**：新增单测 11 例（`viewFallback` 4 + `viewUpdater` 4 + 超时收敛 3）、`npm test` 12 文件 99 例、`tsc --noEmit` 0 error、`i18n:check` 中英各 305 key。真机复测待含本修复的版本发布后（v0.5.0 旧面板行为改不了，需手动安装一次新版）。
+
 - **v0.5.1（2026-09-15）— 修好既有 CI（#252）+ 未同步 issue 按需拉取（#250）+ 同步日志表格横向滚动（#248）**
 
   - **#252 `quality-check.yml` 恢复全绿**：#246 引入该 workflow 时留下两类既有失败 —— `Frontend Lint` 的 `format:check` 报 **29 个文件**未格式化（`.prettierrc` 加了但 `npm run format` 从未跑）；`Rust Clippy` / `Rust Tests` 缺 Tauri 的 Linux 系统库（`glib-sys` / `gio-sys` / `gobject-sys` 在 build script 阶段 pkg-config 失败）。两者都已在 `develop` 上红了很久，让每个新 PR 的 CI 都必然红（#249、#251 均被挡）。详见 [docs/issue-252-ci-green.md](./issue-252-ci-green.md)。
