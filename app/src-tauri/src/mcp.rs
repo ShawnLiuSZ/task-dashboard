@@ -53,42 +53,12 @@ fn resolve_status(s: &str) -> Option<String> {
 }
 
 /// 把多种 issue 引用归一化为 DB 主键 `repo#number`。
+///
+/// v0.4.1 (#250)：解析实现下沉到 [`crate::on_demand::parse_issue_ref_parts`]
+/// （它额外保留 owner，供按需拉取定位资源），本函数只取主键。
+/// 错误文案不变——它对 agent 可见。
 fn parse_issue_ref(ref_: &str) -> Result<String, String> {
-    let r = ref_.trim();
-    if r.is_empty() {
-        return Err("issue 引用为空".to_string());
-    }
-    // URL 形式：https://github.com/{owner}/{repo}/issues/{n}
-    if let Some(idx) = r.find("github.com/") {
-        let rest = &r[idx + "github.com/".len()..];
-        let parts: Vec<&str> = rest.split('/').collect();
-        if parts.len() >= 4 {
-            let repo = parts[1];
-            if let Ok(n) = parts[3].trim_start_matches('#').parse::<i64>() {
-                if n > 0 && !repo.is_empty() {
-                    return Ok(format!("{}#{}", repo, n));
-                }
-            }
-        }
-        return Err(format!("无法解析 issue URL: {ref_}"));
-    }
-    // repo#number 或 owner/repo#number
-    if let Some(pos) = r.rfind('#') {
-        let left = &r[..pos];
-        let right = &r[pos + 1..];
-        let n: i64 = right
-            .parse()
-            .map_err(|_| format!("issue 编号非法: {right}"))?;
-        if n <= 0 {
-            return Err("issue 编号必须 > 0".to_string());
-        }
-        let repo = left.rsplit('/').next().unwrap_or("").trim();
-        if repo.is_empty() {
-            return Err(format!("无法从引用解析仓库名: {ref_}"));
-        }
-        return Ok(format!("{}#{}", repo, n));
-    }
-    Err(format!("无法解析 issue 引用: {ref_}"))
+    crate::on_demand::parse_issue_ref_parts(ref_).map(|r| r.key)
 }
 
 /// 把一行 tasks 记录序列化为返回给 agent 的 JSON 对象。
@@ -195,27 +165,120 @@ fn tool_list(
     Ok(Value::Array(out))
 }
 
-fn tool_get(conn: &Connection, issue: &str) -> Result<Value, String> {
-    let key = parse_issue_ref(issue)?;
+/// 按主键查一行任务（给 `get_task_status` 用）。
+/// 返回 `None` 表示本地没有这一行（区别于 DB 错误）。
+fn fetch_task_row(conn: &Connection, key: &str) -> Result<Option<Value>, String> {
     let mut stmt = conn
         .prepare(&format!("SELECT {SELECT_COLS} FROM tasks WHERE issue_key = ?1"))
         .map_err(|e| e.to_string())?;
     let mut rows = stmt
-        .query_map([key.clone()], row_to_value)
+        .query_map([key], row_to_value)
         .map_err(|e| e.to_string())?;
     match rows.next() {
-        Some(Ok(v)) => {
+        Some(Ok(v)) => Ok(Some(v)),
+        Some(Err(e)) => Err(e.to_string()),
+        None => Ok(None),
+    }
+}
+
+/// 把「按需拉取」的结果翻译成给 agent 的错误文案（仍不可用时）。
+fn ensure_failure_message(key: &str, outcome: &crate::on_demand::EnsureOutcome) -> String {
+    match outcome {
+        crate::on_demand::EnsureOutcome::RemoteNotFound(detail) => {
+            format!("任务不存在且无法从 GitHub 拉取: {key}（{detail}）")
+        }
+        crate::on_demand::EnsureOutcome::Unavailable(reason) => {
+            format!("任务不存在且无法从 GitHub 拉取: {key}（{reason}）")
+        }
+        // 已存在 / 已拉取由调用方处理，不会走到这里
+        _ => format!("任务不存在: {key}"),
+    }
+}
+
+/// 本地未命中时的统一前置处理：按需拉取该 issue（v0.4.1 / #250）。
+///
+/// 返回 `Ok(true)` 表示本次真的从 GitHub 拉取并落库了。
+///
+/// ⚠️ 必须在写入**之前**调用：`common::set_task_status` 会先做状态校验，而自定义列（非四态）
+/// 的校验要读该行的 `account_id`——行还不存在时会误报「非法状态」。
+/// `ref_` 传**原始**引用（可能带 owner），owner 是账号归属匹配的依据。
+fn ensure_local_task(
+    conn: &Connection,
+    key: &str,
+    ref_: &str,
+) -> Result<bool, String> {
+    if crate::on_demand::task_exists(conn, key)? {
+        return Ok(false);
+    }
+    let outcome = crate::on_demand::ensure_task_available(conn, ref_)?;
+    match outcome {
+        crate::on_demand::EnsureOutcome::Pulled => Ok(true),
+        crate::on_demand::EnsureOutcome::AlreadyLocal => Ok(false),
+        other => Err(ensure_failure_message(key, &other)),
+    }
+}
+
+/// 执行「返回影响行数」的写操作：先确保任务存在（必要时按需拉取），再写入。
+///
+/// 返回 `(影响行数, 本次是否按需拉取过)`。`write` 返回 0 表示行仍不存在——拉取成功
+/// 后不应出现，故直接按「任务不存在」报错（保守）。
+fn write_with_on_demand(
+    conn: &Connection,
+    key: &str,
+    ref_: &str,
+    mut write: impl FnMut() -> Result<usize, String>,
+) -> Result<(usize, bool), String> {
+    let pulled = ensure_local_task(conn, key, ref_)?;
+    let n = write()?;
+    if n == 0 {
+        return Err(format!("任务不存在: {key}"));
+    }
+    Ok((n, pulled))
+}
+
+fn tool_get(conn: &Connection, issue: &str) -> Result<Value, String> {
+    let key = parse_issue_ref(issue)?;
+    if let Some(v) = fetch_task_row(conn, &key)? {
+        let mut m = match v {
+            Value::Object(m) => m,
+            _ => Map::new(),
+        };
+        m.insert("found".into(), Value::Bool(true));
+        m.insert("issue_key".into(), Value::String(key));
+        return Ok(Value::Object(m));
+    }
+    // 本地未命中 → 按需拉取后再查一次（v0.4.1 / #250）。
+    //
+    // 读路径保持「永远能回答」的旧契约：账号缺失 / 网络失败 / 甚至本地 DB 出错都**不报错**，
+    // 一律降级为 `found: false` + `reason`（信息不丢，只是不把读操作变成异常）。
+    let outcome = match crate::on_demand::ensure_task_available(conn, issue) {
+        Ok(o) => o,
+        Err(e) => crate::on_demand::EnsureOutcome::Unavailable(format!("按需拉取失败: {e}")),
+    };
+    let pulled = outcome.pulled();
+    if pulled || outcome == crate::on_demand::EnsureOutcome::AlreadyLocal {
+        if let Some(v) = fetch_task_row(conn, &key)? {
             let mut m = match v {
                 Value::Object(m) => m,
                 _ => Map::new(),
             };
             m.insert("found".into(), Value::Bool(true));
             m.insert("issue_key".into(), Value::String(key));
-            Ok(Value::Object(m))
+            m.insert("pulled".into(), Value::Bool(pulled));
+            return Ok(Value::Object(m));
         }
-        Some(Err(e)) => Err(e.to_string()),
-        None => Ok(json!({ "found": false, "issue_key": key })),
     }
+    // 仍未命中：把「远端没有 / 无法拉取」的原因带回（不报错，保持原 found:false 语义）。
+    let reason = match &outcome {
+        crate::on_demand::EnsureOutcome::RemoteNotFound(detail) => {
+            format!("本地无此任务，且{detail}")
+        }
+        crate::on_demand::EnsureOutcome::Unavailable(r) => {
+            format!("本地无此任务，且无法从 GitHub 拉取：{r}")
+        }
+        _ => "本地无此任务".to_string(),
+    };
+    Ok(json!({ "found": false, "issue_key": key, "reason": reason }))
 }
 
 fn tool_update(conn: &Connection, issue: &str, status: &str) -> Result<Value, String> {
@@ -226,11 +289,10 @@ fn tool_update(conn: &Connection, issue: &str, status: &str) -> Result<Value, St
         return Err("状态不能为空".to_string());
     }
     let sk = resolve_status(t).unwrap_or_else(|| t.to_string());
-    let n = crate::common::set_task_status(conn, &key, &sk)?;
-    if n == 0 {
-        return Err(format!("任务不存在: {key}"));
-    }
-    Ok(json!({ "ok": true, "issue_key": key, "status": sk }))
+    let (_, pulled) = write_with_on_demand(conn, &key, issue, || {
+        crate::common::set_task_status(conn, &key, &sk)
+    })?;
+    Ok(json!({ "ok": true, "issue_key": key, "status": sk, "pulled": pulled }))
 }
 
 fn tool_record_session(
@@ -248,31 +310,28 @@ fn tool_record_session(
     let agent = agent.unwrap_or_default().trim().to_string();
     let now = crate::sync::now_secs();
     // v0.3.49 (#147)：SQL 走公共模块（与 commands.rs 同一实现）；branch 非空才写。
-    let n = crate::common::touch_session(conn, &key, sid, Some(&agent), now, branch)?;
-    if n == 0 {
-        return Err(format!("任务不存在: {key}"));
-    }
-    Ok(json!({ "ok": true, "issue_key": key }))
+    let (_, pulled) = write_with_on_demand(conn, &key, issue, || {
+        crate::common::touch_session(conn, &key, sid, Some(&agent), now, branch)
+    })?;
+    Ok(json!({ "ok": true, "issue_key": key, "pulled": pulled }))
 }
 
 fn tool_record_handoff(conn: &Connection, issue: &str, text: &str) -> Result<Value, String> {
     let key = parse_issue_ref(issue)?;
     // v0.3.49 (#147)：SQL 走公共模块（与 commands.rs 同一实现）。
-    let n = crate::common::record_task_handoff(conn, &key, text)?;
-    if n == 0 {
-        return Err(format!("任务不存在: {key}"));
-    }
-    Ok(json!({ "ok": true, "issue_key": key, "handoff_len": text.len() }))
+    let (_, pulled) = write_with_on_demand(conn, &key, issue, || {
+        crate::common::record_task_handoff(conn, &key, text)
+    })?;
+    Ok(json!({ "ok": true, "issue_key": key, "handoff_len": text.len(), "pulled": pulled }))
 }
 
 fn tool_clear_session(conn: &Connection, issue: &str) -> Result<Value, String> {
     let key = parse_issue_ref(issue)?;
     // v0.3.49 (#147)：SQL 走公共模块（与 commands.rs 同一实现）。
-    let n = crate::common::clear_task_session(conn, &key)?;
-    if n == 0 {
-        return Err(format!("任务不存在: {key}"));
-    }
-    Ok(json!({ "ok": true, "issue_key": key }))
+    let (_, pulled) = write_with_on_demand(conn, &key, issue, || {
+        crate::common::clear_task_session(conn, &key)
+    })?;
+    Ok(json!({ "ok": true, "issue_key": key, "pulled": pulled }))
 }
 
 // ============================================================================
@@ -418,7 +477,7 @@ fn tools_list() -> Value {
         },
         {
             "name": "get_task_status",
-            "description": "查询单个任务的当前看板状态，以及已记录的 session_id / session_agent / handoff。",
+            "description": "查询单个任务的当前看板状态，以及已记录的 session_id / session_agent / handoff。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue（返回体 pulled=true 表示本次拉取过）；拉取不到时返回 found=false 并在 reason 里说明原因。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -429,7 +488,7 @@ fn tools_list() -> Value {
         },
         {
             "name": "update_task_status",
-            "description": "将任务在看板上的状态更新为 待处理/处理中/已处理/已完成（只写本地 SQLite，不碰 GitHub）。",
+            "description": "将任务在看板上的状态更新为 待处理/处理中/已处理/已完成（只写本地 SQLite，不碰 GitHub）。若该 issue 还没同步到本地，会自动按需从 GitHub 拉取这一个 issue 再写入（返回体 pulled=true 表示本次拉取过，无需再手动触发同步）。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -441,7 +500,7 @@ fn tools_list() -> Value {
         },
         {
             "name": "record_session",
-            "description": "记录中断会话的 session id 到该任务卡片（session_id / session_agent / session_at；branch 非空则一并记录工作分支到 work_branch，与同步的 PR branch 分离）。只写本地 SQLite，不碰 GitHub。",
+            "description": "记录中断会话的 session id 到该任务卡片（session_id / session_agent / session_at；branch 非空则一并记录工作分支到 work_branch，与同步的 PR branch 分离）。只写本地 SQLite，不碰 GitHub。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -455,7 +514,7 @@ fn tools_list() -> Value {
         },
         {
             "name": "record_handoff",
-            "description": "记录「交接任务」详情到该任务（handoff 字段）。只写本地 SQLite，不碰 GitHub。用于 agent 识别到用户「生成交接任务」类意图时调用。",
+            "description": "记录「交接任务」详情到该任务（handoff 字段）。只写本地 SQLite，不碰 GitHub。用于 agent 识别到用户「生成交接任务」类意图时调用。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -467,7 +526,7 @@ fn tools_list() -> Value {
         },
         {
             "name": "clear_session",
-            "description": "任务完成后清空 session_id / session_agent 字段（保留 session_at 审计）。只写本地 SQLite。",
+            "description": "任务完成后清空 session_id / session_agent 字段（保留 session_at 审计）。只写本地 SQLite。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -851,5 +910,46 @@ mod tests {
         let missing = tool_get(&c, "nope#999").unwrap();
         assert_eq!(missing["found"].as_bool(), Some(false));
         assert_eq!(missing["issue_key"].as_str(), Some("nope#999"));
+    }
+
+    // ── v0.4.1 (#250)：未命中时的按需拉取契约 ──────────────────────────────
+    //
+    // 完整路径要打真实 GitHub，无法在单测里跑；这里锁住两条**不发网络请求**的契约，
+    // 它们正是「未同步的 issue 卡死 agent」修复里最容易回归的部分。
+
+    /// 本地已有该行 → 不做任何拉取（返回 false = 未拉取），无账号也不影响。
+    #[test]
+    fn on_demand_skips_network_when_row_exists() {
+        let c = test_conn();
+        insert_sample(&c);
+        let pulled = ensure_local_task(&c, "fad-backend#1247", "FoodsUp-Inc/fad-backend#1247")
+            .expect("行已存在时不应报错");
+        assert!(!pulled, "行已存在时不应触发按需拉取");
+        // 写操作照旧生效，返回体带 pulled: false
+        let out = tool_update(&c, "FoodsUp-Inc/fad-backend#1247", "已完成").unwrap();
+        assert_eq!(out["ok"].as_bool(), Some(true));
+        assert_eq!(out["pulled"].as_bool(), Some(false));
+        assert_eq!(out["status"].as_str(), Some("done"));
+    }
+
+    /// 无任何账号时：报错并说明原因，**不发网络请求**（连客户端都不会构造）。
+    #[test]
+    fn on_demand_without_account_fails_fast_with_reason() {
+        let c = test_conn();
+        c.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .unwrap();
+        c.execute_batch(
+            "CREATE TABLE accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL, login TEXT NOT NULL,
+                org TEXT NOT NULL, pat_token TEXT NOT NULL, is_default INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL);",
+        )
+        .unwrap();
+        let err = ensure_local_task(&c, "task-dashboard#248", "task-dashboard#248").unwrap_err();
+        assert!(err.contains("无法从 GitHub 拉取"), "错误应说明无法拉取: {err}");
+        assert!(err.contains("没有任何 GitHub 账号"), "错误应带具体原因: {err}");
+        // 写工具同样给出可读错误，而不是含糊的「任务不存在」
+        let werr = tool_update(&c, "task-dashboard#248", "处理中").unwrap_err();
+        assert!(werr.contains("没有任何 GitHub 账号"), "{werr}");
     }
 }

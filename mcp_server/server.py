@@ -31,12 +31,15 @@ Tools
 可用环境变量 `TASKBOARD_DB` 覆盖。
 """
 
+import calendar
 import json
 import os
 import re
 import sqlite3
 import sys
 import time
+import urllib.error
+import urllib.request
 
 DB_PATH = os.environ.get(
     "TASKBOARD_DB",
@@ -83,15 +86,27 @@ def resolve_status(s):
     return STATUS_CN.get(s)
 
 
-def parse_issue_ref(ref):
-    """把多种 issue 引用归一化为本库的任务业务引用 `issue_key`（`repo#number`）。"""
+def parse_issue_ref_parts(ref):
+    """解析 issue 引用，**保留 owner**（v0.4.1 / #250）。
+
+    与 Rust `on_demand::parse_issue_ref_parts` 同义：按需拉取单个 issue 需要
+    `owner` + `repo` 才能定位资源，而主键只有 `repo#number`。
+
+    返回 `{"owner": str|None, "repo": str, "number": int, "key": str}`。
+    """
     ref = (ref or "").strip()
     if not ref:
         raise ValueError("issue 引用为空")
-    # URL 形式：https://github.com/{owner}/{repo}/issues/{n}
-    m = re.search(r"github\.com/[^/]+/([^/#?]+)/(?:issues|pull)/(\d+)", ref)
+    # URL 形式：https://github.com/{owner}/{repo}/issues/{n}（也接受 /pull/{n}）
+    m = re.search(r"github\.com/([^/]+)/([^/#?]+)/(?:issues|pull)/(\d+)", ref)
     if m:
-        return f"{m.group(1)}#{m.group(2)}"
+        owner, repo, num = m.group(1), m.group(2), int(m.group(3))
+        return {
+            "owner": owner or None,
+            "repo": repo,
+            "number": num,
+            "key": f"{repo}#{num}",
+        }
     # repo#number 或 owner/repo#number
     if "#" in ref:
         left, _, right = ref.rpartition("#")
@@ -104,8 +119,15 @@ def parse_issue_ref(ref):
         repo = left.rstrip("/").split("/")[-1]
         if not repo:
             raise ValueError(f"无法从引用解析仓库名: {ref!r}")
-        return f"{repo}#{num}"
+        # owner 只在写全了 `owner/repo#N` 时才采信；否则留给账号的 org 兜底。
+        owner = left.rstrip("/").rsplit("/", 1)[0].strip() if "/" in left.rstrip("/") else None
+        return {"owner": owner or None, "repo": repo, "number": num, "key": f"{repo}#{num}"}
     raise ValueError(f"无法解析 issue 引用: {ref!r}")
+
+
+def parse_issue_ref(ref):
+    """把多种 issue 引用归一化为本库的任务业务引用 `issue_key`（`repo#number`）。"""
+    return parse_issue_ref_parts(ref)["key"]
 
 
 # --------------------------------------------------------------------------- #
@@ -171,6 +193,301 @@ def _is_custom_column(key, status):
 
 
 # --------------------------------------------------------------------------- #
+# v0.4.1 (#250)：本地未命中时按需拉取单个 issue
+#
+# 背景：tasks 表只由 App 的同步（sync.rs）从 GitHub 单向填充，而本 MCP 是纯本地 SQL。
+# 刚创建、尚未同步到的 issue 会让所有写路径报「任务不存在」，把 agent 工作流卡在第一步。
+# 这里补上「未命中 → 拉取该单个 issue → 落库」的通道：只读 GitHub（单次 GET），
+# 不写回、不触发全量同步，且只在未命中时才发请求。
+#
+# 与 Rust 侧 `app/src-tauri/src/on_demand.rs` 同语义（AGENTS.md §8.6 要求两侧一致）：
+#   * 账号选择：ref 带 owner → 与 accounts.org 大小写不敏感匹配；否则用默认账号
+#   * 状态判定：closed → done；显式 label 映射；否则 todo（Project Status 需 GraphQL，REST 给不了）
+#   * 落库用 ON CONFLICT DO NOTHING，绝不覆盖同步写入的 project_status / mentioned 等字段
+# --------------------------------------------------------------------------- #
+GITHUB_API = "https://api.github.com"
+
+# 与 Rust `db.rs::TASK_INSERT_HEAD` 的列清单一致。
+# 实际写入时会与当前库真实存在的列取交集，兼容尚未迁移的老库。
+TASK_INSERT_COLS = (
+    "issue_key", "owner", "repo", "number", "title", "url", "issue_state", "ownership",
+    "status", "project_status", "assignees", "labels", "done_at", "mentioned",
+    "comments_count", "latest_comment_url", "pr_number", "pr_url", "branch",
+    "candidate_done", "stale", "updated_at", "synced_at", "account_id", "author",
+)
+# `ON CONFLICT` 目标列（tasks 的唯一键）；缺失即说明本地库过旧。
+TASK_CONFLICT_COLS = ("repo", "number", "account_id")
+
+
+def _table_columns(table):
+    return {r[1] for r in conn().execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _iso_to_secs(s):
+    """RFC3339 'YYYY-MM-DDTHH:MM:SSZ' → Unix 秒；失败返回 0（对齐 Rust `iso8601_to_secs`）。"""
+    s = (s or "").strip()
+    if len(s) < 19:
+        return 0
+    try:
+        return calendar.timegm(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        return 0
+
+
+def _classify(assignees, login):
+    """归属判定，与 Rust `sync::classify` 一致。"""
+    if not assignees:
+        return "notassignee"
+    return "assigned" if login in assignees else "assigned-others"
+
+
+def _resolve_label_status(org, repo, labels_csv):
+    """显式 label → 状态映射，仅命中时返回状态（对齐 Rust `resolve_status_from_rules_explicit`）。
+
+    优先级：先按 labels 出现顺序查 repo 级（org+repo+label），再按同样顺序查 org 级（repo=''）。
+    """
+    labels = [l.strip() for l in (labels_csv or "").split(",") if l.strip()]
+    if not labels:
+        return None
+    try:
+        rules = conn().execute(
+            "SELECT org, repo, label, status FROM label_mappings"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return None  # 老库没有 label_mappings 表
+    for label in labels:
+        for r in rules:
+            if r[0] == org and r[1] == repo and r[2] == label:
+                return r[3]
+    for label in labels:
+        for r in rules:
+            if r[0] == org and r[1] == "" and r[2] == label:
+                return r[3]
+    return None
+
+
+def _account_owners(row):
+    """账号可认领的 owner 集合（小写）。
+
+    **`org` 与 `login` 都算认领者**：实测本地库里 task-dashboard 所属账号的 `org` 是空串
+    （个人命名空间仓库），只按 org 匹配会让 `owner/repo#N` 找不到账号 —— 恰好是本功能
+    最需要可用的场景。个人命名空间下仓库 owner 就是登录名。
+    """
+    return {
+        v.lower()
+        for v in ((row["org"] or "").strip(), (row["login"] or "").strip())
+        if v
+    }
+
+
+def _default_owner(account):
+    """账号的默认 owner：`org` 优先，为空则退回 `login`（否则 URL 会拼成 `/repos//repo/...`）。"""
+    org = (account["org"] or "").strip()
+    return org or (account["login"] or "").strip()
+
+
+def _pick_account(owner):
+    """选账号。返回 `(account_row, reason)`；`reason` 非空表示不可用（不发网络请求）。"""
+    try:
+        rows = conn().execute(
+            "SELECT id, login, org, pat_token, is_default FROM accounts ORDER BY id ASC"
+        ).fetchall()
+    except sqlite3.OperationalError as e:
+        return None, f"读取账号失败: {e}"
+    if not rows:
+        return None, "本地没有任何 GitHub 账号，请先在 TaskBoard 中添加账号与 PAT"
+    if owner:
+        lower = owner.lower()
+        matched = [r for r in rows if lower in _account_owners(r)]
+        if not matched:
+            known, seen = [], set()
+            for r in rows:
+                for v in ((r["org"] or "").strip(), (r["login"] or "").strip()):
+                    if v and v.lower() not in seen:
+                        seen.add(v.lower())
+                        known.append(v)
+            return None, (
+                f"ref 里的 owner `{owner}` 没有对应账号（已知 owner/org: {', '.join(known)}）"
+            )
+        chosen = next((r for r in matched if r["is_default"]), matched[0])
+    else:
+        chosen = next((r for r in rows if r["is_default"]), rows[0])
+    if not (chosen["pat_token"] or "").strip():
+        return None, f"账号 @{chosen['login']} 未配置 PAT"
+    return chosen, None
+
+
+def _fetch_issue(pat, owner, repo, number):
+    """`GET /repos/{owner}/{repo}/issues/{n}`（只读）。
+
+    返回 `(payload, reason)`：404 → `(None, None)`（远端确实没有）；
+    其它失败 → `(None, reason)`。
+    """
+    url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/{number}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {pat}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8")), None
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None, None
+        if e.code in (401, 403):
+            return None, f"GitHub 鉴权 / 限流失败 (HTTP {e.code})，请检查 PAT 与配额"
+        return None, f"GitHub API 错误 (HTTP {e.code})"
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        return None, f"网络请求失败: {e}"
+
+
+def _missing_detail(owner, parts, owner_inferred):
+    """「远端没有」的说明：带上实际查询目标；owner 系推断时提示改写引用形式。
+
+    `AGENTS.md §7` 允许 `repo#N`（不带 owner）写法，此时 owner 由账号推断；
+    若仓库属于其他命名空间，404 并不代表 issue 不存在，必须让 agent 看出来。
+    """
+    detail = (
+        f"已按 `{owner}/{parts['repo']}#{parts['number']}` 查询，远端没有该 issue"
+        "（或该编号是 PR）"
+    )
+    if owner_inferred:
+        detail += "；该 owner 是由账号推断的，若仓库属于其他命名空间，请用 `owner/repo#N` 形式指定"
+    return detail
+
+
+def _task_exists(key):
+    return (
+        conn().execute("SELECT 1 FROM tasks WHERE issue_key=?", (key,)).fetchone()
+        is not None
+    )
+
+
+def _row_from_issue(payload, repo, key, account, now):
+    """把单 issue REST 响应组装成待写入行（对齐 Rust `on_demand::build_task_row`）。"""
+    assignees = [
+        a.get("login") for a in (payload.get("assignees") or []) if a.get("login")
+    ]
+    labels = [l.get("name") for l in (payload.get("labels") or []) if l.get("name")]
+    labels_csv = ",".join(labels)
+    state = payload.get("state") or ""
+    if state == "closed":
+        status = "done"
+    else:
+        status = _resolve_label_status(account["org"], repo, labels_csv) or "todo"
+    return {
+        "issue_key": key,
+        # 归属列与同步一致：写账号的 org（可能为空串）；API 请求用的 owner 是另一回事。
+        "owner": account["org"],
+        "repo": repo,
+        "number": int(payload.get("number") or 0),
+        "title": payload.get("title") or "",
+        "url": payload.get("html_url") or "",
+        "issue_state": state,
+        "ownership": _classify(assignees, account["login"]),
+        "status": status,
+        # Project Status 需 GraphQL；mentioned / PR 关联 / 分支来自多源聚合 —— 都留待下次全量同步补。
+        "project_status": "",
+        "assignees": ",".join(assignees),
+        "labels": labels_csv,
+        "author": (payload.get("user") or {}).get("login") or "",
+        "done_at": now if status == "done" else 0,
+        "mentioned": 0,
+        "comments_count": int(payload.get("comments") or 0),
+        "latest_comment_url": "",
+        "pr_number": 0,
+        "pr_url": "",
+        "branch": "",
+        "candidate_done": 0,
+        "stale": 0,
+        "updated_at": _iso_to_secs(payload.get("updated_at")),
+        "synced_at": now,
+        "account_id": account["id"],
+    }
+
+
+def _write_task_if_absent(row):
+    """`ON CONFLICT DO NOTHING` 落库。返回 `reason`（非空表示失败）。"""
+    existing = _table_columns("tasks")
+    missing = [c for c in TASK_CONFLICT_COLS if c not in existing]
+    if missing:
+        return (
+            f"本地库结构过旧（tasks 缺列: {', '.join(missing)}），"
+            "请先启动一次 TaskBoard 完成迁移"
+        )
+    cols = [c for c in TASK_INSERT_COLS if c in existing]
+    sql = (
+        f"INSERT INTO tasks ({', '.join(cols)}) "
+        f"VALUES ({', '.join('?' for _ in cols)}) "
+        "ON CONFLICT(repo, number, account_id) DO NOTHING"
+    )
+    try:
+        conn().execute(sql, [row[c] for c in cols])
+    except sqlite3.Error as e:
+        return f"写入任务失败: {e}"
+    return None
+
+
+def ensure_task_available(issue):
+    """本地未命中时按需拉取该 issue 并落库。
+
+    返回 `(outcome, reason)`，`outcome` ∈
+    `{"already", "pulled", "remote_missing", "unavailable"}`。
+    """
+    parts = parse_issue_ref_parts(issue)
+    key = parts["key"]
+    if _task_exists(key):
+        return "already", None
+    account, reason = _pick_account(parts["owner"])
+    if reason:
+        return "unavailable", reason
+    # API 请求用的 owner：ref 显式给的优先；否则用账号的 org，org 为空则退回 login
+    # （个人命名空间仓库，实测 task-dashboard 所属账号 org 就是空串）。
+    api_owner = parts["owner"] or _default_owner(account)
+    payload, reason = _fetch_issue(
+        account["pat_token"].strip(), api_owner, parts["repo"], parts["number"]
+    )
+    if reason:
+        return "unavailable", reason
+    owner_inferred = parts["owner"] is None
+    if payload is None:
+        return "remote_missing", _missing_detail(api_owner, parts, owner_inferred)
+    # `GET /issues/{n}` 对 PR 也返回 200（响应带 pull_request）；看板任务只认 issue。
+    if payload.get("pull_request") is not None:
+        return "remote_missing", _missing_detail(api_owner, parts, owner_inferred)
+    now = int(time.time())
+    row = _row_from_issue(payload, parts["repo"], key, account, now)
+    reason = _write_task_if_absent(row)
+    if reason:
+        return "unavailable", reason
+    return "pulled", None
+
+
+def _ensure_before_write(key, issue):
+    """写路径前置：本地未命中则按需拉取（必须在写入**之前**调用）。
+
+    为什么不能写在 UPDATE 失败之后：自定义列的合法性校验要读该行的 `account_id`，
+    行还不存在时会误报「非法状态」。
+
+    返回本次是否真的拉取过；不可用时 raise ValueError（文案带原因）。
+    """
+    if _task_exists(key):
+        return False
+    outcome, reason = ensure_task_available(issue)
+    if outcome == "pulled":
+        return True
+    if outcome == "already":
+        return False
+    if outcome == "remote_missing":
+        raise ValueError(f"任务不存在且无法从 GitHub 拉取: {key}（{reason}）")
+    raise ValueError(f"任务不存在且无法从 GitHub 拉取: {key}（{reason}）")
+
+
+# --------------------------------------------------------------------------- #
 # 工具实现
 # --------------------------------------------------------------------------- #
 def tool_list_my_tasks(status=None, ownership=None):
@@ -196,14 +513,39 @@ def tool_get_task_status(issue):
     row = conn().execute(
         f"SELECT {SELECT_COLS} FROM tasks WHERE issue_key=?", (key,)
     ).fetchone()
-    if not row:
-        # v0.3.53 (#169)：返回字段由 `key` 改为 `issue_key`，与 Rust MCP 一致。
-        return {"found": False, "issue_key": key}
-    return {"found": True, "issue_key": key, **dict(row)}
+    if row:
+        return {"found": True, "issue_key": key, **dict(row)}
+    # v0.4.1 (#250)：本地未命中 → 按需拉取后再查一次。
+    # 读路径保持「永远能回答」的旧契约：账号缺失 / 网络失败 / DB 异常都降级为
+    # found=False + reason，不把读操作变成异常。
+    try:
+        outcome, reason = ensure_task_available(issue)
+    except (ValueError, sqlite3.Error) as e:
+        outcome, reason = "unavailable", f"按需拉取失败: {e}"
+    if outcome in ("pulled", "already"):
+        row = conn().execute(
+            f"SELECT {SELECT_COLS} FROM tasks WHERE issue_key=?", (key,)
+        ).fetchone()
+        if row:
+            return {
+                "found": True,
+                "issue_key": key,
+                "pulled": outcome == "pulled",
+                **dict(row),
+            }
+    if outcome == "remote_missing":
+        reason_text = f"本地无此任务，且{reason}"
+    else:
+        reason_text = f"本地无此任务，且无法从 GitHub 拉取：{reason}"
+    # v0.3.53 (#169)：返回字段为 `issue_key`，与 Rust MCP 一致。
+    return {"found": False, "issue_key": key, "reason": reason_text}
 
 
 def tool_update_task_status(issue, status):
     key = parse_issue_ref(issue)
+    # v0.4.1 (#250)：先确保任务存在（必要时按需拉取）——自定义列的校验要读该行
+    # 的 account_id，行不存在时会误报「非法状态」。
+    pulled = _ensure_before_write(key, issue)
     sk = resolve_status(status)
     if sk is None:
         # v0.3.53 (#169)：与 Rust `common.rs::validate_task_status` 对齐——四态之外，
@@ -220,7 +562,7 @@ def tool_update_task_status(issue, status):
     cur = conn().execute("UPDATE tasks SET status=? WHERE issue_key=?", (sk, key))
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
-    return {"ok": True, "issue_key": key, "status": sk}
+    return {"ok": True, "issue_key": key, "status": sk, "pulled": pulled}
 
 
 def tool_record_session(issue, session_id, agent=None, branch=None):
@@ -228,6 +570,8 @@ def tool_record_session(issue, session_id, agent=None, branch=None):
     sid = (session_id or "").strip()
     if not sid:
         raise ValueError("session_id 不能为空")
+    # v0.4.1 (#250)：本地未命中时按需拉取。
+    pulled = _ensure_before_write(key, issue)
     br = (branch or "").strip()
     if br:
         cur = conn().execute(
@@ -241,28 +585,32 @@ def tool_record_session(issue, session_id, agent=None, branch=None):
         )
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
-    return {"ok": True, "issue_key": key}
+    return {"ok": True, "issue_key": key, "pulled": pulled}
 
 
 def tool_record_handoff(issue, text):
     key = parse_issue_ref(issue)
     text = text or ""
+    # v0.4.1 (#250)：本地未命中时按需拉取。
+    pulled = _ensure_before_write(key, issue)
     # v0.3.53 (#169)：原为 `WHERE key=?`，#155 改名后必然报 "no such column: key"。
     cur = conn().execute("UPDATE tasks SET handoff=? WHERE issue_key=?", (text, key))
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
     # 返回字段同 Rust MCP 用 issue_key。
-    return {"ok": True, "issue_key": key, "handoff_len": len(text)}
+    return {"ok": True, "issue_key": key, "handoff_len": len(text), "pulled": pulled}
 
 
 def tool_clear_session(issue):
     key = parse_issue_ref(issue)
+    # v0.4.1 (#250)：本地未命中时按需拉取。
+    pulled = _ensure_before_write(key, issue)
     cur = conn().execute(
         "UPDATE tasks SET session_id=NULL, session_agent=NULL WHERE issue_key=?", (key,)
     )
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
-    return {"ok": True, "issue_key": key}
+    return {"ok": True, "issue_key": key, "pulled": pulled}
 
 
 # --------------------------------------------------------------------------- #
@@ -364,7 +712,7 @@ TOOLS = [
     },
     {
         "name": "get_task_status",
-        "description": "查询单个任务的当前看板状态，以及已记录的 session_id / session_agent / handoff。",
+        "description": "查询单个任务的当前看板状态，以及已记录的 session_id / session_agent / handoff。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue（返回体 pulled=true 表示本次拉取过）；拉取不到时返回 found=false 并在 reason 里说明原因。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -379,7 +727,7 @@ TOOLS = [
     },
     {
         "name": "update_task_status",
-        "description": "将任务在看板上的状态更新为 待处理/处理中/已处理/已完成（只写本地 SQLite，不碰 GitHub）。",
+        "description": "将任务在看板上的状态更新为 待处理/处理中/已处理/已完成（只写本地 SQLite，不碰 GitHub）。若该 issue 还没同步到本地，会自动按需从 GitHub 拉取这一个 issue 再写入（返回体 pulled=true 表示本次拉取过，无需再手动触发同步）。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -395,7 +743,7 @@ TOOLS = [
     },
     {
         "name": "record_session",
-        "description": "记录中断会话的 session id 到该任务卡片（session_id / session_agent / session_at；branch 非空则一并记录工作分支到 work_branch，与同步的 PR branch 分离）。"
+        "description": "记录中断会话的 session id 到该任务卡片（session_id / session_agent / session_at；branch 非空则一并记录工作分支到 work_branch，与同步的 PR branch 分离）。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。"
         "只写本地 SQLite，不碰 GitHub。",
         "inputSchema": {
             "type": "object",
@@ -417,7 +765,7 @@ TOOLS = [
     },
     {
         "name": "record_handoff",
-        "description": "记录「交接任务」详情到该任务（handoff 字段）。只写本地 SQLite，不碰 GitHub。"
+        "description": "记录「交接任务」详情到该任务（handoff 字段）。只写本地 SQLite，不碰 GitHub。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。"
         "用于 agent 识别到用户「生成交接任务」类意图时调用。",
         "inputSchema": {
             "type": "object",
@@ -431,7 +779,7 @@ TOOLS = [
     },
     {
         "name": "clear_session",
-        "description": "任务完成后清空 session_id / session_agent 字段（保留 session_at 审计）。只写本地 SQLite。",
+        "description": "任务完成后清空 session_id / session_agent 字段（保留 session_at 审计）。只写本地 SQLite。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。",
         "inputSchema": {
             "type": "object",
             "properties": {
