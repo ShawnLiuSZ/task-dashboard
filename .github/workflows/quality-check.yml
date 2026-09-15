@@ -13,6 +13,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # #252：Tauri 在 Linux 上编译需要 GTK / WebKit / glib 等系统库（build script 阶段
+      # 就要 pkg-config 找得到），漏装则连 `cargo clippy --lib` 都编不过。
+      # 与 release.yml 共用同一份清单，避免各自维护时再次漏装。
+      - name: Install Linux dependencies
+        uses: ./.github/actions/install-linux-deps
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -57,6 +63,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # #252：同 rust-clippy —— 缺系统库时 `cargo test --lib` 也会在编译阶段就失败。
+      - name: Install Linux dependencies
+        uses: ./.github/actions/install-linux-deps
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

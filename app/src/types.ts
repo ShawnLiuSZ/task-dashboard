@@ -1,9 +1,9 @@
-export type StatusKey = "todo" | "doing" | "processed" | "done";
-export type Ownership = "assigned" | "notassignee" | "assigned-others";
+export type StatusKey = 'todo' | 'doing' | 'processed' | 'done';
+export type Ownership = 'assigned' | 'notassignee' | 'assigned-others';
 /** v0.3.16+：视图模式。`single`=仅显示激活账号任务；`all`=显示所有账号任务。 */
-export type ViewMode = "single" | "all";
+export type ViewMode = 'single' | 'all';
 /** v0.3.21+：看板列模式。`status`=四态列；`project`=GitHub Project Status 列。 */
-export type BoardMode = "status" | "project" | "custom";
+export type BoardMode = 'status' | 'project' | 'custom';
 
 export interface Account {
   id: number;
@@ -125,7 +125,7 @@ export interface DeviceLoginStart {
 /** v0.3.17+：Device Flow 第 2 步单次轮询结果。 */
 export interface DeviceLoginPoll {
   /** pending | slow_down | success | error */
-  status: "pending" | "slow_down" | "success" | "error";
+  status: 'pending' | 'slow_down' | 'success' | 'error';
   /** 成功时填：授权账号的 GitHub login。 */
   login: string;
   /** 成功时填：新建/更新的账号 id。 */
@@ -260,7 +260,7 @@ export interface ApiLog {
 export interface Note {
   id: number;
   content: string;
-  label: "low" | "medium" | "high" | "urgent";
+  label: 'low' | 'medium' | 'high' | 'urgent';
   createdAt: number;
   updatedAt: number;
 }
@@ -290,8 +290,8 @@ export interface AccountColumnInput {
  * （Issue #7 起不再硬编码中文文案）。
  */
 export const COLUMNS: { key: StatusKey }[] = [
-  { key: "todo" },
-  { key: "doing" },
-  { key: "processed" },
-  { key: "done" },
+  { key: 'todo' },
+  { key: 'doing' },
+  { key: 'processed' },
+  { key: 'done' },
 ];

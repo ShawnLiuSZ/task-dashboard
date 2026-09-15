@@ -6,6 +6,13 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 修好既有 CI（#252）**
+
+  - **#252 `quality-check.yml` 恢复全绿**：#246 引入该 workflow 时留下两类既有失败 —— `Frontend Lint` 的 `format:check` 报 **29 个文件**未格式化（`.prettierrc` 加了但 `npm run format` 从未跑）；`Rust Clippy` / `Rust Tests` 缺 Tauri 的 Linux 系统库（`glib-sys` / `gio-sys` / `gobject-sys` 在 build script 阶段 pkg-config 失败）。两者都已在 `develop` 上红了很久，让每个新 PR 的 CI 都必然红（#249、#251 均被挡）。详见 [docs/issue-252-ci-green.md](./issue-252-ci-green.md)。
+  - **做法**：格式化单独一个 commit，并用「构建产物 sha256 逐字节一致」证明零语义影响（比测试通过更强的证据）；系统库**不复制第三遍**，抽成 composite action `.github/actions/install-linux-deps`，`release.yml` 与 `quality-check.yml` 的两个 Rust job 共用同一份清单（`runner.os` 判断放在 action 内部）。
+  - **注**：`npm run lint`（ESLint）一直是通过的（`--max-warnings 20` 未触发，实际 17 条 warning），本次未动 ESLint 配置；亦未把 Rust job 挪到 macOS runner（计费约 10 倍，且 release 矩阵已覆盖 Linux）。
+  - **验证**：`format:check` 29 → 0、格式化前后产物哈希一致、`tsc --noEmit` 0 error、`npm test` 11 文件 88 例、`npm run lint` exit 0、`i18n:check` 各 302 key、5 个 workflow + action.yml YAML 合法且断言两个 Rust job 均引用该 action。CI 结果以本 PR 运行为准。
+
 - **未发布（Unreleased）— 未同步的 issue 按需拉取（#250）**
 
   - **#250 消除写状态时的「任务不存在」**：`tasks` 表只由同步单向填充，而 MCP 工具是纯本地 SQL，于是**刚创建、还没同步到的 issue** 会让所有写路径报「任务不存在」（实测：issue 建于 10:26，10:52 调用 `update_task_status` 仍失败）。现在未命中时会**按需拉取该单个 issue** 并落库，再执行原操作；只读 GitHub（单次 `GET`）、不触发全量同步、已存在的任务零额外请求。返回体新增 `pulled` 标记（`get_task_status` 另有 `reason`）。详见 [docs/issue-250-ondemand-issue-pull.md](./issue-250-ondemand-issue-pull.md)。

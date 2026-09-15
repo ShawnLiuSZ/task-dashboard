@@ -1,4 +1,4 @@
-import type { Task } from "../types";
+import type { Task } from '../types';
 
 /** 当前生效的筛选（与 App.tsx toolbar 同构：repo/query 前端筛，ownership 后端筛）。 */
 export interface ActiveFilters {
@@ -52,7 +52,5 @@ export function countHiddenChanged(
   filters: ActiveFilters,
 ): number {
   if (!filters.ownership && !filters.repo && !filters.query.trim()) return 0;
-  return diffChangedTasks(before, afterPool).filter((t) =>
-    isHiddenByFilters(t, filters),
-  ).length;
+  return diffChangedTasks(before, afterPool).filter((t) => isHiddenByFilters(t, filters)).length;
 }
