@@ -189,6 +189,8 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/issue-239-doc-integrity.md`](./docs/issue-239-doc-integrity.md) — **文档完整性修复**：断链 / 不可移植 `file://` 路径 / 失效行号锚点 + v0.3.50 CHANGELOG 补录；含 `scripts/check-doc-links.py` 防回归
 
+- [`docs/issue-250-ondemand-issue-pull.md`](./docs/issue-250-ondemand-issue-pull.md) — **未同步 issue 按需拉取**：MCP 写路径命中「任务不存在」时下拉单个 issue 落库（只读 GitHub、不触发全量同步）；含 owner 匹配与 `DO NOTHING` 落库的取舍、真机验证记录
+
 - [`docs/issue-248-synclogs-hscroll.md`](./docs/issue-248-synclogs-hscroll.md) — **同步日志表格横向滚动**：容器 `overflow: hidden` 静默裁掉右侧列（错误 / 明细）；滚动职责收敛到紧贴表格的容器，含 `src/styles.test.ts` 静态回归测试
 
 - [`docs/perf-audit-optimization.md`](./docs/perf-audit-optimization.md) — **性能 / 安全优化批次索引**：`P0-1`…`P2-2` 编号到 issue 与落地文档的映射（`#143`–`#150`，随 v0.3.50 发布）

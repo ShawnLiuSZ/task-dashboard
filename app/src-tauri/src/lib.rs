@@ -17,6 +17,8 @@ mod github;
 mod hooks;
 mod mcp;
 mod oauth;
+// v0.4.1 (#250)：本地未命中时按需拉取单个 issue（MCP 写路径用）。
+mod on_demand;
 mod sync;
 
 /// 从可执行文件路径上溯定位 `.app` bundle 根目录。

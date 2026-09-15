@@ -50,6 +50,44 @@ pub struct RawTask {
     pub is_pr: bool,
 }
 
+/// 从 `[{login: "..."}]` 形态的数组字段提取 login 列表。
+///
+/// Search API 与单 issue REST 响应的 `assignees` 同形，两处共用本函数。
+/// v0.3.17 线上事故：直接 serde 反序列化到 `Vec<String>` 会报
+/// "invalid type: map, expected a string"，因此一律手动取 `login`。
+fn logins_from_array(v: &serde_json::Value, key: &str) -> Vec<String> {
+    v.get(key)
+        .and_then(|a| a.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|u| u.get("login").and_then(|l| l.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 从 `labels`（`[{name: "..."}]`）提取 name 列表；两处响应同形。
+fn label_names_from_array(v: &serde_json::Value) -> Vec<String> {
+    v.get("labels")
+        .and_then(|a| a.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|u| u.get("name").and_then(|l| l.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `user.login`（#237 创建人，不含 @）。缺失返回空串——创建人只用于卡片展示，
+/// 属装饰性信息，不该让整条任务同步失败。
+fn author_from_user(v: &serde_json::Value) -> String {
+    v.get("user")
+        .and_then(|u| u.get("login"))
+        .and_then(|l| l.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
 impl RawTask {
     /// 从 Search API 的原始 item 手动构造（**不要**直接 serde 反序列化）。
     ///
@@ -84,34 +122,11 @@ impl RawTask {
                 String::new()
             }
         };
-        let assignees = v
-            .get("assignees")
-            .and_then(|a| a.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|u| {
-                        u.get("login").and_then(|l| l.as_str()).map(String::from)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let labels = v
-            .get("labels")
-            .and_then(|a| a.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|u| u.get("name").and_then(|l| l.as_str()).map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let assignees = logins_from_array(v, "assignees");
+        let labels = label_names_from_array(v);
         // #237：Search API 的 `user` 字段即 issue 创建人（`{login: "..."}`）。
         // 缺失不报错——创建人只用于卡片展示，属装饰性信息，不该让整条任务同步失败。
-        let author = v
-            .get("user")
-            .and_then(|u| u.get("login"))
-            .and_then(|l| l.as_str())
-            .unwrap_or("")
-            .to_string();
+        let author = author_from_user(v);
         Ok(RawTask {
             number: v
                 .get("number")
@@ -127,6 +142,45 @@ impl RawTask {
             labels,
             author,
             comments: v.get("comments").and_then(|x| x.as_u64()).unwrap_or(0),
+            is_pr: v.get("pull_request").is_some(),
+        })
+    }
+
+    /// 从**单 issue REST 响应**手动构造：`GET /repos/{owner}/{repo}/issues/{n}`。
+    ///
+    /// v0.4.1 (#250)：与 [`Self::from_item`] 的关键差异——**REST 单 issue 响应没有
+    /// `repository_url`**（只有 `repository` 对象），照搬 `from_item` 会直接
+    /// `Err("search item 缺字段 repository_url")`。故 owner / repo 由调用方传入
+    /// （调用方一定知道：它就是从 issue ref 解析出来的）。
+    ///
+    /// 其余字段与 Search API 同形，解析方式共用同一批小函数。
+    pub fn from_issue_rest(
+        v: &serde_json::Value,
+        owner: &str,
+        repo: &str,
+    ) -> Result<RawTask, String> {
+        let get_str = |key: &str| -> Result<String, String> {
+            v.get(key)
+                .and_then(|x| x.as_str())
+                .map(String::from)
+                .ok_or_else(|| format!("issue 缺字段 {key}"))
+        };
+        Ok(RawTask {
+            number: v
+                .get("number")
+                .and_then(|x| x.as_i64())
+                .ok_or_else(|| "issue 缺 number".to_string())?,
+            title: get_str("title")?,
+            url: get_str("html_url")?,
+            state: get_str("state")?,
+            updated_at: get_str("updated_at")?,
+            repo: repo.to_string(),
+            repo_owner: owner.to_string(),
+            assignees: logins_from_array(v, "assignees"),
+            labels: label_names_from_array(v),
+            author: author_from_user(v),
+            comments: v.get("comments").and_then(|x| x.as_u64()).unwrap_or(0),
+            // 与 from_item 一致：`pull_request` 字段存在即为 PR（REST 也返回 PR）。
             is_pr: v.get("pull_request").is_some(),
         })
     }
@@ -661,6 +715,27 @@ impl GitHubClient {
     /// Status 字段（如「🔎开发完成/测试中」）表达进度，Search API 不返回该字段。
     /// 拉取当前账号可见的全部 Project v2（组织级 + 用户级）。
     /// 返回 `(github_id, title, number_of_items, owner_type)` 列表。
+    /// 拉取**单个 issue**：`GET /repos/{owner}/{repo}/issues/{n}`（走核心配额，非 Search API）。
+    ///
+    /// v0.4.1 (#250)：供 MCP「按需拉取」使用。与 `fetch_*` 系列不同，本方法
+    /// **不做 best-effort 降级**：调用方必须能区分
+    /// 「远端确实没有」(`Ok(None)`) 与「请求失败」(`Err`，网络 / 401 / 限流耗尽)。
+    ///
+    /// 注意：REST issues 端点**同样会返回 PR**（响应带 `pull_request` 字段），
+    /// 由 [`RawTask::is_pr`] 标出，是否接受由调用方决定。
+    pub fn fetch_issue(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: i64,
+    ) -> Result<Option<RawTask>, String> {
+        let url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{number}");
+        match self.get_opt(&url)? {
+            Some(v) => RawTask::from_issue_rest(&v, owner, repo).map(Some),
+            None => Ok(None),
+        }
+    }
+
     pub fn fetch_all_projects(&self) -> Result<Vec<(String, String, i64, String)>, String> {
         let mut out: Vec<(String, String, i64, String)> = Vec::new();
 
@@ -991,6 +1066,31 @@ impl GitHubClient {
     }
 
     fn get_with_timeout(&self, url: &str, timeout_secs: u64) -> Result<serde_json::Value, String> {
+        match self.get_impl(url, timeout_secs, false)? {
+            Some(v) => Ok(v),
+            // not_found_as_none = false 时 get_impl 不会返回 None；仅为类型完备。
+            None => Err(format!("GitHub API 错误 (404): {url}")),
+        }
+    }
+
+    /// 同 [`Self::get_with_timeout`]，但 **404 返回 `Ok(None)`**（远端确实没有该资源）。
+    ///
+    /// v0.4.1 (#250)：单 issue 按需拉取必须把「远端没有这个 issue」与
+    /// 「网络 / 鉴权 / 限流失败」区分开——前者是正常业务结论，后者要带原因上抛给 agent。
+    fn get_opt(&self, url: &str) -> Result<Option<serde_json::Value>, String> {
+        self.get_impl(url, self.http_timeout(), true)
+    }
+
+    /// [`Self::get_with_timeout`] 与 [`Self::get_opt`] 的共用实现。
+    ///
+    /// 限流感知的 GET：依据 `X-RateLimit-Remaining` / `X-RateLimit-Reset` / `Retry-After`
+    /// 主动 sleep；遇 4xx/5xx 返回带状态码的错误（`not_found_as_none` 时 404 例外）。
+    fn get_impl(
+        &self,
+        url: &str,
+        timeout_secs: u64,
+        not_found_as_none: bool,
+    ) -> Result<Option<serde_json::Value>, String> {
         // v0.3.49 (#143)：删除原来 Search 每页固定 1s sleep，改为 search() 入口的
         // 共享限流门（精确到 2s 间隔）。其余路径走核心配额，仍尊重响应头的
         // 剩余计数，避免触发 Search API 二次（突发）限流。
@@ -1050,6 +1150,10 @@ impl GitHubClient {
                     &summarize_text(url, API_LOG_REQ_MAX),
                     &summarize_text(&body, API_LOG_RESP_MAX),
                 ));
+                if not_found_as_none && status.as_u16() == 404 {
+                    // v0.4.1 (#250)：调用方要区分「远端没有」与「请求失败」。
+                    return Ok(None);
+                }
                 return Err(format!(
                     "GitHub API 错误 ({}): {}",
                     status.as_u16(),
@@ -1095,6 +1199,7 @@ impl GitHubClient {
                 &summarize_text(&body_text, API_LOG_RESP_MAX),
             ));
             return serde_json::from_str::<serde_json::Value>(&body_text)
+                .map(Some)
                 .map_err(|e| format!("解析 GitHub 返回失败: {}", e));
         }
         Err(format!("达到最大重试次数（限流持续）: {}", url))
