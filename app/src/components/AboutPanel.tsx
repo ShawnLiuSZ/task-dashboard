@@ -2,9 +2,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, onUpdateProgress, openExternal } from '../api';
 import { useI18n } from '../i18n';
 import {
+  UPDATER_TIMEOUT_MS,
   UPDATE_CHECK_TIMEOUT_MS,
-  decideUpdateState,
   settleWithTimeout,
+  viewFallback,
+  viewUpdater,
 } from '../utils/updateCheck';
 
 interface Props {
@@ -76,8 +78,9 @@ export default function AboutPanel({ onClose }: Props) {
 
   /**
    * #231：优先走应用内更新通道（tauri-plugin-updater）。
-   * #256：双通道并发 + 单路超时封顶——updater 通道无内置超时，串行等待时弱网下
-   * hang 很久才失败，总耗时是加和；并发后取最大，且失败原因会展示出来。
+   * #256：双通道同时发起、分阶段展示——fallback 先到先展示（有新版立刻显示手动
+   * 下载，不用干等慢的 updater 通道），updater 后到做升级（有可用更新则把手动
+   * 下载替换为一键更新）或备注（失败原因，不再静默吞掉）。
    *
    * 该通道不可用时（尚未配置签名公钥、或 Releases 上还没有 latest.json、或超时）
    * 回退为纯版本号对比 + 跳转 Releases 手动下载，避免「检查更新」整体失效。
@@ -85,45 +88,60 @@ export default function AboutPanel({ onClose }: Props) {
   const check = useCallback(async () => {
     setState({ phase: 'loading' });
     try {
-      const [u, d] = await Promise.all([
-        settleWithTimeout(api.checkAppUpdate(), UPDATE_CHECK_TIMEOUT_MS),
-        settleWithTimeout(api.checkLatestRelease(), UPDATE_CHECK_TIMEOUT_MS),
-      ]);
-      const decision = decideUpdateState(u, d);
-      if (decision.phase === 'available' && !decision.manualUrl) {
+      // 双通道同时发起：fallback 无需等 updater，updater 结论后到按需升级界面。
+      // 检查中按钮被禁用，不会有第二次 check 穿插导致旧 Promise 覆盖新状态。
+      const updaterPromise = settleWithTimeout(api.checkAppUpdate(), UPDATER_TIMEOUT_MS);
+      const fb = viewFallback(
+        await settleWithTimeout(api.checkLatestRelease(), UPDATE_CHECK_TIMEOUT_MS),
+      );
+      if (fb.kind === 'upToDate') {
+        setState({ phase: 'upToDate', current: fb.current });
+        return;
+      }
+      if (fb.kind === 'manual') {
         setState({
           phase: 'available',
-          version: decision.version,
-          current: decision.current,
-          notes: decision.notes,
+          version: fb.version,
+          current: fb.current,
+          notes: '',
+          manualUrl: fb.url,
+        });
+      }
+      // fallback 失败则保持 loading，继续等 updater；已有手动下载则等 updater 做升级。
+      const uv = viewUpdater(await updaterPromise);
+      if (uv.kind === 'one-click') {
+        setState({
+          phase: 'available',
+          version: uv.version,
+          current: uv.current,
+          notes: uv.notes,
         });
         return;
       }
-      if (decision.phase === 'available') {
-        const issue = decision.updaterIssue;
-        setState({
-          phase: 'available',
-          version: decision.version,
-          current: decision.current,
-          notes: decision.notes,
-          manualUrl: decision.manualUrl,
-          updaterNote: issue
-            ? issue.kind === 'timeout'
-              ? t('about.updaterTimeout')
-              : t('about.updaterUnavailable', { reason: issue.message })
-            : undefined,
-        });
+      const note =
+        uv.kind === 'issue'
+          ? uv.issue.kind === 'timeout'
+            ? t('about.updaterTimeout')
+            : t('about.updaterUnavailable', { reason: uv.issue.message })
+          : null;
+      if (fb.kind === 'manual') {
+        // 仍停留在手动下载才追加备注（函数式更新守卫，避免覆盖用户后续操作）。
+        if (note) {
+          setState((prev) =>
+            prev.phase === 'available' && prev.manualUrl ? { ...prev, updaterNote: note } : prev,
+          );
+        }
         return;
       }
-      if (decision.phase === 'upToDate') {
-        setState({ phase: 'upToDate', current: decision.current });
-        return;
+      // fallback 失败 + updater 也无可用更新：报错（fallback 具体错误优先）。
+      const fbMessage = fb.kind === 'failed' && !fb.timedOut ? fb.error : '';
+      let message = fbMessage;
+      if (!message && uv.kind === 'issue' && uv.issue.kind === 'backend-error') {
+        message = uv.issue.message;
       }
       setState({
         phase: 'error',
-        message: decision.message
-          ? t('about.error', { error: decision.message })
-          : t('about.checkTimeout'),
+        message: message ? t('about.error', { error: message }) : t('about.checkTimeout'),
       });
     } catch (e) {
       setState({ phase: 'error', message: String(e) });

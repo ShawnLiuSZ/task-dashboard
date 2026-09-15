@@ -20,16 +20,19 @@ v0.5.0 用户实测（macOS Apple Silicon）：点「关于 → 检查更新」�
 
 只改前端（`AboutPanel.tsx` + 新纯模块），零新依赖、Rust 零改动：
 
-- **双通道并发**：`Promise.all` 同时发起 `checkAppUpdate` / `checkLatestRelease`，
-  总耗时由加和变为取最大；
-- **单路 30s 封顶**：新纯模块 `src/utils/updateCheck.ts` 的 `settleWithTimeout`
-  把超时/抛错收敛为 `Settled` 数据（永不抛），updater hang 住不会无限拖住 fallback；
-- **裁决函数 `decideUpdateState`**（纯函数，11 例单测）：
-  - updater 返回可用更新 → 一键更新（与原来一致，fallback 状态不影响）；
-  - 否则以 fallback 的版本结论为准：有新版 → 手动下载；已是最新 → 直接最新
-    （API 说已是最新，updater 就不可能有更新，即使 updater 侧超时未知——结论依然安全）；
-  - updater 健康但与 fallback 结论不一致（版本窗口期）→ 手动下载**不附原因**，不吓用户；
-  - 双双失败 → 按「fallback 具体错误 > updater 具体错误 > 超时」优先级展示；
+- **双通道同时发起、分阶段展示**：fallback 先到先展示——有新版立刻显示手动
+  下载（不用干等慢的 updater 通道），已是最新立刻显示最新（fallback 读的是
+  GitHub Releases API：它说已是最新，updater 就不可能有更新，结论安全）；
+  updater 后到做升级/备注：返回可用更新 → 把手动下载**替换为一键更新**
+  （用户实测 updater 通道本身是通的、只是慢，一刀切判超时会让一键更新永不出现）；
+  失败 → 给手动下载**附带失败原因**（不再静默）；
+- **单路超时封顶**：新纯模块 `src/utils/updateCheck.ts` 的 `settleWithTimeout`
+  把超时/抛错收敛为 `Settled` 数据（永不抛）——fallback 30s、updater 90s；
+  fallback 失败则保持 loading 继续等 updater，updater 同样无可用更新才报错
+  （优先级：fallback 具体错误 > updater 具体错误 > 超时）；
+- **裁决函数可单测**：`viewFallback`（先到先展示）+ `viewUpdater`（后到升级/备注），
+  11 例单测；updater 健康但与 fallback 结论不一致（版本窗口期）→ 手动下载**不附原因**，
+  不吓用户；
 - **失败原因可见**：手动下载时附带 updater 失败行
  （`about.updaterUnavailable` 带后端原文 / `about.updaterTimeout`），双双失败走
   `about.error` / 新增 `about.checkTimeout`。
@@ -39,7 +42,8 @@ v0.5.0 用户实测（macOS Apple Silicon）：点「关于 → 检查更新」�
 
 ## 接口 / 行为变更
 
-- 「检查更新」总耗时：加和 → 取最大（且单路 30s 封顶），弱网下不再「转很久才出前往下载」；
+- 「检查更新」体感：有新版时手动下载秒出（只等 fallback），updater 到达后自动
+  升级为一键更新；弱网下不再「转很久才出前往下载」；
 - 有新版但 updater 不可用时，「前往下载」按钮上方多一行 muted 小字说明原因
   （以前是什么都不说，直接给下载按钮）；
 - updater 可用时行为零变化（一键更新按钮、进度、安装重启流程不动）；
@@ -52,8 +56,8 @@ v0.5.0 用户实测（macOS Apple Silicon）：点「关于 → 检查更新」�
 
 ## 测试 / 验收
 
-- 新增 `src/utils/updateCheck.test.ts` 11 例：裁决 8 例（含超时/窗口期/双失败优先级）、
-  `settleWithTimeout` 3 例（透传 / 抛错收敛 / hang 超时）；
+- 新增 `src/utils/updateCheck.test.ts` 11 例：`viewFallback` 4 + `viewUpdater` 4 +
+  `settleWithTimeout` 3（透传 / 抛错收敛 / hang 超时）；
 - `npm test` 12 文件 99 例全过（之前 11 文件 88 例）；
 - `npx tsc --noEmit` 0 error；`npm run i18n:check` 中英各 305 key；
 - `prettier --check` 目标文件全过；`check-doc-links.py`（本文档新增后复跑）；

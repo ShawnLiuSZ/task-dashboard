@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideUpdateState, settleWithTimeout, type Settled } from './updateCheck';
+import { settleWithTimeout, viewFallback, viewUpdater, type Settled } from './updateCheck';
 import type { AppUpdate, CheckUpdate } from '../types';
 
 function appUpdate(over: Partial<AppUpdate> = {}): AppUpdate {
@@ -22,79 +22,68 @@ function timedOut<T>(): Settled<T> {
   return { ok: false, error: '', timedOut: true };
 }
 
-describe('decideUpdateState', () => {
-  it('updater 可用时一键更新（fallback 失败也不影响）', () => {
-    const d = decideUpdateState(
-      ok(appUpdate({ available: true, version: '0.5.1', notes: 'n' })),
-      failed<CheckUpdate>('network'),
-    );
-    expect(d).toEqual({ phase: 'available', version: '0.5.1', current: '0.5.0', notes: 'n' });
+describe('viewFallback', () => {
+  it('有新版 → 先展示手动下载', () => {
+    expect(
+      viewFallback(ok(checkUpdate({ upToDate: false, latest: '0.5.1', url: 'https://dl' }))),
+    ).toEqual({ kind: 'manual', version: '0.5.1', current: '0.5.0', url: 'https://dl' });
   });
 
-  it('updater 报错 + fallback 有新版 → 手动下载并附带后端原因', () => {
-    const d = decideUpdateState(
-      ok(appUpdate({ error: '检查更新失败：boom' })),
-      ok(checkUpdate({ upToDate: false, latest: '0.5.1', url: 'https://dl' })),
-    );
-    expect(d).toEqual({
-      phase: 'available',
-      version: '0.5.1',
-      current: '0.5.0',
-      notes: '',
-      manualUrl: 'https://dl',
-      updaterIssue: { kind: 'backend-error', message: '检查更新失败：boom' },
+  it('已是最新 → 直接最新（updater 状态不影响结论）', () => {
+    expect(viewFallback(ok(checkUpdate()))).toEqual({ kind: 'upToDate', current: '0.5.0' });
+  });
+
+  it('后端报错 → 失败并保留原文', () => {
+    expect(viewFallback(ok(checkUpdate({ error: 'api bad' })))).toEqual({
+      kind: 'failed',
+      error: 'api bad',
+      timedOut: false,
     });
   });
 
-  it('updater 超时 + fallback 有新版 → 手动下载并附带超时原因', () => {
-    const d = decideUpdateState(
-      timedOut<AppUpdate>(),
-      ok(checkUpdate({ upToDate: false, latest: '0.5.1', url: 'https://dl' })),
-    );
-    expect(d.phase).toBe('available');
-    if (d.phase === 'available') {
-      expect(d.manualUrl).toBe('https://dl');
-      expect(d.updaterIssue).toEqual({ kind: 'timeout' });
-    }
-  });
-
-  it('updater 健康但无更新 + fallback 有新版 → 手动下载且不附原因（版本窗口期，不吓用户）', () => {
-    const d = decideUpdateState(
-      ok(appUpdate()),
-      ok(checkUpdate({ upToDate: false, latest: '0.5.1', url: 'https://dl' })),
-    );
-    expect(d.phase).toBe('available');
-    if (d.phase === 'available') {
-      expect(d.manualUrl).toBe('https://dl');
-      expect(d.updaterIssue).toBeUndefined();
-    }
-  });
-
-  it('fallback 已是最新 → 直接最新（updater 超时未知也不影响结论）', () => {
-    expect(decideUpdateState(timedOut<AppUpdate>(), ok(checkUpdate())).phase).toBe('upToDate');
-    expect(decideUpdateState(ok(appUpdate({ error: 'x' })), ok(checkUpdate())).phase).toBe(
-      'upToDate',
-    );
-  });
-
-  it('双双失败 → 报错，fallback 的具体错误优先', () => {
-    const d = decideUpdateState(
-      ok(appUpdate({ error: 'updater bad' })),
-      failed<CheckUpdate>('api bad'),
-    );
-    expect(d).toEqual({ phase: 'error', message: 'api bad', timedOut: false });
-  });
-
-  it('fallback 超时 + updater 有具体错误 → 展示 updater 的错误', () => {
-    const d = decideUpdateState(ok(appUpdate({ error: 'updater bad' })), timedOut<CheckUpdate>());
-    expect(d).toEqual({ phase: 'error', message: 'updater bad', timedOut: true });
-  });
-
-  it('双双超时 → 超时错误（无具体文案，由调用方按 timedOut 展示）', () => {
-    expect(decideUpdateState(timedOut<AppUpdate>(), timedOut<CheckUpdate>())).toEqual({
-      phase: 'error',
-      message: '',
+  it('抛错/超时 → 失败并标记超时', () => {
+    expect(viewFallback(failed<CheckUpdate>('network'))).toEqual({
+      kind: 'failed',
+      error: 'network',
+      timedOut: false,
+    });
+    expect(viewFallback(timedOut<CheckUpdate>())).toEqual({
+      kind: 'failed',
+      error: '',
       timedOut: true,
+    });
+  });
+});
+
+describe('viewUpdater', () => {
+  it('返回可用更新 → 一键更新', () => {
+    expect(viewUpdater(ok(appUpdate({ available: true, version: '0.5.1', notes: 'n' })))).toEqual({
+      kind: 'one-click',
+      version: '0.5.1',
+      current: '0.5.0',
+      notes: 'n',
+    });
+  });
+
+  it('健康但无更新 → 无动作（不覆盖 fallback 已展示的内容）', () => {
+    expect(viewUpdater(ok(appUpdate()))).toEqual({ kind: 'none' });
+  });
+
+  it('后端报错 → 失败原因备注', () => {
+    expect(viewUpdater(ok(appUpdate({ error: '检查更新失败：boom' })))).toEqual({
+      kind: 'issue',
+      issue: { kind: 'backend-error', message: '检查更新失败：boom' },
+    });
+  });
+
+  it('抛错/超时 → 失败原因备注', () => {
+    expect(viewUpdater(failed<AppUpdate>('network'))).toEqual({
+      kind: 'issue',
+      issue: { kind: 'backend-error', message: 'network' },
+    });
+    expect(viewUpdater(timedOut<AppUpdate>())).toEqual({
+      kind: 'issue',
+      issue: { kind: 'timeout' },
     });
   });
 });

@@ -5,8 +5,8 @@
 - **Unreleased — Concurrent dual-channel update check (#256)**
 
   - **#256 Slow update check with invisible failure cause**: v0.5.0's check was sequential — it awaited the tauri updater channel first (no built-in timeout, hangs long on weak networks) and only then ran the GitHub API fallback, so total latency was the sum; the updater's error was also swallowed silently, leaving only a late "Go to download" button. Observed on v0.5.0 + macOS Apple Silicon. See [docs/issue-256-update-check.md](./issue-256-update-check.md).
-  - **How**: both channels concurrently with a 30s per-channel cap (latency becomes the max); one-click update still preferred when the updater channel works; the fallback's version verdict is authoritative; the updater failure reason is shown next to the manual download. Frontend only (new pure module `src/utils/updateCheck.ts` + `AboutPanel`), no new dependencies, no Rust changes.
-  - **Verification**: 11 new unit tests (8 decision + 3 timeout-settling), `npm test` 12 files / 99 tests, `tsc --noEmit` 0 errors, `i18n:check` 305 keys per locale. Real-machine re-verification awaits a release containing this fix (v0.5.0's old panel can't be changed in place — one manual install of the new version needed).
+  - **How**: both channels start together with staged rendering — the fallback shows the manual download first (no waiting for the slow updater channel), and the updater upgrades it to one-click install or attaches its failure reason when it arrives; per-channel timeout caps (30s fallback / 90s updater). Frontend only (new pure module `src/utils/updateCheck.ts` + `AboutPanel`), no new dependencies, no Rust changes.
+  - **Verification**: 11 new unit tests (4 `viewFallback` + 4 `viewUpdater` + 3 timeout-settling), `npm test` 12 files / 99 tests, `tsc --noEmit` 0 errors, `i18n:check` 305 keys per locale. Real-machine re-verification awaits a release containing this fix (v0.5.0's old panel can't be changed in place — one manual install of the new version needed).
 
 - **v0.5.1 (2026-09-15) — Existing CI fixed (#252) + on-demand pull for not-yet-synced issues (#250) + horizontal scrolling for sync-log tables (#248)**
 
