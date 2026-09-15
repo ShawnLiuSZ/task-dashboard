@@ -1271,12 +1271,27 @@ button.unassigned-tag:disabled {
 .sync-logs-body {
   max-height: 50vh;
   overflow-y: auto;
+  /* 纵向 flex：把滚动职责下放给内部的表格容器，使其成为唯一滚动区。 */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .sync-logs-table-wrap {
   border: 0.5px solid var(--border);
   border-radius: 8px;
-  overflow: hidden;
+  /* 表格最小内容宽度会超过弹窗内宽（目标列最长 320px，且表头/单元格多为 nowrap），
+     原先的 overflow: hidden 把右侧列直接裁掉、且不产生任何滚动条。
+     纵横两个方向都交给本容器：滚动条与内容处于同一视口，
+     横向滚动条无需先把纵向滚到底即可触达。 */
+  overflow: auto;
+  /* 允许在 flex 列中收缩到容器高度以下（auto 会阻止收缩，导致滚动失效）。 */
+  min-height: 0;
+}
+
+/* 筛选行不参与收缩，避免被表格挤扁。 */
+.sync-logs-filter {
+  flex-shrink: 0;
 }
 
 .sync-logs-table {

@@ -14,6 +14,11 @@
   - **无 schema 变更**：未改 `tasks` 表结构，无需迁移。
   - **验证**：`cargo test --lib` 93 passed（+11）、`cargo test --test db_test` 21 passed、Clippy 零警告、`python3 -m unittest discover -s mcp_server` 26 passed（新增 `mcp_server/test_server.py`，并接入 `mcp-schema-check.yml`）、`tsc --noEmit` 0 error、`npm test` 10 文件 84 例、`check-mcp-columns.py` 24 列、`check-doc-links.py` ✅。另有**真机端到端验证**（数据库副本 + 真实 PAT）：未同步 issue 写状态返回 `pulled:true`、再次调用 `pulled:false`、落库字段与真实 GitHub 响应一致、失败路径文案带原因（结果见知识库文档）。
 
+- **未发布（Unreleased）— 同步日志表格横向滚动（#248）**
+
+  - **#248 两个页签的右侧列被静默裁切**：`.sync-logs-table-wrap` 用 `overflow: hidden`，溢出列被直接裁掉且**不产生任何滚动条**——「同步记录」的错误列、「API 明细」的明细列，恰好是 `#161` / `#235` 新增的交互入口，默认窗口（1180×760）下等于功能不可用。改为 `overflow: auto`；同时把 `.sync-logs-body` 改为纵向 flex 列、容器补 `min-height: 0`，使**横纵滚动条同处一个视口**——只改 `overflow-x` 是不够的，横向滚动条会落在整张表格底部（40 行日志时位于可视区下方 **1029px**），必须先滚到底才够得着。详见 [docs/issue-248-synclogs-hscroll.md](./issue-248-synclogs-hscroll.md)。
+  - **验证**：`tsc --noEmit` 0 error、`npm run build` ✅、`npm test` 11 文件 88 例（新增 `src/styles.test.ts` 4 例，且已反向验证——把 `overflow` 改回 `hidden` 即失败）、`i18n:check` 中英各 302 key、`check-doc-links.py` ✅。为让测试读到真实 CSS 文本，`vitest.config.ts` 开启 `css: true`（默认 `css: false` 会把 CSS 打桩成空串）并新增 `src/vite-env.d.ts` 提供 `?raw` 类型——**零新增依赖**，改用 Vite `?raw` 而非 `node:fs`（后者需要 `@types/node`，本仓库未安装，CI 会报 TS2307）。
+
 - **未发布（Unreleased）— 应用内 API 调用明细（#235）**
 
   - **#235 请求/返回参数落盘 + 应用内可查**：新增 `api_logs` 表（`kind` / `method` / `target` / `status` / `ok` / `elapsed_ms` / `request` / `response`），把同步、领取任务（`claim_issue`）、更新状态（`set_project_status`）三路 GitHub API 调用的**请求参数与返回参数**落盘。同步日志面板改为**双页签**（「同步记录」/「API 明细」），明细页签支持按类型筛选、逐行展开查看请求与返回。承接 [#228](./issue-228-api-logging.md) 的 stderr 埋点（默认静默、终端可见），补齐「落盘 + UI 可视化」。详见 [docs/issue-235-in-app-api-log.md](./issue-235-in-app-api-log.md)。
