@@ -69,25 +69,6 @@ const ICON = {
  *  #259：记事本已是主区整页，收起粒度只到「创建列」，不再有整面板收起。 */
 const ADD_COL_COLLAPSED_KEY = 'notes.addColCollapsed';
 
-/** 宽度百分比持久化键（本地偏好，不入数据库）。范围 25–50，默认 25。 */
-const WIDTH_KEY = 'notes.widthPct';
-const MIN_WIDTH_PCT = 25;
-const MAX_WIDTH_PCT = 50;
-const DEFAULT_WIDTH_PCT = 25;
-
-/** 钳制到 [25, 50]；非法输入回默认。 */
-export function clampNotesWidthPct(v: number): number {
-  if (!Number.isFinite(v)) return DEFAULT_WIDTH_PCT;
-  return Math.min(MAX_WIDTH_PCT, Math.max(MIN_WIDTH_PCT, v));
-}
-
-/** 读存档宽度（缺失/非法 → 默认 25）。 */
-export function readNotesWidthPct(): number {
-  const raw = localStorage.getItem(WIDTH_KEY);
-  if (raw === null || raw.trim() === '') return DEFAULT_WIDTH_PCT;
-  return clampNotesWidthPct(Number(raw));
-}
-
 /* ---------- 时间格式化（v0.3.49 #148：文案走 i18n） ---------- */
 
 function relTime(
@@ -180,12 +161,6 @@ export default function NotesPanel() {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  // #202 丝滑拖拽：拖动中只做 DOM 直写 + rAF 合并，不进 React state；
-  // 松手才 setWidthPct（一次渲染 + 一次持久化）。pctRef 为拖动起点快照。
-  const panelRef = useRef<HTMLElement | null>(null);
-  const pctRef = useRef<number>(DEFAULT_WIDTH_PCT);
-  // #202：展开态宽度（占主区百分比），拖拽/键盘调整后持久化。
-  const [widthPct, setWidthPct] = useState(readNotesWidthPct);
 
   // 添加列（左栏）收起状态——**只影响创建列，不影响右侧四列**（#259）。
   const [addColCollapsed, setAddColCollapsed] = useState(
@@ -196,11 +171,6 @@ export default function NotesPanel() {
   }, [addColCollapsed]);
 
   const editRef = useAutoSize(editDraft);
-
-  useEffect(() => {
-    localStorage.setItem(WIDTH_KEY, String(widthPct));
-    pctRef.current = widthPct;
-  }, [widthPct]);
 
   const loadNotes = useCallback(async () => {
     setLoading(true);
@@ -427,11 +397,9 @@ export default function NotesPanel() {
   );
 
   return (
-    <aside
-      ref={panelRef}
-      className="notes-panel"
-      style={{ flex: `0 0 ${widthPct}%`, width: `${widthPct}%` }}
-    >
+    // #259：记事本是主区整页，宽度由 .notes-page 撑满 —— **不要再挂行内 flex/width**，
+    // 行内样式优先级高于样式表，曾把面板锁在 25% 宽（四列被压成竖条的根因）。
+    <aside className="notes-panel">
       <header className="notes-head">
         <span className="notes-head-icon">
           <Icon d={ICON.notebook} size={15} />
@@ -561,67 +529,6 @@ export default function NotesPanel() {
             ))
           )}
         </div>
-      </div>
-      {/* #202：宽度拖拽条（面板右缘；键盘左右箭头 ±1%）。 */}
-      <div
-        className="notes-resizer"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={t('notes.resizeTitle')}
-        aria-valuemin={MIN_WIDTH_PCT}
-        aria-valuemax={MAX_WIDTH_PCT}
-        aria-valuenow={Math.round(widthPct)}
-        tabIndex={0}
-        onMouseDown={(e) => {
-          e.preventDefault();
-          const panel = panelRef.current;
-          const parent = panel?.parentElement;
-          const handle = e.currentTarget;
-          if (!panel || !parent) return;
-          const startX = e.clientX;
-          const startPct = pctRef.current;
-          let latestX = startX;
-          let raf = 0;
-          const apply = () => {
-            raf = 0;
-            const w = parent.getBoundingClientRect().width;
-            if (w <= 0) return;
-            // 相对位移换算（只读一次起点，避免累积抖动）。
-            const pct = clampNotesWidthPct(startPct + ((latestX - startX) / w) * 100);
-            panel.style.flex = `0 0 ${pct}%`;
-            panel.style.width = `${pct}%`;
-            handle.setAttribute('aria-valuenow', String(Math.round(pct)));
-            pctRef.current = pct;
-          };
-          const move = (ev: MouseEvent) => {
-            latestX = ev.clientX;
-            if (!raf) raf = requestAnimationFrame(apply);
-          };
-          const up = () => {
-            window.removeEventListener('mousemove', move);
-            window.removeEventListener('mouseup', up);
-            if (raf) {
-              cancelAnimationFrame(raf);
-              raf = 0;
-              apply();
-            }
-            // 落点提交一次：触发单次渲染 + 持久化。
-            setWidthPct(pctRef.current);
-          };
-          window.addEventListener('mousemove', move);
-          window.addEventListener('mouseup', up);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'ArrowLeft') {
-            e.preventDefault();
-            setWidthPct((v) => clampNotesWidthPct(v - 1));
-          } else if (e.key === 'ArrowRight') {
-            e.preventDefault();
-            setWidthPct((v) => clampNotesWidthPct(v + 1));
-          }
-        }}
-      >
-        <span className="notes-resizer-grip" aria-hidden="true" />
       </div>
     </aside>
   );

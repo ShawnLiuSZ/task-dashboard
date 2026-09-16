@@ -76,6 +76,40 @@ describe('记事本四列并排（#259）', () => {
   });
 });
 
+describe('记事本面板撑满主区（#259）', () => {
+  it('面板元素不得挂行内 flex / width —— 行内样式会盖掉样式表的撑满规则', () => {
+    // 这是「四列被压成竖条 + 容器横向滚动条」的真正根因：组件曾写
+    // style={{ flex: `0 0 25%`, width: `25%` }}，行内样式优先级高于
+    // `.notes-page .notes-panel { flex: 1 1 auto; width: 100% }`，
+    // 于是 .notes-panel 只有 245px（视口 1180），比创建列自己的 280px 还窄，
+    // 右侧 .notes-card-cols 只剩 20px（overflow-x 计算成 auto ⇒ 横向滚动条）。
+    expect(panel, 'NotesPanel 面板元素上又出现了行内宽度').not.toMatch(
+      /className="notes-panel"[^>]*style=/,
+    );
+    // 宽度调节机制（#202 侧栏拖宽）已随整页化整体移除，不能借它把行内样式带回来
+    expect(panel).not.toContain('notes-resizer');
+    expect(panel).not.toContain('widthPct');
+    expect(styles).not.toMatch(/\.notes-resizer/);
+  });
+
+  it('面板自身是撑满形态：flex: 1 1 auto + min-width/min-height: 0', () => {
+    const d = decls('.notes-panel');
+    expect(d).toMatch(/flex\s*:\s*1\s+1\s+auto/);
+    expect(d).toMatch(/min-width\s*:\s*0/);
+    expect(d).toMatch(/min-height\s*:\s*0/);
+    // 侧栏形态（固定 320px / 粘性定位 / 50% 硬锁）必须消失，否则整页下会被压窄
+    expect(d).not.toMatch(/flex\s*:\s*0\s+0\s+\d+px/);
+    expect(d).not.toMatch(/position\s*:\s*sticky/);
+    expect(d).not.toMatch(/max-width\s*:\s*50%/);
+  });
+
+  it('.notes-page 把面板拉满（width/height 100%）', () => {
+    const d = decls('.notes-page .notes-panel');
+    expect(d).toMatch(/width\s*:\s*100%/);
+    expect(d).toMatch(/height\s*:\s*100%/);
+  });
+});
+
 describe('创建列收起只影响创建列（#259）', () => {
   it('面板整体收起态已移除（记事本是主区整页，无 36px 导轨）', () => {
     expect(panel).not.toContain('notes-panel collapsed');

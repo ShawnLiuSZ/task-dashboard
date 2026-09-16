@@ -1829,7 +1829,7 @@ button.unassigned-tag:disabled {
   padding: 0 16px 16px;
 }
 
-/* 记事本作为主区「页面」：全高 flex 容器，红框区域撑满 app 高度。 */
+/* 记事本作为主区「页面」：全高 flex 容器。 */
 .notes-page {
   flex: 1 1 auto;
   min-width: 0;
@@ -1840,48 +1840,11 @@ button.unassigned-tag:disabled {
   padding: 0;
 }
 
+/* 面板撑满主内容区；其余形态（flex 列 / 背景 / 裁切）由 `.notes-panel` 自身定义。
+ * 这里只补「占满」——组件不再挂行内宽度，所以不会再被锁住。 */
 .notes-page .notes-panel {
-  margin: 0;
-  border-radius: 0;
-  position: relative;
-  left: auto;
-  box-shadow: none;
-  border: none;
-  flex: 1 1 auto;
   width: 100%;
-  max-width: none;
   height: 100%;
-  min-height: 0;
-}
-
-/* notes-page 下：面板撑满主内容区（去掉 320px 硬锁 + sticky 定位）。 */
-.notes-page .notes-panel {
-  flex: 1 1 auto;
-  width: 100%;
-  max-width: none;
-  margin: 0;
-  border-radius: 0;
-  position: static;
-  box-shadow: none;
-}
-
-/* notes-page 下隐藏 resizer（面板已占满，无需调宽）。 */
-.notes-page .notes-resizer {
-  display: none;
-}
-
-/* 日期分组 */
-.notes-group {
-  margin-bottom: 4px;
-}
-
-.notes-group-title {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-3);
-  padding: 10px 4px 4px;
-  border-bottom: 0.5px solid var(--border);
-  margin-bottom: 2px;
 }
 
 /* 内嵌面板容器：承接 Settings/Accounts/SyncLogs 的 modal 结构，去掉遮罩与居中。 */
@@ -1987,57 +1950,17 @@ button.unassigned-tag:disabled {
   max-width: 640px;
 }
 
-/* v0.3.24+：记事本面板（与看板列同构：320px / surface-2 / 10px 圆角） */
+/* #259：记事本作为主区「整页」——撑满主内容区。
+ * ⚠️ 组件里**不得**再挂行内 flex/width：行内样式优先级高于样式表，
+ * 曾把面板锁在 25% 宽，导致右侧四列被压成竖条 + 容器横向滚动条。 */
 .notes-panel {
-  flex: 0 0 320px;
-  width: 320px;
-  /* #202：百分比调宽时的硬上限（JS 侧钳制为主，此为兜底）。 */
-  max-width: 50%;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  margin: 12px 0 16px 16px;
   background: var(--surface-2);
-  border-radius: 10px;
   overflow: hidden;
-  /* 冻结在最左侧：看板横向滚动时记事本列始终可见。 */
-  position: sticky;
-  left: 16px;
-  z-index: 2;
-  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.05);
-}
-
-/* #202：宽度拖拽条（面板右缘，hover/聚焦时显 1px 线）。 */
-.notes-resizer {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 9px;
-  cursor: ew-resize;
-  touch-action: none;
-}
-.notes-resizer:focus-visible {
-  outline: none;
-}
-
-/* #202：右缘垂直居中的常显抓手（hover/聚焦时加深）。 */
-.notes-resizer-grip {
-  position: absolute;
-  top: 50%;
-  right: 1px;
-  transform: translateY(-50%);
-  width: 5px;
-  height: 48px;
-  border-radius: 3px;
-  background: var(--border-strong);
-  opacity: 0.55;
-  pointer-events: none;
-}
-.notes-resizer:hover .notes-resizer-grip,
-.notes-resizer:focus-visible .notes-resizer-grip {
-  background: var(--accent);
-  opacity: 1;
 }
 
 .notes-head {
@@ -2332,14 +2255,6 @@ button.unassigned-tag:disabled {
 }
 
 /* ---------- 列表与卡片 ---------- */
-
-.notes-date-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  flex: 1 1 auto;
-  min-height: 0;
-}
 
 .notes-placeholder {
   color: var(--text-3);
