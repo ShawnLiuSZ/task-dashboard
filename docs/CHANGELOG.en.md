@@ -28,6 +28,8 @@
 
   - **#259 notes round 9: column heads switched to the board's status-column style** — round 8 copied the light capsule heads of the board's **4-state views** (`.column-todo .column-head { background }`), but the account panel actually uses the **status-column style**: `.column-status-N { border-top: 3px solid var(--status-N) }`. Now: a 3px status-color bar across the top of the column (`.note-col { border-top: 3px solid var(--col-accent) }`) plus a head with **no background** (the status color appears only on the top bar and the dot; the title uses the default text color), while head geometry and the "dot + title + right-aligned grey count" layout stay aligned with the board. 24 regression cases, reverse-verified.
 
+  - **#259 UI copy renamed: 记事本 → 备忘录 (memos)** — all 10 Chinese user-visible strings switched from 记事本 / 记事 to 备忘录 (sidebar entry, panel title/rail, import-export buttons and toasts, priority group name, delete confirmation, load-failure message). The English locale keeps the `Notes` naming, and internal identifiers/classes remain `notes` / `NotesPanel` (no behaviour change). `i18n:check` still reports matching key counts and placeholders across both locales.
+
 - **Unreleased — Concurrent dual-channel update check (#256)**
 
   - **#256 Slow update check with invisible failure cause**: v0.5.0's check was sequential — it awaited the tauri updater channel first (no built-in timeout, hangs long on weak networks) and only then ran the GitHub API fallback, so total latency was the sum; the updater's error was also swallowed silently, leaving only a late "Go to download" button. Observed on v0.5.0 + macOS Apple Silicon. See [docs/issue-256-update-check.md](./issue-256-update-check.md).
