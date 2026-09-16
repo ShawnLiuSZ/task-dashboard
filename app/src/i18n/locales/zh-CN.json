@@ -280,6 +280,7 @@
   "notes.loading": "加载中…",
   "notes.emptyTitle": "还没有记事",
   "notes.emptySub": "在上面输入框随手记一条",
+  "notes.colEmpty": "暂无",
   "notes.deleteConfirm": "删除这条记事？",
   "notes.editHint": "⌘/Ctrl + Enter 保存 · Esc 取消",
   "notes.markAs": "标记为「{label}」",

@@ -273,13 +273,11 @@ export default function NotesPanel() {
       if (!byPrio.has(n.label)) byPrio.set(n.label, []);
       byPrio.get(n.label)!.push(n);
     }
-    return prioOrder
-      .map((p) => ({
-        label: p,
-        items: byPrio.get(p) ?? [],
-        opt: labelOf(labels, p),
-      }))
-      .filter((c) => c.items.length > 0);
+    return prioOrder.map((p) => ({
+      label: p,
+      items: byPrio.get(p) ?? [],
+      opt: labelOf(labels, p),
+    }));
   }, [sortedNotes, labels]);
 
   const renderNoteCard = (note: Note) => {
@@ -613,13 +611,23 @@ export default function NotesPanel() {
             </div>
           ) : (
             priorityColumns.map((col) => (
-              <div key={col.label} className="note-col" style={{ '--col-accent': col.opt.color } as CSSProperties}>
+              <div
+                key={col.label}
+                className={`note-col${col.items.length === 0 ? ' empty' : ''}`}
+                style={{ '--col-accent': col.opt.color } as CSSProperties}
+              >
                 <div className="note-col-head">
-                  <span className="note-col-count">{col.items.length}</span>
-                  <span>{col.opt.label}</span>
+                  {col.items.length > 0 && (
+                    <span className="note-col-count">{col.items.length}</span>
+                  )}
+                  <span className="note-col-title">{col.opt.label}</span>
                 </div>
                 <div className="note-col-body">
-                  {col.items.map(renderNoteCard)}
+                  {col.items.length === 0 ? (
+                    <div className="note-col-empty">{t('notes.colEmpty')}</div>
+                  ) : (
+                    col.items.map(renderNoteCard)
+                  )}
                 </div>
               </div>
             ))

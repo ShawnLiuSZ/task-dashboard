@@ -2181,6 +2181,11 @@ button.unassigned-tag:disabled {
   padding-left: 10px;
 }
 
+/* 空列：弱化装饰，避免空列还顶着醒目的红色竖线 + 红点。 */
+.note-col.empty {
+  border-left: 2px solid var(--border);
+}
+
 .note-col-head {
   display: flex;
   align-items: center;
@@ -2194,6 +2199,25 @@ button.unassigned-tag:disabled {
   top: 0;
   background: var(--bg, transparent);
   padding-bottom: 4px;
+}
+
+.note-col.empty .note-col-head {
+  color: var(--text-3);
+}
+
+/* 列标题前的优先级色点（替代红色竖线作为唯一标签指示）。 */
+.note-col-title::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--col-accent, var(--text-3));
+  margin-right: 5px;
+}
+
+.note-col.empty .note-col-title::before {
+  background: var(--border-strong);
 }
 
 .note-col-count {
@@ -2215,6 +2239,15 @@ button.unassigned-tag:disabled {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.note-col-empty {
+  color: var(--text-3);
+  font-size: 11px;
+  text-align: center;
+  padding: 12px 8px;
+  border: 0.5px dashed var(--border);
+  border-radius: 6px;
 }
 
 /* ---------- 新建区 ---------- */

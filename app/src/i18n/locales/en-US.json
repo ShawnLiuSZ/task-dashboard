@@ -280,6 +280,7 @@
   "notes.loading": "Loading…",
   "notes.emptyTitle": "No notes yet",
   "notes.emptySub": "Jot one down in the box above",
+  "notes.colEmpty": "None",
   "notes.deleteConfirm": "Delete this note?",
   "notes.editHint": "⌘/Ctrl + Enter to save · Esc to cancel",
   "notes.markAs": "Mark as “{label}”",
