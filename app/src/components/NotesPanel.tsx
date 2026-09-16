@@ -399,51 +399,9 @@ export default function NotesPanel() {
   return (
     // #259：记事本是主区整页，宽度由 .notes-page 撑满 —— **不要再挂行内 flex/width**，
     // 行内样式优先级高于样式表，曾把面板锁在 25% 宽（四列被压成竖条的根因）。
+    // 整行页头（记事本 + 导入/导出 + 收起）已移除：标题与侧边栏重复，导入/导出
+    // 挪进创建列顶部工具行，把纵向空间还给列。
     <aside className="notes-panel">
-      <header className="notes-head">
-        <span className="notes-head-icon">
-          <Icon d={ICON.notebook} size={15} />
-        </span>
-        <span className="notes-title">{t('notes.title')}</span>
-        <span className="notes-count">{notes.length}</span>
-        <div className="notes-tools">
-          <button
-            type="button"
-            className="note-tool"
-            title={t('notes.exportTitle')}
-            onClick={() => void handleExport()}
-            disabled={busy !== null}
-          >
-            <Icon d={ICON.download} size={13} />
-          </button>
-          <button
-            type="button"
-            className="note-tool"
-            title={t('notes.importTitle')}
-            onClick={() => fileInputRef.current?.click()}
-            disabled={busy !== null}
-          >
-            <Icon d={ICON.upload} size={13} />
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="application/json,.json"
-            style={{ display: 'none' }}
-            onChange={(e) => void handleImport(e.target.files?.[0] ?? null)}
-          />
-          <button
-            type="button"
-            className="note-tool"
-            title={addColCollapsed ? t('notes.expandAddCol') : t('notes.collapseAddCol')}
-            aria-expanded={!addColCollapsed}
-            onClick={() => setAddColCollapsed((v) => !v)}
-          >
-            <Icon d={addColCollapsed ? ICON.expand : ICON.collapse} size={13} />
-          </button>
-        </div>
-      </header>
-
       <div className="notes-body">
         {/* 左侧：创建列（仅 composer，textarea 撑满列高；不展示已添加的记事）。
             收起时只换成一条窄导轨——右侧四列不受影响（#259）。 */}
@@ -461,6 +419,44 @@ export default function NotesPanel() {
           </button>
         ) : (
           <div className="notes-add-col">
+            {/* 创建列顶部工具行：收起创建列（左）+ 导入/导出（右）。 */}
+            <div className="notes-add-col-tools">
+              <button
+                type="button"
+                className="note-tool"
+                title={t('notes.collapseAddCol')}
+                aria-expanded
+                onClick={() => setAddColCollapsed(true)}
+              >
+                <Icon d={ICON.collapse} size={13} />
+              </button>
+              <span className="notes-add-col-spacer" />
+              <button
+                type="button"
+                className="note-tool"
+                title={t('notes.exportTitle')}
+                onClick={() => void handleExport()}
+                disabled={busy !== null}
+              >
+                <Icon d={ICON.download} size={13} />
+              </button>
+              <button
+                type="button"
+                className="note-tool"
+                title={t('notes.importTitle')}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={busy !== null}
+              >
+                <Icon d={ICON.upload} size={13} />
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/json,.json"
+                style={{ display: 'none' }}
+                onChange={(e) => void handleImport(e.target.files?.[0] ?? null)}
+              />
+            </div>
             {notice && (
               <div className="note-notice" role="status">
                 <span>{notice}</span>

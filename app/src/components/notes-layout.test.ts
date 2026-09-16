@@ -143,6 +143,44 @@ describe('记事本面板撑满主区（#259）', () => {
   });
 });
 
+describe('整行页头移除，导入/导出挪进创建列（#259）', () => {
+  it('页头（记事本 + 计数 + 工具行）已从组件与样式表中移除', () => {
+    // 页头与侧边栏标题重复，白占一行纵向空间
+    expect(panel).not.toContain('notes-head');
+    // .notes-head-icon 仍被 AgentPanel 复用，故只禁止「.notes-head 规则本身」（后面跟空格或 {）
+    expect(styles).not.toMatch(/\.notes-head[ {]/);
+    // .notes-tools 是旧页头专用（卡片的 hover 操作区是 .note-tools），不得残留
+    expect(panel).not.toContain('className="notes-tools"');
+    expect(styles).not.toMatch(/\.notes-tools\s*\{/);
+  });
+
+  it('导入/导出与收起按钮在创建列的工具行内（列收起时随列隐藏）', () => {
+    const addStart = panel.indexOf('className="notes-add-col"');
+    const cardStart = panel.indexOf('className="notes-card-cols"');
+    const toolsIdx = panel.indexOf('notes-add-col-tools');
+    expect(addStart).toBeGreaterThan(-1);
+    expect(cardStart).toBeGreaterThan(addStart);
+    // 工具行必须落在创建列内部（add-col 开标签之后、四列区之前）——
+    // 用「位置区间」断言而不是子串包含，避免挪到别处时误判为通过
+    expect(toolsIdx, '工具行不在创建列内部').toBeGreaterThan(addStart);
+    expect(toolsIdx).toBeLessThan(cardStart);
+    const toolsBlock = panel.slice(toolsIdx, cardStart);
+    expect(toolsBlock).toContain('handleExport');
+    expect(toolsBlock).toContain('handleImport');
+    expect(toolsBlock).toContain('fileInputRef');
+    expect(toolsBlock).toContain('setAddColCollapsed(true)');
+  });
+
+  it('列头到内容间距统一：列头 margin-bottom 归零，间距由列体 padding-top 提供', () => {
+    // 旧值 head margin-bottom 2px + body padding-top 0 ⇒ 有记录的列上边距只有 2px，
+    // 与空列（提示自带 padding）观感不一致
+    expect(decls('.note-col-head')).toMatch(/margin\s*:\s*10px 10px 0/);
+    expect(decls('.note-col-body')).toMatch(/padding\s*:\s*8px 10px 10px/);
+    // 空列提示不得再带自己的上边距/虚线框
+    expect(decls('.note-col-empty')).toMatch(/padding\s*:\s*0 4px/);
+  });
+});
+
 describe('创建列收起只影响创建列（#259）', () => {
   it('面板整体收起态已移除（记事本是主区整页，无 36px 导轨）', () => {
     expect(panel).not.toContain('notes-panel collapsed');
