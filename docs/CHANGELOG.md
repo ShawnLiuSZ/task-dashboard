@@ -6,6 +6,13 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— Agent 接入面板：设备扫描（#263）**
+
+  - **#263 刷新升级为设备扫描**：刷新按钮（文案改为「扫描设备」）现在一次点击就探出本机**已安装**与**已卸载**的 agent，直接回答「这台机器上到底装了哪些 agent」。原先 `host_present` 只看配置根目录是否存在（`hooks.rs` 的 `root.is_dir()`），于是 ① 装了 CLI 但从未运行（没有配置目录）的 agent 被误判「未安装」——本机实测 `codex` 在 PATH 上却没有 `~/.codex`；② 后端只有 5 个 `AgentSpec`，其余 34 个 agent 永远落在「手动配置」组，看不出本机装没装；③ 卸载 CLI / 删掉 `.app` 之后只要配置目录残留、或接入文件还在，就完全没有提示。详见 [docs/issue-263-agent-device-scan.md](./issue-263-agent-device-scan.md)。
+  - **做法**：三类信号合并探测——PATH 与常见安装目录下的可执行文件、`$HOME` 配置目录、macOS `/Applications` 与 `~/Applications` 的 `.app` 包；按最强信号派生 `cli` / `app` / `config-only` / `none`。新增 `scan_agent_hosts` command 返回全量 39 项探测结果，并与上次快照（`meta.agent_scan_snapshot`，本次唯一写入目标）对比得出「新发现安装 / 疑似已卸载」，首次扫描不报变更（否则首刷会把全部已装 agent 报成新增）。前端把分组规则抽成纯模块 `src/agent-groups.ts`，新增「疑似已卸载」分组（红点，行内给出残留路径 + 复用一键卸载清理）与每行设备徽标（本机已安装 / 已安装应用 / 仅残留配置 / 未检测到；未扫描时不渲染，避免整屏噪音）。`status_one` 新增可选探测参数：正式路径下「装了没跑过的 CLI」归入**可接入**而不再误判「未安装」，单测传 `None` 保持纯配置目录语义（否则断言会依赖开发机 PATH）。
+  - **无 schema 变更**：未新增/修改 SQLite 表，只多一个 `meta` 键（键值表天然向后兼容）；老库无该键即按首次扫描处理。扫描本身只读文件系统，不联网、不写任何 agent 配置文件。
+  - **验证**：Rust 新增 6 例——含 `HOST_SPECS` 与 `app/src/agents.ts` 的 agent id 集合**双向一致**的防漂移断言（`include_str!` 直接解析前端源文件）、快照 diff 的新装/卸载/重装/首次四种迁移、应用包名大小写不敏感匹配；既有 11 处 `status_one` 调用同步补参，语义不变。前端新增 `src/agent-groups.test.ts` 15 例 + SSR 冒烟 1 例（按钮文案为「扫描设备」且未扫描时不出现设备徽标）。`cargo test` 101 + 21 passed / 0 failed、`tsc --noEmit` 0 error、`npm test` 13 文件 132 例、`npm run build` ✅、`i18n:check` 中英各 347 key、`check-doc-links.py` ✅。真机渲染复核待起 dev server 确认（本机沙箱内无头 Chrome 已不可用）。
+
 - **未发布（Unreleased）— 左右分栏布局 + Agent 接入面板（#259）**
 
   - **#259 左右分栏重构**：新增左侧固定 Sidebar（200px）承载全部功能入口——记事本 / 账号列表（点选切换 + 添加账号）/ 设置 / Agent 接入 / 同步日志 / 账号登录 / 底部关于。顶栏从「账号下拉 + 4 按钮 + 同步」精简为「品牌 + 总条数 + 上次同步 + 立即同步」。设置 / 账号 / 同步日志由 Modal 改为**主区内嵌全高页面**（面板组件零侵入，靠 `.panel-page` 容器 + CSS 覆盖）；NotesPanel 改为主区「页面」，选中才渲染。详见 [docs/issue-259-sidebar-nav.md](./issue-259-sidebar-nav.md)。
