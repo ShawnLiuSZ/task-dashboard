@@ -249,6 +249,24 @@
 contain」断言）；反向验证（去掉 clip 与 contain ⇒ 断言失败，还原后字节一致）。
 渲染复核仍受沙箱限制，需在 dev server 窗口确认。
 
+### 第七轮修正（同日，用户 DevTools 定位）：空列复用看板裸 `.empty` 类，多出 8px 顶部内边距
+
+用户在 DevTools 里直接定位到根因：记事本空列的列框挂了 **`empty` 类**
+（`<div class="note-col empty">`），而看板的空列提示规则
+**`.empty { color; font-size: 11px; padding: 8px 4px }` 是全局选择器**，直接命中记事本列框
+⇒ 空列被加上 8px 顶部内边距（列头被顶下），有记录的列没有 ⇒ 两类列的「上边距」不一致。
+（这也精确解释了第五轮的测量：空列列头距列框顶 17.3css ≈ 10(margin) + 8(padding)，
+有记录的列 9.6css ≈ 10(margin)。上一轮的「列框被滚动滚偏」是叠加在其上的次要因素。）
+
+做法：
+
+- 记事本列改用**专属类** `note-col--empty`（不再复用看板的裸 `empty`）；
+  `.note-col.empty .note-col-head` / `.note-col.empty .note-col-title::before` 同步改名；
+- 看板自己的 `.empty` 规则**限定作用域**为 `.board .empty`——裸 `.empty` 是全局类名，
+  任何页面复用这个词都会再漏一次；
+- 回归测试断言两条：记事本列不得再出现 `' empty'`；`.empty` 规则必须带 `.board` 前缀。
+  反向验证（改回复用 + 去掉作用域 ⇒ 断言失败，还原后字节一致）。
+
 ## 数据 / Schema 变更
 
 无（纯前端布局重构，SQLite / Rust 零改动）。
