@@ -278,7 +278,6 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
     updateAccountState(accountId, { ruleInput: '' });
   };
 
-
   const diagnoseProject = async () => {
     if (diagAccountId == null) {
       setDiagMsg({ ok: false, text: t('settings.projectDiagDefaultAcc') });
@@ -479,7 +478,6 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
             )}
           </div>
         </div>
-
 
         {/* 自定义列映射 - 平铺卡片（#226 暂关闭：入口隐藏，此处再守一道） */}
         <div

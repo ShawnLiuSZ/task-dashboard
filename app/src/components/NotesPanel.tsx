@@ -221,8 +221,16 @@ export default function NotesPanel() {
         <article key={note.id} className="note-card confirming" style={accent}>
           <p className="note-confirm-text">{t('notes.deleteConfirm')}</p>
           <div className="note-confirm-actions">
-            <button type="button" className="btn small danger" onClick={() => void handleDelete(note.id)}>{t('btn.delete')}</button>
-            <button type="button" className="btn small ghost" onClick={() => setConfirmId(null)}>{t('btn.cancel')}</button>
+            <button
+              type="button"
+              className="btn small danger"
+              onClick={() => void handleDelete(note.id)}
+            >
+              {t('btn.delete')}
+            </button>
+            <button type="button" className="btn small ghost" onClick={() => setConfirmId(null)}>
+              {t('btn.cancel')}
+            </button>
           </div>
         </article>
       );
@@ -230,18 +238,47 @@ export default function NotesPanel() {
     if (editingId === note.id) {
       return (
         <article key={note.id} className="note-card editing" style={accent}>
-          <textarea ref={editRef} className="note-textarea" value={editDraft} rows={1} autoFocus
+          <textarea
+            ref={editRef}
+            className="note-textarea"
+            value={editDraft}
+            rows={1}
+            autoFocus
             onChange={(e) => setEditDraft(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Escape') { e.preventDefault(); setEditingId(null); setEditDraft(''); }
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void handleSave(); }
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                setEditingId(null);
+                setEditDraft('');
+              }
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                void handleSave();
+              }
             }}
           />
           <div className="note-edit-foot">
             <span className="note-hint">{t('notes.editHint')}</span>
             <div className="note-edit-actions">
-              <button type="button" className="btn small ghost" onClick={() => { setEditingId(null); setEditDraft(''); }} disabled={saving}>{t('btn.cancel')}</button>
-              <button type="button" className="btn small primary" onClick={() => void handleSave()} disabled={saving || !editDraft.trim()}>{saving ? t('notes.saving') : t('btn.save')}</button>
+              <button
+                type="button"
+                className="btn small ghost"
+                onClick={() => {
+                  setEditingId(null);
+                  setEditDraft('');
+                }}
+                disabled={saving}
+              >
+                {t('btn.cancel')}
+              </button>
+              <button
+                type="button"
+                className="btn small primary"
+                onClick={() => void handleSave()}
+                disabled={saving || !editDraft.trim()}
+              >
+                {saving ? t('notes.saving') : t('btn.save')}
+              </button>
             </div>
           </div>
         </article>
@@ -251,24 +288,40 @@ export default function NotesPanel() {
       <article key={note.id} className="note-card" style={accent}>
         <p className="note-content">{note.content}</p>
         <footer className="note-foot">
-          <button type="button" className="note-tag" title={t('notes.toggleTag')}
+          <button
+            type="button"
+            className="note-tag"
+            title={t('notes.toggleTag')}
             onClick={() => {
               const idx = labels.findIndex((l) => l.value === note.label);
               void handleLabelChange(note.id, labels[(idx + 1) % labels.length].value);
             }}
           >
-            <span className="note-dot" />{opt.label}
+            <span className="note-dot" />
+            {opt.label}
           </button>
           <time className="note-time" title={fullTime(note.createdAt)}>
-            {relTime(note.createdAt, t)}{note.updatedAt > note.createdAt && t('notes.editedSuffix')}
+            {relTime(note.createdAt, t)}
+            {note.updatedAt > note.createdAt && t('notes.editedSuffix')}
           </time>
           <div className="note-tools">
-            <button type="button" className="note-tool" title={t('notes.editTitle')}
-              onClick={() => { setEditingId(note.id); setEditDraft(note.content); }}>
+            <button
+              type="button"
+              className="note-tool"
+              title={t('notes.editTitle')}
+              onClick={() => {
+                setEditingId(note.id);
+                setEditDraft(note.content);
+              }}
+            >
               <Icon d={ICON.pencil} size={13} />
             </button>
-            <button type="button" className="note-tool danger" title={t('notes.deleteTitle')}
-              onClick={() => setConfirmId(note.id)}>
+            <button
+              type="button"
+              className="note-tool danger"
+              title={t('notes.deleteTitle')}
+              onClick={() => setConfirmId(note.id)}
+            >
               <Icon d={ICON.trash} size={13} />
             </button>
           </div>
@@ -460,7 +513,12 @@ export default function NotesPanel() {
             {notice && (
               <div className="note-notice" role="status">
                 <span>{notice}</span>
-                <button type="button" className="note-tool" title={t('notes.closeTitle')} onClick={() => setNotice(null)}>
+                <button
+                  type="button"
+                  className="note-tool"
+                  title={t('notes.closeTitle')}
+                  onClick={() => setNotice(null)}
+                >
                   <Icon d={ICON.close} size={12} />
                 </button>
               </div>
@@ -468,7 +526,12 @@ export default function NotesPanel() {
             {error && (
               <div className="note-error" role="alert">
                 <span>{error}</span>
-                <button type="button" className="note-tool" title={t('notes.closeTitle')} onClick={() => setError(null)}>
+                <button
+                  type="button"
+                  className="note-tool"
+                  title={t('notes.closeTitle')}
+                  onClick={() => setError(null)}
+                >
                   <Icon d={ICON.close} size={12} />
                 </button>
               </div>
@@ -482,13 +545,19 @@ export default function NotesPanel() {
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !adding && draft.trim()) {
-                    e.preventDefault(); void handleAdd();
+                    e.preventDefault();
+                    void handleAdd();
                   }
                 }}
               />
               <div className="note-composer-foot">
                 <LabelPicker value={draftLabel} onChange={setDraftLabel} />
-                <button type="button" className="btn primary" onClick={() => void handleAdd()} disabled={adding || !draft.trim()}>
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={() => void handleAdd()}
+                  disabled={adding || !draft.trim()}
+                >
                   {!adding && <Icon d={ICON.plus} size={13} />}
                   {adding ? t('notes.adding') : t('notes.add')}
                 </button>

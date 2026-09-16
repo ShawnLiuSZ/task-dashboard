@@ -51,8 +51,7 @@ describe('Agent 分组下拉（#207，已随接入页迁至 AgentPanel）', () =
 
   it('存档收起态下对应组收起、行不可见', () => {
     vi.stubGlobal('localStorage', {
-      getItem: (k: string) =>
-        k === 'agents.hooks.groupsCollapsed' ? '{"manual":true}' : 'zh-CN',
+      getItem: (k: string) => (k === 'agents.hooks.groupsCollapsed' ? '{"manual":true}' : 'zh-CN'),
       setItem: () => {},
       removeItem: () => {},
     });
