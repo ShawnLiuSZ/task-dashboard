@@ -229,6 +229,26 @@
 **声明处**而非工具行，导致切错块、反向验证假通过；锚点必须选**目标节点自身的特征串**
 （如 `notes-add-col-tools`）。
 
+### 第六轮修正（同日）：列头高低不一致 —— 列框被滚动链式传导滚偏
+
+真机复核：**有记录的列（高，列体内部滚动）的列头比空列的列头高 ~5-7px**（蓝线标注位置）。
+像素测量：五个列框顶边完全对齐（同 78.3css）、列框高度完全一致（593.9css），
+唯独高列的列头 pill 顶边距列框顶 9.6css，其余列 17.3css。
+
+根因：`.note-col { overflow: hidden }` 的盒子**仍是滚动容器**——列体（`.note-col-body`，
+真正的滚动区）滚到头后，继续滚动的手势会**链式传导**到列框本身，把列头滚出几像素并停留
+（有记录的列列体可滚，空列列体无滚动量 ⇒ 只有有记录的列出现偏移）。
+
+做法：
+
+- `.note-col`：`overflow: hidden` 后追加 `overflow: clip` —— clip 只裁剪、**不是滚动容器**，
+  列头从结构上不可能被滚偏；不支持 clip 的引擎自动回退 hidden；
+- `.note-col-body`：`overscroll-behavior: contain` —— 列体滚到头后不再向父级链式滚动。
+
+验证：`notes-layout.test.ts` 20 例（新增「列框 overflow 用 clip + 列体 overscroll-behavior:
+contain」断言）；反向验证（去掉 clip 与 contain ⇒ 断言失败，还原后字节一致）。
+渲染复核仍受沙箱限制，需在 dev server 窗口确认。
+
 ## 数据 / Schema 变更
 
 无（纯前端布局重构，SQLite / Rust 零改动）。
