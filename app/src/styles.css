@@ -1854,6 +1854,17 @@ button.unassigned-tag:disabled {
   min-height: 0;
 }
 
+/* notes-page 下：面板撑满主内容区（去掉 320px 硬锁 + sticky 定位）。 */
+.notes-page .notes-panel {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  border-radius: 0;
+  position: static;
+  box-shadow: none;
+}
+
 /* notes-page 下隐藏 resizer（面板已占满，无需调宽）。 */
 .notes-page .notes-resizer {
   display: none;
@@ -2113,6 +2124,7 @@ button.unassigned-tag:disabled {
   display: flex;
   flex-direction: row;
   overflow: hidden;
+  align-items: stretch;
 }
 
 /* 左侧：添加列（composer + 日期分组列表） */
@@ -2139,15 +2151,16 @@ button.unassigned-tag:disabled {
 
 /* 右侧：横向 card 列 */
 .notes-card-cols {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   min-height: 0;
   padding: 10px;
   display: flex;
   flex-direction: row;
+  align-items: flex-start;
   gap: 12px;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: auto;
 }
 
 /* 添加列收起时出现的展开按钮 */
