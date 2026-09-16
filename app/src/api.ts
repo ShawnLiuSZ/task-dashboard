@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import type {
   Account,
   AccountColumn,
+  AgentScanResult,
   ApiLog,
   AppUpdate,
   BoardMode,
@@ -168,6 +169,8 @@ export const api = {
       }[];
       notices: string[];
     }>('get_agent_hooks_status', { scope, targetDir, agents }),
+  // #263：设备扫描 —— 识别本机已安装 / 已卸载的 agent（含与上次扫描的差异）。
+  scanAgentHosts: () => invoke<AgentScanResult>('scan_agent_hosts'),
 };
 export function onSynced(cb: (r: SyncResult) => void) {
   return listen<SyncResult>(SYNCED_EVENT, (e) => cb(e.payload));

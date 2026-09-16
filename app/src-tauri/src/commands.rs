@@ -1728,6 +1728,58 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// #263：扫描本机已安装 / 已卸载的 agent。
+///
+/// 只读本地文件系统（PATH + 常见安装目录、`$HOME` 配置目录、macOS 应用包），
+/// 与上次快照对比得出「新发现安装」与「疑似已卸载」；快照存 `meta.agent_scan_snapshot`，
+/// 是本命令**唯一**的写入目标（不碰任何 agent 配置文件，不联网）。
+#[tauri::command]
+pub fn scan_agent_hosts(state: State<'_, AppState>) -> Result<crate::hooks::AgentScanResult, String> {
+    let agents = crate::hooks::probe_agent_hosts()?;
+    let now = crate::sync::now_secs();
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let raw = crate::db::get_setting(&conn, "agent_scan_snapshot");
+    let previous: Option<crate::hooks::ScanSnapshot> = if raw.trim().is_empty() {
+        None
+    } else {
+        // 快照损坏（手工改库 / 版本降级）不应让扫描整体失败：按首次扫描处理。
+        match serde_json::from_str(&raw) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                crate::tlog!("[scan] 快照解析失败，按首次扫描处理: {}", e);
+                None
+            }
+        }
+    };
+
+    let (newly_installed, newly_removed) = crate::hooks::diff_scan(previous.as_ref(), &agents);
+    let snapshot = crate::hooks::snapshot_of(now, &agents);
+    crate::db::set_setting(
+        &conn,
+        "agent_scan_snapshot",
+        &serde_json::to_string(&snapshot).map_err(|e| format!("快照序列化失败: {e}"))?,
+    )?;
+
+    let present = agents.iter().filter(|a| a.present).count();
+    crate::tlog!(
+        "[scan] 设备扫描完成：{} 个已安装 / {} 个候选，新发现 {}，疑似已卸载 {}",
+        present,
+        agents.len(),
+        newly_installed.len(),
+        newly_removed.len()
+    );
+
+    Ok(crate::hooks::AgentScanResult {
+        scanned_at: now,
+        previous_scanned_at: previous.as_ref().map(|p| p.scanned_at),
+        has_previous: previous.is_some(),
+        agents,
+        newly_installed,
+        newly_removed,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use rusqlite::Connection;

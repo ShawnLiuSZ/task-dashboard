@@ -76,3 +76,18 @@ describe('自定义列映射页签（#226）', () => {
     expect(html).not.toContain('自定义列映射');
   });
 });
+
+describe('设备扫描入口（#263）', () => {
+  it('未扫描时不渲染设备徽标与摘要，刷新按钮文案为「扫描设备」', () => {
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <AgentPanel onClose={noop} />
+      </I18nProvider>,
+    );
+    // 按钮已从「刷新状态」升级为设备扫描
+    expect(html).toContain('扫描设备');
+    // 无扫描结果：不出现设备徽标（避免全屏「未检测到」噪音），也不出摘要
+    expect(html).not.toContain('agent-device');
+    expect(html).not.toContain('扫描于');
+  });
+});

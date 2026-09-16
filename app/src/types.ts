@@ -286,6 +286,36 @@ export interface AccountColumnInput {
 }
 
 /**
+ * #263：单个 agent 的设备探测结果。
+ *
+ * `kind` 为最强信号：`cli`（PATH 上有可执行文件）/ `app`（macOS 应用包）/
+ * `config-only`（只剩配置目录，疑似已卸载或历史残留）/ `none`（未检测到）。
+ */
+export interface AgentHostInfo {
+  agent: string;
+  present: boolean;
+  kind: AgentHostKind;
+  binary: string | null;
+  configDir: string | null;
+  app: string | null;
+}
+
+export type AgentHostKind = 'cli' | 'app' | 'config-only' | 'none';
+
+/** #263：一次设备扫描的结果（含与上次快照的差异）。 */
+export interface AgentScanResult {
+  scannedAt: number;
+  /** 上次扫描时间；首次扫描为 null。 */
+  previousScannedAt: number | null;
+  hasPrevious: boolean;
+  agents: AgentHostInfo[];
+  /** 上次无信号、本次有 → 新发现安装。 */
+  newlyInstalled: string[];
+  /** 上次有可执行文件/应用包、本次消失 → 疑似已卸载。 */
+  newlyRemoved: string[];
+}
+
+/**
  * 四态列定义。label / hint 走 i18n：status.{key} / hint.{key}
  * （Issue #7 起不再硬编码中文文案）。
  */

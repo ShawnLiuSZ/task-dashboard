@@ -2,6 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { buildMcpSnippet } from './AboutPanel';
 import { api } from '../api';
 import { AGENTS, HOOK_SUPPORTED_AGENTS, MANUAL_PATH_HINTS, agentLabel } from '../agents';
+import {
+  deviceDetail,
+  deviceStateOf,
+  groupOf,
+  GROUP_ORDER,
+  type DeviceState,
+} from '../agent-groups';
+import type { AgentScanResult } from '../types';
 import { useT } from '../i18n';
 
 interface Props {
@@ -57,6 +65,21 @@ const TRIGGERS: { when: string; action: string }[] = [
   { when: 'done', action: 'done' },
 ];
 
+/** #263：设备状态 → i18n key（徽标文案）。 */
+const DEVICE_LABEL_KEY: Record<DeviceState, string> = {
+  cli: 'settings.hooks.device.cli',
+  app: 'settings.hooks.device.app',
+  'config-only': 'settings.hooks.device.configOnly',
+  none: 'settings.hooks.device.none',
+  'suspected-removed': 'settings.hooks.device.suspectedRemoved',
+};
+
+/** 扫描时间的 HH:MM（本地时区）。 */
+function clockOf(secs: number): string {
+  const d = new Date(secs * 1000);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 type AgentTab = 'hooks' | 'mcp';
 
 export default function AgentPanel({ onClose }: Props) {
@@ -79,6 +102,8 @@ export default function AgentPanel({ onClose }: Props) {
   const [hooksMsg, setHooksMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [hooksNotices, setHooksNotices] = useState<string[]>([]);
   const [hooksStatus, setHooksStatus] = useState<AgentStatus[] | null>(null);
+  // #263：设备扫描结果（本机装了哪些 agent / 哪些已卸载），与 hooks 状态独立获取。
+  const [scan, setScan] = useState<AgentScanResult | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() => {
     try {
       const raw = localStorage.getItem('agents.hooks.groupsCollapsed');
@@ -100,11 +125,21 @@ export default function AgentPanel({ onClose }: Props) {
     setHooksNotices(s.notices);
   }, [hooksScope, allAgentIds]);
 
+  // #263：设备扫描。与 hooks 状态一起刷新，保证「设备安装/卸载」与「接入状态」同源同刻。
+  const runScan = useCallback(async () => {
+    setScan(await api.scanAgentHosts());
+  }, []);
+
+  const refreshAll = useCallback(
+    () => Promise.all([refreshHooksStatus(), runScan()]),
+    [refreshHooksStatus, runScan],
+  );
+
   // 打开 Hooks tab / 切换作用域时自动查询
   useEffect(() => {
     if (tab !== 'hooks' || hooksBusy) return;
     setHooksMsg(null);
-    refreshHooksStatus().catch((e) => setHooksMsg({ ok: false, text: String(e) }));
+    refreshAll().catch((e) => setHooksMsg({ ok: false, text: String(e) }));
   }, [tab, hooksScope]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const runHooksOp = async (
@@ -248,22 +283,17 @@ export default function AgentPanel({ onClose }: Props) {
             )}
             <div className="field">
               <label>{t('settings.hooks.agents')}</label>
-              {(
-                [
-                  ['installed', t('settings.hooks.group.installed')],
-                  ['available', t('settings.hooks.group.available')],
-                  ['missing', t('settings.hooks.group.missing')],
-                  ['manual', t('settings.hooks.group.manual')],
-                ] as const
-              ).map(([group, title]) => {
+              {GROUP_ORDER.map((group) => {
+                const title = t(`settings.hooks.group.${group}`);
                 const rows = AGENTS.map((a) => a.value).filter((v) => {
-                  const supported = supportedHere(v);
                   const st = hooksStatus?.find((s) => s.agent === v);
-                  if (!supported) return group === 'manual';
-                  if (!st) return group === 'available';
-                  if (st.installed) return group === 'installed';
-                  if (st.hostPresent) return group === 'available';
-                  return group === 'missing';
+                  return (
+                    groupOf({
+                      supported: supportedHere(v),
+                      status: st,
+                      device: deviceStateOf(v, scan),
+                    }) === group
+                  );
                 });
                 if (rows.length === 0) return null;
                 const collapsed = collapsedGroups[group] === true;
@@ -284,11 +314,14 @@ export default function AgentPanel({ onClose }: Props) {
                       rows.map((v) => {
                         const st = hooksStatus?.find((s) => s.agent === v);
                         const supported = supportedHere(v);
+                        const device = deviceStateOf(v, scan);
                         const detail = !supported
                           ? (MANUAL_PATH_HINTS[v] ?? t('settings.hooks.manual'))
                           : st
                             ? `hooks ${st.hooksOk ? '✓' : '✗'} · commands ${st.commandsOk ? '✓' : '✗'} · ${v === 'opencode' ? 'mcp' : 'settings'} ${st.settingsOk ? '✓' : '✗'}`
                             : '…';
+                        // 「疑似已卸载」行显式给出残留路径，便于用户核对后再清理。
+                        const residue = group === 'uninstalled' ? deviceDetail(v, scan) : '';
                         return (
                           <div
                             key={v}
@@ -302,12 +335,24 @@ export default function AgentPanel({ onClose }: Props) {
                                   ? 'hook-row-installed'
                                   : group === 'available'
                                     ? 'hook-row-available'
-                                    : undefined
+                                    : group === 'uninstalled'
+                                      ? 'hook-row-uninstalled'
+                                      : undefined
                               }
                             >
                               {agentLabel(v, t)}
                             </span>
+                            {scan && (
+                              <span className={`agent-device agent-device-${device}`}>
+                                {t(DEVICE_LABEL_KEY[device])}
+                              </span>
+                            )}
                             <span className="muted small">{detail}</span>
+                            {residue && (
+                              <span className="small agent-scan-path" title={residue}>
+                                {residue}
+                              </span>
+                            )}
                             <span style={{ marginLeft: 'auto' }}>
                               {supported && st?.installed && (
                                 <button
@@ -337,6 +382,13 @@ export default function AgentPanel({ onClose }: Props) {
               <div className="muted small" style={{ marginTop: 4 }}>
                 {t('settings.hooks.manualHint')}
               </div>
+              {scan &&
+              (scan.newlyRemoved.length > 0 ||
+                scan.agents.some((a) => a.kind === 'config-only' && supportedHere(a.agent))) ? (
+                <div className="muted small" style={{ marginTop: 4 }}>
+                  {t('settings.hooks.uninstalledHint')}
+                </div>
+              ) : null}
             </div>
             <div className="row" style={{ gap: 6 }}>
               <button
@@ -346,11 +398,12 @@ export default function AgentPanel({ onClose }: Props) {
                   if (hooksScope === 'project' && !targetDir.trim()) return;
                   setHooksBusy(true);
                   setHooksMsg(null);
-                  refreshHooksStatus()
+                  refreshAll()
                     .catch((e) => setHooksMsg({ ok: false, text: String(e) }))
                     .finally(() => setHooksBusy(false));
                 }}
                 disabled={hooksBusy || (hooksScope === 'project' && !targetDir.trim())}
+                title={t('settings.hooks.scanHint')}
               >
                 {hooksBusy ? t('settings.hooks.working') : t('settings.hooks.refresh')}
               </button>
@@ -358,6 +411,21 @@ export default function AgentPanel({ onClose }: Props) {
                 {t('settings.hooks.installAll')}
               </button>
             </div>
+            {/* #263：设备扫描摘要 —— 已安装 / 新发现 / 疑似已卸载 / 仅残留配置。 */}
+            {scan && (
+              <div className="muted small agent-scan-summary">
+                <div>
+                  {t('settings.hooks.scanSummary', {
+                    time: clockOf(scan.scannedAt),
+                    n: scan.agents.filter((a) => a.present).length,
+                    x: scan.newlyInstalled.length,
+                    y: scan.newlyRemoved.length,
+                    z: scan.agents.filter((a) => a.kind === 'config-only').length,
+                  })}
+                </div>
+                {!scan.hasPrevious && <div>{t('settings.hooks.scanFirst')}</div>}
+              </div>
+            )}
             {hooksNotices.length > 0 && (
               <div className="muted small" style={{ marginTop: 6, whiteSpace: 'pre-line' }}>
                 {hooksNotices.map((n, i) => (
