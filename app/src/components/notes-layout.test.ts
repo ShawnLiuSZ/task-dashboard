@@ -7,14 +7,17 @@ import panelRaw from './NotesPanel.tsx?raw';
 /**
  * 记事本「四列」布局回归测试（#259）。
  *
- * 背景：`.notes-card-cols` 曾是 `flex-wrap: wrap` + 固定 260px 的 `.note-col`，
- * 于是四列在真实窗口下从来不是并排的——实测 1180×760 窗口（`tauri.conf.json`
- * 的默认尺寸）下紧急/高在第一行、中/低被挤到第二行；1440 下变成 3+1；
- * 900 下直接竖着叠成 4 行。同时容器靠 `overflow-y: auto` 隐式获得
- * `overflow-x: auto`，一旦内容超宽就出现内部横向滚动条。
+ * 演进（2026-09-16，两轮）：
+ * 1. 初版按「四列等宽可收缩」实现，但真机四列被压成 ~18px 竖条 —— 根因是
+ *    `NotesPanel` 在面板元素上挂了行内 `style={{flex:'0 0 25%', width:'25%'}}`（#202 遗留），
+ *    行内样式优先级高于样式表，`.notes-page .notes-panel` 的「撑满」覆盖从未生效。
+ * 2. 移除宽度机制 + 面板整页化后，用户把交互定为**看板列模式**：
+ *    四列**固定宽度**（与最左侧创建列同宽，`--notes-col-w`）、放不下时出**有意**的
+ *    横向滚动条、卡片不再用左侧色条区分优先级。
  *
- * 判定口径（与看板 `.column` 同构）：四列等宽可收缩（`flex: 1 1 0` + `min-width: 0`）
- * → 结构上不可能换行、也不可能横向溢出；纵向滚动下沉到每列内部。
+ * 判定口径（最终）：面板必须撑满主区且不得再挂行内宽度；四列与创建列共用同一宽度变量；
+ * 容器是受约束的横向滚动区（overflow-x: auto + overflow-y: hidden，不换行）；
+ * 纵向滚动下沉到每列内部；卡片/页脚可收缩。
  *
  * vitest 跑在 node 环境（无 DOM、无布局引擎），无法用渲染断言覆盖，
  * 因此改为对源码做静态断言——与 `styles.test.ts`、`scripts/check-*.py` 同一思路。
@@ -34,24 +37,45 @@ function decls(selector: string): string {
   return hits.join('\n');
 }
 
-describe('记事本四列并排（#259）', () => {
+describe('记事本四列（看板列模式，#259）', () => {
   it('容器不换行：flex-wrap 不得为 wrap', () => {
     expect(decls('.notes-card-cols')).not.toMatch(/flex-wrap\s*:\s*wrap/);
   });
 
-  it('容器自身不得滚动（否则 overflow-y 会隐式带出 overflow-x，出现横向滚动条）', () => {
+  it('容器是受约束的横向滚动区：列宽固定后，横向滚动是「有意」的', () => {
     const d = decls('.notes-card-cols');
-    expect(d).not.toMatch(/overflow(-\w)?\s*:\s*(auto|scroll)/);
-    expect(d).toMatch(/overflow\s*:\s*hidden/);
+    // overflow-x 显式声明（而不是靠 overflow-y 隐式带出），纵向交给每列自己
+    expect(d).toMatch(/overflow-x\s*:\s*auto/);
+    expect(d).toMatch(/overflow-y\s*:\s*hidden/);
+    expect(d).toMatch(/min-width\s*:\s*0/);
   });
 
-  it('列必须可收缩且等宽：flex: 1 1 0 + min-width: 0，且不得退回固定宽度', () => {
-    const d = decls('.note-col');
-    expect(d).toMatch(/flex\s*:\s*1\s+1\s+0/);
-    expect(d).toMatch(/min-width\s*:\s*0/);
-    // 固定宽度（flex-basis 像素值 / max-width 像素值）会让列在窄窗口下换行或溢出
-    expect(d).not.toMatch(/flex\s*:\s*0\s+0\s+\d+px/);
-    expect(d).not.toMatch(/max-width\s*:\s*\d+px/);
+  it('四列固定宽度，且与最左侧创建列同宽（共用 --notes-col-w）', () => {
+    // 与创建列共用同一变量 ⇒ 天然等宽；固定宽度 ⇒ 永远不会被容器压成竖条
+    const col = decls('.note-col');
+    const add = decls('.notes-add-col');
+    for (const d of [col, add]) {
+      expect(d).toMatch(/flex\s*:\s*0\s+0\s+var\(--notes-col-w\)/);
+      expect(d).toMatch(/width\s*:\s*var\(--notes-col-w\)/);
+    }
+    // 变量必须定义在 .notes-panel 上
+    expect(decls('.notes-panel')).toMatch(/--notes-col-w\s*:\s*\d+px/);
+    // 不得回到「随容器收缩」的等分布局（那是竖条的来源）
+    expect(col).not.toMatch(/flex\s*:\s*1\s+1\s+0/);
+  });
+
+  it('记事卡片不再有左侧色条（优先级由列分组 + 卡片底部标签表达）', () => {
+    expect(styles).not.toMatch(/\.note-card::before/);
+    // 色条没了，左侧内边距也不再为色条留位（原来左 13px / 右 12px）
+    expect(decls('.note-card')).toMatch(/padding\s*:\s*8px 12px 6px/);
+  });
+
+  it('窄列下卡片与页脚可收缩 ⇒ 列内不会长出横向滚动条', () => {
+    // 若卡片保持 min-width: auto，其子元素（.note-foot 的标签 + 时间 + 操作按钮）
+    // 的 min-content 会把卡片撑宽，进而让 .note-col-body（overflow-y: auto ⇒
+    // overflow-x 计算成 auto）出现横向滚动条。
+    expect(decls('.note-card')).toMatch(/min-width\s*:\s*0/);
+    expect(decls('.note-foot')).toMatch(/flex-wrap\s*:\s*wrap/);
   });
 
   it('列内纵向滚动：.note-col-body 是受约束的滚动区', () => {
@@ -59,14 +83,6 @@ describe('记事本四列并排（#259）', () => {
     expect(d).toMatch(/overflow-y\s*:\s*auto/);
     // 没有 min-height: 0，flex 项的 auto 最小高度会阻止收缩，滚动条会落到可视区之外
     expect(d).toMatch(/min-height\s*:\s*0/);
-  });
-
-  it('窄列下卡片与页脚可收缩 ⇒ 列内不会长出横向滚动条', () => {
-    // 900px 窗口（minWidth）+ 创建列展开时每列仅 ~90px：若卡片保持 min-width: auto，
-    // 其子元素（.note-foot 的标签 + 时间 + 操作按钮）的 min-content 会把卡片撑宽，
-    // 进而让 .note-col-body（overflow-y: auto ⇒ overflow-x 计算成 auto）出现横向滚动条。
-    expect(decls('.note-card')).toMatch(/min-width\s*:\s*0/);
-    expect(decls('.note-foot')).toMatch(/flex-wrap\s*:\s*wrap/);
   });
 
   it('创建列的 textarea 撑满列高（不得受 260px 上限约束）', () => {

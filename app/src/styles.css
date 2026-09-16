@@ -2005,11 +2005,10 @@ button.unassigned-tag:disabled {
   align-items: stretch;
 }
 
-/* 左侧：添加列（仅 composer，textarea 撑满高度） */
+/* 左侧：创建列（固定宽，与四个优先级列同宽，见 .notes-panel 的 --notes-col-w）。 */
 .notes-add-col {
-  flex: 0 0 280px;
-  width: 280px;
-  min-width: 240px;
+  flex: 0 0 var(--notes-col-w);
+  width: var(--notes-col-w);
   border-right: 0.5px solid var(--border);
   background: var(--surface-2);
   display: flex;
@@ -2019,17 +2018,19 @@ button.unassigned-tag:disabled {
   gap: 8px;
 }
 
-/* 右侧：固定四列（紧急/高/中/低）。等宽、不换行、容器自身不滚动——
- * 纵向滚动下沉到每列内部（.note-col-body），因此不会再出现横向滚动条。 */
+/* 右侧：固定四列（紧急/高/中/低）。
+ * 列宽固定 ⇒ 放不下时出**有意**的横向滚动条（列本身不再被压缩成竖条）；
+ * 纵向滚动下沉到每列内部（.note-col-body）。 */
 .notes-card-cols {
-  flex: 1 1 0;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   padding: 10px;
   display: flex;
   flex-direction: row;
   gap: 12px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 /* 创建列收起后占位的一条窄导轨（只影响创建列本身）。 */
@@ -2062,10 +2063,16 @@ button.unassigned-tag:disabled {
   letter-spacing: 2px;
 }
 
-/* 单优先级 card 列——与看板 .column 同构：等宽拉伸、全高、列内纵向滚动。 */
+/* 记事本列宽：创建列与四个优先级列**同宽**（用户指定）。
+ * 固定宽度 ⇒ 列永远不会被容器压成竖条；放不下时由 .notes-card-cols 出横向滚动条。 */
+.notes-panel {
+  --notes-col-w: 280px;
+}
+
+/* 单优先级 card 列——与看板 .column 同构：固定宽、全高、列内纵向滚动。 */
 .note-col {
-  flex: 1 1 0;
-  min-width: 0;
+  flex: 0 0 var(--notes-col-w);
+  width: var(--notes-col-w);
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -2265,30 +2272,20 @@ button.unassigned-tag:disabled {
 
 .note-card {
   position: relative;
-  /* 列宽可被压到 ~90px（900px 窗口 + 创建列展开），卡片必须能跟着收缩，
-   * 否则子元素（.note-foot）的 min-content 会把卡片撑宽，进而在
-   * .note-col-body（overflow-y: auto ⇒ overflow-x 计算成 auto）里长出横向滚动条。 */
+  /* 列是固定宽度，但卡片仍须能收缩：否则子元素（.note-foot）的 min-content
+   * 会把卡片撑宽，进而在 .note-col-body（overflow-y: auto ⇒ overflow-x 计算成 auto）
+   * 里长出横向滚动条。 */
   min-width: 0;
   background: var(--surface);
   border: 0.5px solid var(--border);
   border-radius: 8px;
-  padding: 8px 12px 6px 13px;
+  padding: 8px 12px 6px;
   transition:
     box-shadow 0.15s,
     border-color 0.15s;
 }
 
-/* 左侧色条表示标签，替代全彩徽章 */
-.note-card::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 3px;
-  border-radius: 0 2px 2px 0;
-  background: var(--note-accent, var(--text-3));
-}
+/* 用户指定：卡片不再用左侧色条区分优先级（优先级由列分组 + 卡片底部标签表达）。 */
 
 .note-card:hover {
   border-color: var(--border-strong);
