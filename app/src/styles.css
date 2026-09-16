@@ -1952,14 +1952,16 @@ button.unassigned-tag:disabled {
 
 /* #259：记事本作为主区「整页」——撑满主内容区。
  * ⚠️ 组件里**不得**再挂行内 flex/width：行内样式优先级高于样式表，
- * 曾把面板锁在 25% 宽，导致右侧四列被压成竖条 + 容器横向滚动条。 */
+ * 曾把面板锁在 25% 宽，导致右侧四列被压成竖条 + 容器横向滚动条。
+ * 背景用 --bg（与看板页面一致）：列底色是 --surface-2，底色相同则列的包围框不可见。 */
 .notes-panel {
+  --notes-col-w: 280px;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--surface-2);
+  background: var(--bg);
   overflow: hidden;
 }
 
@@ -2003,14 +2005,16 @@ button.unassigned-tag:disabled {
   flex-direction: row;
   overflow: hidden;
   align-items: stretch;
+  gap: 12px;
+  padding: 10px;
 }
 
-/* 左侧：创建列（固定宽，与四个优先级列同宽，见 .notes-panel 的 --notes-col-w）。 */
+/* 左侧：创建列——与四个优先级列同宽（--notes-col-w）、同款包围框（surface-2 圆角块）。 */
 .notes-add-col {
   flex: 0 0 var(--notes-col-w);
   width: var(--notes-col-w);
-  border-right: 0.5px solid var(--border);
   background: var(--surface-2);
+  border-radius: 10px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2019,15 +2023,15 @@ button.unassigned-tag:disabled {
 }
 
 /* 右侧：固定四列（紧急/高/中/低）。
- * 列宽固定 ⇒ 放不下时出**有意**的横向滚动条（列本身不再被压缩成竖条）；
- * 纵向滚动下沉到每列内部（.note-col-body）。 */
+ * 列最小宽度固定（--notes-col-w）⇒ 窄窗口压不扁、出**有意**的横向滚动条；
+ * 宽窗口则四列等分撑满，不留死空间。纵向滚动下沉到每列内部（.note-col-body）。 */
 .notes-card-cols {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  padding: 10px;
   display: flex;
   flex-direction: row;
+  align-items: stretch;
   gap: 12px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -2044,7 +2048,7 @@ button.unassigned-tag:disabled {
   gap: 8px;
   padding: 10px 0;
   border: 0;
-  border-right: 0.5px solid var(--border);
+  border-radius: 10px;
   background: var(--surface-2);
   color: var(--text-3);
   font-family: inherit;
@@ -2063,16 +2067,11 @@ button.unassigned-tag:disabled {
   letter-spacing: 2px;
 }
 
-/* 记事本列宽：创建列与四个优先级列**同宽**（用户指定）。
- * 固定宽度 ⇒ 列永远不会被容器压成竖条；放不下时由 .notes-card-cols 出横向滚动条。 */
-.notes-panel {
-  --notes-col-w: 280px;
-}
-
-/* 单优先级 card 列——与看板 .column 同构：固定宽、全高、列内纵向滚动。 */
+/* 单优先级 card 列——与看板 .column 同构：全高、列内纵向滚动、明显的包围框。
+ * 宽窗口四列等分撑满（不留死空间）；窄窗口不低于 --notes-col-w，超出部分横向滚动。 */
 .note-col {
-  flex: 0 0 var(--notes-col-w);
-  width: var(--notes-col-w);
+  flex: 1 1 0;
+  min-width: var(--notes-col-w);
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -2141,13 +2140,11 @@ button.unassigned-tag:disabled {
   flex-direction: column;
   gap: 8px;
 }
+/* 空列提示：与看板 .empty 同款（灰色文字，不用虚线框——列本身就是包围框）。 */
 .note-col-empty {
   color: var(--text-3);
   font-size: 11px;
-  text-align: center;
-  padding: 12px 8px;
-  border: 0.5px dashed var(--border);
-  border-radius: 6px;
+  padding: 8px 4px;
 }
 
 /* ---------- 新建区 ---------- */

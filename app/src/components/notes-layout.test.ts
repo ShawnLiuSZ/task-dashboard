@@ -50,18 +50,35 @@ describe('记事本四列（看板列模式，#259）', () => {
     expect(d).toMatch(/min-width\s*:\s*0/);
   });
 
-  it('四列固定宽度，且与最左侧创建列同宽（共用 --notes-col-w）', () => {
-    // 与创建列共用同一变量 ⇒ 天然等宽；固定宽度 ⇒ 永远不会被容器压成竖条
+  it('四列有最小宽度（--notes-col-w）且宽窗口下撑满、不留死空间', () => {
+    // flex: 1 1 0 + min-width ⇒ 宽窗口四列等分撑满（与面板同宽），
+    // 窄窗口不低于 --notes-col-w（不会被压成竖条，超出部分横向滚动）
     const col = decls('.note-col');
-    const add = decls('.notes-add-col');
-    for (const d of [col, add]) {
-      expect(d).toMatch(/flex\s*:\s*0\s+0\s+var\(--notes-col-w\)/);
-      expect(d).toMatch(/width\s*:\s*var\(--notes-col-w\)/);
-    }
+    expect(col).toMatch(/flex\s*:\s*1\s+1\s+0/);
+    expect(col).toMatch(/min-width\s*:\s*var\(--notes-col-w\)/);
     // 变量必须定义在 .notes-panel 上
     expect(decls('.notes-panel')).toMatch(/--notes-col-w\s*:\s*\d+px/);
-    // 不得回到「随容器收缩」的等分布局（那是竖条的来源）
-    expect(col).not.toMatch(/flex\s*:\s*1\s+1\s+0/);
+  });
+
+  it('列有「明显的包围框」：页面底 --bg 上放 --surface-2 列（同色则包围框不可见）', () => {
+    // 曾因 .notes-panel 与 .note-col 同为 --surface-2，四列的框完全看不见
+    expect(decls('.notes-panel')).toMatch(/background\s*:\s*var\(--bg\)/);
+    const col = decls('.note-col');
+    expect(col).toMatch(/background\s*:\s*var\(--surface-2\)/);
+    expect(col).toMatch(/border-radius\s*:\s*10px/);
+  });
+
+  it('创建列与四列同款包围框（surface-2 圆角块，不再用 border-right 分隔）', () => {
+    const add = decls('.notes-add-col');
+    expect(add).toMatch(/background\s*:\s*var\(--surface-2\)/);
+    expect(add).toMatch(/border-radius\s*:\s*10px/);
+    expect(add).not.toMatch(/border-right/);
+  });
+
+  it('空列提示与看板 .empty 同款（灰色文字，不用虚线框）', () => {
+    const d = decls('.note-col-empty');
+    expect(d).toMatch(/color\s*:\s*var\(--text-3\)/);
+    expect(d).not.toMatch(/border/);
   });
 
   it('记事卡片不再有左侧色条（优先级由列分组 + 卡片底部标签表达）', () => {
