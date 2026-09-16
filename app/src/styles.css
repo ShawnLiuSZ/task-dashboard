@@ -2050,7 +2050,10 @@ button.unassigned-tag:disabled {
 }
 
 /* 单优先级 card 列——与看板 .column 同构：全高、列内纵向滚动、明显的包围框。
- * 宽窗口四列等分撑满（不留死空间）；窄窗口不低于 --notes-col-w，超出部分横向滚动。 */
+ * 宽窗口四列等分撑满（不留死空间）；窄窗口不低于 --notes-col-w，超出部分横向滚动。
+ * ⚠️ overflow 用 clip（不支持时回退 hidden）：hidden 的盒子仍是滚动容器，
+ * 列体滚动到底后滚动手势会链式传导到列框本身，把列头滚高几像素
+ * （实测有记录的列列头比空列高 ~5-7px，即此原因）；clip 不是滚动容器，从根上杜绝。 */
 .note-col {
   flex: 1 1 0;
   min-width: var(--notes-col-w);
@@ -2060,6 +2063,7 @@ button.unassigned-tag:disabled {
   background: var(--surface-2);
   border-radius: 10px;
   overflow: hidden;
+  overflow: clip;
 }
 
 .note-col-head {
@@ -2114,11 +2118,14 @@ button.unassigned-tag:disabled {
   line-height: 1;
 }
 
-/* 列内滚动容器：每列各自纵向滚动，与看板 .column-body 一致。 */
+/* 列内滚动容器：每列各自纵向滚动，与看板 .column-body 一致。
+ * overscroll-behavior: contain —— 列体滚到头后不再向父级（列框/页面）链式滚动，
+ * 避免把列框本身滚出几像素的偏移。 */
 .note-col-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 8px 10px 10px;
   display: flex;
   flex-direction: column;

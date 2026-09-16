@@ -81,6 +81,17 @@ describe('记事本四列（看板列模式，#259）', () => {
     expect(d).not.toMatch(/border/);
   });
 
+  it('列框不是滚动容器：overflow 用 clip（防滚动手势链式传导把列头滚偏）', () => {
+    // overflow: hidden 的盒子仍是滚动容器——列体（真正滚动区）滚到头后，
+    // 继续滚动会链式传导到列框，把列头滚高几像素（实测有记录的列比空列高 ~5-7px）。
+    // clip 只裁剪、不可滚动，从根上杜绝；不支持 clip 的引擎回退 hidden。
+    const d = decls('.note-col');
+    expect(d).toMatch(/overflow\s*:\s*hidden/);
+    expect(d).toMatch(/overflow\s*:\s*clip/);
+    // 列体是唯一的滚动区，且不再向父级链式滚动
+    expect(decls('.note-col-body')).toMatch(/overscroll-behavior\s*:\s*contain/);
+  });
+
   it('记事卡片不再有左侧色条（优先级由列分组 + 卡片底部标签表达）', () => {
     expect(styles).not.toMatch(/\.note-card::before/);
     // 色条没了，左侧内边距也不再为色条留位（原来左 13px / 右 12px）
