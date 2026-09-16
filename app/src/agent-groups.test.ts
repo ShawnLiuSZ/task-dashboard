@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import {
   deviceDetail,
   deviceStateOf,
+  GROUP_ORDER,
   groupOf,
   isNewlyInstalled,
   summarize,
@@ -86,11 +87,13 @@ describe('deviceStateOf', () => {
 });
 
 describe('groupOf', () => {
-  it('不支持一键接入的 agent 恒入手动组（设备状态只做徽标）', () => {
-    expect(groupOf({ supported: false, device: 'cli' })).toBe('manual');
+  it('不支持一键接入的 agent 恒入「未接入」（设备状态只做徽标）', () => {
+    expect(groupOf({ supported: false, device: 'cli' })).toBe('notIntegrated');
     expect(groupOf({ supported: false, status: status({ installed: true }), device: 'cli' })).toBe(
-      'manual',
+      'notIntegrated',
     );
+    // 手动 agent 即使被判定为「已卸载」也不进该组清理 —— 本面板从未给它装过东西，没有残留可清。
+    expect(groupOf({ supported: false, device: 'suspected-removed' })).toBe('notIntegrated');
   });
 
   it('疑似已卸载优先于已接入 —— 必须先提示清理，而不是报"已接入"', () => {
@@ -135,8 +138,8 @@ describe('groupOf', () => {
     ).toBe('available');
   });
 
-  it('未接入 + 无任何安装证据 → 未安装', () => {
-    expect(groupOf({ supported: true, status: status(), device: 'none' })).toBe('missing');
+  it('支持一键但本机无任何安装证据 → 与手动配置同组（未接入）', () => {
+    expect(groupOf({ supported: true, status: status(), device: 'none' })).toBe('notIntegrated');
   });
 
   it('未接入 + 仅配置目录 → 疑似已卸载（不是"未安装"）', () => {
@@ -147,6 +150,12 @@ describe('groupOf', () => {
 
   it('状态未就绪时不误判为未安装（先给可接入占位）', () => {
     expect(groupOf({ supported: true, device: 'none' })).toBe('available');
+  });
+
+  it('共 4 组：旧的「未安装」/「手动配置」已并入「未接入」，不得回归', () => {
+    expect(GROUP_ORDER).toEqual(['uninstalled', 'installed', 'available', 'notIntegrated']);
+    expect(GROUP_ORDER as string[]).not.toContain('missing');
+    expect(GROUP_ORDER as string[]).not.toContain('manual');
   });
 });
 

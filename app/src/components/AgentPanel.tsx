@@ -7,6 +7,7 @@ import {
   deviceStateOf,
   groupOf,
   GROUP_ORDER,
+  type AgentGroupKey,
   type DeviceState,
 } from '../agent-groups';
 import type { AgentScanResult } from '../types';
@@ -195,6 +196,21 @@ export default function AgentPanel({ onClose }: Props) {
     HOOK_SUPPORTED_AGENTS.includes(v) &&
     (hooksScope === 'global' || v === 'claude-code' || v === 'opencode');
 
+  // #263：分组结果一次算好 —— 渲染分组用，同时也是「疑似已卸载」底部提示显示与否的依据
+  // （只看 newlyRemoved 会出现「有提示但没有可清理的行」）。
+  const grouped: Record<AgentGroupKey, string[]> = {
+    installed: [],
+    available: [],
+    uninstalled: [],
+    notIntegrated: [],
+  };
+  for (const v of allAgentIds) {
+    const st = hooksStatus?.find((s) => s.agent === v);
+    grouped[
+      groupOf({ supported: supportedHere(v), status: st, device: deviceStateOf(v, scan) })
+    ].push(v);
+  }
+
   const installAllAvailable = () => {
     const list = (hooksStatus ?? [])
       .filter((st) => supportedHere(st.agent) && st.hostPresent && !st.installed)
@@ -285,16 +301,7 @@ export default function AgentPanel({ onClose }: Props) {
               <label>{t('settings.hooks.agents')}</label>
               {GROUP_ORDER.map((group) => {
                 const title = t(`settings.hooks.group.${group}`);
-                const rows = AGENTS.map((a) => a.value).filter((v) => {
-                  const st = hooksStatus?.find((s) => s.agent === v);
-                  return (
-                    groupOf({
-                      supported: supportedHere(v),
-                      status: st,
-                      device: deviceStateOf(v, scan),
-                    }) === group
-                  );
-                });
+                const rows = grouped[group];
                 if (rows.length === 0) return null;
                 const collapsed = collapsedGroups[group] === true;
                 return (
@@ -315,11 +322,18 @@ export default function AgentPanel({ onClose }: Props) {
                         const st = hooksStatus?.find((s) => s.agent === v);
                         const supported = supportedHere(v);
                         const device = deviceStateOf(v, scan);
+                        // 「未接入」是合并组（本机未检测到 / 尚未支持一键安装），行内 detail
+                        // 必须自述属于哪一种，否则读不出为什么没有安装按钮。
+                        const hint = MANUAL_PATH_HINTS[v];
                         const detail = !supported
-                          ? (MANUAL_PATH_HINTS[v] ?? t('settings.hooks.manual'))
-                          : st
-                            ? `hooks ${st.hooksOk ? '✓' : '✗'} · commands ${st.commandsOk ? '✓' : '✗'} · ${v === 'opencode' ? 'mcp' : 'settings'} ${st.settingsOk ? '✓' : '✗'}`
-                            : '…';
+                          ? hint
+                            ? t('settings.hooks.manualPath', { path: hint })
+                            : t('settings.hooks.manual')
+                          : !st
+                            ? '…'
+                            : !st.installed && !st.hostPresent
+                              ? t('settings.hooks.notDetected')
+                              : `hooks ${st.hooksOk ? '✓' : '✗'} · commands ${st.commandsOk ? '✓' : '✗'} · ${v === 'opencode' ? 'mcp' : 'settings'} ${st.settingsOk ? '✓' : '✗'}`;
                         // 「疑似已卸载」行显式给出残留路径，便于用户核对后再清理。
                         const residue = group === 'uninstalled' ? deviceDetail(v, scan) : '';
                         return (
@@ -382,9 +396,7 @@ export default function AgentPanel({ onClose }: Props) {
               <div className="muted small" style={{ marginTop: 4 }}>
                 {t('settings.hooks.manualHint')}
               </div>
-              {scan &&
-              (scan.newlyRemoved.length > 0 ||
-                scan.agents.some((a) => a.kind === 'config-only' && supportedHere(a.agent))) ? (
+              {grouped.uninstalled.length > 0 ? (
                 <div className="muted small" style={{ marginTop: 4 }}>
                   {t('settings.hooks.uninstalledHint')}
                 </div>

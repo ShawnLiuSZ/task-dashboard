@@ -51,7 +51,8 @@ describe('Agent 分组下拉（#207，已随接入页迁至 AgentPanel）', () =
 
   it('存档收起态下对应组收起、行不可见', () => {
     vi.stubGlobal('localStorage', {
-      getItem: (k: string) => (k === 'agents.hooks.groupsCollapsed' ? '{"manual":true}' : 'zh-CN'),
+      getItem: (k: string) =>
+        k === 'agents.hooks.groupsCollapsed' ? '{"notIntegrated":true}' : 'zh-CN',
       setItem: () => {},
       removeItem: () => {},
     });
@@ -61,7 +62,7 @@ describe('Agent 分组下拉（#207，已随接入页迁至 AgentPanel）', () =
       </I18nProvider>,
     );
     expect(html).toContain('aria-expanded="false"');
-    // 手动组收起：其行内提示（如 codex 路径）不可见，可接入组仍展开
+    // 「未接入」组收起：其行内提示（如 codex 路径）不可见，可接入组仍展开
     expect(html).toContain('aria-expanded="true"');
   });
 });
