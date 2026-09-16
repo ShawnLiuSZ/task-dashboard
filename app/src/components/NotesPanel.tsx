@@ -235,36 +235,6 @@ export default function NotesPanel() {
     });
   }, [notes]);
 
-  // 按日期分组（今天 / 昨日 / M月D日），组内保持优先级+时间排序。
-  const groupedNotes = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const fmtDateKey = (ts: number) => {
-      const d = new Date(ts * 1000);
-      d.setHours(0, 0, 0, 0);
-      return d.getTime();
-    };
-    const groups = new Map<number, Note[]>();
-    for (const note of sortedNotes) {
-      const key = fmtDateKey(note.createdAt);
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(note);
-    }
-    return Array.from(groups.entries())
-      .sort((a, b) => b[0] - a[0])
-      .map(([key, items]) => {
-        const diffDays = Math.round((today.getTime() - key) / 86400000);
-        let title: string;
-        if (diffDays === 0) title = t('notes.group.today');
-        else if (diffDays === 1) title = t('notes.group.yesterday');
-        else {
-          const d = new Date(items[0].createdAt * 1000);
-          title = t('notes.group.date', { m: d.getMonth() + 1, d: d.getDate() });
-        }
-        return { key, title, items };
-      });
-  }, [sortedNotes, t]);
-
   // 按优先级分列（右侧横向 card 列用），列内按创建时间倒序。
   const priorityColumns = useMemo(() => {
     const prioOrder: NoteLabel[] = ['urgent', 'high', 'medium', 'low'];
@@ -531,63 +501,43 @@ export default function NotesPanel() {
       </header>
 
       <div className="notes-body">
-        {/* 左侧：添加列（composer + 日期分组列表） */}
+        {/* 左侧：添加列（仅 composer，textarea 撑满高度） */}
         {!addColCollapsed && (
           <div className="notes-add-col">
-            <div className="notes-add-col-inner">
-              {notice && (
-                <div className="note-notice" role="status">
-                  <span>{notice}</span>
-                  <button type="button" className="note-tool" title={t('notes.closeTitle')} onClick={() => setNotice(null)}>
-                    <Icon d={ICON.close} size={12} />
-                  </button>
-                </div>
-              )}
-              {error && (
-                <div className="note-error" role="alert">
-                  <span>{error}</span>
-                  <button type="button" className="note-tool" title={t('notes.closeTitle')} onClick={() => setError(null)}>
-                    <Icon d={ICON.close} size={12} />
-                  </button>
-                </div>
-              )}
-
-              <div className="note-composer">
-                <textarea ref={draftRef} className="note-textarea"
-                  placeholder={t('notes.composer.placeholder')}
-                  value={draft} rows={1}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !adding && draft.trim()) {
-                      e.preventDefault(); void handleAdd();
-                    }
-                  }}
-                />
-                <div className="note-composer-foot">
-                  <LabelPicker value={draftLabel} onChange={setDraftLabel} />
-                  <button type="button" className="btn primary" onClick={() => void handleAdd()} disabled={adding || !draft.trim()}>
-                    {!adding && <Icon d={ICON.plus} size={13} />}
-                    {adding ? t('notes.adding') : t('notes.add')}
-                  </button>
-                </div>
+            {notice && (
+              <div className="note-notice" role="status">
+                <span>{notice}</span>
+                <button type="button" className="note-tool" title={t('notes.closeTitle')} onClick={() => setNotice(null)}>
+                  <Icon d={ICON.close} size={12} />
+                </button>
               </div>
+            )}
+            {error && (
+              <div className="note-error" role="alert">
+                <span>{error}</span>
+                <button type="button" className="note-tool" title={t('notes.closeTitle')} onClick={() => setError(null)}>
+                  <Icon d={ICON.close} size={12} />
+                </button>
+              </div>
+            )}
 
-              {/* 日期分组列表 */}
-              <div className="notes-date-list">
-                {loading ? (
-                  <div className="notes-placeholder">{t('notes.loading')}</div>
-                ) : notes.length === 0 ? (
-                  <div className="notes-empty">
-                    <span className="notes-empty-icon"><Icon d={ICON.notebook} size={22} /></span>
-                    <p>{t('notes.emptyTitle')}</p>
-                    <span>{t('notes.emptySub')}</span>
-                  </div>
-                ) : groupedNotes.map((group) => (
-                  <section key={group.key} className="notes-group">
-                    <div className="notes-group-title">{group.title}</div>
-                    {group.items.map(renderNoteCard)}
-                  </section>
-                ))}
+            <div className="note-composer note-composer-full">
+              <textarea ref={draftRef} className="note-textarea note-textarea-full"
+                placeholder={t('notes.composer.placeholder')}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !adding && draft.trim()) {
+                    e.preventDefault(); void handleAdd();
+                  }
+                }}
+              />
+              <div className="note-composer-foot">
+                <LabelPicker value={draftLabel} onChange={setDraftLabel} />
+                <button type="button" className="btn primary" onClick={() => void handleAdd()} disabled={adding || !draft.trim()}>
+                  {!adding && <Icon d={ICON.plus} size={13} />}
+                  {adding ? t('notes.adding') : t('notes.add')}
+                </button>
               </div>
             </div>
           </div>
