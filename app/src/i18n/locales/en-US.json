@@ -313,6 +313,8 @@
   "notes.noImportable": "No importable notes in file",
   "notes.badFormat": "Unrecognized format: expected a notes-backup export",
   "agent.title": "Agent Setup",
+  "agent.tab.hooks": "Agent Hooks",
+  "agent.tab.mcp": "MCP Setup",
   "agent.mcpTitle": "MCP Configuration",
   "agent.mcpDesc": "The app ships a built-in \"taskboard mcp\" subcommand (stdio JSON-RPC reading the same SQLite, zero Python deps). Add it to your agent's MCP config:",
   "agent.mcpFallback": "Portable fallback (no app installed): use python3 + mcp_server/server.py; override the DB path with the TASKBOARD_DB env var.",

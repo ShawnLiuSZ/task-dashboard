@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import SettingsPanel from './SettingsPanel';
+import AgentPanel from './AgentPanel';
 import { I18nProvider } from '../i18n';
 import type { Settings } from '../types';
 
@@ -34,11 +35,11 @@ function mkSettings(): Settings {
   };
 }
 
-describe('Agent 分组下拉（#207）', () => {
+describe('Agent 分组下拉（#207，已随接入页迁至 AgentPanel）', () => {
   it('未查询时可接入/手动两组标题为可点开关且默认展开', () => {
     const html = renderToStaticMarkup(
       <I18nProvider>
-        <SettingsPanel settings={mkSettings()} onSaved={noop} onClose={noop} />
+        <AgentPanel onClose={noop} />
       </I18nProvider>,
     );
     // SSR 不跑 effect，hooksStatus 为 null：支持的一键 agent 进可接入，不支持的进手动配置
@@ -51,13 +52,13 @@ describe('Agent 分组下拉（#207）', () => {
   it('存档收起态下对应组收起、行不可见', () => {
     vi.stubGlobal('localStorage', {
       getItem: (k: string) =>
-        k === 'settings.hooks.groupsCollapsed' ? '{"manual":true}' : 'zh-CN',
+        k === 'agents.hooks.groupsCollapsed' ? '{"manual":true}' : 'zh-CN',
       setItem: () => {},
       removeItem: () => {},
     });
     const html = renderToStaticMarkup(
       <I18nProvider>
-        <SettingsPanel settings={mkSettings()} onSaved={noop} onClose={noop} />
+        <AgentPanel onClose={noop} />
       </I18nProvider>,
     );
     expect(html).toContain('aria-expanded="false"');

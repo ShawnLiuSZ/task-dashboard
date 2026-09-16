@@ -45,7 +45,6 @@ const ICON = {
   agent: 'M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z M12 8v4 M9 11h.01 M15 11h.01 M9 14c1.5 1.2 4.5 1.2 6 0',
   synclogs:
     'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z M14 2v6h6 M16 13H8 M16 17H8 M10 9H8',
-  login: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z M19 8v6 M16 11h6',
   about: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z M12 16v-4 M12 8h.01',
 };
 
@@ -145,12 +144,6 @@ export default function Sidebar({
           label={t('sidebar.synclogs')}
           active={nav === 'synclogs'}
           onClick={() => onNavigate('synclogs')}
-        />
-        <NavItem
-          icon={ICON.login}
-          label={t('sidebar.accounts')}
-          active={nav === 'accounts'}
-          onClick={() => onNavigate('accounts')}
         />
       </div>
 
