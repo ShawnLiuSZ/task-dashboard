@@ -73,64 +73,95 @@
 - i18n：中英各 **334** key（原 305 + 新增 42 - 删除 13）。
 - **记事本收起粒度**（2026-09-16 修正）：收起按钮从「整个面板（36px 导轨）」改为
   **只收起创建列**；`localStorage['notes.collapsed']` 不再被读取（遗留键无害）。
+- **记事本宽度拖拽撤销**（2026-09-16）：面板在 notes 视图改为**撑满主内容区**，
+  `#202` 的 `.notes-resizer` / `notes.widthPct` 机制整体移除 —— 它是把面板锁在
+  25% 宽（进而压扁四列、产生横向滚动条）的直接原因。
 
-## 追加修正：记事本四列并排（2026-09-16）
+## 追加修正：记事本四列并排 + 面板撑满主区（2026-09-16）
 
-### 问题
+### 现象（真机截图）
 
-记事本视图拆成「创建列 + 四列」后，四列**在真实窗口下从来不是并排的**：
+- 右侧四列被压成 ~18px 的竖条，卡片文字逐字换行；
+- 面板只占主区左侧约 1/4，右面大片空白；
+- 四列区内部出现**横向滚动条**（可左右拖）；
+- 四列在三个窗口尺寸下都不并排：900（`minWidth`）→ 叠成 4 行；1180（`tauri.conf.json` 默认）→ 2+2；1440 → 3+1。
 
-| 窗口宽度（视口 760 高） | 修复前 | 修复后 |
-|---|---|---|
-| 900（`minWidth`） | 4 行竖着叠（w260 各占一行） | 四列并排，等宽可收缩 |
-| 1180（`tauri.conf.json` 默认） | 2+2 换行（紧急/高 上、中/低 下） | 四列并排 |
-| 1440 | 3+1 换行 | 四列并排 |
+### 根因（两个独立缺陷叠加）
 
-### 根因
+**A. 面板宽度被行内样式锁死 —— 真正的主因**
 
-`.notes-card-cols` 是 `flex-wrap: wrap`，而 `.note-col` 是**固定** `flex: 0 0 260px`
-（`min-width: 220px` / `max-width: 320px`）。四列需要 `4×260 + 3×12 = 1076px`，
-即使 1440 窗口下右侧可用宽也仅 ~960px ⇒ 必然换行。
-且容器只写了 `overflow-y: auto`，按 CSS 规则 `overflow-x: visible` 会被**计算成 auto**，
-容器因此带上横向滚动条能力（内容一旦超宽就出现）。
+`NotesPanel` 在 `<aside className="notes-panel">` 上挂了行内
+`style={{ flex: '0 0 25%', width: '25%' }}`（`#202` 侧栏拖宽机制的遗留）。行内样式优先级
+**高于**样式表规则，所以 `.notes-page .notes-panel { flex: 1 1 auto; width: 100% }` 这层
+「整页撑满」覆盖**从未生效过**。实测量（视口 1180×617）：
+
+| 读数 | 值 |
+|---|---|
+| `.notes-panel` | `245x617`（inline.flex=`0 0 25%`，inline.width=`25%`；应为 980） |
+| `.notes-add-col` | `280x575` —— **比面板自己还宽** |
+| `.notes-card-cols` | `20x575` / scroll `280x665`，`overflowX=auto`，`scrollLeft=260`（可横滚 ⇒ 横向滚动条） |
+| 四列 | `w260@left230/top52 \| w260@left230/top329 \| ...`（固定 260px，叠成 4 行） |
+
+**B. 四列是固定宽度且允许换行**
+
+`.notes-card-cols` 是 `flex-wrap: wrap`，`.note-col` 是**固定** `flex: 0 0 260px`
+（`min-width: 220px` / `max-width: 320px`）：四列需 `4×260 + 3×12 = 1076px`，面板撑满后
+右侧可用宽也只有 ~960px ⇒ 必然换行。加上容器只写 `overflow-y: auto`，按 CSS 规则
+`overflow-x: visible` 会被**计算成 auto**，容器天生带着横向滚动条能力。
 
 ### 做法
 
-按看板 `.column` 的既有模式改造，结构上消除「换行 + 横向溢出」两种可能：
+**先解决 A（去掉行内宽度，面板才能真正撑满），再按看板 `.column` 的既有模式解决 B：**
 
-1. `.notes-card-cols`：去掉 `flex-wrap`（默认 nowrap）+ `overflow: hidden`
-   —— 容器自身不滚动，横向滚动条无从产生；
-2. `.note-col`：`flex: 1 1 0` + `min-width: 0`，去掉固定 `flex-basis` / `max-width`
+1. **移除 `#202` 宽度机制**：删掉 `widthPct` / `WIDTH_KEY` / `clampNotesWidthPct` /
+   `readNotesWidthPct` / `panelRef` / `pctRef` / 拖拽与键盘处理 / `.notes-resizer` JSX
+   与 CSS / `notes.resizeTitle` key。该机制在整页化后早已失效（`.notes-page .notes-resizer`
+   是 `display: none`），删掉才能**结构上保证**行内宽度不会被重新挂回来；
+2. `.notes-panel` 直接定义成「整页形态」（`flex: 1 1 auto` + `min-width/min-height: 0` +
+   flex 列 + `overflow: hidden`），删掉侧栏形态的 `320px 硬锁` / `position: sticky` /
+   `max-width: 50%` / `margin` / 圆角阴影，以及 `.notes-page .notes-panel` 里重复的两段覆盖
+   （只留 `width/height: 100%`）；
+3. `.notes-card-cols`：去掉 `flex-wrap`（默认 nowrap）+ `overflow: hidden` —— 容器自身不滚动；
+4. `.note-col`：`flex: 1 1 0` + `min-width: 0`，去掉固定 `flex-basis` / `max-width`
    —— 四列等分可用宽度，永不换行；外观改为看板列样式（灰底圆角列 + 白色胶囊列头）；
-3. `.note-col-body`：`flex: 1 1 auto` + `min-height: 0` + `overflow-y: auto`
+5. `.note-col-body`：`flex: 1 1 auto` + `min-height: 0` + `overflow-y: auto`
    —— 纵向滚动下沉到每列内部（与 `.column-body` 一致）；
-4. 创建列收起时渲染 `.notes-add-rail`（30px 窄导轨）作为 **兄弟节点**，
-   不再是藏在四列容器里的按钮 ⇒ 收起创建列与四列完全解耦；
-5. 空数据时不再用「整块空状态」替换四列，改为**始终渲染四列**、空列显示「暂无」
-   —— 否则「没有记事」会被误读成「四列消失了」；
-6. 创建列 textarea 用 `.note-textarea-full` 撑满列高，不再走 `useAutoSize`
+6. 窄列收缩：`.note-card { min-width: 0 }` + `.note-foot { flex-wrap: wrap }`
+   —— 列被压窄时内容换行收缩，而不是把溢出裁掉（裁掉比滚动条更糟，同 `#248` 判据）；
+7. 创建列收起时渲染 `.notes-add-rail`（30px 窄导轨）作为 **兄弟节点**，
+   不再是藏在四列容器里的按钮 ⇒ 收起创建列与四列完全解耦；空数据时**始终渲染四列**
+   （原先整块空状态替换，看起来像「四列消失了」）；
+8. 创建列 textarea 用 `.note-textarea-full` 撑满列高，不再走 `useAutoSize`
    （行内 `height` 与 `flex-grow` 语义重叠，且受 260px 上限约束）；
-7. 删除死代码：CSS 的 `.notes-panel.collapsed` / `.notes-rail*` / `.notes-add-col-open` /
-   `.notes-empty*`，以及随之失效的 4 个 i18n key（`notes.expandTitle` / `notes.collapseTitle` /
-   `notes.emptyTitle` / `notes.emptySub`，中英各删 ⇒ 各 **338** key）。
-8. **窄列残留横向滚动条**：列宽被压到 ~90px 时（900px 窗口 + 创建列展开），
-   `.note-foot`（标签 + 时间 + 操作按钮）的 min-content 把 `.note-card` 撑宽，
-   而 `.note-col-body` 同样因 `overflow-y: auto` 隐式获得 `overflow-x: auto` ⇒
-   **列内部出现横向滚动条**。修法：`.note-card { min-width: 0 }` + `.note-foot { flex-wrap: wrap }`
-   —— 让内容换行收缩，而不是把溢出裁掉（裁掉比滚动条更糟，见 `#248` 同类修复）。
+9. 删除死代码与失效 key：CSS 的 `.notes-panel.collapsed` / `.notes-rail*` /
+   `.notes-add-col-open` / `.notes-empty*` / `.notes-resizer*` / `.notes-date-list` /
+   `.notes-group*`；i18n 的中英各 5 个（`notes.expandTitle` / `notes.collapseTitle` /
+   `notes.emptyTitle` / `notes.emptySub` / `notes.resizeTitle` ⇒ 各 **337** key）；
+   测试侧删除随功能失效的 `notes-width.test.tsx`（`#202` 拖宽 8 例）。
+
+### 教训：隔离复现页的保真度
+
+首版复现页**只复刻了类名与 DOM 结构，漏掉了组件写在元素上的行内样式**，因此 A 完全没被复现，
+只看到 B，得出了「把列改成可收缩就够了」的错误结论 —— 交付后真机四列被压成竖条。
+
+> 复现页必须逐条对齐组件产出的**属性**（`style` / 条件 className / 隐藏元素 / 默认 state），
+> 而不只是标签与类名。「行内样式 vs 样式表覆盖」这类缺陷，恰恰只在行内样式存在时才出现。
 
 ### 验证
 
-- 隔离复现页（真实 `styles.css` + 复刻 DOM，`/tmp` 下临时产物，未入库）
-  + Chrome 无头截图 + 页面内注入读数（`clientWidth/scrollWidth/overflowX`）：
-  四列 `top/bottom` 齐平为 `true/true`、容器 `overflowX=hidden`、
-  `横向溢出元素(0)`、textarea `h=560.5px`（与列高等高）。
-- 新增回归测试 `app/src/components/notes-layout.test.ts`（9 例）：
-  断言容器不 `wrap`/不滚动、列 `flex: 1 1 0` + `min-width: 0`、列内纵向滚动区、
-  卡片与页脚可收缩、四列区块内**不得引用** `addColCollapsed`（即收起创建列不会动四列）。
-  **已反向验证**：把 `flex-wrap: wrap`、`flex: 0 0 260px`、四列内引用 `addColCollapsed`、
-  去掉 `.note-card { min-width: 0 }` / `.note-foot { flex-wrap: wrap }` 四处改回缺陷写法，
-  对应 5 条断言全部失败；还原后 9 例全绿。
+- **修正后的**复现页（补上 `style="flex:0 0 25%;width:25%"`）成功复现 A+B，读数见上表；
+- 静态回归 `app/src/components/notes-layout.test.ts`（12 例）新增一组断言锁定 A：
+  「`.notes-panel` 元素不得挂行内 `style`」「`widthPct` / `notes-resizer` 机制必须已移除」
+  「`.notes-panel` 必须是 `flex: 1 1 auto` + `min-width/min-height: 0`，且不得回到
+  固定 `320px` / `position: sticky` / `max-width: 50%`」「`.notes-page .notes-panel` 拉满 100%」；
+- **已反向验证**（一轮注入 5 类缺陷，7 条断言失败，还原后 `diff -q` 字节一致、12 例全绿）：
+  改回 `flex-wrap: wrap` + 容器 `overflow-y: auto`、`flex: 0 0 260px`、
+  四列内引用 `addColCollapsed`、去掉 `.note-card { min-width: 0 }` / `.note-foot { flex-wrap: wrap }`、
+  面板改回 `flex: 0 0 320px` + `position: sticky` + `max-width: 50%` 并重新挂上行内宽度。
+- ⚠️ **修复后的渲染复核未能完成**：本机沙箱内 Chrome 无头模式已无法启动
+  （`sandbox initialization failed` + GPU / network service 反复崩溃，提权未生效），
+  Quick Look 渲染同样被拦。A 的结论来自**修正后复现页的读数**与真机截图，修复后的观感
+  需在 `npm run tauri dev` 窗口复核（HMR 即时生效）。
 
 ## 数据 / Schema 变更
 
@@ -139,16 +170,18 @@
 ## 测试 / 验收
 
 - [x] `npx tsc --noEmit` 0 error
-- [x] `npm run i18n:check`：zh-CN / en-US 各 334 key，占位符一致
-- [x] `npm test`：12 文件 99 例全部通过
+- [x] `npm run i18n:check`：zh-CN / en-US 各 **337** key（含追加修正删掉的 5 个），占位符一致
+- [x] `npm test`：12 文件 105 例全部通过（含新增 `notes-layout.test.ts` 12 例；删除失效的 `notes-width.test.tsx` 8 例）
 - [x] `npm run build`：生产构建成功
 - [x] `scripts/check-doc-links.py`：文档链接检查通过
+- [x] `npx prettier --check`：本次新增 / 改动的文件全部合规（`NotesPanel.tsx` 的不合规为既有债，见「已知技术债」）
 - [x] Sidebar 渲染：分组、账号动态列表、激活高亮、底部关于
 - [x] 点击各导航项 → 主区即时切换，无 Modal 弹层
 - [x] 面板内嵌后设置/日志/账号内容完整可滚动、可关闭返回
-- [x] NotesPanel 在 notes 视图可拖拽调整宽度；收起按钮只收起**创建列**（见下节追加修正）
-- [x] 四列（紧急/高/中/低）在 900 / 1180 / 1440 三种窗口下均并排、等高、无横向滚动条
+- [x] NotesPanel 收起按钮只收起**创建列**（见追加修正）；宽度拖拽机制已移除
+- [x] 四列（紧急/高/中/低）固定为等宽四列，容器不换行、不滚动（见追加修正）
 - [x] 顶栏仅剩品牌/条数/同步时间/同步按钮
+- [ ] **真机渲染复核**：四列并排 + 面板撑满（沙箱内 Chrome 无头不可用，需在 `npm run tauri dev` 窗口确认）
 - [ ] 真机手动 QA：多账号切换、筛选回归、详情面板、关于弹窗
 
 ## 相关链接
@@ -157,5 +190,5 @@
 - 分支：`feature/issue-259-sidebar-nav`
 - 相关代码：`app/src/components/Sidebar.tsx` / `app/src/components/AgentPanel.tsx` /
   `app/src/components/NotesPanel.tsx` / `app/src/App.tsx` / `app/src/styles.css`
-- 回归测试：`app/src/components/notes-layout.test.ts`（四列布局）/ `app/src/components/notes-width.test.tsx`（拖拽宽度）
+- 回归测试：`app/src/components/notes-layout.test.ts`（四列布局 + 面板撑满，12 例）
 - 关联文档：[`CHANGELOG.md`](./CHANGELOG.md)（Unreleased 条目）
