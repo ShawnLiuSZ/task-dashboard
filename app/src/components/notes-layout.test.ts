@@ -84,13 +84,15 @@ describe('记事本四列（看板列模式，#259）', () => {
     expect(decls('.note-col-count')).toMatch(/color\s*:\s*var\(--text-3\)/);
   });
 
-  it('列头底色/字色按优先级取自看板同一套浅色调', () => {
-    expect(decls('.note-col--urgent .note-col-head')).toMatch(/background\s*:\s*#fde7ec/);
-    expect(decls('.note-col--high .note-col-head')).toMatch(/background\s*:\s*var\(--amber-bg\)/);
-    expect(decls('.note-col--medium .note-col-head')).toMatch(/background\s*:\s*#dbe9fc/);
-    expect(decls('.note-col--low .note-col-head')).toMatch(/background\s*:\s*#e6e7ea/);
-    expect(decls('.note-col--medium .note-col-title')).toMatch(/color\s*:\s*#0a5bd0/);
-    expect(decls('.note-col--low .note-col-title')).toMatch(/color\s*:\s*var\(--text-2\)/);
+  it('列顶状态色横条 + 列头无胶囊底色（同看板 .column-status-N）', () => {
+    // 看板状态列只在列顶画 3px 状态色横条、列头不带底色
+    const col = decls('.note-col');
+    expect(col).toMatch(/border-top\s*:\s*3px solid var\(--col-accent/);
+    expect(decls('.column-status-0')).toMatch(/border-top\s*:\s*3px solid var\(--status-0\)/);
+    // 列头不得有底色（胶囊底是 4 状态看板视图的写法，不是状态列写法）
+    expect(decls('.note-col-head')).not.toMatch(/background\s*:/);
+    // 标题用默认文字色：看板状态列不单独给标题上色
+    expect(styles).not.toMatch(/\.note-col--(urgent|high|medium|low) \.note-col-title/);
   });
 
   it('列有「明显的包围框」：页面底 --bg 上放 --surface-2 列（同色则包围框不可见）', () => {

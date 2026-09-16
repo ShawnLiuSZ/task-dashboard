@@ -2055,7 +2055,9 @@ button.unassigned-tag:disabled {
 }
 
 /* 单优先级 card 列——**与看板 .column 完全同构**（固定 320px / 全高 / 列内纵向滚动 /
- * 彩色胶囊列头），让两个面板的列视觉统一。列放不下时由 .notes-card-cols 横向滚动。
+ * 列顶状态色横条 + 无胶囊列头），让两个面板的列视觉统一。
+ * 列顶横条同看板 `.column-status-N { border-top: 3px solid var(--status-N) }`：
+ * 这里用 --col-accent（优先级色，由组件按看板同一套色板注入）。
  * ⚠️ overflow 用 clip（不支持时回退 hidden）：hidden 的盒子仍是滚动容器，
  * 列体滚动到底后滚动手势会链式传导到列框本身，把列头滚高几像素；clip 从根上杜绝。 */
 .note-col {
@@ -2065,13 +2067,13 @@ button.unassigned-tag:disabled {
   display: flex;
   flex-direction: column;
   background: var(--surface-2);
+  border-top: 3px solid var(--col-accent, var(--border));
   border-radius: 10px;
   overflow: hidden;
   overflow: clip;
 }
 
-/* 列头：与看板 .column-head 同款（胶囊底 + 圆点 + 标题 + 右侧计数）。
- * 底色/字色按优先级取自看板同一套浅色调（doing / todo / amber 变量）。 */
+/* 列头：与看板 .column-head 同款几何，**不带底色**（状态色只落在列顶横条与圆点上）。 */
 .note-col-head {
   display: flex;
   align-items: center;
@@ -2080,19 +2082,6 @@ button.unassigned-tag:disabled {
   margin: 8px 8px 2px;
   padding: 5px 10px;
   border-radius: 7px;
-  background: #e6e7ea;
-}
-.note-col--urgent .note-col-head {
-  background: #fde7ec;
-}
-.note-col--high .note-col-head {
-  background: var(--amber-bg);
-}
-.note-col--medium .note-col-head {
-  background: #dbe9fc;
-}
-.note-col--low .note-col-head {
-  background: #e6e7ea;
 }
 
 .note-col-dot {
@@ -2105,18 +2094,6 @@ button.unassigned-tag:disabled {
 
 .note-col-title {
   font-weight: 500;
-}
-.note-col--urgent .note-col-title {
-  color: #be123c;
-}
-.note-col--high .note-col-title {
-  color: var(--amber-text);
-}
-.note-col--medium .note-col-title {
-  color: #0a5bd0;
-}
-.note-col--low .note-col-title {
-  color: var(--text-2);
 }
 
 .note-col-count {
