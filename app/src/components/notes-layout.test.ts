@@ -50,14 +50,47 @@ describe('记事本四列（看板列模式，#259）', () => {
     expect(d).toMatch(/min-width\s*:\s*0/);
   });
 
-  it('四列有最小宽度（--notes-col-w）且宽窗口下撑满、不留死空间', () => {
-    // flex: 1 1 0 + min-width ⇒ 宽窗口四列等分撑满（与面板同宽），
-    // 窄窗口不低于 --notes-col-w（不会被压成竖条，超出部分横向滚动）
+  it('列宽与看板 .column 保持一致（固定 320px，不随容器伸缩）', () => {
     const col = decls('.note-col');
-    expect(col).toMatch(/flex\s*:\s*1\s+1\s+0/);
-    expect(col).toMatch(/min-width\s*:\s*var\(--notes-col-w\)/);
-    // 变量必须定义在 .notes-panel 上
-    expect(decls('.notes-panel')).toMatch(/--notes-col-w\s*:\s*\d+px/);
+    const board = decls('.column');
+    expect(col).toMatch(/flex\s*:\s*0\s+0\s+var\(--notes-col-w\)/);
+    expect(col).toMatch(/width\s*:\s*var\(--notes-col-w\)/);
+    // 变量值必须等于看板列宽（两处面板列视觉统一，用户明确要求）
+    expect(decls('.notes-panel')).toMatch(/--notes-col-w\s*:\s*320px/);
+    expect(board).toMatch(/flex\s*:\s*0\s+0\s+320px/);
+    // 不得回到「随容器伸缩」写法
+    expect(col).not.toMatch(/flex\s*:\s*1\s+1\s+0/);
+  });
+
+  it('列头/列体几何与看板同参（margin / padding / 圆角逐条对齐）', () => {
+    const head = decls('.note-col-head');
+    const boardHead = decls('.column-head');
+    for (const d of [head, boardHead]) {
+      expect(d).toMatch(/margin\s*:\s*8px 8px 2px/);
+      expect(d).toMatch(/padding\s*:\s*5px 10px/);
+      expect(d).toMatch(/border-radius\s*:\s*7px/);
+    }
+    for (const d of [decls('.note-col-body'), decls('.column-body')]) {
+      expect(d).toMatch(/padding\s*:\s*0 8px 10px/);
+      expect(d).toMatch(/gap\s*:\s*8px/);
+    }
+  });
+
+  it('列头内容与看板同构：圆点 + 标题 + 右侧灰色计数', () => {
+    expect(panel).toContain('note-col-dot');
+    expect(decls('.note-col-dot')).toMatch(/border-radius\s*:\s*50%/);
+    expect(decls('.note-col-title')).toMatch(/font-weight\s*:\s*500/);
+    expect(decls('.note-col-count')).toMatch(/margin-left\s*:\s*auto/);
+    expect(decls('.note-col-count')).toMatch(/color\s*:\s*var\(--text-3\)/);
+  });
+
+  it('列头底色/字色按优先级取自看板同一套浅色调', () => {
+    expect(decls('.note-col--urgent .note-col-head')).toMatch(/background\s*:\s*#fde7ec/);
+    expect(decls('.note-col--high .note-col-head')).toMatch(/background\s*:\s*var\(--amber-bg\)/);
+    expect(decls('.note-col--medium .note-col-head')).toMatch(/background\s*:\s*#dbe9fc/);
+    expect(decls('.note-col--low .note-col-head')).toMatch(/background\s*:\s*#e6e7ea/);
+    expect(decls('.note-col--medium .note-col-title')).toMatch(/color\s*:\s*#0a5bd0/);
+    expect(decls('.note-col--low .note-col-title')).toMatch(/color\s*:\s*var\(--text-2\)/);
   });
 
   it('列有「明显的包围框」：页面底 --bg 上放 --surface-2 列（同色则包围框不可见）', () => {
@@ -92,17 +125,14 @@ describe('记事本四列（看板列模式，#259）', () => {
     expect(decls('.note-col-body')).toMatch(/overscroll-behavior\s*:\s*contain/);
   });
 
-  it('空列不得复用看板的裸 .empty 类（其 padding 会顶下空列列头）', () => {
-    // 看板的 .empty { padding: 8px 4px } 是全局规则；记事本空列若复用 empty 类，
+  it('列类名用专属命名（note-col--<优先级>），不得复用看板的裸 .empty', () => {
+    // 看板的 .empty { padding: 8px 4px } 是全局规则；记事本列若复用裸 empty 类，
     // 列框会被加上 8px 顶部内边距 ⇒ 有记录/没有记录的列列头高低不一致（用户实测）。
     expect(panel, '记事本列又复用了裸 empty 类').not.toContain("' empty'");
-    expect(panel).toContain("' note-col--empty'");
-    // 看板自己的 .empty 规则必须限定在 .board 作用域内，防止再漏进其他页面
+    expect(panel).toContain('note-col--${col.label}');
+    // 看板自己的 .empty 规则限定在 .board 作用域，防止再漏进其他页面
     expect(styles).not.toMatch(/(?:^|[},])\s*\.empty\s*\{/);
     expect(styles).toMatch(/\.board \.empty\s*\{/);
-    // 空列态样式改用专属类
-    expect(styles).toMatch(/\.note-col--empty \.note-col-head/);
-    expect(styles).toMatch(/\.note-col--empty \.note-col-title::before/);
   });
 
   it('记事卡片不再有左侧色条（优先级由列分组 + 卡片底部标签表达）', () => {
@@ -195,13 +225,13 @@ describe('整行页头移除，导入/导出挪进创建列（#259）', () => {
     expect(toolsBlock).toContain('setAddColCollapsed(true)');
   });
 
-  it('列头到内容间距统一：列头 margin-bottom 归零，间距由列体 padding-top 提供', () => {
-    // 旧值 head margin-bottom 2px + body padding-top 0 ⇒ 有记录的列上边距只有 2px，
-    // 与空列（提示自带 padding）观感不一致
-    expect(decls('.note-col-head')).toMatch(/margin\s*:\s*10px 10px 0/);
-    expect(decls('.note-col-body')).toMatch(/padding\s*:\s*8px 10px 10px/);
-    // 空列提示不得再带自己的上边距/虚线框
-    expect(decls('.note-col-empty')).toMatch(/padding\s*:\s*0 4px/);
+  it('列头几何不受「空列」影响（历史缺陷：空列被多顶下 8px）', () => {
+    // 历史缺陷：记事本列复用了看板的裸 .empty 类，其 padding: 8px 4px 命中列框，
+    // 让空列的列头比有记录的列低 8px。修法是专属命名 + 看板规则限定作用域，
+    // 因此空列不再需要任何专属规则（与看板一致：空列同样显示彩色列头与计数 0）。
+    expect(styles).not.toMatch(/note-col--empty/);
+    expect(panel).not.toContain('note-col--empty');
+    expect(decls('.note-col-head')).toMatch(/margin\s*:\s*8px 8px 2px/);
   });
 });
 

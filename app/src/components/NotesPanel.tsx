@@ -505,14 +505,13 @@ export default function NotesPanel() {
             priorityColumns.map((col) => (
               <div
                 key={col.label}
-                className={`note-col${col.items.length === 0 ? ' note-col--empty' : ''}`}
+                className={`note-col note-col--${col.label}`}
                 style={{ '--col-accent': col.opt.color } as CSSProperties}
               >
                 <div className="note-col-head">
-                  {col.items.length > 0 && (
-                    <span className="note-col-count">{col.items.length}</span>
-                  )}
+                  <span className="note-col-dot" aria-hidden="true" />
                   <span className="note-col-title">{col.opt.label}</span>
+                  <span className="note-col-count">{col.items.length}</span>
                 </div>
                 <div className="note-col-body">
                   {col.items.length === 0 ? (

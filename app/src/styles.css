@@ -1957,8 +1957,10 @@ button.unassigned-tag:disabled {
  * ⚠️ 组件里**不得**再挂行内 flex/width：行内样式优先级高于样式表，
  * 曾把面板锁在 25% 宽，导致右侧四列被压成竖条 + 容器横向滚动条。
  * 背景用 --bg（与看板页面一致）：列底色是 --surface-2，底色相同则列的包围框不可见。 */
+/* 记事本列宽：与看板 .column 保持一致（固定 320px）——两处面板的列视觉统一。
+ * 创建列与四个优先级列共用同一变量。 */
 .notes-panel {
-  --notes-col-w: 280px;
+  --notes-col-w: 320px;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
@@ -2052,14 +2054,13 @@ button.unassigned-tag:disabled {
   letter-spacing: 2px;
 }
 
-/* 单优先级 card 列——与看板 .column 同构：全高、列内纵向滚动、明显的包围框。
- * 宽窗口四列等分撑满（不留死空间）；窄窗口不低于 --notes-col-w，超出部分横向滚动。
+/* 单优先级 card 列——**与看板 .column 完全同构**（固定 320px / 全高 / 列内纵向滚动 /
+ * 彩色胶囊列头），让两个面板的列视觉统一。列放不下时由 .notes-card-cols 横向滚动。
  * ⚠️ overflow 用 clip（不支持时回退 hidden）：hidden 的盒子仍是滚动容器，
- * 列体滚动到底后滚动手势会链式传导到列框本身，把列头滚高几像素
- * （实测有记录的列列头比空列高 ~5-7px，即此原因）；clip 不是滚动容器，从根上杜绝。 */
+ * 列体滚动到底后滚动手势会链式传导到列框本身，把列头滚高几像素；clip 从根上杜绝。 */
 .note-col {
-  flex: 1 1 0;
-  min-width: var(--notes-col-w);
+  flex: 0 0 var(--notes-col-w);
+  width: var(--notes-col-w);
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -2069,77 +2070,78 @@ button.unassigned-tag:disabled {
   overflow: clip;
 }
 
+/* 列头：与看板 .column-head 同款（胶囊底 + 圆点 + 标题 + 右侧计数）。
+ * 底色/字色按优先级取自看板同一套浅色调（doing / todo / amber 变量）。 */
 .note-col-head {
   display: flex;
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
-  /* 底边距归零：列头到内容（卡片 / 空列提示）的间距统一由 .note-col-body 的
-   * padding-top 提供，保证「有记录的列」和「没有记录的列」上边距一致。 */
-  margin: 10px 10px 0;
+  margin: 8px 8px 2px;
   padding: 5px 10px;
   border-radius: 7px;
-  background: var(--surface);
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--col-accent, var(--text-2));
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  background: #e6e7ea;
+}
+.note-col--urgent .note-col-head {
+  background: #fde7ec;
+}
+.note-col--high .note-col-head {
+  background: var(--amber-bg);
+}
+.note-col--medium .note-col-head {
+  background: #dbe9fc;
+}
+.note-col--low .note-col-head {
+  background: #e6e7ea;
 }
 
-.note-col--empty .note-col-head {
-  color: var(--text-3);
-}
-
-/* 列标题前的优先级色点（替代红色竖线作为唯一标签指示）。 */
-.note-col-title::before {
-  content: '';
-  display: inline-block;
+.note-col-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  flex: 0 0 8px;
   background: var(--col-accent, var(--text-3));
-  margin-right: 5px;
 }
 
-.note-col--empty .note-col-title::before {
-  background: var(--border-strong);
+.note-col-title {
+  font-weight: 500;
+}
+.note-col--urgent .note-col-title {
+  color: #be123c;
+}
+.note-col--high .note-col-title {
+  color: var(--amber-text);
+}
+.note-col--medium .note-col-title {
+  color: #0a5bd0;
+}
+.note-col--low .note-col-title {
+  color: var(--text-2);
 }
 
 .note-col-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 16px;
-  padding: 0 5px;
-  border-radius: 8px;
-  background: var(--col-accent, var(--border));
-  color: #fff;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1;
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 11px;
 }
 
-/* 列内滚动容器：每列各自纵向滚动，与看板 .column-body 一致。
- * overscroll-behavior: contain —— 列体滚到头后不再向父级（列框/页面）链式滚动，
- * 避免把列框本身滚出几像素的偏移。 */
+/* 列内滚动容器：每列各自纵向滚动，与看板 .column-body 同参。
+ * overscroll-behavior: contain —— 列体滚到头后不再向父级（列框/页面）链式滚动。 */
 .note-col-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 8px 10px 10px;
+  padding: 0 8px 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-/* 空列提示：与看板 .empty 同款（灰色文字，不用虚线框——列本身就是包围框）。
- * 不带独立内边距：与卡片的间距统一由 .note-col-body 的 padding/gap 提供。 */
+/* 空列提示：与看板 .empty 同款（灰色文字，不用虚线框——列本身就是包围框）。 */
 .note-col-empty {
   color: var(--text-3);
   font-size: 11px;
-  padding: 0 4px;
+  padding: 8px 4px;
 }
 
 /* ---------- 新建区 ---------- */
