@@ -65,8 +65,8 @@ const ICON = {
   upload: 'M12 15V3 M7 8l5-5 5 5 M5 21h14',
 };
 
-/** 收起状态持久化键（本地偏好，不入数据库）。 */
-const COLLAPSED_KEY = 'notes.collapsed';
+/** 创建列（左栏）收起状态持久化键（本地偏好，不入数据库）。
+ *  #259：记事本已是主区整页，收起粒度只到「创建列」，不再有整面板收起。 */
 const ADD_COL_COLLAPSED_KEY = 'notes.addColCollapsed';
 
 /** 宽度百分比持久化键（本地偏好，不入数据库）。范围 25–50，默认 25。 */
@@ -184,12 +184,10 @@ export default function NotesPanel() {
   // 松手才 setWidthPct（一次渲染 + 一次持久化）。pctRef 为拖动起点快照。
   const panelRef = useRef<HTMLElement | null>(null);
   const pctRef = useRef<number>(DEFAULT_WIDTH_PCT);
-  // 收起后列表内容完全不渲染（避免旁人看到），状态记在本地，重启后保持。
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSED_KEY) === '1');
   // #202：展开态宽度（占主区百分比），拖拽/键盘调整后持久化。
   const [widthPct, setWidthPct] = useState(readNotesWidthPct);
 
-  // 添加列（左栏）收起状态——独立于面板整体收起。
+  // 添加列（左栏）收起状态——**只影响创建列，不影响右侧四列**（#259）。
   const [addColCollapsed, setAddColCollapsed] = useState(
     () => localStorage.getItem(ADD_COL_COLLAPSED_KEY) === '1',
   );
@@ -197,12 +195,7 @@ export default function NotesPanel() {
     localStorage.setItem(ADD_COL_COLLAPSED_KEY, addColCollapsed ? '1' : '0');
   }, [addColCollapsed]);
 
-  const draftRef = useAutoSize(draft);
   const editRef = useAutoSize(editDraft);
-
-  useEffect(() => {
-    localStorage.setItem(COLLAPSED_KEY, collapsed ? '1' : '0');
-  }, [collapsed]);
 
   useEffect(() => {
     localStorage.setItem(WIDTH_KEY, String(widthPct));
@@ -433,24 +426,6 @@ export default function NotesPanel() {
     [busy, loadNotes, t],
   );
 
-  // 收起态：只留一条竖向导轨，列表内容完全不渲染。
-  if (collapsed) {
-    return (
-      <aside className="notes-panel collapsed">
-        <button
-          type="button"
-          className="notes-rail"
-          onClick={() => setCollapsed(false)}
-          title={t('notes.expandTitle')}
-        >
-          <Icon d={ICON.expand} size={14} />
-          <span className="notes-rail-text">{t('notes.title')}</span>
-          {notes.length > 0 && <span className="notes-rail-count">{notes.length}</span>}
-        </button>
-      </aside>
-    );
-  }
-
   return (
     <aside
       ref={panelRef}
@@ -492,17 +467,31 @@ export default function NotesPanel() {
           <button
             type="button"
             className="note-tool"
-            title={t('notes.collapseTitle')}
-            onClick={() => setCollapsed(true)}
+            title={addColCollapsed ? t('notes.expandAddCol') : t('notes.collapseAddCol')}
+            aria-expanded={!addColCollapsed}
+            onClick={() => setAddColCollapsed((v) => !v)}
           >
-            <Icon d={ICON.collapse} size={13} />
+            <Icon d={addColCollapsed ? ICON.expand : ICON.collapse} size={13} />
           </button>
         </div>
       </header>
 
       <div className="notes-body">
-        {/* 左侧：添加列（仅 composer，textarea 撑满高度） */}
-        {!addColCollapsed && (
+        {/* 左侧：创建列（仅 composer，textarea 撑满列高；不展示已添加的记事）。
+            收起时只换成一条窄导轨——右侧四列不受影响（#259）。 */}
+        {addColCollapsed ? (
+          <button
+            type="button"
+            className="notes-add-rail"
+            title={t('notes.expandAddCol')}
+            aria-expanded={false}
+            onClick={() => setAddColCollapsed(false)}
+          >
+            <Icon d={ICON.expand} size={13} />
+            <span className="notes-add-rail-text">{t('notes.title')}</span>
+            <Icon d={ICON.plus} size={12} />
+          </button>
+        ) : (
           <div className="notes-add-col">
             {notice && (
               <div className="note-notice" role="status">
@@ -522,7 +511,8 @@ export default function NotesPanel() {
             )}
 
             <div className="note-composer note-composer-full">
-              <textarea ref={draftRef} className="note-textarea note-textarea-full"
+              <textarea
+                className="note-textarea note-textarea-full"
                 placeholder={t('notes.composer.placeholder')}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -543,22 +533,10 @@ export default function NotesPanel() {
           </div>
         )}
 
-        {/* 右侧：横向 card 列（按优先级分组） */}
+        {/* 右侧：固定四列（紧急 / 高 / 中 / 低），与看板列同构：等宽、全高、列内纵向滚动。 */}
         <div className="notes-card-cols">
-          {addColCollapsed && (
-            <button type="button" className="notes-add-col-open" title={t('notes.expandAddCol')}
-              onClick={() => setAddColCollapsed(false)}>
-              <Icon d={ICON.plus} size={13} />
-            </button>
-          )}
           {loading ? (
             <div className="notes-placeholder">{t('notes.loading')}</div>
-          ) : priorityColumns.every((c) => c.items.length === 0) ? (
-            <div className="notes-empty">
-              <span className="notes-empty-icon"><Icon d={ICON.notebook} size={22} /></span>
-              <p>{t('notes.emptyTitle')}</p>
-              <span>{t('notes.emptySub')}</span>
-            </div>
           ) : (
             priorityColumns.map((col) => (
               <div

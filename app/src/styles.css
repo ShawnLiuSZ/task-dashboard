@@ -2007,12 +2007,6 @@ button.unassigned-tag:disabled {
   box-shadow: 2px 0 8px rgba(0, 0, 0, 0.05);
 }
 
-/* 收起态：竖向导轨，宽 36px。 */
-.notes-panel.collapsed {
-  flex: 0 0 36px;
-  width: 36px;
-}
-
 /* #202：宽度拖拽条（面板右缘，hover/聚焦时显 1px 线）。 */
 .notes-resizer {
   position: absolute;
@@ -2044,45 +2038,6 @@ button.unassigned-tag:disabled {
 .notes-resizer:focus-visible .notes-resizer-grip {
   background: var(--accent);
   opacity: 1;
-}
-
-.notes-rail {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 10px 0;
-  border: 0;
-  background: transparent;
-  color: var(--text-2);
-  font-family: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  transition:
-    color 0.15s,
-    background 0.15s;
-}
-
-.notes-rail:hover {
-  background: rgba(0, 0, 0, 0.04);
-  color: var(--text);
-}
-
-.notes-rail-text {
-  writing-mode: vertical-rl;
-  letter-spacing: 2px;
-}
-
-.notes-rail-count {
-  min-width: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--text-3);
-  font-size: 10px;
-  text-align: center;
 }
 
 .notes-head {
@@ -2141,68 +2096,75 @@ button.unassigned-tag:disabled {
   gap: 8px;
 }
 
-/* 右侧：四列 card 列（无横向滚动，自动换行） */
+/* 右侧：固定四列（紧急/高/中/低）。等宽、不换行、容器自身不滚动——
+ * 纵向滚动下沉到每列内部（.note-col-body），因此不会再出现横向滚动条。 */
 .notes-card-cols {
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
   padding: 10px;
   display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
+  flex-direction: row;
   gap: 12px;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
-/* 添加列收起时出现的展开按钮 */
-.notes-add-col-open {
-  position: sticky;
-  left: 0;
-  width: 28px;
-  height: 32px;
-  align-self: flex-start;
-  border: 0.5px solid var(--border);
-  border-radius: 4px;
-  background: var(--surface);
-  cursor: pointer;
-  color: var(--text-2);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s;
-}
-.notes-add-col-open:hover { background: var(--surface-2); color: var(--text); }
-
-/* 单优先级 card 列 */
-.note-col {
-  flex: 0 0 260px;
-  min-width: 220px;
-  max-width: 320px;
+/* 创建列收起后占位的一条窄导轨（只影响创建列本身）。 */
+.notes-add-rail {
+  flex: 0 0 30px;
+  width: 30px;
   display: flex;
   flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 8px;
-  border-left: 2px solid var(--col-accent, var(--border));
-  padding-left: 10px;
+  padding: 10px 0;
+  border: 0;
+  border-right: 0.5px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    background 0.15s;
+}
+.notes-add-rail:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+.notes-add-rail-text {
+  writing-mode: vertical-rl;
+  letter-spacing: 2px;
 }
 
-/* 空列：弱化装饰，避免空列还顶着醒目的红色竖线 + 红点。 */
-.note-col.empty {
-  border-left: 2px solid var(--border);
+/* 单优先级 card 列——与看板 .column 同构：等宽拉伸、全高、列内纵向滚动。 */
+.note-col {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-2);
+  border-radius: 10px;
+  overflow: hidden;
 }
 
 .note-col-head {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: 0 0 auto;
+  margin: 8px 8px 2px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  background: var(--surface);
   font-size: 11px;
   font-weight: 600;
   color: var(--col-accent, var(--text-2));
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  position: sticky;
-  top: 0;
-  background: var(--bg, transparent);
-  padding-bottom: 4px;
 }
 
 .note-col.empty .note-col-head {
@@ -2239,12 +2201,16 @@ button.unassigned-tag:disabled {
   line-height: 1;
 }
 
+/* 列内滚动容器：每列各自纵向滚动，与看板 .column-body 一致。 */
 .note-col-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-
 .note-col-empty {
   color: var(--text-3);
   font-size: 11px;
@@ -2304,9 +2270,11 @@ button.unassigned-tag:disabled {
   overflow: hidden;
 }
 
+/* 创建列内的 textarea：撑满列高（与面板等高），不参与 useAutoSize 的行高计算。 */
 .note-textarea-full {
   flex: 1 1 auto;
   min-height: 0;
+  height: auto;
   max-height: none;
 }
 
@@ -2373,39 +2341,19 @@ button.unassigned-tag:disabled {
   min-height: 0;
 }
 
-.notes-placeholder,
-.notes-empty {
+.notes-placeholder {
   color: var(--text-3);
   font-size: 12px;
   text-align: center;
   padding: 18px 8px;
 }
 
-.notes-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 28px 12px;
-}
-
-.notes-empty-icon {
-  color: var(--border-strong);
-  margin-bottom: 4px;
-}
-
-.notes-empty p {
-  margin: 0;
-  color: var(--text-2);
-  font-size: 12px;
-}
-
-.notes-empty span {
-  font-size: 11px;
-}
-
 .note-card {
   position: relative;
+  /* 列宽可被压到 ~90px（900px 窗口 + 创建列展开），卡片必须能跟着收缩，
+   * 否则子元素（.note-foot）的 min-content 会把卡片撑宽，进而在
+   * .note-col-body（overflow-y: auto ⇒ overflow-x 计算成 auto）里长出横向滚动条。 */
+  min-width: 0;
   background: var(--surface);
   border: 0.5px solid var(--border);
   border-radius: 8px;
@@ -2445,6 +2393,8 @@ button.unassigned-tag:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* 窄列（900px 窗口下每列仅 ~90px）时让标签/时间/操作按钮换行，而不是撑宽卡片。 */
+  flex-wrap: wrap;
 }
 
 .note-tag {
