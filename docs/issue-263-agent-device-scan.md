@@ -106,6 +106,7 @@ pub fn scan_agent_hosts(state: State<'_, AppState>) -> Result<hooks::AgentScanRe
 - 新分组 **疑似已卸载**（`settings.hooks.group.uninstalled`，红点）：收录
   ① 本轮快照对比发现可执行/应用包消失的 agent；② 已接入但设备上只剩配置目录的 agent。
   该组每行额外展示残留路径（`deviceDetail`），并提供已有的一键卸载按钮用于清理。
+- **分组收敛为 4 组**：「未安装」与「手动配置」合并为 **未接入**（详见下节「追加修正」）。
 - 每行新增设备徽标：`本机已安装` / `已安装应用` / `仅残留配置` / `未检测到`；
   **无扫描结果时不渲染徽标**（避免整屏「未检测到」噪音）。
 - 摘要行：`扫描于 HH:MM：已安装 N 个 · 新发现 X · 疑似已卸载 Y · 仅残留配置 Z`；
@@ -113,9 +114,10 @@ pub fn scan_agent_hosts(state: State<'_, AppState>) -> Result<hooks::AgentScanRe
 
 ### i18n
 
-中英各新增 10 个 key（`settings.hooks.refresh` 改文案，其余新增）：
-`scanSummary` / `scanHint` / `scanFirst` / `group.uninstalled` / `uninstalledHint` /
-`device.cli` / `device.app` / `device.configOnly` / `device.none` / `device.suspectedRemoved`。
+中英各 348 key（原 347）。改动：`settings.hooks.refresh` 与 `manualHint` 改文案；
+新增 `scanSummary` / `scanHint` / `scanFirst` / `group.uninstalled` / `group.notIntegrated` /
+`uninstalledHint` / `manualPath` / `notDetected` / `device.{cli,app,configOnly,none,suspectedRemoved}`；
+删除随分组收敛而失效的 `group.missing` / `group.manual`（避免留下死 key）。
 
 ## 数据 / Schema 变更
 
@@ -159,9 +161,9 @@ pub fn scan_agent_hosts(state: State<'_, AppState>) -> Result<hooks::AgentScanRe
 |---|---|
 | `cargo test` | 101 passed（lib）+ 21 passed（`db_test`），0 failed |
 | `npx tsc --noEmit` | 0 error |
-| `npm test` | 13 文件 132 例全绿（新增 15 + 1） |
+| `npm test` | 13 文件 **134 例**全绿（新增 16 + 1，含分组收敛后的守卫） |
 | `npm run build` | ✅ |
-| `npm run i18n:check` | 中英各 347 key，占位符一致 |
+| `npm run i18n:check` | 中英各 **348** key，占位符一致 |
 | `python3 scripts/check-doc-links.py` | ✅ |
 | `python3 scripts/check-mcp-columns.py` | ✅（本次未改 `tasks` 列，属例行回归） |
 
@@ -177,6 +179,48 @@ pub fn scan_agent_hosts(state: State<'_, AppState>) -> Result<hooks::AgentScanRe
 - **首次扫描不会显示差异**（设计如此，见「为什么快照是唯一写入」）。
 - 快照在每次扫描时覆盖，粒度是「上一次扫描」而非「历史上线」；若用户在两次扫描之间装卸同一
   agent，不会被报告。
+
+## 追加修正（2026-09-16）：合并「未安装」与「手动配置」为「未接入」
+
+**问题（维护者提出）**：分组里「未安装」和「手动配置」各占一组，可否合并。
+
+**为什么原来会拆开**：这两组自 `2e174e0`（#177 后续「接入页分组展示」）起就存在，当时是两个
+不同维度：
+
+| 组 | 维度 | 判定 |
+|---|---|---|
+| 未安装 | **设备** | 支持一键接入，但本机配置根不存在（`host_present=false`） |
+| 手动配置 | **能力** | TaskBoard 未验证该 agent 的 hook 机制，与设备无关（本机装没装都在这组） |
+
+**为什么现在应当合并**：
+
+1. #263 之后**每行都有设备徽标**，「本机装没装」这一原本支撑拆分的依据已由徽标承载，不必再用组名表达。
+2. 两组在本面板内的**可操作性完全相同** —— 都没有安装按钮：一个是因为本机还没装上游 agent，
+   一个是因为尚未验证一键接入。用户能做的动作是同一类（去装上游 / 手动改配置）。
+3. 拆分导致碎片化：「未安装」组最多只有 5 个候选，实测本机常常只有 1 行（`trae`），
+   一个组头换一行内容，信息密度反而下降。
+
+**改动**：
+
+- `agent-groups.ts`：`AgentGroupKey` 由 `installed | available | uninstalled | missing | manual`
+  收敛为 `installed | available | uninstalled | notIntegrated`；`GROUP_ORDER` 同步为 4 项。
+  `groupOf` 的**行为差异**只有一处：支持一键、但本机无任何安装证据的 agent 由 `missing` 改归
+  `notIntegrated`。`!supported` 仍**优先**返回 `notIntegrated`，所以手动 agent 即使被快照对比
+  判为「已卸载」也不会进「疑似已卸载」组（本面板从未给它装过东西，没有残留可清）。
+- **信息不丢**：行内 `detail` 仍是逐 agent 计算，并让两类**自述**（否则合并后读不出「为什么没有安装按钮」）：
+  手动 agent → `手动配置：~/.codex/hooks.json`（新 key `settings.hooks.manualPath`）；
+  支持但本机没装 → `本机未检测到`（新 key `settings.hooks.notDetected`）。
+- 组级提示 `settings.hooks.manualHint` 改写为覆盖两种情形的一句话。
+- i18n：删除 `settings.hooks.group.missing` / `settings.hooks.group.manual`（避免产生新死 key），
+  新增 `group.notIntegrated` / `manualPath` / `notDetected`，中英各 348 key（原 347）。
+- 顺带修正：底部「疑似已卸载」提示原先只看 `newlyRemoved`，可能出现「有提示但没有可清理的行」；
+  现在与分组结果同源（`grouped.uninstalled.length > 0`），且分组结果只算一次供渲染与提示共用。
+- 回归：`agent-groups.test.ts` 改为断言 `notIntegrated`（含「手动 agent 被判卸载也不进清理组」），
+  新增一条「共 4 组、不得回归出 `missing` / `manual`」的守卫；`settings-groups.test.tsx` 的
+  折叠态 stub 由 `{"manual":true}` 改为 `{"notIntegrated":true}`。
+
+**验证**：`tsc --noEmit` 0 error、`npm test` 13 文件 **134 例**、`npm run build` ✅、
+`npm run lint` exit 0（18 warnings，未新增）、`prettier --check` ✅、`i18n:check` 中英各 348 key。
 
 ## 相关链接
 
