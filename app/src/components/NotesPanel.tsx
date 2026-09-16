@@ -273,11 +273,13 @@ export default function NotesPanel() {
       if (!byPrio.has(n.label)) byPrio.set(n.label, []);
       byPrio.get(n.label)!.push(n);
     }
-    return prioOrder.map((p) => ({
-      label: p,
-      items: byPrio.get(p) ?? [],
-      opt: labelOf(labels, p),
-    }));
+    return prioOrder
+      .map((p) => ({
+        label: p,
+        items: byPrio.get(p) ?? [],
+        opt: labelOf(labels, p),
+      }))
+      .filter((c) => c.items.length > 0);
   }, [sortedNotes, labels]);
 
   const renderNoteCard = (note: Note) => {
