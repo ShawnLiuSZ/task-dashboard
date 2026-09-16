@@ -92,6 +92,19 @@ describe('记事本四列（看板列模式，#259）', () => {
     expect(decls('.note-col-body')).toMatch(/overscroll-behavior\s*:\s*contain/);
   });
 
+  it('空列不得复用看板的裸 .empty 类（其 padding 会顶下空列列头）', () => {
+    // 看板的 .empty { padding: 8px 4px } 是全局规则；记事本空列若复用 empty 类，
+    // 列框会被加上 8px 顶部内边距 ⇒ 有记录/没有记录的列列头高低不一致（用户实测）。
+    expect(panel, '记事本列又复用了裸 empty 类').not.toContain("' empty'");
+    expect(panel).toContain("' note-col--empty'");
+    // 看板自己的 .empty 规则必须限定在 .board 作用域内，防止再漏进其他页面
+    expect(styles).not.toMatch(/(?:^|[},])\s*\.empty\s*\{/);
+    expect(styles).toMatch(/\.board \.empty\s*\{/);
+    // 空列态样式改用专属类
+    expect(styles).toMatch(/\.note-col--empty \.note-col-head/);
+    expect(styles).toMatch(/\.note-col--empty \.note-col-title::before/);
+  });
+
   it('记事卡片不再有左侧色条（优先级由列分组 + 卡片底部标签表达）', () => {
     expect(styles).not.toMatch(/\.note-card::before/);
     // 色条没了，左侧内边距也不再为色条留位（原来左 13px / 右 12px）

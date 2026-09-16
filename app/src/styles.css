@@ -498,7 +498,10 @@ body {
   gap: 8px;
 }
 
-.empty {
+/* 看板空列提示。⚠️ 必须限定在 .board 作用域内：裸 `.empty` 是全局类名，
+ * 会漏进记事本（note-col 曾复用 empty 类，被这里的 padding 顶下 8px，
+ * 造成「有记录的列和没有记录的列上边距不一致」）。 */
+.board .empty {
   color: var(--text-3);
   font-size: 11px;
   padding: 8px 4px;
@@ -2084,7 +2087,7 @@ button.unassigned-tag:disabled {
   letter-spacing: 0.04em;
 }
 
-.note-col.empty .note-col-head {
+.note-col--empty .note-col-head {
   color: var(--text-3);
 }
 
@@ -2099,7 +2102,7 @@ button.unassigned-tag:disabled {
   margin-right: 5px;
 }
 
-.note-col.empty .note-col-title::before {
+.note-col--empty .note-col-title::before {
   background: var(--border-strong);
 }
 
