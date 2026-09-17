@@ -6,6 +6,13 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 多账号同步修复（#262）**
+
+  - **#262 多账号同步失效：同步恒覆盖全部账号**：配置 ≥2 个 GitHub 账号后，立即 / 定时 / 启动 / 托盘四条同步路径每轮都只同步激活账号、其余账号永不同步（本机 `sync_logs` 历史从未有一轮覆盖 2 个账号）。根因是同步目标集由 `meta.view_mode` 决定，而 `view_mode` 恒为默认值 `single`——其唯一写入入口（topbar 的 `<select>`）已被 `597840b` 删除，后端 `set_view_mode` / `api.setViewMode` / i18n key 全部残留但无调用方（「有实现、无入口」）。详见 [docs/issue-262-multi-account-sync.md](./issue-262-multi-account-sync.md)。
+  - **做法**：采用方案 A——**同步范围与视图模式解耦**，同步不再受 `view_mode` 限制，恒覆盖全部已配置账号（多账号用户核心诉求是「数据都要进本地库」）；抽出 `sync_target_accounts(conn)` 返回全部账号便于回归测试。`view_mode` 仅影响前端展示（单账号 / 聚合全部），并**撤回 `597840b` 的 UI 部分**在 topbar 重新接回「单账号 / 全部账号」切换，消除死代码（`set_view_mode` 的 `#[allow(dead_code)]` 误标注）与死 i18n key。附带修复：账号遍历处 `get_account_pat(...)?` 改为 `match` + 记失败 + `continue`，单账号读 PAT 失败不再中止整轮；`SyncResult` 新增 `accountsSynced` 字段，UI banner 在 ≥2 账号时展示「覆盖 N 个账号」。
+  - **无 schema 变更**：`meta.view_mode` / `active_account_id` 继续存在并被消费，仅不再参与同步目标选择；`SyncResult` 为进程内返回结构。
+  - **验证**：新增 Rust 回归测试 `sync_target_accounts_covers_all_accounts_regardless_of_view_mode`（写入 `view_mode=single` + 2 账号仍断言返回 2 个目标）；全套 `cargo test --lib` 102 passed、`tsc --noEmit` 0 error、`npm test` 13 文件 136 例、`i18n:check` 中英各 349 key、`prettier --check` ✅、`npm run lint` 18 warning（未超 `--max-warnings 20`）、`check-doc-links.py` ✅。
+
 - **未发布（Unreleased）— Agent 接入面板：设备扫描（#263）**
 
   - **#263 刷新升级为设备扫描**：刷新按钮（文案改为「扫描设备」）现在一次点击就探出本机**已安装**与**已卸载**的 agent，直接回答「这台机器上到底装了哪些 agent」。原先 `host_present` 只看配置根目录是否存在（`hooks.rs` 的 `root.is_dir()`），于是 ① 装了 CLI 但从未运行（没有配置目录）的 agent 被误判「未安装」——本机实测 `codex` 在 PATH 上却没有 `~/.codex`；② 后端只有 5 个 `AgentSpec`，其余 34 个 agent 永远落在「手动配置」组，看不出本机装没装；③ 卸载 CLI / 删掉 `.app` 之后只要配置目录残留、或接入文件还在，就完全没有提示。详见 [docs/issue-263-agent-device-scan.md](./issue-263-agent-device-scan.md)。
