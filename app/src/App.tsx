@@ -20,6 +20,7 @@ import type {
   ProjectStatus,
   Settings as SettingsT,
   Task,
+  ViewMode,
 } from './types';
 
 export default function App() {
@@ -252,8 +253,10 @@ function BoardApp() {
       void loadSettings();
       // loadProjectStatuses 依赖 settings，下面的 useEffect 会在 settings 变化时自动触发
       const prune = r.pruned > 0 ? ` · ${t('sync.pruned', { n: r.pruned })}` : '';
+      const scope =
+        r.accountsSynced > 1 ? ` · ${t('sync.accountsSynced', { n: r.accountsSynced })}` : '';
       showSyncResult(
-        `${t('sync.result', { added: r.added, updated: r.updated, done: r.candidateDone })}${prune}`,
+        `${t('sync.result', { added: r.added, updated: r.updated, done: r.candidateDone })}${scope}${prune}`,
         r.warning,
       );
     }).then((f) => {
@@ -352,8 +355,10 @@ function BoardApp() {
     try {
       const r = await api.syncNow();
       const prune = r.pruned > 0 ? ` · ${t('sync.pruned', { n: r.pruned })}` : '';
+      const scope =
+        r.accountsSynced > 1 ? ` · ${t('sync.accountsSynced', { n: r.accountsSynced })}` : '';
       showSyncResult(
-        `${t('sync.result', { added: r.added, updated: r.updated, done: r.candidateDone })}${prune}`,
+        `${t('sync.result', { added: r.added, updated: r.updated, done: r.candidateDone })}${scope}${prune}`,
         r.warning,
       );
       const fresh = await api.listTasks(ownership || undefined, accountFilter);
@@ -403,6 +408,20 @@ function BoardApp() {
     }
   };
 
+  // #262：切换前端「展示视图模式」（单账号 / 全部账号聚合）。仅影响展示范围，
+  // 不决定同步范围——同步恒覆盖全部账号（见 sync.rs::run）。撤回 597840b 删掉的 UI 入口，
+  // 让 set_view_mode 命令与残留 i18n key 重新接回 UI（消除「有实现、无入口」死代码）。
+  const handleSwitchView = async (mode: ViewMode) => {
+    setError(null);
+    try {
+      await api.setViewMode(mode);
+      await loadSettings();
+      await load();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const selectedTask = useMemo(
     () => tasks.find((t) => t.issueKey === selected) ?? null,
     [tasks, selected],
@@ -421,6 +440,16 @@ function BoardApp() {
           <span className="muted small">
             {t('topbar.lastSync', { time: fmtTime(settings?.lastSyncAt ?? 0, lang) })}
           </span>
+          {/* #262：展示视图模式切换（单账号 / 全部账号聚合）。仅影响展示，不决定同步范围。 */}
+          <select
+            className="select"
+            value={settings?.viewMode ?? 'single'}
+            onChange={(e) => void handleSwitchView(e.target.value as ViewMode)}
+            title={t('topbar.viewModeTitle')}
+          >
+            <option value="single">{t('topbar.singleAccount')}</option>
+            <option value="all">{t('topbar.allAccounts')}</option>
+          </select>
           <button
             className="btn primary"
             onClick={doSync}

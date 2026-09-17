@@ -75,6 +75,7 @@
   "sync.result": "Added {added} · Updated {updated} · Candidate done {done}",
   "sync.filterHidesNew": "{n} tasks from this sync are hidden by current filters",
   "sync.pruned": "Pruned completed {n}",
+  "sync.accountsSynced": "Synced {n} accounts",
   "search.placeholder": "Search repo / number / title…",
   "filter.byRepo": "Filter by repository",
   "filter.allRepos": "All repositories",

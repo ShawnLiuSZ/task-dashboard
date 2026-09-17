@@ -98,6 +98,8 @@ pub struct SyncResult {
     pub pruned: usize,
     pub warning: String,
     pub synced_at: i64,
+    /// #262：本次同步实际覆盖的账号数（可观测性：UI 据此展示「覆盖 N 个账号」）。
+    pub accounts_synced: usize,
 }
 
 /// 从文本（PR 正文）里提取 issue 引用，返回 `repo#number` 形式的键。
@@ -670,30 +672,22 @@ fn sync_account_inner(
     })
 }
 
-pub fn run(conn: &Connection, trigger_type: &str) -> Result<SyncResult, String> {
-    // v0.3.16+：决定本次同步的目标账号集。
-    // view_mode='single' → 仅同步 active_account_id；'all' → 同步所有账号。
+/// #262：决定本次同步覆盖的账号集。**始终返回全部已配置账号**——同步范围与
+/// `meta.view_mode` 解耦（view_mode 仅影响前端展示，见 App.tsx 的 accountFilter / 看板聚合）。
+/// 旧实现按 view_mode 选靶，而 view_mode 恒为默认值 'single'（其设置入口已被 597840b 删除，
+/// 前端再无调用方），导致除「激活账号」外的账号永不同步。多账号用户的核心诉求是
+/// 「数据都要进本地库」，故同步不再受 view_mode 限制。抽出为独立函数便于回归测试守住该契约。
+fn sync_target_accounts(conn: &Connection) -> Result<Vec<crate::db::Account>, String> {
     let accounts = crate::db::list_accounts(conn)?;
     if accounts.is_empty() {
         return Err("未配置 GitHub PAT，请在设置面板粘贴 token（fine-grained 推荐）".to_string());
     }
-    let view_mode = crate::db::get_setting(conn, "view_mode");
-    let active_id: i64 = crate::db::get_setting(conn, "active_account_id")
-        .parse()
-        .unwrap_or(0);
-    let target: Vec<crate::db::Account> = match view_mode.as_str() {
-        "all" => accounts.clone(),
-        _ => accounts
-            .iter()
-            .filter(|a| a.id == active_id)
-            .cloned()
-            .collect(),
-    };
-    if target.is_empty() {
-        return Err(format!(
-            "激活账号 #{active_id} 不存在，请重新选择激活账号"
-        ));
-    }
+    Ok(accounts)
+}
+
+pub fn run(conn: &Connection, trigger_type: &str) -> Result<SyncResult, String> {
+    // #262：同步范围与视图模式解耦——始终同步全部已配置账号（见 `sync_target_accounts`）。
+    let target: Vec<crate::db::Account> = sync_target_accounts(conn)?;
 
     let now = now_secs();
     // v0.3.23：记录同步开始日志（每个账号一条）
@@ -715,7 +709,15 @@ pub fn run(conn: &Connection, trigger_type: &str) -> Result<SyncResult, String> 
         if idx > 0 {
             std::thread::sleep(Duration::from_millis(800));
         }
-        let (login, _org, pat) = crate::db::get_account_pat(conn, account.id)?;
+        // #262：读 PAT 失败不应中止整轮同步（与紧随其后的 `pat.is_empty() → continue`
+        // 策略一致）。旧写法用 `?` 直接冒泡，任一账号读 PAT 失败会让后续账号全不动。
+        let (login, _org, pat) = match crate::db::get_account_pat(conn, account.id) {
+            Ok(t) => t,
+            Err(e) => {
+                total_failed.push(format!("{}: 读取 PAT 失败: {}", account.login, e));
+                continue;
+            }
+        };
         if pat.is_empty() {
             total_failed.push(format!("{}: 未配置 PAT", login));
             continue;
@@ -787,6 +789,7 @@ pub fn run(conn: &Connection, trigger_type: &str) -> Result<SyncResult, String> 
             format!("部分账号/数据源拉取失败: {}", total_failed.join("; "))
         },
         synced_at: now,
+        accounts_synced: target.len(),
     })
 }
 
@@ -811,6 +814,37 @@ mod tests {
         // 非法值拒绝
         assert!(db::set_account_board_mode(&conn, 1, "bogus").is_err());
         assert_eq!(db::get_account_board_mode(&conn, 1), "custom");
+    }
+
+    /// #262 防回归：无论 view_mode 为何值，同步目标集都必须覆盖全部已配置账号。
+    /// 旧实现按 view_mode 选靶，view_mode='single' 时只同步激活账号，第二个账号永不同步。
+    #[test]
+    fn sync_target_accounts_covers_all_accounts_regardless_of_view_mode() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SEQ: AtomicUsize = AtomicUsize::new(0);
+        let n = SEQ.fetch_add(1, Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!(
+            "taskboard_sync_target_test_{}_{}.db",
+            std::process::id(),
+            n
+        ));
+        let _ = std::fs::remove_file(&path);
+        let conn = db::open_db(&path).expect("open_db 测试库");
+        // 两个真实账号（PAT 非空）。
+        let _ = db::insert_account(&conn, "A", "a", "", "pa").unwrap();
+        let _ = db::insert_account(&conn, "B", "b", "", "pb").unwrap();
+        // 即便 view_mode='single' + active_account_id 指向某单一账号，也应同步全部账号。
+        db::set_setting(&conn, "view_mode", "single").unwrap();
+        db::set_setting(&conn, "active_account_id", "1").unwrap();
+
+        let targets = sync_target_accounts(&conn).expect("应返回账号集");
+        assert_eq!(
+            targets.len(),
+            2,
+            "view_mode=single 时仍应同步全部账号（#262 核心修复点）"
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 
     /// 头less 全量同步验证：直接打开生产库（与应用共用同一 SQLite 文件），
