@@ -416,7 +416,10 @@ function BoardApp() {
     try {
       await api.setViewMode(mode);
       await loadSettings();
-      await load();
+      // M3：显式传新 accountFilter——filterRef 由被动 effect 刷新，
+      // await loadSettings() 后仍可能读到旧值（与 handleSwitchAccount 同款修复）。
+      const accountId = mode === 'all' ? 0 : settings?.activeAccountId ?? 0;
+      await loadWith(ownership, accountId);
     } catch (e) {
       setError(String(e));
     }

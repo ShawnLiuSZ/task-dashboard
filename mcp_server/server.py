@@ -138,10 +138,17 @@ _conn = None
 
 def ensure_schema(c):
     """幂等补齐应用新增列（与 Tauri 后端 db.rs::init 的迁移一致）。
-    即使 TaskBoard App 尚未启动过，MCP Server 也能直接读写既有数据库。"""
+    即使 TaskBoard App 尚未启动过，MCP Server 也能直接读写既有数据库。
+    """
     for col_sql in (
         "ALTER TABLE tasks ADD COLUMN branch TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE tasks ADD COLUMN handoff TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN project_status TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN candidate_done INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN account_id INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN work_branch TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN author TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN comments_count INTEGER NOT NULL DEFAULT 0",
     ):
         try:
             c.execute(col_sql)
@@ -950,7 +957,7 @@ def handle(msg):
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "taskboard", "version": "0.3.47"},
+                "serverInfo": {"name": "taskboard", "version": "0.6.0"},
             },
         }
 

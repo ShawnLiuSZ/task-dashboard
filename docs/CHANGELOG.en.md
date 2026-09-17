@@ -8,6 +8,16 @@
   - **How**: a secondary "I've installed it — restart app" button was added to the manual-download branch of the `available` phase, reusing the existing `api.restartApp()` (Tauri 2 `app.restart()`). The label makes the "install first, then restart" ordering explicit. Pure frontend + i18n change — zero Rust / schema changes.
   - **Verification**: `tsc --noEmit` 0 errors, `npm test` 136 passed, `i18n:check` 350 keys per locale.
 
+- **Unreleased — Codebase-wide hidden-bug batch fix**
+
+  - **Python MCP `serverInfo.version` hard-coded 7 minor versions stale**: `mcp_server/server.py:953` returned `"version": "0.3.47"` (actual app is 0.6.0), diverging from Rust's `mcp.rs` which uses `env!("CARGO_PKG_VERSION")`. Agents reading `initialize.serverInfo.version` get a misleading capability signal. Updated to `"0.6.0"`.
+  - **Python MCP `ensure_schema` only added 2 columns, missing 6**: `server.py:139` only ALTERed `branch` / `handoff`, but `SELECT_COLS` references `project_status` / `candidate_done` / `account_id` / `work_branch` / `author` / `comments_count`. Against a partially-migrated DB this raised `no such column` hard failures. All 6 columns now added.
+  - **Device-login poll loop never cancelled on unmount**: `AccountsPanel.tsx`'s `while` loop was only cancellable via UI actions, not on unmount — it kept calling `device_login_poll` and `setState` on an unmounted component (network leak every few seconds). Added a `useEffect` cleanup that increments `oauthRunRef`.
+  - **AgentPanel read stale `targetDir`**: `refreshHooksStatus`'s `useCallback` deps were missing `targetDir`, so after typing a path, refresh still sent `target_dir=null` → backend error "target directory is empty". Added to deps.
+  - **Hooks auto-refresh missing empty-target guard + omitted `hooksBusy`**: switching to project scope without typing a path triggered a refresh → error banner; changing scope mid-operation never re-refreshed. Added guard and deps.
+  - **`handleSwitchView` read stale `filterRef`**: after `await loadSettings()`, the passive effect hadn't refreshed `filterRef` yet, so `load()` queried with the old `accountFilter`. Changed to pass `accountId` explicitly (same fix as `handleSwitchAccount`).
+  - **`onUpdateProgress` listener leaked if unmounted before `listen()` resolved**: AboutPanel's `listen()` Promise hadn't resolved when the modal closed → listener never unregistered, kept firing `setState`. Added `cancelled` flag (same pattern as App.tsx).
+
 - **v0.6.0 (2026-09-17) — Fix Rust test random disk I/O error (CI flake) (#266)**
 
   - **#266 Test temp-db naming was not isolated, causing intermittent CI failures**: the `mem_conn()` test helper named its temp DB only by `process::id()` and `remove_file`d it twice per call. Since Rust tests run in parallel within one process, all callers shared the same file and unlinked each other's open DB, so initializing the schema randomly hit `disk I/O error` (green on rerun). `sync.rs:843`'s fully fixed name `taskboard_headless_test.db` was the same class of hazard. See [docs/issue-266-test-flake.md](./issue-266-test-flake.md).
