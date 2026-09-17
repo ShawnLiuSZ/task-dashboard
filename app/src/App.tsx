@@ -44,6 +44,10 @@ function BoardApp() {
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [lastWarning, setLastWarning] = useState<string | null>(null);
+  // #265：窗口宽度 < 900px 时侧边栏自动收起为纯图标模式（响应式，不持久化）。
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    typeof window !== 'undefined' ? window.innerWidth < 900 : false,
+  );
   // #258：部分失败 warning 与成功结果互斥展示（琥珀色 warn vs 绿色 ok）。
   // #178：上次同步中新变、但被当前筛选藏住的任务数（>0 时给提示+一键清除）。
   const [hiddenAfterSync, setHiddenAfterSync] = useState(0);
@@ -67,6 +71,14 @@ function BoardApp() {
     }, 4000);
     return () => clearTimeout(t);
   }, [lastResult, lastWarning]);
+
+  // #265：监听窗口尺寸变化，窗口 < 900px 时自动收起侧边栏为纯图标模式。
+  // 状态值与上次相同（同为 false / true）时 setState 为 no-op，不会触发多余重渲染，无需手抖防抖。
+  useEffect(() => {
+    const onResize = () => setSidebarCollapsed(window.innerWidth < 900);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   // #258：同步结果分级展示——warning 非空（部分账号/数据源失败）走琥珀色 warn
   // banner，不再混进绿色成功 banner；两者互斥展示。
@@ -458,6 +470,7 @@ function BoardApp() {
           accounts={settings?.accounts ?? []}
           activeAccountId={settings?.activeAccountId ?? null}
           nav={nav}
+          collapsed={sidebarCollapsed}
           onNavigate={setNav}
           onSwitchAccount={(id) => void handleSwitchAccount(id)}
           onAddAccount={() => setNav('accounts')}

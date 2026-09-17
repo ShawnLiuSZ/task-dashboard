@@ -53,3 +53,24 @@ describe('同步日志表格横向滚动', () => {
     expect(panelRaw.match(/sync-logs-table-wrap/g) ?? []).toHaveLength(2);
   });
 });
+
+/**
+ * 侧边栏窄窗收起（#265）回归测试。
+ *
+ * 背景：窗口宽度 < 900px 时侧边栏应自动收起为纯图标模式（`.sidebar.collapsed`）。
+ * 该行为纯靠 CSS 表达（隐藏标签 / 分组标题 / 空态 + 收窄宽度），vitest 无布局引擎，
+ * 故沿用 `?raw` 静态断言，与同步日志表格横向滚动测试同一思路。
+ */
+describe('侧边栏窄窗收起 #265', () => {
+  it('收起态收窄到纯图标宽度（约 56px），main-content 仍 flex:1 占满', () => {
+    const d = decls('.sidebar.collapsed');
+    expect(d).toMatch(/flex-basis\s*:\s*56px/);
+    expect(d).toMatch(/width\s*:\s*56px/);
+  });
+
+  it('收起态隐藏文字标签 / 分组标题 / 空态，仅保留图标', () => {
+    expect(decls('.sidebar.collapsed .sidebar-item-label')).toMatch(/display\s*:\s*none/);
+    expect(decls('.sidebar.collapsed .sidebar-group-title')).toMatch(/display\s*:\s*none/);
+    expect(decls('.sidebar.collapsed .sidebar-empty')).toMatch(/display\s*:\s*none/);
+  });
+});

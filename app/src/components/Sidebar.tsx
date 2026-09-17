@@ -9,6 +9,8 @@ interface Props {
   activeAccountId: number | null;
   /** 当前视图：board 时高亮激活账号项，其余高亮对应导航项。 */
   nav: NavKey;
+  /** #265：窗口过窄（< 900px）时纯图标收起态，由 App 按窗口宽度自动驱动。 */
+  collapsed?: boolean;
   onNavigate: (nav: NavKey) => void;
   onSwitchAccount: (id: number) => void;
   onAddAccount: () => void;
@@ -83,6 +85,7 @@ export default function Sidebar({
   accounts,
   activeAccountId,
   nav,
+  collapsed = false,
   onNavigate,
   onSwitchAccount,
   onAddAccount,
@@ -91,7 +94,7 @@ export default function Sidebar({
   const t = useT();
 
   return (
-    <nav className="sidebar" aria-label={t('sidebar.title')}>
+    <nav className={`sidebar${collapsed ? ' collapsed' : ''}`} aria-label={t('sidebar.title')}>
       <div className="sidebar-group">
         <NavItem
           icon={ICON.notes}
