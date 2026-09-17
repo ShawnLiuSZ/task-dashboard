@@ -828,7 +828,8 @@ mod tests {
             std::process::id(),
             n
         ));
-        let _ = std::fs::remove_file(&path);
+        // #266：路径已按 pid+seq 唯一化，无需预删；连接存活期也不删（删除打开中的 SQLite
+        // 在 Windows 会 sharing violation，在 Unix 会留孤儿 -wal/-shm）。与 mem_conn() 同一约定。
         let conn = db::open_db(&path).expect("open_db 测试库");
         // 两个真实账号（PAT 非空）。
         let _ = db::insert_account(&conn, "A", "a", "", "pa").unwrap();
@@ -843,8 +844,6 @@ mod tests {
             2,
             "view_mode=single 时仍应同步全部账号（#262 核心修复点）"
         );
-
-        let _ = std::fs::remove_file(&path);
     }
 
     /// 头less 全量同步验证：直接打开生产库（与应用共用同一 SQLite 文件），

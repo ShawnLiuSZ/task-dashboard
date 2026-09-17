@@ -2334,6 +2334,7 @@ mod tests {
         replace_project_items(&conn, 1, "PVT_big", &[]).unwrap();
         let t2 = resolve_project_write_target(&conn, 1, "r#1").unwrap();
         assert_eq!(t2.project_github_id, "PVT_small");
+        drop(conn);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -2408,6 +2409,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(label, "low", "应保留最早 id 的记录");
+        drop(conn);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -2542,6 +2544,7 @@ mod tests {
             delete_account(&conn, a).is_err(),
             "多账号时默认账号不可删除"
         );
+        drop(conn);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -2594,6 +2597,7 @@ mod tests {
         assert!(second.ok);
         assert_eq!(second.status, 200);
         assert_eq!(second.target, "/repos/a/b/issues");
+        drop(conn);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -2604,6 +2608,7 @@ mod tests {
         let conn = open_db(&path).unwrap();
         assert!(list_api_logs(&conn, 50).unwrap().is_empty());
         assert_eq!(clear_api_logs(&conn).unwrap(), 0);
+        drop(conn);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -2627,6 +2632,7 @@ mod tests {
         let removed = prune_api_logs(&conn, 10_000_000, 0).unwrap();
         assert_eq!(removed, 3, "全部过期应被清掉");
         assert_eq!(clear_api_logs(&conn).unwrap(), 0);
+        drop(conn);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }
