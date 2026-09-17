@@ -6,20 +6,21 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **未发布（Unreleased）— 修复 Rust 测试随机 disk I/O error（#266）**
+- **v0.6.0（2026-09-17）— 修复 Rust 测试随机 disk I/O error（#266）**
 
   - **#266 测试临时库命名未隔离导致 CI 偶发失败**：`commands.rs` 的测试辅助 `mem_conn()` 把临时库只按 `process::id()` 命名并每次 `remove_file` 两次，Rust 测试同进程内并行执行时所有调用共用同一文件、互相 unlink 对方正在使用的库，初始化 schema 时随机撞 `disk I/O error`（重跑即绿）。`sync.rs:843` 的 `taskboard_headless_test.db` 也是完全固定名，属同一类隐患。详见 [docs/issue-266-test-flake.md](./issue-266-test-flake.md)。
   - **做法**：`mem_conn()` 临时库路径加**每调用递增的 `AtomicUsize` 序号**（`{pid}_{SEQ}`），保证每个连接独享一个文件；连接存活期不再 `remove_file`。`sync.rs` 固定名一并改为带 pid。新增防回归断言 `mem_conn_returns_unique_paths_per_call`（两次调用路径必须不同）。纯测试辅助改动，不涉及任何产品代码 / 公共 API / schema。
   - **验证**：`cargo test --lib -- --test-threads=16` → 102 passed / 0 failed / 3 ignored；连续 4 次 `cargo test --lib` 全绿（含新增断言）。CI `Rust Tests` 连续多次全绿。
+  - **追加清理**：`sync.rs` 的 `sync_target_accounts` 测试与 `db.rs` 6 个测试在连接存活期仍调用 `remove_file` / `remove_dir_all`（#266 修 `mem_conn()` 时漏改的同类反模式），本次发版一并清理——统一 `drop(conn)` 后再清理，Windows 下不再 sharing violation 静默失败、Unix 下不再留孤儿 `-wal`/`-shm`。
 
-- **未发布（Unreleased）— 多账号同步修复（#262）**
+- **v0.6.0（2026-09-17）— 多账号同步修复（#262）**
 
   - **#262 多账号同步失效：同步恒覆盖全部账号**：配置 ≥2 个 GitHub 账号后，立即 / 定时 / 启动 / 托盘四条同步路径每轮都只同步激活账号、其余账号永不同步（本机 `sync_logs` 历史从未有一轮覆盖 2 个账号）。根因是同步目标集由 `meta.view_mode` 决定，而 `view_mode` 恒为默认值 `single`——其唯一写入入口（topbar 的 `<select>`）已被 `597840b` 删除，后端 `set_view_mode` / `api.setViewMode` / i18n key 全部残留但无调用方（「有实现、无入口」）。详见 [docs/issue-262-multi-account-sync.md](./issue-262-multi-account-sync.md)。
   - **做法**：采用方案 A——**同步范围与视图模式解耦**，同步不再受 `view_mode` 限制，恒覆盖全部已配置账号（多账号用户核心诉求是「数据都要进本地库」）；抽出 `sync_target_accounts(conn)` 返回全部账号便于回归测试。`view_mode` 仅影响前端展示（单账号 / 聚合全部），并**撤回 `597840b` 的 UI 部分**在 topbar 重新接回「单账号 / 全部账号」切换，消除死代码（`set_view_mode` 的 `#[allow(dead_code)]` 误标注）与死 i18n key。附带修复：账号遍历处 `get_account_pat(...)?` 改为 `match` + 记失败 + `continue`，单账号读 PAT 失败不再中止整轮；`SyncResult` 新增 `accountsSynced` 字段，UI banner 在 ≥2 账号时展示「覆盖 N 个账号」。
   - **无 schema 变更**：`meta.view_mode` / `active_account_id` 继续存在并被消费，仅不再参与同步目标选择；`SyncResult` 为进程内返回结构。
   - **验证**：新增 Rust 回归测试 `sync_target_accounts_covers_all_accounts_regardless_of_view_mode`（写入 `view_mode=single` + 2 账号仍断言返回 2 个目标）；全套 `cargo test --lib` 102 passed、`tsc --noEmit` 0 error、`npm test` 13 文件 136 例、`i18n:check` 中英各 349 key、`prettier --check` ✅、`npm run lint` 18 warning（未超 `--max-warnings 20`）、`check-doc-links.py` ✅。
 
-- **未发布（Unreleased）— Agent 接入面板：设备扫描（#263）**
+- **v0.6.0（2026-09-17）— Agent 接入面板：设备扫描（#263）**
 
   - **#263 刷新升级为设备扫描**：刷新按钮（文案改为「扫描设备」）现在一次点击就探出本机**已安装**与**已卸载**的 agent，直接回答「这台机器上到底装了哪些 agent」。原先 `host_present` 只看配置根目录是否存在（`hooks.rs` 的 `root.is_dir()`），于是 ① 装了 CLI 但从未运行（没有配置目录）的 agent 被误判「未安装」——本机实测 `codex` 在 PATH 上却没有 `~/.codex`；② 后端只有 5 个 `AgentSpec`，其余 34 个 agent 永远落在「手动配置」组，看不出本机装没装；③ 卸载 CLI / 删掉 `.app` 之后只要配置目录残留、或接入文件还在，就完全没有提示。详见 [docs/issue-263-agent-device-scan.md](./issue-263-agent-device-scan.md)。
   - **做法**：三类信号合并探测——PATH 与常见安装目录下的可执行文件、`$HOME` 配置目录、macOS `/Applications` 与 `~/Applications` 的 `.app` 包；按最强信号派生 `cli` / `app` / `config-only` / `none`。新增 `scan_agent_hosts` command 返回全量 39 项探测结果，并与上次快照（`meta.agent_scan_snapshot`，本次唯一写入目标）对比得出「新发现安装 / 疑似已卸载」，首次扫描不报变更（否则首刷会把全部已装 agent 报成新增）。前端把分组规则抽成纯模块 `src/agent-groups.ts`，新增「疑似已卸载」分组（红点，行内给出残留路径 + 复用一键卸载清理）与每行设备徽标（本机已安装 / 已安装应用 / 仅残留配置 / 未检测到；未扫描时不渲染，避免整屏噪音）。`status_one` 新增可选探测参数：正式路径下「装了没跑过的 CLI」归入**可接入**而不再误判「未安装」，单测传 `None` 保持纯配置目录语义（否则断言会依赖开发机 PATH）。
@@ -31,7 +32,7 @@
   - **做法**：纯响应式、不持久化——`App.tsx` 用 `window.innerWidth < 900` 作初始态并监听 `resize` 驱动 `sidebarCollapsed` 状态；状态值与上次相同（同为 false / true）时 `setState` 为 no-op，不触发多余重渲染；`Sidebar` 据此在 `nav` 上加 `.collapsed` 类。main-content 仍 `flex: 1` 自动占满释放出的空间，主区无需改动。纯前端，SQLite / Rust 零改动。
   - **验证**：`tsc --noEmit` 0 error、`npm run build` ✅、`npm test` 13 文件 136 例（新增 `styles.test.ts` 侧边栏收起静态回归 2 例）、`i18n:check` 中英各 348 key（无新增 key）、`prettier --check` ✅、`check-doc-links.py` ✅。真机渲染复核待起 dev server 确认（沙箱无头 Chrome 不可用）。
 
-- **未发布（Unreleased）— 左右分栏布局 + Agent 接入面板（#259）**
+- **v0.6.0（2026-09-17）— 左右分栏布局 + Agent 接入面板（#259）**
 
   - **#259 左右分栏重构**：新增左侧固定 Sidebar（200px）承载全部功能入口——记事本 / 账号列表（点选切换 + 添加账号）/ 设置 / Agent 接入 / 同步日志 / 账号登录 / 底部关于。顶栏从「账号下拉 + 4 按钮 + 同步」精简为「品牌 + 总条数 + 上次同步 + 立即同步」。设置 / 账号 / 同步日志由 Modal 改为**主区内嵌全高页面**（面板组件零侵入，靠 `.panel-page` 容器 + CSS 覆盖）；NotesPanel 改为主区「页面」，选中才渲染。详见 [docs/issue-259-sidebar-nav.md](./issue-259-sidebar-nav.md)。
   - **做法**：`activeModal` 状态废弃，改 `nav`（`notes | board | settings | agents | synclogs | accounts`）+ 独立 `showAbout`（关于保留 Modal）；账号切换复用 `handleSwitchAccount` 并切回看板；新增 `Sidebar.tsx`、`AgentPanel.tsx` 两个组件；`main-layout` CSS 废弃由 `app-shell` + `main-content` 替代。纯前端改动，SQLite / Rust 零改动。
