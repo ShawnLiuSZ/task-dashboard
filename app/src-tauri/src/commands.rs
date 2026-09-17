@@ -1063,7 +1063,7 @@ pub fn set_active_account(state: State<'_, AppState>, id: i64) -> Result<(), Str
 }
 
 /// 设置视图模式：'single' / 'all'。
-#[allow(dead_code)]
+/// 仅影响前端展示范围（单账号 / 聚合全部账号），**不**决定同步范围（#262 起同步恒覆盖全部账号）。
 #[tauri::command]
 pub fn set_view_mode(state: State<'_, AppState>, mode: String) -> Result<(), String> {
     if mode != "single" && mode != "all" {
@@ -1728,21 +1728,94 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// #263：扫描本机已安装 / 已卸载的 agent。
+///
+/// 只读本地文件系统（PATH + 常见安装目录、`$HOME` 配置目录、macOS 应用包），
+/// 与上次快照对比得出「新发现安装」与「疑似已卸载」；快照存 `meta.agent_scan_snapshot`，
+/// 是本命令**唯一**的写入目标（不碰任何 agent 配置文件，不联网）。
+#[tauri::command]
+pub fn scan_agent_hosts(state: State<'_, AppState>) -> Result<crate::hooks::AgentScanResult, String> {
+    let agents = crate::hooks::probe_agent_hosts()?;
+    let now = crate::sync::now_secs();
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let raw = crate::db::get_setting(&conn, "agent_scan_snapshot");
+    let previous: Option<crate::hooks::ScanSnapshot> = if raw.trim().is_empty() {
+        None
+    } else {
+        // 快照损坏（手工改库 / 版本降级）不应让扫描整体失败：按首次扫描处理。
+        match serde_json::from_str(&raw) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                crate::tlog!("[scan] 快照解析失败，按首次扫描处理: {}", e);
+                None
+            }
+        }
+    };
+
+    let (newly_installed, newly_removed) = crate::hooks::diff_scan(previous.as_ref(), &agents);
+    let snapshot = crate::hooks::snapshot_of(now, &agents);
+    crate::db::set_setting(
+        &conn,
+        "agent_scan_snapshot",
+        &serde_json::to_string(&snapshot).map_err(|e| format!("快照序列化失败: {e}"))?,
+    )?;
+
+    let present = agents.iter().filter(|a| a.present).count();
+    crate::tlog!(
+        "[scan] 设备扫描完成：{} 个已安装 / {} 个候选，新发现 {}，疑似已卸载 {}",
+        present,
+        agents.len(),
+        newly_installed.len(),
+        newly_removed.len()
+    );
+
+    Ok(crate::hooks::AgentScanResult {
+        scanned_at: now,
+        previous_scanned_at: previous.as_ref().map(|p| p.scanned_at),
+        has_previous: previous.is_some(),
+        agents,
+        newly_installed,
+        newly_removed,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use rusqlite::Connection;
 
     /// 打开内存库临时文件的连接，并初始化 schema。
+    ///
+    /// #266：临时库路径必须**每次调用都唯一**——旧写法只按 `process::id()` 命名，
+    /// Rust 测试同进程内并行执行时所有 `mem_conn()` 调用共用同一文件，且每次都会
+    /// `remove_file` 两次，于是并行时 A 测试把 B 测试正在使用的库 unlink/重建，
+    /// B 初始化 schema 时撞上 `disk I/O error`（重跑即绿，纯竞争窗口问题）。
+    /// 改为「pid + 每调用递增序号」保证每个连接独享一个文件，且**连接存活期间绝不删除**。
     fn mem_conn() -> Connection {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SEQ: AtomicUsize = AtomicUsize::new(0);
+        let n = SEQ.fetch_add(1, Ordering::SeqCst);
         let path = std::env::temp_dir().join(format!(
-            "taskboard_cmds_test_{}.db",
-            std::process::id()
+            "taskboard_cmds_test_{}_{}.db",
+            std::process::id(),
+            n
         ));
-        let _ = std::fs::remove_file(&path);
+        // 注意：不再在连接存活期 remove_file。并行测试各自占用不同文件，无互删风险；
+        // 残留文件由 OS 在临时目录回收，不影响正确性。
         let conn = crate::db::open_db(&path).expect("打开测试库");
-        // 测试进程结束后清理
-        let _ = std::fs::remove_file(&path);
         conn
+    }
+
+    /// #266 防回归：两次 `mem_conn()` 必须返回不同路径（连接存活期互不干扰）。
+    /// 旧写法按 pid 命名 → 并行测试共享同一文件并互删，触发随机 `disk I/O error`。
+    #[test]
+    fn mem_conn_returns_unique_paths_per_call() {
+        let a = mem_conn();
+        let b = mem_conn();
+        // rusqlite::Connection::path() 返回 Option<&str>。
+        let pa = a.path().expect("a 应有路径").to_string();
+        let pb = b.path().expect("b 应有路径").to_string();
+        assert_ne!(pa, pb, "两次 mem_conn() 必须返回不同路径，否则并行测试会互删库文件");
     }
 
     // 导出文件名的时间戳：epoch 0、近期典型值。

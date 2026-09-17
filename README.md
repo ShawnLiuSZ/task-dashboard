@@ -173,7 +173,7 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — 设计要点（多源拉取、归属三分、四态维护、PR 关联）与 GitHub Actions 在线打包说明
 
-- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.5.1）
+- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.6.0）
 
 - [`docs/v0.3.15-pat-auth.md`](./docs/v0.3.15-pat-auth.md) — v0.3.15 PAT 认证与 visual polish 设计文档（gh 替换、卡片配色、多账号规划）
 
@@ -182,6 +182,16 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 - [`docs/issue-181-auto-refresh.md`](./docs/issue-181-auto-refresh.md) — 外部写入（MCP）后 App 任务界面自动刷新：聚焦/轮询/指纹跳过 + `tasks-changed` 事件
 
 - [`docs/release-backmerge-policy.md`](./docs/release-backmerge-policy.md) — **发布回合策略**：release 合入 `main` 后必须把 `main` 回合 `develop`，避免版本号与 CHANGELOG 断档
+
+- [`docs/issue-256-update-check.md`](./docs/issue-256-update-check.md) — **检查更新双通道并发**：updater 通道无超时导致的串行慢 + 静默 fallback；并发 + 单路 30s 封顶，手动下载时展示失败原因
+
+- [`docs/issue-259-sidebar-nav.md`](./docs/issue-259-sidebar-nav.md) — **左右分栏布局**：左侧固定 Sidebar（记事本 / 账号点选 / 设置 / Agent 接入 / 同步日志 / 账号登录 / 关于）承载全部入口，顶栏精简；设置 / 账号 / 同步日志由 Modal 改为主区内嵌全高页面，Agent 接入面板展示 MCP 配置与看板工具说明
+
+- [`docs/issue-263-agent-device-scan.md`](./docs/issue-263-agent-device-scan.md) — **Agent 设备扫描**：刷新升级为「扫本机已安装 / 已卸载的 agent」——PATH + 配置目录 + macOS 应用包三类信号 + 快照对比判卸载，含「疑似已卸载」分组与防漂移测试
+- [`docs/issue-265-sidebar-collapse.md`](./docs/issue-265-sidebar-collapse.md) — **侧边栏窄窗收起**：窗口宽度 < 900px 时 Sidebar 自动收起为纯图标模式（~56px），隐藏文字标签 / 分组标题，账号靠 `title` 提示辨识；纯响应式、不持久化
+
+- [`docs/issue-266-test-flake.md`](./docs/issue-266-test-flake.md) — **修复 Rust 测试随机 disk I/O error**：`mem_conn()` 临时库路径加每调用递增序号、连接存活期不再删文件，消除并行测试互相 unlink 的 CI flake；新增防回归断言
+- [`docs/issue-262-multi-account-sync.md`](./docs/issue-262-multi-account-sync.md) — **多账号同步修复**：同步范围与视图模式解耦，恒覆盖全部账号（不再受 `view_mode` 限制）；恢复 topbar 显示模式切换，消除死代码 / 死 key；`SyncResult` 新增 `accountsSynced` 可观测性字段
 
 - [`docs/issue-235-in-app-api-log.md`](./docs/issue-235-in-app-api-log.md) — **应用内 API 调用明细**：`api_logs` 新表 + 可选 sink 收集器，同步/认领/状态写回的请求与返回参数可在日志面板展开查看（承接 #228 的 stderr 埋点）
 
@@ -201,5 +211,5 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/issue-119-expand-release-matrix.md`](./docs/issue-119-expand-release-matrix.md) — **扩展 Release 打包矩阵**：Linux arm64、rpm、Windows msi；并记录 `zip` 作为 Tauri 2 bundle 类型**被当日回滚**的教训
 
-> 版本 v0.5.1 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-15
+> 版本 v0.6.0 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-17
 

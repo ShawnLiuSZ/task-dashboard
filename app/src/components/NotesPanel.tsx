@@ -65,27 +65,9 @@ const ICON = {
   upload: 'M12 15V3 M7 8l5-5 5 5 M5 21h14',
 };
 
-/** 收起状态持久化键（本地偏好，不入数据库）。 */
-const COLLAPSED_KEY = 'notes.collapsed';
-
-/** 宽度百分比持久化键（本地偏好，不入数据库）。范围 25–50，默认 25。 */
-const WIDTH_KEY = 'notes.widthPct';
-const MIN_WIDTH_PCT = 25;
-const MAX_WIDTH_PCT = 50;
-const DEFAULT_WIDTH_PCT = 25;
-
-/** 钳制到 [25, 50]；非法输入回默认。 */
-export function clampNotesWidthPct(v: number): number {
-  if (!Number.isFinite(v)) return DEFAULT_WIDTH_PCT;
-  return Math.min(MAX_WIDTH_PCT, Math.max(MIN_WIDTH_PCT, v));
-}
-
-/** 读存档宽度（缺失/非法 → 默认 25）。 */
-export function readNotesWidthPct(): number {
-  const raw = localStorage.getItem(WIDTH_KEY);
-  if (raw === null || raw.trim() === '') return DEFAULT_WIDTH_PCT;
-  return clampNotesWidthPct(Number(raw));
-}
+/** 创建列（左栏）收起状态持久化键（本地偏好，不入数据库）。
+ *  #259：记事本已是主区整页，收起粒度只到「创建列」，不再有整面板收起。 */
+const ADD_COL_COLLAPSED_KEY = 'notes.addColCollapsed';
 
 /* ---------- 时间格式化（v0.3.49 #148：文案走 i18n） ---------- */
 
@@ -179,26 +161,16 @@ export default function NotesPanel() {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  // #202 丝滑拖拽：拖动中只做 DOM 直写 + rAF 合并，不进 React state；
-  // 松手才 setWidthPct（一次渲染 + 一次持久化）。pctRef 为拖动起点快照。
-  const panelRef = useRef<HTMLElement | null>(null);
-  const pctRef = useRef<number>(DEFAULT_WIDTH_PCT);
-  // 收起后列表内容完全不渲染（避免旁人看到），状态记在本地，重启后保持。
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSED_KEY) === '1');
-  // #202：展开态宽度（占主区百分比），拖拽/键盘调整后持久化。
-  const [widthPct, setWidthPct] = useState(readNotesWidthPct);
 
-  const draftRef = useAutoSize(draft);
+  // 添加列（左栏）收起状态——**只影响创建列，不影响右侧四列**（#259）。
+  const [addColCollapsed, setAddColCollapsed] = useState(
+    () => localStorage.getItem(ADD_COL_COLLAPSED_KEY) === '1',
+  );
+  useEffect(() => {
+    localStorage.setItem(ADD_COL_COLLAPSED_KEY, addColCollapsed ? '1' : '0');
+  }, [addColCollapsed]);
+
   const editRef = useAutoSize(editDraft);
-
-  useEffect(() => {
-    localStorage.setItem(COLLAPSED_KEY, collapsed ? '1' : '0');
-  }, [collapsed]);
-
-  useEffect(() => {
-    localStorage.setItem(WIDTH_KEY, String(widthPct));
-    pctRef.current = widthPct;
-  }, [widthPct]);
 
   const loadNotes = useCallback(async () => {
     setLoading(true);
@@ -216,6 +188,147 @@ export default function NotesPanel() {
   useEffect(() => {
     void loadNotes();
   }, [loadNotes]);
+
+  // 排序：优先级 urgent(0) > high(1) > medium(2) > low(3)；同优先级按倒序创建时间。
+  const sortedNotes = useMemo(() => {
+    const prio: Record<NoteLabel, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
+    return [...notes].sort((a, b) => {
+      const pd = prio[a.label] - prio[b.label];
+      return pd !== 0 ? pd : b.createdAt - a.createdAt;
+    });
+  }, [notes]);
+
+  // 按优先级分列（右侧横向 card 列用），列内按创建时间倒序。
+  const priorityColumns = useMemo(() => {
+    const prioOrder: NoteLabel[] = ['urgent', 'high', 'medium', 'low'];
+    const byPrio = new Map<NoteLabel, Note[]>();
+    for (const n of sortedNotes) {
+      if (!byPrio.has(n.label)) byPrio.set(n.label, []);
+      byPrio.get(n.label)!.push(n);
+    }
+    return prioOrder.map((p) => ({
+      label: p,
+      items: byPrio.get(p) ?? [],
+      opt: labelOf(labels, p),
+    }));
+  }, [sortedNotes, labels]);
+
+  const renderNoteCard = (note: Note) => {
+    const opt = labelOf(labels, note.label);
+    const accent = { '--note-accent': opt.color } as CSSProperties;
+    if (confirmId === note.id) {
+      return (
+        <article key={note.id} className="note-card confirming" style={accent}>
+          <p className="note-confirm-text">{t('notes.deleteConfirm')}</p>
+          <div className="note-confirm-actions">
+            <button
+              type="button"
+              className="btn small danger"
+              onClick={() => void handleDelete(note.id)}
+            >
+              {t('btn.delete')}
+            </button>
+            <button type="button" className="btn small ghost" onClick={() => setConfirmId(null)}>
+              {t('btn.cancel')}
+            </button>
+          </div>
+        </article>
+      );
+    }
+    if (editingId === note.id) {
+      return (
+        <article key={note.id} className="note-card editing" style={accent}>
+          <textarea
+            ref={editRef}
+            className="note-textarea"
+            value={editDraft}
+            rows={1}
+            autoFocus
+            onChange={(e) => setEditDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                setEditingId(null);
+                setEditDraft('');
+              }
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                void handleSave();
+              }
+            }}
+          />
+          <div className="note-edit-foot">
+            <span className="note-hint">{t('notes.editHint')}</span>
+            <div className="note-edit-actions">
+              <button
+                type="button"
+                className="btn small ghost"
+                onClick={() => {
+                  setEditingId(null);
+                  setEditDraft('');
+                }}
+                disabled={saving}
+              >
+                {t('btn.cancel')}
+              </button>
+              <button
+                type="button"
+                className="btn small primary"
+                onClick={() => void handleSave()}
+                disabled={saving || !editDraft.trim()}
+              >
+                {saving ? t('notes.saving') : t('btn.save')}
+              </button>
+            </div>
+          </div>
+        </article>
+      );
+    }
+    return (
+      <article key={note.id} className="note-card" style={accent}>
+        <p className="note-content">{note.content}</p>
+        <footer className="note-foot">
+          <button
+            type="button"
+            className="note-tag"
+            title={t('notes.toggleTag')}
+            onClick={() => {
+              const idx = labels.findIndex((l) => l.value === note.label);
+              void handleLabelChange(note.id, labels[(idx + 1) % labels.length].value);
+            }}
+          >
+            <span className="note-dot" />
+            {opt.label}
+          </button>
+          <time className="note-time" title={fullTime(note.createdAt)}>
+            {relTime(note.createdAt, t)}
+            {note.updatedAt > note.createdAt && t('notes.editedSuffix')}
+          </time>
+          <div className="note-tools">
+            <button
+              type="button"
+              className="note-tool"
+              title={t('notes.editTitle')}
+              onClick={() => {
+                setEditingId(note.id);
+                setEditDraft(note.content);
+              }}
+            >
+              <Icon d={ICON.pencil} size={13} />
+            </button>
+            <button
+              type="button"
+              className="note-tool danger"
+              title={t('notes.deleteTitle')}
+              onClick={() => setConfirmId(note.id)}
+            >
+              <Icon d={ICON.trash} size={13} />
+            </button>
+          </div>
+        </footer>
+      </article>
+    );
+  };
 
   const handleAdd = useCallback(async () => {
     const content = draft.trim();
@@ -336,331 +449,150 @@ export default function NotesPanel() {
     [busy, loadNotes, t],
   );
 
-  // 收起态：只留一条竖向导轨，列表内容完全不渲染。
-  if (collapsed) {
-    return (
-      <aside className="notes-panel collapsed">
-        <button
-          type="button"
-          className="notes-rail"
-          onClick={() => setCollapsed(false)}
-          title={t('notes.expandTitle')}
-        >
-          <Icon d={ICON.expand} size={14} />
-          <span className="notes-rail-text">{t('notes.title')}</span>
-          {notes.length > 0 && <span className="notes-rail-count">{notes.length}</span>}
-        </button>
-      </aside>
-    );
-  }
-
   return (
-    <aside
-      ref={panelRef}
-      className="notes-panel"
-      style={{ flex: `0 0 ${widthPct}%`, width: `${widthPct}%` }}
-    >
-      <header className="notes-head">
-        <span className="notes-head-icon">
-          <Icon d={ICON.notebook} size={15} />
-        </span>
-        <span className="notes-title">{t('notes.title')}</span>
-        <span className="notes-count">{notes.length}</span>
-        <div className="notes-tools">
-          <button
-            type="button"
-            className="note-tool"
-            title={t('notes.exportTitle')}
-            onClick={() => void handleExport()}
-            disabled={busy !== null}
-          >
-            <Icon d={ICON.download} size={13} />
-          </button>
-          <button
-            type="button"
-            className="note-tool"
-            title={t('notes.importTitle')}
-            onClick={() => fileInputRef.current?.click()}
-            disabled={busy !== null}
-          >
-            <Icon d={ICON.upload} size={13} />
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="application/json,.json"
-            style={{ display: 'none' }}
-            onChange={(e) => void handleImport(e.target.files?.[0] ?? null)}
-          />
-          <button
-            type="button"
-            className="note-tool"
-            title={t('notes.collapseTitle')}
-            onClick={() => setCollapsed(true)}
-          >
-            <Icon d={ICON.collapse} size={13} />
-          </button>
-        </div>
-      </header>
-
+    // #259：记事本是主区整页，宽度由 .notes-page 撑满 —— **不要再挂行内 flex/width**，
+    // 行内样式优先级高于样式表，曾把面板锁在 25% 宽（四列被压成竖条的根因）。
+    // 整行页头（记事本 + 导入/导出 + 收起）已移除：标题与侧边栏重复，导入/导出
+    // 挪进创建列顶部工具行，把纵向空间还给列。
+    <aside className="notes-panel">
       <div className="notes-body">
-        {notice && (
-          <div className="note-notice" role="status">
-            <span>{notice}</span>
-            <button
-              type="button"
-              className="note-tool"
-              title={t('notes.closeTitle')}
-              onClick={() => setNotice(null)}
-            >
-              <Icon d={ICON.close} size={12} />
-            </button>
-          </div>
-        )}
-        {error && (
-          <div className="note-error" role="alert">
-            <span>{error}</span>
-            <button
-              type="button"
-              className="note-tool"
-              title={t('notes.closeTitle')}
-              onClick={() => setError(null)}
-            >
-              <Icon d={ICON.close} size={12} />
-            </button>
+        {/* 左侧：创建列（仅 composer，textarea 撑满列高；不展示已添加的记事）。
+            收起时只换成一条窄导轨——右侧四列不受影响（#259）。 */}
+        {addColCollapsed ? (
+          <button
+            type="button"
+            className="notes-add-rail"
+            title={t('notes.expandAddCol')}
+            aria-expanded={false}
+            onClick={() => setAddColCollapsed(false)}
+          >
+            <Icon d={ICON.expand} size={13} />
+            <span className="notes-add-rail-text">{t('notes.title')}</span>
+            <Icon d={ICON.plus} size={12} />
+          </button>
+        ) : (
+          <div className="notes-add-col">
+            {/* 创建列顶部工具行：收起创建列（左）+ 导入/导出（右）。 */}
+            <div className="notes-add-col-tools">
+              <button
+                type="button"
+                className="note-tool"
+                title={t('notes.collapseAddCol')}
+                aria-expanded
+                onClick={() => setAddColCollapsed(true)}
+              >
+                <Icon d={ICON.collapse} size={13} />
+              </button>
+              <span className="notes-add-col-spacer" />
+              <button
+                type="button"
+                className="note-tool"
+                title={t('notes.exportTitle')}
+                onClick={() => void handleExport()}
+                disabled={busy !== null}
+              >
+                <Icon d={ICON.download} size={13} />
+              </button>
+              <button
+                type="button"
+                className="note-tool"
+                title={t('notes.importTitle')}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={busy !== null}
+              >
+                <Icon d={ICON.upload} size={13} />
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/json,.json"
+                style={{ display: 'none' }}
+                onChange={(e) => void handleImport(e.target.files?.[0] ?? null)}
+              />
+            </div>
+            {notice && (
+              <div className="note-notice" role="status">
+                <span>{notice}</span>
+                <button
+                  type="button"
+                  className="note-tool"
+                  title={t('notes.closeTitle')}
+                  onClick={() => setNotice(null)}
+                >
+                  <Icon d={ICON.close} size={12} />
+                </button>
+              </div>
+            )}
+            {error && (
+              <div className="note-error" role="alert">
+                <span>{error}</span>
+                <button
+                  type="button"
+                  className="note-tool"
+                  title={t('notes.closeTitle')}
+                  onClick={() => setError(null)}
+                >
+                  <Icon d={ICON.close} size={12} />
+                </button>
+              </div>
+            )}
+
+            <div className="note-composer note-composer-full">
+              <textarea
+                className="note-textarea note-textarea-full"
+                placeholder={t('notes.composer.placeholder')}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !adding && draft.trim()) {
+                    e.preventDefault();
+                    void handleAdd();
+                  }
+                }}
+              />
+              <div className="note-composer-foot">
+                <LabelPicker value={draftLabel} onChange={setDraftLabel} />
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={() => void handleAdd()}
+                  disabled={adding || !draft.trim()}
+                >
+                  {!adding && <Icon d={ICON.plus} size={13} />}
+                  {adding ? t('notes.adding') : t('notes.add')}
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
-        {/* 新建 */}
-        <div className="note-composer">
-          <textarea
-            ref={draftRef}
-            className="note-textarea"
-            placeholder={t('notes.composer.placeholder')}
-            value={draft}
-            rows={1}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !adding && draft.trim()) {
-                e.preventDefault();
-                void handleAdd();
-              }
-            }}
-          />
-          <div className="note-composer-foot">
-            <LabelPicker value={draftLabel} onChange={setDraftLabel} />
-            <button
-              type="button"
-              className="btn primary"
-              onClick={() => void handleAdd()}
-              disabled={adding || !draft.trim()}
-            >
-              {!adding && <Icon d={ICON.plus} size={13} />}
-              {adding ? t('notes.adding') : t('notes.add')}
-            </button>
-          </div>
-        </div>
-
-        {/* 列表 */}
-        <div className="notes-list">
+        {/* 右侧：固定四列（紧急 / 高 / 中 / 低），与看板列同构：等宽、全高、列内纵向滚动。 */}
+        <div className="notes-card-cols">
           {loading ? (
             <div className="notes-placeholder">{t('notes.loading')}</div>
-          ) : notes.length === 0 ? (
-            <div className="notes-empty">
-              <span className="notes-empty-icon">
-                <Icon d={ICON.notebook} size={22} />
-              </span>
-              <p>{t('notes.emptyTitle')}</p>
-              <span>{t('notes.emptySub')}</span>
-            </div>
           ) : (
-            notes.map((note) => {
-              const opt = labelOf(labels, note.label);
-              const accent = { '--note-accent': opt.color } as CSSProperties;
-
-              if (confirmId === note.id) {
-                return (
-                  <article key={note.id} className="note-card confirming" style={accent}>
-                    <p className="note-confirm-text">{t('notes.deleteConfirm')}</p>
-                    <div className="note-confirm-actions">
-                      <button
-                        type="button"
-                        className="btn small danger"
-                        onClick={() => void handleDelete(note.id)}
-                      >
-                        {t('btn.delete')}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn small ghost"
-                        onClick={() => setConfirmId(null)}
-                      >
-                        {t('btn.cancel')}
-                      </button>
-                    </div>
-                  </article>
-                );
-              }
-
-              if (editingId === note.id) {
-                return (
-                  <article key={note.id} className="note-card editing" style={accent}>
-                    <textarea
-                      ref={editRef}
-                      className="note-textarea"
-                      value={editDraft}
-                      rows={1}
-                      autoFocus
-                      onChange={(e) => setEditDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Escape') {
-                          e.preventDefault();
-                          setEditingId(null);
-                          setEditDraft('');
-                        }
-                        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                          e.preventDefault();
-                          void handleSave();
-                        }
-                      }}
-                    />
-                    <div className="note-edit-foot">
-                      <span className="note-hint">{t('notes.editHint')}</span>
-                      <div className="note-edit-actions">
-                        <button
-                          type="button"
-                          className="btn small ghost"
-                          onClick={() => {
-                            setEditingId(null);
-                            setEditDraft('');
-                          }}
-                          disabled={saving}
-                        >
-                          {t('btn.cancel')}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn small primary"
-                          onClick={() => void handleSave()}
-                          disabled={saving || !editDraft.trim()}
-                        >
-                          {saving ? t('notes.saving') : t('btn.save')}
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                );
-              }
-
-              return (
-                <article key={note.id} className="note-card" style={accent}>
-                  <p className="note-content">{note.content}</p>
-                  <footer className="note-foot">
-                    <button
-                      type="button"
-                      className="note-tag"
-                      title={t('notes.toggleTag')}
-                      onClick={() => {
-                        const idx = labels.findIndex((l) => l.value === note.label);
-                        const next = labels[(idx + 1) % labels.length];
-                        void handleLabelChange(note.id, next.value);
-                      }}
-                    >
-                      <span className="note-dot" />
-                      {opt.label}
-                    </button>
-                    <time className="note-time" title={fullTime(note.createdAt)}>
-                      {relTime(note.createdAt, t)}
-                      {note.updatedAt > note.createdAt && t('notes.editedSuffix')}
-                    </time>
-                    <div className="note-tools">
-                      <button
-                        type="button"
-                        className="note-tool"
-                        title={t('notes.editTitle')}
-                        onClick={() => {
-                          setEditingId(note.id);
-                          setEditDraft(note.content);
-                        }}
-                      >
-                        <Icon d={ICON.pencil} size={13} />
-                      </button>
-                      <button
-                        type="button"
-                        className="note-tool danger"
-                        title={t('notes.deleteTitle')}
-                        onClick={() => setConfirmId(note.id)}
-                      >
-                        <Icon d={ICON.trash} size={13} />
-                      </button>
-                    </div>
-                  </footer>
-                </article>
-              );
-            })
+            priorityColumns.map((col) => (
+              <div
+                key={col.label}
+                className={`note-col note-col--${col.label}`}
+                style={{ '--col-accent': col.opt.color } as CSSProperties}
+              >
+                <div className="note-col-head">
+                  <span className="note-col-dot" aria-hidden="true" />
+                  <span className="note-col-title">{col.opt.label}</span>
+                  <span className="note-col-count">{col.items.length}</span>
+                </div>
+                <div className="note-col-body">
+                  {col.items.length === 0 ? (
+                    <div className="note-col-empty">{t('notes.colEmpty')}</div>
+                  ) : (
+                    col.items.map(renderNoteCard)
+                  )}
+                </div>
+              </div>
+            ))
           )}
         </div>
-      </div>
-      {/* #202：宽度拖拽条（面板右缘；键盘左右箭头 ±1%）。 */}
-      <div
-        className="notes-resizer"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={t('notes.resizeTitle')}
-        aria-valuemin={MIN_WIDTH_PCT}
-        aria-valuemax={MAX_WIDTH_PCT}
-        aria-valuenow={Math.round(widthPct)}
-        tabIndex={0}
-        onMouseDown={(e) => {
-          e.preventDefault();
-          const panel = panelRef.current;
-          const parent = panel?.parentElement;
-          const handle = e.currentTarget;
-          if (!panel || !parent) return;
-          const startX = e.clientX;
-          const startPct = pctRef.current;
-          let latestX = startX;
-          let raf = 0;
-          const apply = () => {
-            raf = 0;
-            const w = parent.getBoundingClientRect().width;
-            if (w <= 0) return;
-            // 相对位移换算（只读一次起点，避免累积抖动）。
-            const pct = clampNotesWidthPct(startPct + ((latestX - startX) / w) * 100);
-            panel.style.flex = `0 0 ${pct}%`;
-            panel.style.width = `${pct}%`;
-            handle.setAttribute('aria-valuenow', String(Math.round(pct)));
-            pctRef.current = pct;
-          };
-          const move = (ev: MouseEvent) => {
-            latestX = ev.clientX;
-            if (!raf) raf = requestAnimationFrame(apply);
-          };
-          const up = () => {
-            window.removeEventListener('mousemove', move);
-            window.removeEventListener('mouseup', up);
-            if (raf) {
-              cancelAnimationFrame(raf);
-              raf = 0;
-              apply();
-            }
-            // 落点提交一次：触发单次渲染 + 持久化。
-            setWidthPct(pctRef.current);
-          };
-          window.addEventListener('mousemove', move);
-          window.addEventListener('mouseup', up);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'ArrowLeft') {
-            e.preventDefault();
-            setWidthPct((v) => clampNotesWidthPct(v - 1));
-          } else if (e.key === 'ArrowRight') {
-            e.preventDefault();
-            setWidthPct((v) => clampNotesWidthPct(v + 1));
-          }
-        }}
-      >
-        <span className="notes-resizer-grip" aria-hidden="true" />
       </div>
     </aside>
   );

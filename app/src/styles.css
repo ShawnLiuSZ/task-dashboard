@@ -103,6 +103,13 @@ body {
   flex: 0 0 auto;
 }
 
+/* #259：顶栏品牌名。 */
+.app-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
 /* 顶部栏按钮内联图标：默认与文字同排，窄窗口下隐藏文字仅留图标。 */
 .btn .btn-icon {
   flex: 0 0 auto;
@@ -205,6 +212,49 @@ body {
 }
 .hook-row-available {
   color: #0a5bd0;
+}
+/* #263：设备扫描 —— 「疑似已卸载」分组圆点（红：需要用户处理的接入残留）。 */
+.hook-group-dot-uninstalled {
+  background: #b3261e;
+}
+.hook-row-uninstalled {
+  color: #b3261e;
+}
+/* #263：行内设备安装徽标（本机已安装 / 已安装应用 / 仅残留配置 / 未检测到）。 */
+.agent-device {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.agent-device-cli,
+.agent-device-app {
+  border-color: #bfe3d7;
+  background: var(--teal-bg);
+  color: var(--teal-text);
+}
+.agent-device-config-only,
+.agent-device-suspected-removed {
+  border-color: #f0dcae;
+  background: var(--amber-bg);
+  color: var(--amber-text);
+}
+.agent-device-none {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-3);
+}
+/* #263：扫描摘要与「疑似已卸载」的残留路径提示。 */
+.agent-scan-summary {
+  margin-top: 6px;
+  line-height: 1.5;
+}
+.agent-scan-path {
+  color: var(--text-3);
+  word-break: break-all;
 }
 .banner.warn {
   background: #fff7e6;
@@ -491,7 +541,10 @@ body {
   gap: 8px;
 }
 
-.empty {
+/* 看板空列提示。⚠️ 必须限定在 .board 作用域内：裸 `.empty` 是全局类名，
+ * 会漏进记事本（note-col 曾复用 empty 类，被这里的 padding 顶下 8px，
+ * 造成「有记录的列和没有记录的列上边距不一致」）。 */
+.board .empty {
   color: var(--text-3);
   font-size: 11px;
   padding: 8px 4px;
@@ -1708,15 +1761,141 @@ button.unassigned-tag:disabled {
   overflow: auto;
 }
 
-/* v0.3.24+：主布局（记事本 + 看板）。
- * 用 grid：记事本列在第 1 列、永远不动；看板在第 2 列、独自横向滚动。
- * 这样横向滚动条只会出现在「记事本列右边」——避免滚动条穿过 panel 下方。 */
-.main-layout {
-  /* #202：flex row（代替 grid auto 1fr）：记事本按容器百分比宽可靠解析，
-     看板区 flex:1 占剩余。 */
+/* #259：左右分栏主布局（左侧 Sidebar + 右侧主区）。
+ * 顶栏在上；banner 在 app-shell 之上全局展示；app-shell 独占剩余高度。 */
+.app-shell {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
+}
+
+/* ---- 左侧固定导航 ---- */
+.sidebar {
+  flex: 0 0 200px;
+  width: 200px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 0.5px solid var(--border);
+  padding: 10px 8px 8px;
+  overflow-y: auto;
+}
+
+.sidebar-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 0.5px solid var(--border);
+}
+
+.sidebar-group:last-of-type {
+  border-bottom: none;
+}
+
+.sidebar-group-title {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 2px 10px 4px;
+}
+
+.sidebar-empty {
+  padding: 2px 10px 4px;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sidebar-item:hover {
+  background: var(--surface-2);
+}
+
+.sidebar-item.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.sidebar-icon {
+  flex: 0 0 auto;
+}
+
+.sidebar-item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 0.5px solid var(--border);
+}
+
+/* 账号过多时滚动；分组标题与底部固定不跟随滚动。 */
+.sidebar-group.accounts {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* #265：窗口过窄（< 900px）时侧边栏收起为纯图标模式。
+ * 仅保留图标，分组标题 / 文字标签 / 空态提示全部隐藏；账号项靠 title 提示辨识。
+ * 宽度由 200px 收窄到 56px，main-content 仍 flex:1 自动占满剩余空间，无需额外改主区。 */
+.sidebar.collapsed {
+  flex-basis: 56px;
+  width: 56px;
+  padding-left: 6px;
+  padding-right: 6px;
+  align-items: center;
+}
+
+.sidebar.collapsed .sidebar-group,
+.sidebar.collapsed .sidebar-footer {
+  width: 100%;
+  align-items: center;
+}
+
+.sidebar.collapsed .sidebar-group-title {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-empty {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-item {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.sidebar.collapsed .sidebar-item-label {
+  display: none;
+}
+
+/* ---- 右侧主区（按 Sidebar 选中项条件渲染） ---- */
+.main-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -1731,105 +1910,249 @@ button.unassigned-tag:disabled {
   padding: 0 16px 16px;
 }
 
-/* v0.3.24+：记事本面板（与看板列同构：320px / surface-2 / 10px 圆角） */
-.notes-panel {
-  flex: 0 0 320px;
-  width: 320px;
-  /* #202：百分比调宽时的硬上限（JS 侧钳制为主，此为兜底）。 */
-  max-width: 50%;
+/* 记事本作为主区「页面」：全高 flex 容器。 */
+.notes-page {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+  padding: 0;
+}
+
+/* 面板撑满主内容区；其余形态（flex 列 / 背景 / 裁切）由 `.notes-panel` 自身定义。
+ * 这里只补「占满」——组件不再挂行内宽度，所以不会再被锁住。 */
+.notes-page .notes-panel {
+  width: 100%;
+  height: 100%;
+}
+
+/* 内嵌面板容器：承接 Settings/Accounts/SyncLogs 的 modal 结构，去掉遮罩与居中。 */
+.panel-page {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  padding: 16px;
+}
+
+.panel-page .modal-mask {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  z-index: auto;
+  align-items: stretch;
+  padding: 0;
+}
+
+.panel-page .modal {
+  width: 100%;
+  max-height: none;
+  height: 100%;
+}
+
+/* 内嵌后去掉弹窗时代的尺寸约束，让面板铺满主区。 */
+.panel-page .sync-logs-modal {
+  width: 100%;
+  max-width: none;
+}
+
+.panel-page .sync-logs-body {
+  max-height: none;
+  flex: 1 1 auto;
+}
+
+/* #259：Agent 接入面板（非 modal 页面，自带页头与滚动区）。 */
+.panel-page-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+  border-bottom: 0.5px solid var(--border);
+}
+
+.panel-page-title {
+  flex: 1 1 auto;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.agent-body {
+  flex: 1 1 auto;
   min-height: 0;
-  margin: 12px 0 16px 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.agent-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.agent-tools-table,
+.agent-trigger-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.agent-tools-table th,
+.agent-tools-table td,
+.agent-trigger-table td {
+  border: 0.5px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.agent-tools-table th {
+  background: var(--surface-2);
+  font-weight: 500;
+}
+
+.agent-tools-table .mono,
+.agent-trigger-table .mono {
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+}
+
+.agent-trigger-table {
+  max-width: 640px;
+}
+
+/* #259：记事本作为主区「整页」——撑满主内容区。
+ * ⚠️ 组件里**不得**再挂行内 flex/width：行内样式优先级高于样式表，
+ * 曾把面板锁在 25% 宽，导致右侧四列被压成竖条 + 容器横向滚动条。
+ * 背景用 --bg（与看板页面一致）：列底色是 --surface-2，底色相同则列的包围框不可见。 */
+/* 记事本列宽：与看板 .column 保持一致（固定 320px）——两处面板的列视觉统一。
+ * 创建列与四个优先级列共用同一变量。 */
+.notes-panel {
+  --notes-col-w: 320px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/* 整行页头（记事本 + 导入/导出 + 收起）已移除：标题与侧边栏重复、白占一行纵向空间；
+ * 导入/导出与收起挪进创建列顶部工具行（.notes-add-col-tools）。
+ * `.notes-tools`（卡片 hover 操作区）与本页头无关，保留。 */
+
+.notes-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  align-items: stretch;
+  gap: 12px;
+  padding: 12px 16px 16px;
+}
+
+/* 左侧：创建列——与四个优先级列同宽（--notes-col-w）、同款包围框（surface-2 圆角块）。 */
+.notes-add-col {
+  flex: 0 0 var(--notes-col-w);
+  width: var(--notes-col-w);
   background: var(--surface-2);
   border-radius: 10px;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
-  /* 冻结在最左侧：看板横向滚动时记事本列始终可见。 */
-  position: sticky;
-  left: 16px;
-  z-index: 2;
-  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.05);
+  padding: 8px 10px 10px;
+  gap: 8px;
 }
 
-/* 收起态：竖向导轨，宽 36px。 */
-.notes-panel.collapsed {
-  flex: 0 0 36px;
-  width: 36px;
+/* 创建列顶部工具行：收起创建列（左）+ 导入/导出（右）。 */
+.notes-add-col-tools {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
-
-/* #202：宽度拖拽条（面板右缘，hover/聚焦时显 1px 线）。 */
-.notes-resizer {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 9px;
-  cursor: ew-resize;
-  touch-action: none;
-}
-.notes-resizer:focus-visible {
-  outline: none;
-}
-
-/* #202：右缘垂直居中的常显抓手（hover/聚焦时加深）。 */
-.notes-resizer-grip {
-  position: absolute;
-  top: 50%;
-  right: 1px;
-  transform: translateY(-50%);
-  width: 5px;
-  height: 48px;
-  border-radius: 3px;
-  background: var(--border-strong);
-  opacity: 0.55;
-  pointer-events: none;
-}
-.notes-resizer:hover .notes-resizer-grip,
-.notes-resizer:focus-visible .notes-resizer-grip {
-  background: var(--accent);
-  opacity: 1;
-}
-
-.notes-rail {
+.notes-add-col-spacer {
   flex: 1 1 auto;
+}
+
+/* 右侧：固定四列（紧急/高/中/低）。
+ * 列最小宽度固定（--notes-col-w）⇒ 窄窗口压不扁、出**有意**的横向滚动条；
+ * 宽窗口则四列等分撑满，不留死空间。纵向滚动下沉到每列内部（.note-col-body）。 */
+.notes-card-cols {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* 创建列收起后占位的一条窄导轨（只影响创建列本身）。 */
+.notes-add-rail {
+  flex: 0 0 30px;
+  width: 30px;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  width: 100%;
   padding: 10px 0;
   border: 0;
-  background: transparent;
-  color: var(--text-2);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-3);
   font-family: inherit;
-  font-size: 12px;
+  font-size: 11px;
   cursor: pointer;
   transition:
     color 0.15s,
     background 0.15s;
 }
-
-.notes-rail:hover {
-  background: rgba(0, 0, 0, 0.04);
+.notes-add-rail:hover {
+  background: var(--surface);
   color: var(--text);
 }
-
-.notes-rail-text {
+.notes-add-rail-text {
   writing-mode: vertical-rl;
   letter-spacing: 2px;
 }
 
-.notes-rail-count {
-  min-width: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--text-3);
-  font-size: 10px;
-  text-align: center;
+/* 单优先级 card 列——**与看板 .column 完全同构**（固定 320px / 全高 / 列内纵向滚动 /
+ * 列顶状态色横条 + 无胶囊列头），让两个面板的列视觉统一。
+ * 列顶横条同看板 `.column-status-N { border-top: 3px solid var(--status-N) }`：
+ * 这里用 --col-accent（优先级色，由组件按看板同一套色板注入）。
+ * ⚠️ overflow 用 clip（不支持时回退 hidden）：hidden 的盒子仍是滚动容器，
+ * 列体滚动到底后滚动手势会链式传导到列框本身，把列头滚高几像素；clip 从根上杜绝。 */
+.note-col {
+  flex: 0 0 var(--notes-col-w);
+  width: var(--notes-col-w);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-2);
+  border-top: 3px solid var(--col-accent, var(--border));
+  border-radius: 10px;
+  overflow: hidden;
+  overflow: clip;
 }
 
-.notes-head {
+/* 列头：与看板 .column-head 同款几何，**不带底色**（状态色只落在列顶横条与圆点上）。 */
+.note-col-head {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1837,39 +2160,43 @@ button.unassigned-tag:disabled {
   margin: 8px 8px 2px;
   padding: 5px 10px;
   border-radius: 7px;
-  background: #e8eaed;
 }
 
-.notes-head-icon {
-  display: inline-flex;
-  color: var(--text-2);
+.note-col-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 8px;
+  background: var(--col-accent, var(--text-3));
 }
 
-.notes-title {
-  font-size: 13px;
+.note-col-title {
   font-weight: 500;
-  color: var(--text);
 }
 
-.notes-count {
+.note-col-count {
   margin-left: auto;
-  min-width: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
-  background: rgba(0, 0, 0, 0.06);
   color: var(--text-3);
   font-size: 11px;
-  text-align: center;
 }
 
-.notes-body {
+/* 列内滚动容器：每列各自纵向滚动，与看板 .column-body 同参。
+ * overscroll-behavior: contain —— 列体滚到头后不再向父级（列框/页面）链式滚动。 */
+.note-col-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0 8px 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+/* 空列提示：与看板 .empty 同款（灰色文字，不用虚线框——列本身就是包围框）。 */
+.note-col-empty {
+  color: var(--text-3);
+  font-size: 11px;
+  padding: 8px 4px;
 }
 
 /* ---------- 新建区 ---------- */
@@ -1911,6 +2238,23 @@ button.unassigned-tag:disabled {
 
 .note-textarea:focus {
   outline: none;
+}
+
+/* 创建列内 composer 撑满剩余高度 */
+.note-composer-full {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 创建列内的 textarea：撑满列高（与面板等高），不参与 useAutoSize 的行高计算。 */
+.note-textarea-full {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  max-height: none;
 }
 
 .note-textarea::placeholder {
@@ -1968,65 +2312,29 @@ button.unassigned-tag:disabled {
 
 /* ---------- 列表与卡片 ---------- */
 
-.notes-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.notes-placeholder,
-.notes-empty {
+.notes-placeholder {
   color: var(--text-3);
   font-size: 12px;
   text-align: center;
   padding: 18px 8px;
 }
 
-.notes-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 28px 12px;
-}
-
-.notes-empty-icon {
-  color: var(--border-strong);
-  margin-bottom: 4px;
-}
-
-.notes-empty p {
-  margin: 0;
-  color: var(--text-2);
-  font-size: 12px;
-}
-
-.notes-empty span {
-  font-size: 11px;
-}
-
 .note-card {
   position: relative;
+  /* 列是固定宽度，但卡片仍须能收缩：否则子元素（.note-foot）的 min-content
+   * 会把卡片撑宽，进而在 .note-col-body（overflow-y: auto ⇒ overflow-x 计算成 auto）
+   * 里长出横向滚动条。 */
+  min-width: 0;
   background: var(--surface);
   border: 0.5px solid var(--border);
   border-radius: 8px;
-  padding: 8px 12px 6px 13px;
+  padding: 8px 12px 6px;
   transition:
     box-shadow 0.15s,
     border-color 0.15s;
 }
 
-/* 左侧色条表示标签，替代全彩徽章 */
-.note-card::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 3px;
-  border-radius: 0 2px 2px 0;
-  background: var(--note-accent, var(--text-3));
-}
+/* 用户指定：卡片不再用左侧色条区分优先级（优先级由列分组 + 卡片底部标签表达）。 */
 
 .note-card:hover {
   border-color: var(--border-strong);
@@ -2046,6 +2354,8 @@ button.unassigned-tag:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* 窄列（900px 窗口下每列仅 ~90px）时让标签/时间/操作按钮换行，而不是撑宽卡片。 */
+  flex-wrap: wrap;
 }
 
 .note-tag {
@@ -2120,13 +2430,7 @@ button.unassigned-tag:disabled {
   color: #c0392b;
 }
 
-/* 记事本 header 工具组：常显（不同于 note-card 内 hover 显示） */
-.notes-tools {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  margin-left: auto;
-}
+/* 旧页头工具组（.notes-tools）随页头移除而删除；导入/导出现在在 .notes-add-col-tools。 */
 
 .notes-tool-button:disabled,
 .note-tool:disabled {

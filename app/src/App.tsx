@@ -11,6 +11,8 @@ import AboutPanel from './components/AboutPanel';
 import AccountsPanel from './components/AccountsPanel';
 import SyncLogsPanel from './components/SyncLogsPanel';
 import NotesPanel from './components/NotesPanel';
+import Sidebar, { type NavKey } from './components/Sidebar';
+import AgentPanel from './components/AgentPanel';
 import type {
   Account,
   AccountColumn,
@@ -18,6 +20,7 @@ import type {
   ProjectStatus,
   Settings as SettingsT,
   Task,
+  ViewMode,
 } from './types';
 
 export default function App() {
@@ -33,15 +36,20 @@ function BoardApp() {
   const [selected, setSelected] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [settings, setSettings] = useState<SettingsT | null>(null);
-  // 互斥弹窗状态：同一时刻仅显示一个（设置/关于/账号/同步日志）。
-  const [activeModal, setActiveModal] = useState<
-    'settings' | 'about' | 'accounts' | 'synclogs' | null
-  >(null);
+  // #259：主区视图由左侧 Sidebar 驱动；「关于」保留为互斥弹窗。
+  const [nav, setNav] = useState<NavKey>('board');
+  const [showAbout, setShowAbout] = useState(false);
   const [ownership, setOwnership] = useState('');
   const [query, setQuery] = useState('');
   const [repo, setRepo] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<string | null>(null);
+  const [lastWarning, setLastWarning] = useState<string | null>(null);
+  // #265：窗口宽度 < 900px 时侧边栏自动收起为纯图标模式（响应式，不持久化）。
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    typeof window !== 'undefined' ? window.innerWidth < 900 : false,
+  );
+  // #258：部分失败 warning 与成功结果互斥展示（琥珀色 warn vs 绿色 ok）。
   // #178：上次同步中新变、但被当前筛选藏住的任务数（>0 时给提示+一键清除）。
   const [hiddenAfterSync, setHiddenAfterSync] = useState(0);
   const [projectStatuses, setProjectStatuses] = useState<ProjectStatus[]>([]);
@@ -55,12 +63,35 @@ function BoardApp() {
     return () => window.removeEventListener(TASKBOARD_ERROR_EVENT, handler);
   }, []);
 
-  // 同步结果 banner 4 秒后自动消失（错误 banner 不受影响，由下次操作覆盖）。
+  // 同步结果 / 部分失败 banner 4 秒后自动消失（错误 banner 不受影响，由下次操作覆盖）。
   useEffect(() => {
-    if (!lastResult) return;
-    const t = setTimeout(() => setLastResult(null), 4000);
+    if (!lastResult && !lastWarning) return;
+    const t = setTimeout(() => {
+      setLastResult(null);
+      setLastWarning(null);
+    }, 4000);
     return () => clearTimeout(t);
-  }, [lastResult]);
+  }, [lastResult, lastWarning]);
+
+  // #265：监听窗口尺寸变化，窗口 < 900px 时自动收起侧边栏为纯图标模式。
+  // 状态值与上次相同（同为 false / true）时 setState 为 no-op，不会触发多余重渲染，无需手抖防抖。
+  useEffect(() => {
+    const onResize = () => setSidebarCollapsed(window.innerWidth < 900);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // #258：同步结果分级展示——warning 非空（部分账号/数据源失败）走琥珀色 warn
+  // banner，不再混进绿色成功 banner；两者互斥展示。
+  const showSyncResult = (base: string, warning: string) => {
+    if (warning) {
+      setLastResult(null);
+      setLastWarning(`${base} · ⚠️ ${warning}`);
+    } else {
+      setLastWarning(null);
+      setLastResult(base);
+    }
+  };
 
   // v0.3.16+：根据当前 viewMode + activeAccountId 计算 listTasks 用的 accountId 参数。
   // - 'single' → activeAccountId（单账号视图）
@@ -221,10 +252,12 @@ function BoardApp() {
       void load();
       void loadSettings();
       // loadProjectStatuses 依赖 settings，下面的 useEffect 会在 settings 变化时自动触发
-      const warn = r.warning ? ` · ⚠️ ${r.warning}` : '';
       const prune = r.pruned > 0 ? ` · ${t('sync.pruned', { n: r.pruned })}` : '';
-      setLastResult(
-        `${t('sync.result', { added: r.added, updated: r.updated, done: r.candidateDone })}${prune}${warn}`,
+      const scope =
+        r.accountsSynced > 1 ? ` · ${t('sync.accountsSynced', { n: r.accountsSynced })}` : '';
+      showSyncResult(
+        `${t('sync.result', { added: r.added, updated: r.updated, done: r.candidateDone })}${scope}${prune}`,
+        r.warning,
       );
     }).then((f) => {
       if (cancelled) {
@@ -321,10 +354,12 @@ function BoardApp() {
     const before = snapshotTasks(beforePool);
     try {
       const r = await api.syncNow();
-      const warn = r.warning ? ` · ⚠️ ${r.warning}` : '';
       const prune = r.pruned > 0 ? ` · ${t('sync.pruned', { n: r.pruned })}` : '';
-      setLastResult(
-        `${t('sync.result', { added: r.added, updated: r.updated, done: r.candidateDone })}${prune}${warn}`,
+      const scope =
+        r.accountsSynced > 1 ? ` · ${t('sync.accountsSynced', { n: r.accountsSynced })}` : '';
+      showSyncResult(
+        `${t('sync.result', { added: r.added, updated: r.updated, done: r.candidateDone })}${scope}${prune}`,
+        r.warning,
       );
       const fresh = await api.listTasks(ownership || undefined, accountFilter);
       applyTasks(fresh);
@@ -359,14 +394,29 @@ function BoardApp() {
     setHiddenAfterSync(0);
   }, [query, repo, ownership]);
 
-  // v0.3.16+：切换激活账号（单账号视图）。
+  // v0.3.16+：切换激活账号（单账号视图）。#259：同时切回看板视图。
   const handleSwitchAccount = async (id: number) => {
     setError(null);
+    setNav('board');
     try {
       await api.setActiveAccount(id);
       await loadSettings();
       // #221：显式传新账号 id——闭包里的 accountFilter 还是旧值，靠它会查出旧账号。
       await loadWith(ownership, id);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  // #262：切换前端「展示视图模式」（单账号 / 全部账号聚合）。仅影响展示范围，
+  // 不决定同步范围——同步恒覆盖全部账号（见 sync.rs::run）。撤回 597840b 删掉的 UI 入口，
+  // 让 set_view_mode 命令与残留 i18n key 重新接回 UI（消除「有实现、无入口」死代码）。
+  const handleSwitchView = async (mode: ViewMode) => {
+    setError(null);
+    try {
+      await api.setViewMode(mode);
+      await loadSettings();
+      await load();
     } catch (e) {
       setError(String(e));
     }
@@ -381,29 +431,8 @@ function BoardApp() {
     <div className="app">
       <header className="topbar">
         <div className="topbar-left">
-          {/* v0.3.16+：账号下拉。v0.3.x：暂隐藏「全部账号」视图模式，
-              待 project status map 功能落地后再恢复。 */}
-          <select
-            className="select"
-            value={settings?.activeAccountId ?? 0}
-            onChange={(e) => void handleSwitchAccount(Number(e.target.value))}
-            title={
-              settings?.viewMode === 'all'
-                ? t('topbar.switchAccountAll')
-                : t('topbar.switchAccount')
-            }
-            disabled={settings?.viewMode === 'all'}
-          >
-            {(settings?.accounts ?? []).length === 0 && (
-              <option value={0}>{t('topbar.noAccounts')}</option>
-            )}
-            {(settings?.accounts ?? []).map((a) => (
-              <option key={a.id} value={a.id}>
-                @{a.login}
-                {a.org ? ` (${a.org})` : ''}
-              </option>
-            ))}
-          </select>
+          {/* #259：品牌 + 当前视图条数；账号切换移到左侧 Sidebar。 */}
+          <span className="app-title">{t('app.title')}</span>
           <span className="muted">{t('topbar.totalCount', { n: visible.length })}</span>
         </div>
 
@@ -411,98 +440,16 @@ function BoardApp() {
           <span className="muted small">
             {t('topbar.lastSync', { time: fmtTime(settings?.lastSyncAt ?? 0, lang) })}
           </span>
-          <button
-            className="btn"
-            onClick={() => setActiveModal(activeModal === 'about' ? null : 'about')}
-            title={t('btn.about')}
+          {/* #262：展示视图模式切换（单账号 / 全部账号聚合）。仅影响展示，不决定同步范围。 */}
+          <select
+            className="select"
+            value={settings?.viewMode ?? 'single'}
+            onChange={(e) => void handleSwitchView(e.target.value as ViewMode)}
+            title={t('topbar.viewModeTitle')}
           >
-            <svg
-              className="btn-icon"
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <circle cx="12" cy="12" r="10" />
-              <path d="M12 16v-4" />
-              <path d="M12 8h.01" />
-            </svg>
-            <span className="btn-label">{t('btn.about')}</span>
-          </button>
-          <button
-            className="btn"
-            onClick={() => setActiveModal(activeModal === 'settings' ? null : 'settings')}
-            title={t('btn.settings')}
-          >
-            <svg
-              className="btn-icon"
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
-            </svg>
-            <span className="btn-label">{t('btn.settings')}</span>
-          </button>
-          <button
-            className="btn"
-            onClick={() => setActiveModal(activeModal === 'accounts' ? null : 'accounts')}
-            title={t('btn.accounts')}
-          >
-            <svg
-              className="btn-icon"
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
-              <circle cx="12" cy="7" r="4" />
-            </svg>
-            <span className="btn-label">{t('btn.accounts')}</span>
-          </button>
-          <button
-            className="btn"
-            onClick={() => setActiveModal(activeModal === 'synclogs' ? null : 'synclogs')}
-            title={t('syncLogs.title')}
-          >
-            <svg
-              className="btn-icon"
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
-              <path d="M14 2v6h6" />
-              <path d="M16 13H8" />
-              <path d="M16 17H8" />
-              <path d="M10 9H8" />
-            </svg>
-            <span className="btn-label">{t('syncLogs.title')}</span>
-          </button>
+            <option value="single">{t('topbar.singleAccount')}</option>
+            <option value="all">{t('topbar.allAccounts')}</option>
+          </select>
           <button
             className="btn primary"
             onClick={doSync}
@@ -529,61 +476,11 @@ function BoardApp() {
         </div>
       </header>
 
-      <div className="toolbar">
-        <input
-          className="input"
-          placeholder={t('search.placeholder')}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <select
-          className="select"
-          value={repo}
-          onChange={(e) => setRepo(e.target.value)}
-          title={t('filter.byRepo')}
-        >
-          <option value="">{t('filter.allRepos')}</option>
-          {repos.map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-        </select>
-        <select
-          className="select"
-          value={ownership}
-          onChange={(e) => {
-            // #221：load 已稳定化（不再随筛选变身份），归属变化需显式重查。
-            const v = e.target.value;
-            setOwnership(v);
-            void loadWith(v, accountFilter);
-          }}
-          title={t('filter.byOwnership')}
-        >
-          <option value="">{t('filter.allOwnership')}</option>
-          <option value="assigned">{t('ownership.assigned')}</option>
-          <option value="notassignee">{t('ownership.notassignee')}</option>
-          <option value="assigned-others">{t('ownership.assigned-others')}</option>
-        </select>
-        {(query || repo || ownership) && (
-          <button
-            className="btn ghost"
-            onClick={() => {
-              void clearAllFilters();
-            }}
-            title={t('filter.clear')}
-          >
-            {t('btn.reset')}
-          </button>
-        )}
-
-        {/* v0.3.43+：看板列展示方式已改为「每账号」在设置面板配置，此处不再提供切换下拉。 */}
-      </div>
-
-      {(error || lastResult) && (
+      {(error || lastResult || lastWarning) && (
         <div className="banner-row">
           {error && <div className="banner error">{error}</div>}
-          {!error && lastResult && <div className="banner ok">{lastResult}</div>}
+          {!error && lastWarning && <div className="banner warn">{lastWarning}</div>}
+          {!error && !lastWarning && lastResult && <div className="banner ok">{lastResult}</div>}
         </div>
       )}
       {!error && hiddenAfterSync > 0 && (query || repo || ownership) && (
@@ -597,18 +494,119 @@ function BoardApp() {
         </div>
       )}
 
-      <div className="main-layout">
-        <NotesPanel />
-        <div className="board-wrap">
-          <Board
-            tasks={visible}
-            selected={selected}
-            onSelect={setSelected}
-            boardMode={boardMode}
-            projectStatuses={projectStatuses}
-            accountColumns={accountColumns}
-          />
-        </div>
+      <div className="app-shell">
+        <Sidebar
+          accounts={settings?.accounts ?? []}
+          activeAccountId={settings?.activeAccountId ?? null}
+          nav={nav}
+          collapsed={sidebarCollapsed}
+          onNavigate={setNav}
+          onSwitchAccount={(id) => void handleSwitchAccount(id)}
+          onAddAccount={() => setNav('accounts')}
+          onAbout={() => setShowAbout(true)}
+        />
+        <main className="main-content">
+          {nav === 'board' && (
+            <>
+              <div className="toolbar">
+                <input
+                  className="input"
+                  placeholder={t('search.placeholder')}
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+                <select
+                  className="select"
+                  value={repo}
+                  onChange={(e) => setRepo(e.target.value)}
+                  title={t('filter.byRepo')}
+                >
+                  <option value="">{t('filter.allRepos')}</option>
+                  {repos.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="select"
+                  value={ownership}
+                  onChange={(e) => {
+                    // #221：load 已稳定化（不再随筛选变身份），归属变化需显式重查。
+                    const v = e.target.value;
+                    setOwnership(v);
+                    void loadWith(v, accountFilter);
+                  }}
+                  title={t('filter.byOwnership')}
+                >
+                  <option value="">{t('filter.allOwnership')}</option>
+                  <option value="assigned">{t('ownership.assigned')}</option>
+                  <option value="notassignee">{t('ownership.notassignee')}</option>
+                  <option value="assigned-others">{t('ownership.assigned-others')}</option>
+                </select>
+                {(query || repo || ownership) && (
+                  <button
+                    className="btn ghost"
+                    onClick={() => {
+                      void clearAllFilters();
+                    }}
+                    title={t('filter.clear')}
+                  >
+                    {t('btn.reset')}
+                  </button>
+                )}
+              </div>
+              <div className="board-wrap">
+                <Board
+                  tasks={visible}
+                  selected={selected}
+                  onSelect={setSelected}
+                  boardMode={boardMode}
+                  projectStatuses={projectStatuses}
+                  accountColumns={accountColumns}
+                />
+              </div>
+            </>
+          )}
+          {nav === 'notes' && (
+            <div className="notes-page">
+              <NotesPanel />
+            </div>
+          )}
+          {nav === 'settings' && settings && (
+            <div className="panel-page">
+              <SettingsPanel
+                settings={settings}
+                onSaved={(s) => {
+                  setSettings(s);
+                  void load();
+                }}
+                onClose={() => {
+                  setNav('board');
+                  // v0.3.43+：展示方式在设置面板按账号修改，关闭后重载 settings 使看板即时生效。
+                  void loadSettings();
+                }}
+              />
+            </div>
+          )}
+          {nav === 'agents' && <AgentPanel onClose={() => setNav('board')} />}
+          {nav === 'synclogs' && (
+            <div className="panel-page">
+              <SyncLogsPanel onClose={() => setNav('board')} />
+            </div>
+          )}
+          {nav === 'accounts' && settings && (
+            <div className="panel-page">
+              <AccountsPanel
+                settings={settings}
+                onClose={() => setNav('board')}
+                onAccountsChanged={() => {
+                  void loadSettings();
+                }}
+              />
+            </div>
+          )}
+        </main>
       </div>
 
       {selectedTask && (
@@ -630,35 +628,7 @@ function BoardApp() {
         </>
       )}
 
-      {activeModal === 'settings' && settings && (
-        <SettingsPanel
-          settings={settings}
-          onSaved={(s) => {
-            setSettings(s);
-            setActiveModal(null);
-            void load();
-          }}
-          onClose={() => {
-            setActiveModal(null);
-            // v0.3.43+：展示方式在设置面板按账号修改，关闭后重载 settings 使看板即时生效。
-            void loadSettings();
-          }}
-        />
-      )}
-
-      {activeModal === 'accounts' && settings && (
-        <AccountsPanel
-          settings={settings}
-          onClose={() => setActiveModal(null)}
-          onAccountsChanged={() => {
-            void loadSettings();
-          }}
-        />
-      )}
-
-      {activeModal === 'about' && <AboutPanel onClose={() => setActiveModal(null)} />}
-
-      {activeModal === 'synclogs' && <SyncLogsPanel onClose={() => setActiveModal(null)} />}
+      {showAbout && <AboutPanel onClose={() => setShowAbout(false)} />}
     </div>
   );
 }

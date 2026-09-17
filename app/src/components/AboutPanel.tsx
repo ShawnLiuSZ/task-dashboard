@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, onUpdateProgress, openExternal } from '../api';
 import { useI18n } from '../i18n';
+import {
+  UPDATER_TIMEOUT_MS,
+  UPDATE_CHECK_TIMEOUT_MS,
+  settleWithTimeout,
+  viewFallback,
+  viewUpdater,
+} from '../utils/updateCheck';
 
 interface Props {
   onClose: () => void;
@@ -21,13 +28,15 @@ type State =
       notes: string;
       /** 非空表示应用内更新不可用，退化为前往 Releases 手动下载。 */
       manualUrl?: string;
+      /** #256：手动下载时附带 updater 通道失败原因（不再静默吞掉）。 */
+      updaterNote?: string;
     }
   | { phase: 'installing'; percent: number | null }
   | { phase: 'installed'; version: string }
   | { phase: 'error'; message: string };
 
 /** 按当前安装平台返回 taskboard 二进制的默认路径（与 README 一致）。 */
-function getMcpCommand(): string {
+export function getMcpCommand(): string {
   const ua = navigator.userAgent.toLowerCase();
   if (ua.includes('mac')) {
     return '/Applications/TaskBoard.app/Contents/MacOS/taskboard';
@@ -40,7 +49,7 @@ function getMcpCommand(): string {
 }
 
 /** MCP 接入配置片段（与 README 一致，代码块非翻译）。 */
-function buildMcpSnippet(): string {
+export function buildMcpSnippet(): string {
   const cmd = getMcpCommand();
   return `{
   "mcpServers": {
@@ -69,46 +78,75 @@ export default function AboutPanel({ onClose }: Props) {
 
   /**
    * #231：优先走应用内更新通道（tauri-plugin-updater）。
+   * #256：双通道同时发起、分阶段展示——fallback 先到先展示（有新版立刻显示手动
+   * 下载，不用干等慢的 updater 通道），updater 后到做升级（有可用更新则把手动
+   * 下载替换为一键更新）或备注（失败原因，不再静默吞掉）。
    *
-   * 该通道不可用时（尚未配置签名公钥、或 Releases 上还没有 latest.json）回退为
-   * 纯版本号对比 + 跳转 Releases 手动下载，避免「检查更新」整体失效。
+   * 该通道不可用时（尚未配置签名公钥、或 Releases 上还没有 latest.json、或超时）
+   * 回退为纯版本号对比 + 跳转 Releases 手动下载，避免「检查更新」整体失效。
    */
   const check = useCallback(async () => {
     setState({ phase: 'loading' });
     try {
-      const u = await api.checkAppUpdate();
-      if (!u.error) {
-        setState(
-          u.available
-            ? {
-                phase: 'available',
-                version: u.version,
-                current: u.current,
-                notes: u.notes,
-              }
-            : { phase: 'upToDate', current: u.current },
-        );
+      // 双通道同时发起：fallback 无需等 updater，updater 结论后到按需升级界面。
+      // 检查中按钮被禁用，不会有第二次 check 穿插导致旧 Promise 覆盖新状态。
+      const updaterPromise = settleWithTimeout(api.checkAppUpdate(), UPDATER_TIMEOUT_MS);
+      const fb = viewFallback(
+        await settleWithTimeout(api.checkLatestRelease(), UPDATE_CHECK_TIMEOUT_MS),
+      );
+      if (fb.kind === 'upToDate') {
+        setState({ phase: 'upToDate', current: fb.current });
         return;
       }
-
-      const d = await api.checkLatestRelease();
-      if (d.error) {
-        setState({ phase: 'error', message: d.error });
-      } else if (d.upToDate) {
-        setState({ phase: 'upToDate', current: d.current });
-      } else {
+      if (fb.kind === 'manual') {
         setState({
           phase: 'available',
-          version: d.latest,
-          current: d.current,
+          version: fb.version,
+          current: fb.current,
           notes: '',
-          manualUrl: d.url,
+          manualUrl: fb.url,
         });
       }
+      // fallback 失败则保持 loading，继续等 updater；已有手动下载则等 updater 做升级。
+      const uv = viewUpdater(await updaterPromise);
+      if (uv.kind === 'one-click') {
+        setState({
+          phase: 'available',
+          version: uv.version,
+          current: uv.current,
+          notes: uv.notes,
+        });
+        return;
+      }
+      const note =
+        uv.kind === 'issue'
+          ? uv.issue.kind === 'timeout'
+            ? t('about.updaterTimeout')
+            : t('about.updaterUnavailable', { reason: uv.issue.message })
+          : null;
+      if (fb.kind === 'manual') {
+        // 仍停留在手动下载才追加备注（函数式更新守卫，避免覆盖用户后续操作）。
+        if (note) {
+          setState((prev) =>
+            prev.phase === 'available' && prev.manualUrl ? { ...prev, updaterNote: note } : prev,
+          );
+        }
+        return;
+      }
+      // fallback 失败 + updater 也无可用更新：报错（fallback 具体错误优先）。
+      const fbMessage = fb.kind === 'failed' && !fb.timedOut ? fb.error : '';
+      let message = fbMessage;
+      if (!message && uv.kind === 'issue' && uv.issue.kind === 'backend-error') {
+        message = uv.issue.message;
+      }
+      setState({
+        phase: 'error',
+        message: message ? t('about.error', { error: message }) : t('about.checkTimeout'),
+      });
     } catch (e) {
       setState({ phase: 'error', message: String(e) });
     }
-  }, []);
+  }, [t]);
 
   /** #231：下载并安装更新，完成后引导用户重启生效。 */
   const install = useCallback(async (target: string) => {
@@ -216,6 +254,7 @@ export default function AboutPanel({ onClose }: Props) {
                   {state.notes}
                 </p>
               )}
+              {state.updaterNote && <p className="muted small">{state.updaterNote}</p>}
               {state.manualUrl ? (
                 <button
                   className="btn primary"
