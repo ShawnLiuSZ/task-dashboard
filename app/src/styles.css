@@ -213,6 +213,49 @@ body {
 .hook-row-available {
   color: #0a5bd0;
 }
+/* #263：设备扫描 —— 「疑似已卸载」分组圆点（红：需要用户处理的接入残留）。 */
+.hook-group-dot-uninstalled {
+  background: #b3261e;
+}
+.hook-row-uninstalled {
+  color: #b3261e;
+}
+/* #263：行内设备安装徽标（本机已安装 / 已安装应用 / 仅残留配置 / 未检测到）。 */
+.agent-device {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.agent-device-cli,
+.agent-device-app {
+  border-color: #bfe3d7;
+  background: var(--teal-bg);
+  color: var(--teal-text);
+}
+.agent-device-config-only,
+.agent-device-suspected-removed {
+  border-color: #f0dcae;
+  background: var(--amber-bg);
+  color: var(--amber-text);
+}
+.agent-device-none {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-3);
+}
+/* #263：扫描摘要与「疑似已卸载」的残留路径提示。 */
+.agent-scan-summary {
+  margin-top: 6px;
+  line-height: 1.5;
+}
+.agent-scan-path {
+  color: var(--text-3);
+  word-break: break-all;
+}
 .banner.warn {
   background: #fff7e6;
   color: #8a5a00;

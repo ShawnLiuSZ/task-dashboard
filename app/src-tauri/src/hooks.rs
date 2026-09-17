@@ -242,6 +242,337 @@ fn manual_hint(agent: &str) -> &'static str {
     }
 }
 
+// ===== #263：设备扫描（本机装了哪些 agent / 哪些已卸载） =====
+//
+// 上面的 `AGENTS`（`AgentSpec`）是**安装契约**，只覆盖 5 个已验证 hook 机制的
+// agent；本节的 `HOST_SPECS` 只回答「怎么在这台设备上认出这个 agent」，覆盖前端
+// `app/src/agents.ts` 的全量 agent。两处 id 集合由单测断言保持一致（防漂移）。
+//
+// 三类信号任一命中即视为「有安装证据」：
+//   binary      PATH 与常见安装目录下的可执行文件 —— 装了但从未运行也能认出
+//   config_dir  `$HOME` 下的配置目录 —— 只剩配置目录时单列为 config-only（疑似已卸载）
+//   app         macOS `/Applications`、`~/Applications` 下的应用包（GUI 版 agent）
+//
+// 全部只读本地文件系统：不联网、不写任何 agent 配置文件。
+
+/// 单个 agent 的设备探测契约（`bins` / `configs` / `apps` 三者任一命中即为已安装）。
+struct HostSpec {
+    id: &'static str,
+    /// PATH 与常见安装目录下探测的可执行文件名（不含平台后缀）。
+    bins: &'static [&'static str],
+    /// `$HOME` 下的配置目录候选（相对路径，正斜杠）。
+    configs: &'static [&'static str],
+    /// macOS 应用包名（不含 `.app`，大小写不敏感）。
+    apps: &'static [&'static str],
+}
+
+/// 无本地安装信号的 agent（纯 Web / IDE 插件形态，如继续用空数组而非省略条目）。
+const NO_SIGNAL: &[&str] = &[];
+
+const HOST_SPECS: &[HostSpec] = &[
+    HostSpec { id: "amazon-q", bins: &["q"], configs: &[".aws/amazonq"], apps: NO_SIGNAL },
+    HostSpec { id: "augment", bins: &["auggie"], configs: &[".augment"], apps: NO_SIGNAL },
+    HostSpec { id: "bolt", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
+    HostSpec { id: "chatgpt", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: &["ChatGPT"] },
+    HostSpec { id: "claude-code", bins: &["claude"], configs: &[".claude"], apps: NO_SIGNAL },
+    HostSpec { id: "cline", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
+    HostSpec { id: "codebuddy", bins: &["codebuddy"], configs: &[".codebuddy"], apps: &["CodeBuddy"] },
+    HostSpec { id: "codeium", bins: NO_SIGNAL, configs: &[".codeium"], apps: NO_SIGNAL },
+    HostSpec { id: "codex", bins: &["codex"], configs: &[".codex"], apps: &["Codex"] },
+    HostSpec { id: "codestral", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
+    HostSpec { id: "cody", bins: &["cody"], configs: &[".cody"], apps: NO_SIGNAL },
+    HostSpec { id: "continue", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
+    HostSpec {
+        id: "copilot",
+        bins: &["copilot", "github-copilot-cli"],
+        configs: &[".copilot"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec { id: "cursor", bins: &["cursor-agent"], configs: &[".cursor"], apps: &["Cursor"] },
+    HostSpec { id: "deepseek", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
+    HostSpec { id: "devin", bins: &["devin"], configs: &[".devin"], apps: NO_SIGNAL },
+    HostSpec { id: "doubao", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: &["Doubao"] },
+    HostSpec { id: "factory", bins: &["droid"], configs: &[".factory"], apps: NO_SIGNAL },
+    HostSpec { id: "gemini-cli", bins: &["gemini"], configs: &[".gemini"], apps: NO_SIGNAL },
+    HostSpec { id: "glm", bins: NO_SIGNAL, configs: &[".glm"], apps: NO_SIGNAL },
+    HostSpec { id: "goose", bins: &["goose"], configs: &[".config/goose"], apps: NO_SIGNAL },
+    HostSpec { id: "grok", bins: &["grok"], configs: &[".grok"], apps: NO_SIGNAL },
+    HostSpec { id: "helix", bins: &["helix"], configs: &[".helix"], apps: NO_SIGNAL },
+    HostSpec { id: "kimi", bins: &["kimi"], configs: &[".kimi"], apps: NO_SIGNAL },
+    HostSpec { id: "llama", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
+    HostSpec {
+        id: "opencode",
+        bins: &["opencode"],
+        configs: &[".config/opencode", ".opencode"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec { id: "openhands", bins: &["openhands"], configs: &[".openhands"], apps: NO_SIGNAL },
+    HostSpec { id: "phind", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
+    HostSpec { id: "qwen-code", bins: &["qwen"], configs: &[".qwen"], apps: NO_SIGNAL },
+    HostSpec { id: "replit", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
+    HostSpec { id: "roo-code", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
+    HostSpec { id: "tabnine", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
+    HostSpec { id: "tongyi", bins: NO_SIGNAL, configs: &[".lingma"], apps: &["Lingma"] },
+    HostSpec {
+        id: "trae",
+        bins: &["trae"],
+        configs: &[".trae-cn", ".trae"],
+        apps: &["Trae", "Trae CN"],
+    },
+    HostSpec { id: "v0", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
+    HostSpec {
+        id: "windsurf",
+        bins: &["windsurf"],
+        configs: &[".codeium/windsurf"],
+        apps: &["Windsurf"],
+    },
+    HostSpec {
+        id: "workbuddy",
+        bins: &["workbuddy"],
+        configs: &[".workbuddy-ai", ".workbuddy"],
+        apps: &["WorkBuddy"],
+    },
+    HostSpec { id: "zcode", bins: &["zcode"], configs: &[".zcode"], apps: NO_SIGNAL },
+    HostSpec { id: "aider", bins: &["aider"], configs: &[".aider"], apps: &["Aider"] },
+];
+
+fn host_spec_of(agent: &str) -> Option<&'static HostSpec> {
+    HOST_SPECS.iter().find(|s| s.id == agent)
+}
+
+/// 单个 agent 的设备探测结果。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentHostInfo {
+    pub agent: String,
+    /// 三类信号任一命中。
+    pub present: bool,
+    /// 最强信号：`cli`（可执行文件）/ `app`（应用包）/ `config-only`（仅配置目录残留）/
+    /// `none`（未检测到）。
+    pub kind: String,
+    /// 命中的可执行文件（`~/` 或绝对路径展示形式）。
+    pub binary: Option<String>,
+    pub config_dir: Option<String>,
+    pub app: Option<String>,
+}
+
+/// 扫描快照：与上次结果对比得出「新发现安装 / 疑似已卸载」。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ScanSnapshot {
+    pub scanned_at: i64,
+    pub agents: std::collections::BTreeMap<String, SnapshotEntry>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SnapshotEntry {
+    pub kind: String,
+    pub binary: Option<String>,
+    pub config_dir: Option<String>,
+    pub app: Option<String>,
+}
+
+/// 设备扫描结果（前端据此渲染摘要与分组）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentScanResult {
+    pub scanned_at: i64,
+    /// 上次扫描时间（首次为 None）。
+    pub previous_scanned_at: Option<i64>,
+    pub has_previous: bool,
+    pub agents: Vec<AgentHostInfo>,
+    /// 上次无信号、本次有（新装）。
+    pub newly_installed: Vec<String>,
+    /// 上次有可执行文件 / 应用包、本次消失（疑似已卸载，通常只剩配置目录）。
+    pub newly_removed: Vec<String>,
+}
+
+/// PATH + 常见安装目录（去重后返回，含平台惯例目录）。
+fn bin_search_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Ok(path) = std::env::var("PATH") {
+        for p in std::env::split_paths(&path) {
+            if !p.as_os_str().is_empty() {
+                dirs.push(p);
+            }
+        }
+    }
+    for extra in [
+        ".local/bin",
+        "bin",
+        ".cargo/bin",
+        ".bun/bin",
+        ".npm-global/bin",
+        ".volta/bin",
+    ] {
+        dirs.push(home.join(extra));
+    }
+    #[cfg(target_os = "macos")]
+    for extra in ["/opt/homebrew/bin", "/usr/local/bin"] {
+        dirs.push(PathBuf::from(extra));
+    }
+    dirs
+}
+
+/// 可执行文件名候选（Windows 需补后缀；Unix 原样）。
+fn bin_file_names(name: &str) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        vec![format!("{name}.exe"), format!("{name}.cmd"), format!("{name}.bat"), name.to_string()]
+    }
+    #[cfg(not(windows))]
+    {
+        vec![name.to_string()]
+    }
+}
+
+/// 在 PATH / 常见目录中找可执行文件，返回首个命中。
+fn find_binary(home: &Path, names: &[&str]) -> Option<PathBuf> {
+    if names.is_empty() {
+        return None;
+    }
+    let dirs = bin_search_dirs(home);
+    for name in names {
+        for file in bin_file_names(name) {
+            for dir in &dirs {
+                let p = dir.join(&file);
+                if p.is_file() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 本机应用包名字集合（macOS 读 `/Applications` 与 `~/Applications`；其他平台为空）。
+fn mac_app_names(home: &Path) -> Vec<String> {
+    if !cfg!(target_os = "macos") {
+        return Vec::new();
+    }
+    let mut names = Vec::new();
+    for dir in [PathBuf::from("/Applications"), home.join("Applications")] {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if let Some(stem) = name.strip_suffix(".app") {
+                names.push(stem.to_string());
+            }
+        }
+    }
+    names
+}
+
+/// 按应用包名匹配（大小写不敏感），返回命中的 `.app` 路径。
+fn find_app(app_names: &[String], want: &[&str]) -> Option<String> {
+    if want.is_empty() {
+        return None;
+    }
+    app_names
+        .iter()
+        .find(|n| want.iter().any(|w| n.eq_ignore_ascii_case(w)))
+        .map(|n| format!("/Applications/{n}.app"))
+}
+
+/// 单 agent 探测（`app_names` 由调用方缓存，避免逐 agent 重复列目录）。
+fn probe_one_with(home: &Path, agent_id: &str, app_names: &[String]) -> AgentHostInfo {
+    let none = |agent: &str| AgentHostInfo {
+        agent: agent.to_string(),
+        present: false,
+        kind: "none".to_string(),
+        binary: None,
+        config_dir: None,
+        app: None,
+    };
+    let Some(spec) = host_spec_of(agent_id) else { return none(agent_id) };
+
+    let binary = find_binary(home, spec.bins).map(|p| display_path(home, None, &p));
+    let config_dir = spec
+        .configs
+        .iter()
+        .map(|c| home.join(c))
+        .find(|p| p.is_dir())
+        .map(|p| display_path(home, None, &p));
+    let app = find_app(app_names, spec.apps);
+
+    let kind = if binary.is_some() || app.is_some() {
+        if binary.is_some() {
+            "cli"
+        } else {
+            "app"
+        }
+    } else if config_dir.is_some() {
+        "config-only"
+    } else {
+        "none"
+    };
+    AgentHostInfo {
+        agent: agent_id.to_string(),
+        present: kind != "none",
+        kind: kind.to_string(),
+        binary,
+        config_dir,
+        app,
+    }
+}
+
+/// 全量设备扫描（只读）。覆盖 `HOST_SPECS` 全部 agent。
+pub fn probe_agent_hosts() -> Result<Vec<AgentHostInfo>, String> {
+    let home = home_dir()?;
+    let app_names = mac_app_names(&home);
+    Ok(HOST_SPECS.iter().map(|s| probe_one_with(&home, s.id, &app_names)).collect())
+}
+
+/// 与上次快照对比：返回 (新发现安装, 疑似已卸载)。
+///
+/// - 首次扫描（无快照）或快照为空 → 不报变更，避免首刷全量噪音。
+/// - 新装：上次 `none`，本次有信号（含 config-only，说明已运行过）。
+/// - 卸载：上次有 `binary` / `app`，本次退化为 `none` / `config-only`。
+pub fn diff_scan(prev: Option<&ScanSnapshot>, cur: &[AgentHostInfo]) -> (Vec<String>, Vec<String>) {
+    let Some(prev) = prev else { return (Vec::new(), Vec::new()) };
+    if prev.agents.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let mut installed = Vec::new();
+    let mut removed = Vec::new();
+    for a in cur {
+        let before = prev
+            .agents
+            .get(&a.agent)
+            .map(|e| e.kind.as_str())
+            .unwrap_or("none");
+        match (before, a.kind.as_str()) {
+            ("none", "cli" | "app" | "config-only") => installed.push(a.agent.clone()),
+            ("config-only", "cli" | "app") => installed.push(a.agent.clone()),
+            ("cli" | "app", "none" | "config-only") => removed.push(a.agent.clone()),
+            _ => {}
+        }
+    }
+    (installed, removed)
+}
+
+/// 由扫描结果生成快照（`scanned_at` 由调用方给出，便于测试注入时间）。
+pub fn snapshot_of(scanned_at: i64, cur: &[AgentHostInfo]) -> ScanSnapshot {
+    ScanSnapshot {
+        scanned_at,
+        agents: cur
+            .iter()
+            .map(|a| {
+                (
+                    a.agent.clone(),
+                    SnapshotEntry {
+                        kind: a.kind.clone(),
+                        binary: a.binary.clone(),
+                        config_dir: a.config_dir.clone(),
+                        app: a.app.clone(),
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
 /// 非 Claude agent 的脚本变体：去掉 `${CLAUDE_SESSION_ID}` 与 `/task-start` slash
 /// 引用（这些 agent 不一定有 slash 命令），改为 MCP 直调指引。基于模板精确替换，
 /// 替换失败则回退 Claude 原文（测试断言覆盖关键 token）。
@@ -1206,7 +1537,18 @@ fn opencode_mcp_present_text(home: &Path, project: Option<&Path>, mcp_file: &str
     })
 }
 
-fn status_one(home: &Path, project: Option<&Path>, agent_id: &str) -> AgentStatus {
+/// #263：`host` 为设备扫描结果（可选）。
+///
+/// - `Some(info)`：装了但从未运行（无配置目录）、或 GUI 版仅有 `.app` 的 agent 也
+///   算 host 存在 → 归入「可接入」而不是「未安装」（正式路径由 `get_agent_hooks_status`
+///   传入扫描结果）。
+/// - `None`：退化为纯配置目录判定（保持既有语义；单测走这条以避免依赖开发机 PATH）。
+fn status_one(
+    home: &Path,
+    project: Option<&Path>,
+    agent_id: &str,
+    host: Option<&AgentHostInfo>,
+) -> AgentStatus {
     let bad = |host_present: bool| AgentStatus {
         agent: agent_id.to_string(),
         installed: false,
@@ -1215,13 +1557,14 @@ fn status_one(home: &Path, project: Option<&Path>, agent_id: &str) -> AgentStatu
         settings_ok: false,
         host_present,
     };
-    let Some(spec) = spec_of(agent_id) else { return bad(false) };
-    // 项目级：target 目录已校验，host 恒视为 present；全局：配置根可解析才算装过
+    let probed = host.map(|h| h.present).unwrap_or(false);
+    let Some(spec) = spec_of(agent_id) else { return bad(probed) };
+    // 项目级：target 目录已校验，host 恒视为 present；全局：配置根可解析或设备探测命中
     let root = match config_root(home, project, spec) {
         Some(r) => r,
-        None => return bad(false),
+        None => return bad(probed),
     };
-    let host_present = project.is_some() || root.is_dir();
+    let host_present = project.is_some() || root.is_dir() || probed;
     let has = |rel: &str| root.join(rel).is_file();
     // 无 commands 机制的 agent：commands_ok 恒 true（只考核 hooks + settings）
     let expects_commands = agent_id == "claude-code" || agent_id == "opencode";
@@ -1312,6 +1655,9 @@ pub fn get_agent_hooks_status(
     let home = home_dir()?;
     let scope_s = if global { "global" } else { "project" };
     let target_s = project.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| home.display().to_string());
+    // #263：设备扫描结果参与 host 判定 —— CLI 已装但从未运行（无配置目录）也能识别为
+    // 「可接入」，不再误判「未安装」。项目级只看目标仓库，跳过设备探测。
+    let hosts: Vec<AgentHostInfo> = if global { probe_agent_hosts()? } else { Vec::new() };
     let mut out = StatusResult {
         scope: scope_s.to_string(),
         target: target_s,
@@ -1319,13 +1665,14 @@ pub fn get_agent_hooks_status(
         notices: Vec::new(),
     };
     for agent_id in &list {
+        let host = hosts.iter().find(|h| &h.agent == agent_id);
         if global && spec_of(agent_id).is_some() && config_root(&home, None, spec_of(agent_id).expect("checked some")).is_none() {
             out.notices.push(format!("{agent_id}：未检测到全局配置（host 疑似未安装）"));
         }
         if spec_of(agent_id).is_none() {
             out.notices.push(format!("{agent_id}：暂不支持一键安装。{hint}", hint = manual_hint(agent_id)));
         }
-        out.agents.push(status_one(&home, project.as_deref(), agent_id));
+        out.agents.push(status_one(&home, project.as_deref(), agent_id, host));
     }
     if !global {
         // 项目级 opencode 若缺 MCP，给出一句提醒（安装时会自动配，这里只读）
@@ -1441,7 +1788,7 @@ mod tests {
         let s = std::fs::read_to_string(repo.join(".claude/settings.json")).unwrap();
         assert!(s.contains("${CLAUDE_PROJECT_DIR}/.claude/hooks/taskboard-session-start.sh"));
         for a in ["claude-code", "opencode"] {
-            assert!(status_one(&home, Some(&repo), a).installed, "{a} 应装好");
+            assert!(status_one(&home, Some(&repo), a, None).installed, "{a} 应装好");
         }
         // 幂等重装：零写入
         let mut r2 = InstallResult::empty("project", "x");
@@ -1561,8 +1908,8 @@ mod tests {
         // trae 写的是 hooks.json（不是 settings.json）
         assert!(home.join(".trae-cn/hooks.json").is_file());
         assert!(!home.join(".trae-cn/settings.json").exists());
-        assert!(status_one(&home, None, "trae").installed);
-        assert!(status_one(&home, None, "codebuddy").installed);
+        assert!(status_one(&home, None, "trae", None).installed);
+        assert!(status_one(&home, None, "codebuddy", None).installed);
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -1574,7 +1921,7 @@ mod tests {
         install_one(&home, None, "codex", exe, &mut res).unwrap();
         assert!(res.files_written.is_empty());
         assert!(res.notices.iter().any(|n| n.contains("codex") && n.contains("codex_hooks") || n.contains("AGENT_INSTRUCTIONS")));
-        assert!(!status_one(&home, None, "codex").installed);
+        assert!(!status_one(&home, None, "codex", None).installed);
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -1737,8 +2084,8 @@ mod tests {
         for a in ["claude-code", "opencode"] {
             uninstall_one(&home, Some(&repo), a, exe, &mut u).unwrap();
         }
-        assert!(!status_one(&home, Some(&repo), "claude-code").installed);
-        assert!(!status_one(&home, Some(&repo), "opencode").installed);
+        assert!(!status_one(&home, Some(&repo), "claude-code", None).installed);
+        assert!(!status_one(&home, Some(&repo), "opencode", None).installed);
         assert!(!repo.join("opencode.json").exists(), "只含 ours 的 opencode.json 应删除");
         assert!(!u.backups.is_empty());
         let _ = std::fs::remove_dir_all(&repo);
@@ -1898,7 +2245,7 @@ mod tests {
         assert!(after.contains("// keep me"), "注释保留");
         assert!(after.contains("\"o\": 1"), "兄弟键保留");
         assert!(u.backups.iter().any(|b| b.contains("taskboard-bak")), "应留备份");
-        assert!(!status_one(&home, None, "opencode").installed);
+        assert!(!status_one(&home, None, "opencode", None).installed);
         // 外来条目：保留 + notice
         std::fs::write(
             cfg.join("opencode.jsonc"),
@@ -1917,16 +2264,16 @@ mod tests {
     fn status_distinguishes_missing_host() {
         // 全局 + host 不存在 → host_present=false（“未安装”组）
         let home = fake_home("host-flag");
-        let st = status_one(&home, None, "codebuddy");
+        let st = status_one(&home, None, "codebuddy", None);
         assert!(!st.installed && !st.host_present);
         // host 存在但 ours 缺失 → host_present=true（“可接入”组）
         std::fs::create_dir_all(home.join(".codebuddy")).unwrap();
-        let st2 = status_one(&home, None, "codebuddy");
+        let st2 = status_one(&home, None, "codebuddy", None);
         assert!(!st2.installed && st2.host_present);
         // 项目级：有项目支持的恒视为 present；无项目支持的不可装（手动组）
         let repo = tmp("host-flag-proj");
-        assert!(status_one(&home, Some(&repo), "claude-code").host_present);
-        assert!(!status_one(&home, Some(&repo), "codebuddy").host_present);
+        assert!(status_one(&home, Some(&repo), "claude-code", None).host_present);
+        assert!(!status_one(&home, Some(&repo), "codebuddy", None).host_present);
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&repo);
     }
@@ -1977,6 +2324,199 @@ mod tests {
         assert!(!r2.notices.iter().any(|n| n.contains("开发版")));
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(&repo2);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// （临时）打印本机真实探测结果，人工核对用：`cargo test dump_real_probe -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn dump_real_probe() {
+        let agents = probe_agent_hosts().unwrap();
+        for a in agents.iter().filter(|a| a.present) {
+            println!("{:<12} {:<12} {:?} {:?} {:?}", a.agent, a.kind, a.binary, a.config_dir, a.app);
+        }
+        let snap = snapshot_of(1, &agents);
+        let text = serde_json::to_string(&snap).unwrap();
+        let back: ScanSnapshot = serde_json::from_str(&text).unwrap();
+        let (i, r) = diff_scan(Some(&back), &agents);
+        println!("--- 已安装 {} 个；与自身对比 diff: +{:?} -{:?}", agents.iter().filter(|a| a.present).count(), i, r);
+    }
+
+    /* ===== #263：设备扫描 ===== */
+
+    /// 从 `app/src/agents.ts` 抽取 `AGENTS` 的 value 集合（`{ value: 'x'` 形式）。
+    /// 只认带 `value:` 前缀的条目，故 `HOOK_SUPPORTED_AGENTS` / `MANUAL_PATH_HINTS`
+    /// 不会被误收。
+    fn frontend_agent_ids() -> Vec<String> {
+        let ts = include_str!("../../src/agents.ts");
+        let mut out = Vec::new();
+        for line in ts.lines() {
+            let Some(idx) = line.find("value: '") else { continue };
+            let rest = &line[idx + "value: '".len()..];
+            if let Some(end) = rest.find('\'') {
+                out.push(rest[..end].to_string());
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn host_specs_cover_frontend_agent_ids() {
+        let mut fe = frontend_agent_ids();
+        fe.sort();
+        let mut be: Vec<String> = HOST_SPECS.iter().map(|s| s.id.to_string()).collect();
+        be.sort();
+        // 防漂移：前端新增 agent 必须同步在 HOST_SPECS 里给出探测口径（可留空数组）。
+        assert_eq!(fe, be, "HOST_SPECS 与 app/src/agents.ts 的 agent id 集合必须一致");
+        assert!(fe.len() >= 30, "agents.ts 解析疑似失败，只拿到 {} 条", fe.len());
+    }
+
+    #[test]
+    fn host_spec_ids_unique_and_cover_hook_specs() {
+        let mut ids: Vec<&str> = HOST_SPECS.iter().map(|s| s.id).collect();
+        ids.sort();
+        let n = ids.len();
+        ids.dedup();
+        assert_eq!(ids.len(), n, "HOST_SPECS 存在重复 id");
+        // 5 个有安装契约的 agent 必须都能被设备探测认出。
+        for spec in AGENTS.iter() {
+            assert!(host_spec_of(spec.id).is_some(), "{} 缺少 HostSpec", spec.id);
+        }
+    }
+
+    #[test]
+    fn diff_scan_reports_install_and_uninstall() {
+        let info = |id: &str, kind: &str| AgentHostInfo {
+            agent: id.to_string(),
+            present: kind != "none",
+            kind: kind.to_string(),
+            binary: None,
+            config_dir: None,
+            app: None,
+        };
+        let cur = vec![
+            info("claude-code", "cli"),
+            info("opencode", "config-only"),
+            info("trae", "none"),
+            info("glm", "none"),
+        ];
+
+        // 首次扫描（无快照 / 空快照）不报变更，避免首刷全量噪音。
+        assert_eq!(diff_scan(None, &cur), (Vec::new(), Vec::new()));
+        assert_eq!(
+            diff_scan(Some(&ScanSnapshot::default()), &cur),
+            (Vec::new(), Vec::new())
+        );
+
+        // 新装：none → cli；none → config-only（已运行过）。
+        let prev = snapshot_of(
+            100,
+            &[
+                info("claude-code", "none"),
+                info("opencode", "none"),
+                info("trae", "cli"),   // 上一轮还在，本轮消失 → 疑似已卸载
+                info("glm", "app"),    // 同上，app 形态
+            ],
+        );
+        let (installed, removed) = diff_scan(Some(&prev), &cur);
+        assert_eq!(installed, vec!["claude-code".to_string(), "opencode".to_string()]);
+        assert_eq!(removed, vec!["trae".to_string(), "glm".to_string()]);
+
+        // config-only → cli 视为补齐/重装，不重复计为"已安装"以外的事件。
+        let prev2 = snapshot_of(100, &[info("claude-code", "config-only")]);
+        let (i2, r2) = diff_scan(Some(&prev2), &[info("claude-code", "cli")]);
+        assert_eq!(i2, vec!["claude-code".to_string()]);
+        assert!(r2.is_empty());
+
+        // cli → config-only 是卸载的核心形态（只剩配置目录残留）。
+        let prev3 = snapshot_of(100, &[info("claude-code", "cli")]);
+        let (_, r3) = diff_scan(Some(&prev3), &[info("claude-code", "config-only")]);
+        assert_eq!(r3, vec!["claude-code".to_string()]);
+    }
+
+    #[test]
+    fn snapshot_round_trips_through_json() {
+        let cur = vec![AgentHostInfo {
+            agent: "claude-code".to_string(),
+            present: true,
+            kind: "cli".to_string(),
+            binary: Some("~/.local/bin/claude".to_string()),
+            config_dir: Some("~/.claude".to_string()),
+            app: None,
+        }];
+        let snap = snapshot_of(1_789_000_000, &cur);
+        let text = serde_json::to_string(&snap).unwrap();
+        let back: ScanSnapshot = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.scanned_at, 1_789_000_000);
+        assert_eq!(back.agents["claude-code"].kind, "cli");
+        assert_eq!(back.agents["claude-code"].binary.as_deref(), Some("~/.local/bin/claude"));
+    }
+
+    #[test]
+    fn find_binary_probes_path_and_home_dirs() {
+        let home = fake_home("probe-bin");
+        // 唯一名，避免与开发机真实 PATH 冲突；命中 <home>/bin 这一惯例目录。
+        std::fs::create_dir_all(home.join("bin")).unwrap();
+        std::fs::write(home.join("bin").join("tb-probe-fixture-only"), "#!/bin/sh\n").unwrap();
+        let hit = find_binary(&home, &["tb-probe-fixture-only"]);
+        assert_eq!(hit.as_deref(), Some(home.join("bin").join("tb-probe-fixture-only").as_path()));
+        assert!(find_binary(&home, &["tb-probe-definitely-absent-xyz"]).is_none());
+        assert!(find_binary(&home, &[]).is_none());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn find_app_matches_case_insensitively() {
+        let apps = vec!["Cursor".to_string(), "WorkBuddy".to_string()];
+        assert_eq!(find_app(&apps, &["cursor"]).as_deref(), Some("/Applications/Cursor.app"));
+        assert_eq!(find_app(&apps, &["Trae"]), None);
+        assert_eq!(find_app(&apps, &[]), None);
+    }
+
+    /// 只用 `configs` 信号（`bins` / `apps` 均为空）的 agent，分类结果与开发机
+    /// PATH / /Applications 无关，可确定性断言。
+    #[test]
+    fn probe_classifies_config_only_and_app_signals() {
+        let home = fake_home("probe-kind");
+        // glm：仅 ~/.glm 一个信号。
+        assert_eq!(probe_one_with(&home, "glm", &[]).kind, "none");
+        std::fs::create_dir_all(home.join(".glm")).unwrap();
+        let info = probe_one_with(&home, "glm", &[]);
+        assert_eq!(info.kind, "config-only");
+        assert!(info.present);
+        assert_eq!(info.config_dir.as_deref(), Some("~/.glm"));
+
+        // doubao：仅应用包信号（app_names 注入，不依赖本机 /Applications）。
+        let app_home = fake_home("probe-app");
+        let info2 = probe_one_with(&app_home, "doubao", &["Doubao".to_string()]);
+        assert_eq!(info2.kind, "app");
+        assert_eq!(info2.app.as_deref(), Some("/Applications/Doubao.app"));
+        assert_eq!(probe_one_with(&app_home, "doubao", &[]).kind, "none");
+
+        // 未知 id → none，不 panic。
+        assert_eq!(probe_one_with(&home, "no-such-agent-xyz", &[]).kind, "none");
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&app_home);
+    }
+
+    /// 设备扫描结果参与 host 判定：配置根不存在但 CLI 已装（装了没跑过）→ 应归
+    /// 「可接入」而不是「未安装」。
+    #[test]
+    fn status_one_uses_probe_for_host_presence() {
+        let home = fake_home("probe-status");
+        let info = AgentHostInfo {
+            agent: "codebuddy".to_string(),
+            present: true,
+            kind: "cli".to_string(),
+            binary: Some("~/.local/bin/codebuddy".to_string()),
+            config_dir: None,
+            app: None,
+        };
+        let without = status_one(&home, None, "codebuddy", None);
+        assert!(!without.host_present && !without.installed, "无配置目录且无探测 → 未安装");
+        let with = status_one(&home, None, "codebuddy", Some(&info));
+        assert!(with.host_present && !with.installed, "探测命中 → 可接入");
         let _ = std::fs::remove_dir_all(&home);
     }
 }

@@ -436,6 +436,8 @@ pub fn run() {
             // v0.3.28+：自定义列映射（按账号配置看板列）。
             commands::list_account_columns,
             commands::save_account_columns,
+            // #263：设备扫描 —— 识别本机已安装 / 已卸载的 agent（只读 FS + 快照）。
+            commands::scan_agent_hosts,
             // #177：一键安装/卸载 agent 看板 hooks（claude/opencode × 项目/全局）。
             // 实现参考 clawd-on-desk 的 Settings → Agents：per-agent 安装器 + 跳过未安装 host。
             hooks::install_agent_hooks,
