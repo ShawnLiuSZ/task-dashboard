@@ -75,6 +75,7 @@
   "sync.result": "新增 {added} · 更新 {updated} · 候选完成 {done}",
   "sync.filterHidesNew": "本次同步的 {n} 个任务被当前筛选隐藏",
   "sync.pruned": "清理已完成 {n}",
+  "sync.accountsSynced": "覆盖 {n} 个账号",
   "search.placeholder": "搜索仓库 / 编号 / 标题…",
   "filter.byRepo": "按仓库筛选",
   "filter.allRepos": "全部仓库",
