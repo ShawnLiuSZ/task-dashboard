@@ -79,6 +79,8 @@ export interface SyncResult {
   pruned: number;
   warning: string;
   syncedAt: number;
+  /** #262：本次同步覆盖的账号数（可观测性）。 */
+  accountsSynced: number;
 }
 
 export interface Settings {

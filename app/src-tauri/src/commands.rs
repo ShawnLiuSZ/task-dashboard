@@ -1063,7 +1063,7 @@ pub fn set_active_account(state: State<'_, AppState>, id: i64) -> Result<(), Str
 }
 
 /// 设置视图模式：'single' / 'all'。
-#[allow(dead_code)]
+/// 仅影响前端展示范围（单账号 / 聚合全部账号），**不**决定同步范围（#262 起同步恒覆盖全部账号）。
 #[tauri::command]
 pub fn set_view_mode(state: State<'_, AppState>, mode: String) -> Result<(), String> {
     if mode != "single" && mode != "all" {
