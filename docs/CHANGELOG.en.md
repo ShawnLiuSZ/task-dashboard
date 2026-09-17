@@ -2,6 +2,12 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — Restart button added to manual-download flow (#272)**
+
+  - **#272 No restart option after manual download**: the `about.restart` button only appeared in the `installed` phase (after the updater channel's `installAppUpdate()` resolved). When the updater failed and the UI fell back to the manual download branch (`manualUrl`), clicking "Go to download" opened the browser and left the app with **no restart button at all** — the user had to manually quit and reopen. See [docs/issue-272-restart-after-manual.md](./issue-272-restart-after-manual.md).
+  - **How**: a secondary "I've installed it — restart app" button was added to the manual-download branch of the `available` phase, reusing the existing `api.restartApp()` (Tauri 2 `app.restart()`). The label makes the "install first, then restart" ordering explicit. Pure frontend + i18n change — zero Rust / schema changes.
+  - **Verification**: `tsc --noEmit` 0 errors, `npm test` 136 passed, `i18n:check` 350 keys per locale.
+
 - **v0.6.0 (2026-09-17) — Fix Rust test random disk I/O error (CI flake) (#266)**
 
   - **#266 Test temp-db naming was not isolated, causing intermittent CI failures**: the `mem_conn()` test helper named its temp DB only by `process::id()` and `remove_file`d it twice per call. Since Rust tests run in parallel within one process, all callers shared the same file and unlinked each other's open DB, so initializing the schema randomly hit `disk I/O error` (green on rerun). `sync.rs:843`'s fully fixed name `taskboard_headless_test.db` was the same class of hazard. See [docs/issue-266-test-flake.md](./issue-266-test-flake.md).

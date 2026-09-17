@@ -256,13 +256,22 @@ export default function AboutPanel({ onClose }: Props) {
               )}
               {state.updaterNote && <p className="muted small">{state.updaterNote}</p>}
               {state.manualUrl ? (
-                <button
-                  className="btn primary"
-                  style={{ marginTop: 6 }}
-                  onClick={() => openExternal(state.manualUrl as string)}
-                >
-                  {t('about.download')} ↗
-                </button>
+                <>
+                  <button
+                    className="btn primary"
+                    style={{ marginTop: 6 }}
+                    onClick={() => openExternal(state.manualUrl as string)}
+                  >
+                    {t('about.download')} ↗
+                  </button>
+                  <button
+                    className="btn"
+                    style={{ marginTop: 4 }}
+                    onClick={() => void api.restartApp()}
+                  >
+                    {t('about.restartAfterManual')}
+                  </button>
+                </>
               ) : (
                 <button
                   className="btn primary"

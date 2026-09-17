@@ -259,6 +259,7 @@
   "about.progress": "Downloaded {percent}%",
   "about.installed": "v{version} installed, restart the app to apply",
   "about.restart": "Restart app",
+  "about.restartAfterManual": "I've installed it — restart app",
   "about.error": "Update check failed: {error}",
   "about.updaterUnavailable": "In-app update unavailable: {reason}",
   "about.updaterTimeout": "In-app update check timed out, falling back to manual download",
