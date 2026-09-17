@@ -188,6 +188,7 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 - [`docs/issue-259-sidebar-nav.md`](./docs/issue-259-sidebar-nav.md) — **左右分栏布局**：左侧固定 Sidebar（记事本 / 账号点选 / 设置 / Agent 接入 / 同步日志 / 账号登录 / 关于）承载全部入口，顶栏精简；设置 / 账号 / 同步日志由 Modal 改为主区内嵌全高页面，Agent 接入面板展示 MCP 配置与看板工具说明
 
 - [`docs/issue-263-agent-device-scan.md`](./docs/issue-263-agent-device-scan.md) — **Agent 设备扫描**：刷新升级为「扫本机已安装 / 已卸载的 agent」——PATH + 配置目录 + macOS 应用包三类信号 + 快照对比判卸载，含「疑似已卸载」分组与防漂移测试
+- [`docs/issue-265-sidebar-collapse.md`](./docs/issue-265-sidebar-collapse.md) — **侧边栏窄窗收起**：窗口宽度 < 900px 时 Sidebar 自动收起为纯图标模式（~56px），隐藏文字标签 / 分组标题，账号靠 `title` 提示辨识；纯响应式、不持久化
 
 - [`docs/issue-235-in-app-api-log.md`](./docs/issue-235-in-app-api-log.md) — **应用内 API 调用明细**：`api_logs` 新表 + 可选 sink 收集器，同步/认领/状态写回的请求与返回参数可在日志面板展开查看（承接 #228 的 stderr 埋点）
 

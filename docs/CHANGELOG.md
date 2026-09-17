@@ -14,6 +14,10 @@
   - **验证**：Rust 新增 6 例——含 `HOST_SPECS` 与 `app/src/agents.ts` 的 agent id 集合**双向一致**的防漂移断言（`include_str!` 直接解析前端源文件）、快照 diff 的新装/卸载/重装/首次四种迁移、应用包名大小写不敏感匹配；既有 11 处 `status_one` 调用同步补参，语义不变。前端新增 `src/agent-groups.test.ts` 15 例 + SSR 冒烟 1 例（按钮文案为「扫描设备」且未扫描时不出现设备徽标）。`cargo test` 101 + 21 passed / 0 failed、`tsc --noEmit` 0 error、`npm test` 13 文件 132 例、`npm run build` ✅、`i18n:check` 中英各 347 key、`check-doc-links.py` ✅。真机渲染复核待起 dev server 确认（本机沙箱内无头 Chrome 已不可用）。
   - **#263 追加修正：分组收敛为 4 组**——「未安装」与「手动配置」两个维度（设备 vs 能力）合并为 **未接入**。理由：① 设备装没装这一原本支撑拆分的依据，已由新增的**每行设备徽标**承载；② 两组在本面板内的可操作性完全相同（都没有安装按钮，一个因本机未装、一个因未验证一键接入）；③ 「未安装」组最多 5 个候选、实测常只剩 1 行，组头比内容还吵。信息不丢：行内 detail 让两类**自述**（手动 agent 显示「手动配置：~/.codex/hooks.json」，支持但本机没装的显示「本机未检测到」），组级提示改写为覆盖两种情形的一句话；手动 agent 即使被判「已卸载」也不进「疑似已卸载」组（本面板从未给它装过东西，无残留可清）。顺带修正底部提示原先只看 `newlyRemoved` 导致「有提示却无可清理行」的问题（改为与分组结果同源）。i18n 删 `group.missing` / `group.manual`、加 `group.notIntegrated` / `manualPath` / `notDetected`（中英各 348 key）；`npm test` 13 文件 134 例（含「共 4 组、不得回归出 missing/manual」守卫）。
 
+  - **#265 窗口过窄侧边栏自动收起为纯图标模式**：窗口宽度 `< 900px` 时，左侧 Sidebar 由 200px 的固定文字导航自动收起为 ~56px 的纯图标模式——只保留图标、隐藏文字标签 / 账号名 / 分组标题 / 空态提示，账号项靠 `title` 悬浮提示辨识。详见 [docs/issue-265-sidebar-collapse.md](./issue-265-sidebar-collapse.md)。
+  - **做法**：纯响应式、不持久化——`App.tsx` 用 `window.innerWidth < 900` 作初始态并监听 `resize` 驱动 `sidebarCollapsed` 状态；状态值与上次相同（同为 false / true）时 `setState` 为 no-op，不触发多余重渲染；`Sidebar` 据此在 `nav` 上加 `.collapsed` 类。main-content 仍 `flex: 1` 自动占满释放出的空间，主区无需改动。纯前端，SQLite / Rust 零改动。
+  - **验证**：`tsc --noEmit` 0 error、`npm run build` ✅、`npm test` 13 文件 136 例（新增 `styles.test.ts` 侧边栏收起静态回归 2 例）、`i18n:check` 中英各 348 key（无新增 key）、`prettier --check` ✅、`check-doc-links.py` ✅。真机渲染复核待起 dev server 确认（沙箱无头 Chrome 不可用）。
+
 - **未发布（Unreleased）— 左右分栏布局 + Agent 接入面板（#259）**
 
   - **#259 左右分栏重构**：新增左侧固定 Sidebar（200px）承载全部功能入口——记事本 / 账号列表（点选切换 + 添加账号）/ 设置 / Agent 接入 / 同步日志 / 账号登录 / 底部关于。顶栏从「账号下拉 + 4 按钮 + 同步」精简为「品牌 + 总条数 + 上次同步 + 立即同步」。设置 / 账号 / 同步日志由 Modal 改为**主区内嵌全高页面**（面板组件零侵入，靠 `.panel-page` 容器 + CSS 覆盖）；NotesPanel 改为主区「页面」，选中才渲染。详见 [docs/issue-259-sidebar-nav.md](./issue-259-sidebar-nav.md)。

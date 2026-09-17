@@ -1854,6 +1854,41 @@ button.unassigned-tag:disabled {
   min-height: 0;
 }
 
+/* #265：窗口过窄（< 900px）时侧边栏收起为纯图标模式。
+ * 仅保留图标，分组标题 / 文字标签 / 空态提示全部隐藏；账号项靠 title 提示辨识。
+ * 宽度由 200px 收窄到 56px，main-content 仍 flex:1 自动占满剩余空间，无需额外改主区。 */
+.sidebar.collapsed {
+  flex-basis: 56px;
+  width: 56px;
+  padding-left: 6px;
+  padding-right: 6px;
+  align-items: center;
+}
+
+.sidebar.collapsed .sidebar-group,
+.sidebar.collapsed .sidebar-footer {
+  width: 100%;
+  align-items: center;
+}
+
+.sidebar.collapsed .sidebar-group-title {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-empty {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-item {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.sidebar.collapsed .sidebar-item-label {
+  display: none;
+}
+
 /* ---- 右侧主区（按 Sidebar 选中项条件渲染） ---- */
 .main-content {
   flex: 1 1 auto;
