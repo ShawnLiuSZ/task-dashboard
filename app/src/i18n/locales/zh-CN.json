@@ -259,6 +259,7 @@
   "about.progress": "已下载 {percent}%",
   "about.installed": "已安装 v{version}，重启应用后生效",
   "about.restart": "重启应用",
+  "about.restartAfterManual": "我已安装，重启应用",
   "about.error": "检查更新失败：{error}",
   "about.updaterUnavailable": "应用内更新不可用：{reason}",
   "about.updaterTimeout": "应用内更新检查超时，已改用手动下载",

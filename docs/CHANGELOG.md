@@ -6,6 +6,12 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 手动下载流程补充「重启应用」按钮（#272）**
+
+  - **#272 手动下载后无重启入口**：`about.restart` 按钮仅在 updater 通道安装成功后（`installed` 阶段）出现；当 updater 失败回退为手动下载（`manualUrl` 分支），用户点「前往下载」跳转浏览器后 App 内**没有任何重启按钮**，必须手动退出重开。详见 [docs/issue-272-restart-after-manual.md](./issue-272-restart-after-manual.md)。
+  - **做法**：在 `available` 阶段的手动下载分支追加次级按钮「我已安装，重启应用」，复用已有 `api.restartApp()`（Tauri 2 `app.restart()`），文案明确「先下载安装、再点重启」的时序。纯前端 + i18n 改动，零 Rust / schema 改动。
+  - **验证**：`tsc --noEmit` 0 error、`npm test` 136 例 passed、`i18n:check` 350 key / locale。
+
 - **v0.6.0（2026-09-17）— 修复 Rust 测试随机 disk I/O error（#266）**
 
   - **#266 测试临时库命名未隔离导致 CI 偶发失败**：`commands.rs` 的测试辅助 `mem_conn()` 把临时库只按 `process::id()` 命名并每次 `remove_file` 两次，Rust 测试同进程内并行执行时所有调用共用同一文件、互相 unlink 对方正在使用的库，初始化 schema 时随机撞 `disk I/O error`（重跑即绿）。`sync.rs:843` 的 `taskboard_headless_test.db` 也是完全固定名，属同一类隐患。详见 [docs/issue-266-test-flake.md](./issue-266-test-flake.md)。
