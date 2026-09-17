@@ -2,6 +2,12 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — Fix Rust test random disk I/O error (CI flake) (#266)**
+
+  - **#266 Test temp-db naming was not isolated, causing intermittent CI failures**: the `mem_conn()` test helper named its temp DB only by `process::id()` and `remove_file`d it twice per call. Since Rust tests run in parallel within one process, all callers shared the same file and unlinked each other's open DB, so initializing the schema randomly hit `disk I/O error` (green on rerun). `sync.rs:843`'s fully fixed name `taskboard_headless_test.db` was the same class of hazard. See [docs/issue-266-test-flake.md](./issue-266-test-flake.md).
+  - **How**: `mem_conn()` now appends a per-call `AtomicUsize` sequence to the temp path (`{pid}_{SEQ}`) so every connection gets its own file, and no longer `remove_file`s while the connection is alive. The `sync.rs` fixed name was also made pid-unique. Added a regression assertion `mem_conn_returns_unique_paths_per_call` (two calls must return different paths). Pure test-helper change — no product code / public API / schema touched.
+  - **Verification**: `cargo test --lib -- --test-threads=16` → 102 passed / 0 failed / 3 ignored; 4 consecutive `cargo test --lib` runs all green (including the new assertion). CI `Rust Tests` green across reruns.
+
 - **Unreleased — Agent Setup panel: device scan (#263)**
 
   - **#263 The refresh button becomes a device scan**: one click now reports which agents are **installed** on this machine and which have been **uninstalled**, answering "what agents does this box actually have?". Previously `host_present` was derived purely from whether the config root directory exists (`root.is_dir()` in `hooks.rs`), which caused three gaps: ① an agent whose CLI is on PATH but has never run (no config dir) was reported as **not installed** — measured on this machine, `codex` is on PATH but `~/.codex` does not exist; ② only 5 agents have an `AgentSpec`, so the other 34 always landed in the "manual setup" group with no hint about local installation; ③ after removing a CLI or deleting its `.app`, a leftover config dir (or a live integration) produced no signal at all. See [docs/issue-263-agent-device-scan.md](./issue-263-agent-device-scan.md).

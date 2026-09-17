@@ -6,6 +6,12 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 修复 Rust 测试随机 disk I/O error（#266）**
+
+  - **#266 测试临时库命名未隔离导致 CI 偶发失败**：`commands.rs` 的测试辅助 `mem_conn()` 把临时库只按 `process::id()` 命名并每次 `remove_file` 两次，Rust 测试同进程内并行执行时所有调用共用同一文件、互相 unlink 对方正在使用的库，初始化 schema 时随机撞 `disk I/O error`（重跑即绿）。`sync.rs:843` 的 `taskboard_headless_test.db` 也是完全固定名，属同一类隐患。详见 [docs/issue-266-test-flake.md](./issue-266-test-flake.md)。
+  - **做法**：`mem_conn()` 临时库路径加**每调用递增的 `AtomicUsize` 序号**（`{pid}_{SEQ}`），保证每个连接独享一个文件；连接存活期不再 `remove_file`。`sync.rs` 固定名一并改为带 pid。新增防回归断言 `mem_conn_returns_unique_paths_per_call`（两次调用路径必须不同）。纯测试辅助改动，不涉及任何产品代码 / 公共 API / schema。
+  - **验证**：`cargo test --lib -- --test-threads=16` → 102 passed / 0 failed / 3 ignored；连续 4 次 `cargo test --lib` 全绿（含新增断言）。CI `Rust Tests` 连续多次全绿。
+
 - **未发布（Unreleased）— Agent 接入面板：设备扫描（#263）**
 
   - **#263 刷新升级为设备扫描**：刷新按钮（文案改为「扫描设备」）现在一次点击就探出本机**已安装**与**已卸载**的 agent，直接回答「这台机器上到底装了哪些 agent」。原先 `host_present` 只看配置根目录是否存在（`hooks.rs` 的 `root.is_dir()`），于是 ① 装了 CLI 但从未运行（没有配置目录）的 agent 被误判「未安装」——本机实测 `codex` 在 PATH 上却没有 `~/.codex`；② 后端只有 5 个 `AgentSpec`，其余 34 个 agent 永远落在「手动配置」组，看不出本机装没装；③ 卸载 CLI / 删掉 `.app` 之后只要配置目录残留、或接入文件还在，就完全没有提示。详见 [docs/issue-263-agent-device-scan.md](./issue-263-agent-device-scan.md)。
