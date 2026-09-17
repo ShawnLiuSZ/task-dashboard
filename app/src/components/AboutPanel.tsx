@@ -166,15 +166,24 @@ export default function AboutPanel({ onClose }: Props) {
 
   // #231：订阅下载进度，仅在 installing 阶段刷新百分比。
   useEffect(() => {
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     void onUpdateProgress((p) => {
+      if (cancelled) return;
       const percent =
         p.total && p.total > 0 ? Math.min(100, Math.floor((p.downloaded / p.total) * 100)) : null;
       setState((prev) => (prev.phase === 'installing' ? { phase: 'installing', percent } : prev));
     }).then((fn) => {
-      unlisten = fn;
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
     });
-    return () => unlisten?.();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   const busy = state.phase === 'loading' || state.phase === 'installing';

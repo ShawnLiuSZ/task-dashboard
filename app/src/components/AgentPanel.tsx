@@ -124,7 +124,7 @@ export default function AgentPanel({ onClose }: Props) {
     const s = await api.getAgentHooksStatus(hooksScope, hooksTarget(), allAgentIds);
     setHooksStatus(s.agents);
     setHooksNotices(s.notices);
-  }, [hooksScope, allAgentIds]);
+  }, [hooksScope, allAgentIds, targetDir]);
 
   // #263：设备扫描。与 hooks 状态一起刷新，保证「设备安装/卸载」与「接入状态」同源同刻。
   const runScan = useCallback(async () => {
@@ -139,9 +139,10 @@ export default function AgentPanel({ onClose }: Props) {
   // 打开 Hooks tab / 切换作用域时自动查询
   useEffect(() => {
     if (tab !== 'hooks' || hooksBusy) return;
+    if (hooksScope === 'project' && !targetDir.trim()) return;
     setHooksMsg(null);
     refreshAll().catch((e) => setHooksMsg({ ok: false, text: String(e) }));
-  }, [tab, hooksScope]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tab, hooksScope, hooksBusy, targetDir, refreshAll]);
 
   const runHooksOp = async (
     op: (scope: HooksScope, target: string | null, agents: string[]) => Promise<unknown>,
