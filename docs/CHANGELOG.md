@@ -6,6 +6,12 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 修复 Rust 测试随机 disk I/O error（#266）**
+
+  - **#266 测试临时库命名未隔离导致 CI 偶发失败**：`commands.rs` 的测试辅助 `mem_conn()` 把临时库只按 `process::id()` 命名并每次 `remove_file` 两次，Rust 测试同进程内并行执行时所有调用共用同一文件、互相 unlink 对方正在使用的库，初始化 schema 时随机撞 `disk I/O error`（重跑即绿）。`sync.rs:843` 的 `taskboard_headless_test.db` 也是完全固定名，属同一类隐患。详见 [docs/issue-266-test-flake.md](./issue-266-test-flake.md)。
+  - **做法**：`mem_conn()` 临时库路径加**每调用递增的 `AtomicUsize` 序号**（`{pid}_{SEQ}`），保证每个连接独享一个文件；连接存活期不再 `remove_file`。`sync.rs` 固定名一并改为带 pid。新增防回归断言 `mem_conn_returns_unique_paths_per_call`（两次调用路径必须不同）。纯测试辅助改动，不涉及任何产品代码 / 公共 API / schema。
+  - **验证**：`cargo test --lib -- --test-threads=16` → 102 passed / 0 failed / 3 ignored；连续 4 次 `cargo test --lib` 全绿（含新增断言）。CI `Rust Tests` 连续多次全绿。
+
 - **未发布（Unreleased）— 多账号同步修复（#262）**
 
   - **#262 多账号同步失效：同步恒覆盖全部账号**：配置 ≥2 个 GitHub 账号后，立即 / 定时 / 启动 / 托盘四条同步路径每轮都只同步激活账号、其余账号永不同步（本机 `sync_logs` 历史从未有一轮覆盖 2 个账号）。根因是同步目标集由 `meta.view_mode` 决定，而 `view_mode` 恒为默认值 `single`——其唯一写入入口（topbar 的 `<select>`）已被 `597840b` 删除，后端 `set_view_mode` / `api.setViewMode` / i18n key 全部残留但无调用方（「有实现、无入口」）。详见 [docs/issue-262-multi-account-sync.md](./issue-262-multi-account-sync.md)。

@@ -874,7 +874,12 @@ mod tests {
         // v0.3.17 起 DB 是 WAL 模式：最新数据可能在 `-wal` 里尚未 checkpoint，
         // `fs::copy` 主文件会拿到旧快照（实测丢 accounts 表）。改用 SQLite 原生
         // `VACUUM INTO` 做一致性快照（含 WAL 内容，且对正在使用的库安全）。
-        let tmp = std::env::temp_dir().join("taskboard_headless_test.db");
+        // #266：原固定名 taskboard_headless_test.db 在多进程/重跑时会与自身或别处冲突，
+        // 改为带 pid 的唯一名（本测试虽 #[ignore]，仍按同一约定整改，避免遗留隐患）。
+        let tmp = std::env::temp_dir().join(format!(
+            "taskboard_headless_test_{}.db",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&tmp);
         {
             let src = Connection::open(prod).expect("打开生产库（只读快照）");

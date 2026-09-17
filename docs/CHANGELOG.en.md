@@ -2,6 +2,12 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — Fix Rust test random disk I/O error (CI flake) (#266)**
+
+  - **#266 Test temp-db naming was not isolated, causing intermittent CI failures**: the `mem_conn()` test helper named its temp DB only by `process::id()` and `remove_file`d it twice per call. Since Rust tests run in parallel within one process, all callers shared the same file and unlinked each other's open DB, so initializing the schema randomly hit `disk I/O error` (green on rerun). `sync.rs:843`'s fully fixed name `taskboard_headless_test.db` was the same class of hazard. See [docs/issue-266-test-flake.md](./issue-266-test-flake.md).
+  - **How**: `mem_conn()` now appends a per-call `AtomicUsize` sequence to the temp path (`{pid}_{SEQ}`) so every connection gets its own file, and no longer `remove_file`s while the connection is alive. The `sync.rs` fixed name was also made pid-unique. Added a regression assertion `mem_conn_returns_unique_paths_per_call` (two calls must return different paths). Pure test-helper change — no product code / public API / schema touched.
+  - **Verification**: `cargo test --lib -- --test-threads=16` → 102 passed / 0 failed / 3 ignored; 4 consecutive `cargo test --lib` runs all green (including the new assertion). CI `Rust Tests` green across reruns.
+
 - **Unreleased — Multi-account sync now covers all accounts (#262)**
 
   - **#262 Multi-account sync was broken: only the active account was ever synced.** With ≥2 GitHub accounts configured, all four sync triggers (manual / scheduled / startup / tray) synced only the active account every round, so the 2nd, 3rd… accounts were never pulled and no failure was surfaced. Root cause: the sync target set was gated by `meta.view_mode`, which was permanently stuck at its default `'single'`. Its only writer (the topbar `<select>`) had been deleted by commit `597840b`, so the backend `set_view_mode` command, `api.setViewMode`, and the i18n keys were all left as orphans with no caller — "implemented but unreachable". See [docs/issue-262-multi-account-sync.md](./issue-262-multi-account-sync.md).
