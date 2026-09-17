@@ -1785,16 +1785,37 @@ mod tests {
     use rusqlite::Connection;
 
     /// 打开内存库临时文件的连接，并初始化 schema。
+    ///
+    /// #266：临时库路径必须**每次调用都唯一**——旧写法只按 `process::id()` 命名，
+    /// Rust 测试同进程内并行执行时所有 `mem_conn()` 调用共用同一文件，且每次都会
+    /// `remove_file` 两次，于是并行时 A 测试把 B 测试正在使用的库 unlink/重建，
+    /// B 初始化 schema 时撞上 `disk I/O error`（重跑即绿，纯竞争窗口问题）。
+    /// 改为「pid + 每调用递增序号」保证每个连接独享一个文件，且**连接存活期间绝不删除**。
     fn mem_conn() -> Connection {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SEQ: AtomicUsize = AtomicUsize::new(0);
+        let n = SEQ.fetch_add(1, Ordering::SeqCst);
         let path = std::env::temp_dir().join(format!(
-            "taskboard_cmds_test_{}.db",
-            std::process::id()
+            "taskboard_cmds_test_{}_{}.db",
+            std::process::id(),
+            n
         ));
-        let _ = std::fs::remove_file(&path);
+        // 注意：不再在连接存活期 remove_file。并行测试各自占用不同文件，无互删风险；
+        // 残留文件由 OS 在临时目录回收，不影响正确性。
         let conn = crate::db::open_db(&path).expect("打开测试库");
-        // 测试进程结束后清理
-        let _ = std::fs::remove_file(&path);
         conn
+    }
+
+    /// #266 防回归：两次 `mem_conn()` 必须返回不同路径（连接存活期互不干扰）。
+    /// 旧写法按 pid 命名 → 并行测试共享同一文件并互删，触发随机 `disk I/O error`。
+    #[test]
+    fn mem_conn_returns_unique_paths_per_call() {
+        let a = mem_conn();
+        let b = mem_conn();
+        // rusqlite::Connection::path() 返回 Option<&str>。
+        let pa = a.path().expect("a 应有路径").to_string();
+        let pb = b.path().expect("b 应有路径").to_string();
+        assert_ne!(pa, pb, "两次 mem_conn() 必须返回不同路径，否则并行测试会互删库文件");
     }
 
     // 导出文件名的时间戳：epoch 0、近期典型值。
