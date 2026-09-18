@@ -122,16 +122,18 @@ tab 缩进 / 结构行缩进不是偶数 / 同作用域重复 key / 缺 `name` `
 
 ## 5. 测试 / 验收
 
-### 5.1 单测（62 例，`python3 -m unittest discover -s scripts -p 'test_*.py'`）
+### 5.1 单测（70 例，`python3 -m unittest discover -s scripts -p 'test_*.py'`）
 
 | 文件 | 例数 | 覆盖 |
 |---|---|---|
-| `test_merge_cleanup.py` | 29 | `extract_issue_refs` 21 例（关键词、多引用、去重保序、中文关键词、**汉字前缀的中文关键词**、助词隔断不匹配、关键词不得按子串匹配、sha/ref 路径碎片、超大编号、前导零、真实 PR 正文回放）+ dry-run 走完整 `main()` 8 例（argparse 属性名、事件负载读取、fork 跳过、`test`/`draft` 标记跳过、无引用跳过、含斜杠分支名） |
+| `test_merge_cleanup.py` | 37 | `extract_issue_refs` 21 例（关键词、多引用、去重保序、中文关键词、**汉字前缀的中文关键词**、助词隔断不匹配、关键词不得按子串匹配、sha/ref 路径碎片、超大编号、前导零、真实 PR 正文回放）+ dry-run 走完整 `main()` 8 例（argparse 属性名、事件负载读取、fork 跳过、`test`/`draft` 标记跳过、无引用跳过、含斜杠分支名）+ **`ref_head_path()` 4 例与打桩后的非 dry-run 删分支路径 4 例**（#289 追加） |
 | `test_workflow_yaml.py` | 33 | 正向回归（仓库现存 6 个 workflow 必须全部通过）+ 反向验证（每类声称能拦的缺陷都断言「一定会被标记」）+ 解析器单测 |
 
 ### 5.2 开发过程中被拦下的真实缺陷
 
-这些不是演练 —— 全是本次真写出来的 bug，靠上面两层测试与提交前 review 才没进 CI：
+这些不是演练 —— 全是本次真写出来的 bug，靠上面两层测试与提交前 review 才没进 CI。
+**唯一例外是最后一行**：它带着 62 个全绿的单测合进了 `develop`，直到 PR #287 真实合并后才暴露，见
+[#289](https://github.com/ShawnLiuSZ/task-dashboard/issues/289)。
 
 | 缺陷 | 如何被拦下 |
 |---|---|
@@ -146,11 +148,12 @@ tab 缩进 / 结构行缩进不是偶数 / 同作用域重复 key / 缺 `name` `
 | `merge-cleanup.yml` 缺 `actions/checkout` | runner workspace 默认是空的，会以 file not found 静默失败 |
 | `CLOSE_RE` 用 `\b` 做词边界 | 汉字都是 `\w`，「已关闭 #284」永远匹配不上 —— 新增 `test_chinese_keyword_after_cjk_prefix` |
 | 删分支对同一端点发两次 GET（`ref_exists` + `head_ref_at`） | 代码 review 时发现，合并为单次请求的 `head_branch()`，同时省一次网络往返 |
+| **DELETE 用了单数 `/git/ref/` 端点**（#289，**唯一漏网**） | **没被拦下**：单数路径只有 GET 路由、没有 DELETE 路由，DELETE 恒 404；而 GET 对单复数都能路由，于是「分支存在 + sha 比对」全部照常有通过、走完所有护栏后才在 DELETE 那一步 404 —— **读路径把写路径的缺陷完全掩盖**。dry-run 全程不打网络，所以 62 个单测全绿也拦不住。修复见 §5.5 |
 
 ### 5.3 本地验证
 
 ```bash
-python3 -m unittest discover -s scripts -p 'test_*.py'     # 62 例 OK
+python3 -m unittest discover -s scripts -p 'test_*.py'     # 70 例 OK（#289 追加 8 例后）
 python3 scripts/check-workflow-yaml.py                       # 6 个 workflow 全绿
 python3 scripts/check-mcp-columns.py                         # 26 列两侧一致
 python3 scripts/check-doc-links.py                           # 135 个 markdown 无断链
@@ -162,6 +165,41 @@ dry-run 四场景实测（`GITHUB_EVENT_PATH` 指向构造的 PR 事件负载）
 
 改 `CLOSE_RE` 放宽成裸 `#N` 匹配时，`test_body_bare_ref_ignored` 与
 `test_realistic_pr_body_only_closes_declared_issue` 必须失败。这是「误关 issue」防线的唯一保障，不得删除或放松。
+
+把 `ref_head_path()` 退回单数 `/git/ref/` 端点时，`RefPathTest` 的 3 个用例与
+`BranchDeleteFlowTest.test_deletes_via_plural_refs_endpoint` 必须失败（实测 5 例失败）。
+这是「删分支真的能删掉」的唯一保障，不得删除或放松。
+
+### 5.5 首个真实合并暴露的删分支 404（#289 已修）
+
+PR #287 合并后 workflow 首次真实运行：issue 关闭成功（#284 已 CLOSED），**但删分支失败**——
+runner 日志报 `::warning::删除分支 feature/issue-284-merge-cleanup 失败（HTTP 404）`，远端分支仍在。
+
+根因见 §5.2 最后一行。删 ref 的正确端点是**复数** `/git/refs/heads/{branch}`。
+对真实分支逐一实测的结论：
+
+| 请求 | 结果 |
+|---|---|
+| `GET /git/ref/heads/a/b`（未编码） | ✅ 200，返回 sha |
+| `GET /git/ref/heads/a%2Fb`（编码） | ✅ 200，返回 sha |
+| `DELETE /git/ref/heads/a/b`（**原代码**） | ❌ 404，分支仍在 |
+| `DELETE /git/ref/heads/a%2Fb`（原代码 + 编码） | ❌ 404，分支仍在 |
+| `DELETE /git/refs/heads/a%2Fb` | ✅ 204，分支已删 |
+| `DELETE /git/refs/heads/a/b` | ✅ 204，分支已删 |
+| `DELETE /git/refs/heads/<已删分支>` | 422 Unprocessable Entity（**非 404**） |
+
+修法：抽出 `ref_head_path()` 纯函数，GET 与 DELETE **共用同一路径**（复数 `/git/refs/heads/`，
+保留 `/` 不编码——该端点实测对编码与未编码的 `/` 都接受，保留字面 `/` 便于日志直接读出分支名）。
+另注意复数端点对「已不存在的 ref」返回 **422 而非 404**，代码里 `status in (200, 204)` 的判断
+已能把它正确归入失败分支。
+
+新增测试：`RefPathTest` 4 例（含显式反向断言路径里不得出现 `/git/ref/`）+
+`BranchDeleteFlowTest` 4 例（`mock.patch.object` 打桩 `api`，零真实网络，跑**非 dry-run** 的删分支
+五条路径：端点正确 / sha 不匹配保留分支 / 分支已不存在 / DELETE 失败只告警且不影响关 issue）。
+
+真机端到端复验：建临时分支 `probe/merge-cleanup-verify`（指向 `develop` tip），用修复后的脚本以
+非 dry-run 跑，输出 `已删除源分支 probe/merge-cleanup-verify`，`git ls-remote` 确认远端已清空，退出码 0。
+用于实测的探针分支 `tmp/ref-delete-probe`、`tmp/ref-delete-probe2` 测完已删除。
 
 ## 6. 相关链接
 
