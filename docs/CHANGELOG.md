@@ -6,6 +6,15 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— PR 合并后自动收尾：删分支 + 关关联 Issue（#284）**
+
+  - **#284 每个 PR 合入后都要人工收尾**：删掉 `feature/issue-N-xxx` 分支、关闭 PR 标题 / 正文里声明的 issue —— 每合并一个 PR 重复一遍，且没有判断成分（分支名与 issue 号都在 PR 元数据里）。一个常被忽略的事实：GitHub 的 Closing keywords（`Closes #N`）只在合入**默认分支** `main` 时自动生效，而日常开发合入的是 `develop`，所以绝大多数 PR 的 `Refs #N` 从来不触发自动关闭，手动关是常态而非例外。详见 [docs/issue-284-merge-cleanup.md](./issue-284-merge-cleanup.md)。
+  - **做法**：新增 `merge-cleanup.yml`，在 `pull_request: closed` 且 `merged == true` 且 base ∈ {`develop`, `main`} 时触发；先 `check-workflow-yaml.py` 校验全部 workflow 配置、再执行写操作（配置没验证就不动数据）。提取规则抽成纯函数 `extract_issue_refs`，**刻意保守、宁可漏关不可误关**：PR 标题全量匹配 `#N`；正文**只认带关闭关键词**的引用（Closes / Fixes / Resolves / Refs / 关闭 / 解决 / 修复），正文裸 `#N` 一律不关 —— 本仓库 PR 正文习惯引用历史 issue（「沿用 #155 / #175 / #237 的教训」），裸匹配会往早已关闭的无关 issue 里留言。安全护栏：fork 源分支跳过删除、标题含 `test` / `draft` 跳过删除（验证本 workflow 时保留现场）、远端分支 sha 与 PR head sha 不一致不删、已关闭的 issue 跳过且不重复留言、单项失败只 `::warning::` 不中断。正文走 `GITHUB_EVENT_PATH` 事件负载文件而非 shell 变量（正文含单引号 / 反引号 / 多行代码块，转义风险大）。
+  - **顺带补齐 workflow 语法零覆盖**：此前 CI 只跑 i18n / MCP 列名 / 文档链接，**没有任何检查会碰 `.github/workflows/`**。新增 `check-workflow-yaml.py`（零依赖、逐行结构校验，刻意不用 PyYAML —— `${{ }}` 表达式、`on:` 被 YAML 1.1 解析成布尔值等 GitHub 专有写法通用解析器更易误报），拦下 9 类缺陷：tab 缩进 / 结构行奇数缩进 / 重复 key / 缺 `name`·`on`·`jobs` / `on:` 无触发 / job 缺 `runs-on`·`uses` / step 缺 `uses`·`run` / 第三方 action 未固定版本 / `${{ "..." }}` 引号冲突 / `if:` 含 `: ` 裸标量 / `permissions:` 空或 scope 非法 / 引用 `scripts/` 却没有 checkout。该检查器自己也被 CI 跑，故有**双向**要求（一个误报就让每个 PR 的 CI 都红），两类都有测试兜住。`quality-check.yml` 新增 `scripts-checks` job 随每个 PR 运行。
+  - **测试拦下的真实缺陷**：`args.dry-run`（Python 解析成 `args.dry - run` → AttributeError，纯逻辑单测覆盖不到 `main()`）；`rest = s[len(key):]` 把冒号留在 value 里（`if: >-` 变 `": >-"`，初版对全部 6 个 workflow 报 30 处误报）；`on_block` / `jobs` 在每个顶层 key 处被重置（循环后恒空）；step 子键被记到 `job.keys`（两步式 step 全误判「空步骤 + 重复 key」）；`run: |` 在标记 `has_run` 前被 flush；块标量内强制偶数缩进（`if: >-` 续行非偶数缩进是合法格式）；`USE_RE` 不匹配 `- uses:` 内联形式（本仓库最常用写法从未被校验）；`strip_comment` 用 `line[i:i+3] == "}}"`（3 字符切片永不相等，只有 `}}` 落在行尾时才复位表达式深度）；`merge-cleanup.yml` 缺 `actions/checkout`（runner workspace 默认是空的，会以 file not found 静默失败）。review 另拦下两条：`CLOSE_RE` 用 `\b` 做词边界（汉字都是 `\w`，「已关闭 #284」永远匹配不上）；删分支对同一端点发两次 GET（合并为单次请求的 `head_branch()`，省一次网络往返）。
+  - **验证**：`python3 -m unittest discover -s scripts -p 'test_*.py'` **62 例全绿**（`test_merge_cleanup.py` 29 例 = 提取逻辑 21 + dry-run 走完整 `main()` 8；`test_workflow_yaml.py` 33 例 = 现存 6 个 workflow 正向回归 + 每类缺陷反向验证 + 解析器单测）、`scripts/check-workflow-yaml.py` 6 个 workflow 全绿、`scripts/check-mcp-columns.py` ✅（26 列两侧一致）、`scripts/check-doc-links.py` ✅（135 个 markdown 无断链）。dry-run 四场景实测：正常路径 / fork 跳过删分支但仍关 issue / `test` 标记跳过删分支 / 正文仅裸引用不关任何 issue，退出码均 0 且全程无网络调用。
+  - **无 schema / 无前端变更**：不碰 SQLite、不碰 Rust、不碰前端、不碰 MCP 双实现 —— 纯仓库工程自动化。
+
 - **未发布（Unreleased）— 任务详情关联 parent / sub issue 并支持打开与复制（#278）**
 
   - **#278 详情看不出 issue 的父子关系**：GitHub issue 支持父子关系（子任务），但 TaskBoard 详情面板完全不体现——某 issue 挂在父任务下、或自身拆了子任务，看板里都看不出来，只能离开 App 去 GitHub 看。诉求：显示父 issue 编号 + 子 issue 编号列表，父与每个子项都能「在浏览器打开」「复制链接」。详见 [docs/issue-278-issue-links.md](./issue-278-issue-links.md)。
