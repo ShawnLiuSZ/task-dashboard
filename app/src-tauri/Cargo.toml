@@ -2,6 +2,7 @@
 name = "taskboard"
 version = "0.6.0"
 description = "GitHub 个人任务看板"
+license = "MIT"
 authors = ["liushizhao"]
 edition = "2021"
 rust-version = "1.77"
