@@ -1101,6 +1101,12 @@ pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// #101：前端轮询读取 quarantine 清除消息（一次性，读取后清空）。
+#[tauri::command]
+pub fn get_quarantine_notice(state: tauri::State<'_, crate::AppState>) -> Option<String> {
+    state.quarantine_notice.lock().ok()?.take()
+}
+
 /// 「检查更新」返回信息。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

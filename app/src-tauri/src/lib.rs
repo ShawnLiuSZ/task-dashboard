@@ -93,21 +93,29 @@ pub fn autoclear_self_quarantine() -> bool {
     cleared
 }
 
-/// 启动时执行 #101 自动清除并可外发一次性提示事件。
+/// 启动时执行 #101 自动清除并将消息存入 AppState（供前端轮询读取）。
 #[cfg(target_os = "macos")]
-pub fn autoclear_self_quarantine_and_notify(app: &AppHandle) {
+pub fn autoclear_self_quarantine_and_notify(state: &AppState) {
     if autoclear_self_quarantine() {
-        let msg = "已自动清除应用的 Gatekeeper 隔离标记，重新连接 MCP 即可。";
-        let _ = app.emit("quarantine-cleared", msg);
+        let msg = "已自动清除应用的 Gatekeeper 隔离标记，重新连接 MCP 即可。".to_string();
+        if let Ok(mut notice) = state.quarantine_notice.lock() {
+            *notice = Some(msg);
+        }
         eprintln!("[#101] quarantine cleared for self executable");
     }
 }
+
+/// 启动时执行 #101 自动清除并将消息存入 AppState（供前端轮询读取）。
+#[cfg(not(target_os = "macos"))]
+pub fn autoclear_self_quarantine_and_notify(_state: &AppState) {}
 
 /// 同步进行中去重标志：true 表示已有一次同步正在跑，后续触发直接跳过。
 /// 防止 Tray「立即同步」、启动同步、定时同步、前端按钮并发时背靠背跑多次全量同步。
 pub struct AppState {
     pub db: Mutex<Connection>,
     pub syncing: AtomicBool,
+    /// #101：macOS quarantine 清除消息（一次性，前端轮询读取后清空）。
+    pub quarantine_notice: Mutex<Option<String>>,
 }
 
 const TRAY_ID: &str = "main";
@@ -302,10 +310,6 @@ pub fn run() {
         // 从而绕过 Gatekeeper 对每次更新的手动放行要求。
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            // #101：macOS 首启自动清除自身 quarantine，免 sudo 修复 MCP 连接超时。
-            #[cfg(target_os = "macos")]
-            autoclear_self_quarantine_and_notify(app.handle());
-
             // #206：不再启动自动注册全局 hooks——接入一律由用户在设置页手动一键安装。
             let handle = app.handle().clone();
             let conn = db::init(&handle).map_err(|e| {
@@ -315,7 +319,12 @@ pub fn run() {
             app.manage(AppState {
                 db: Mutex::new(conn),
                 syncing: AtomicBool::new(false),
+                quarantine_notice: Mutex::new(None),
             });
+
+            // #101：macOS 首启自动清除自身 quarantine，免 sudo 修复 MCP 连接超时。
+            // 消息存入 AppState（前端轮询读取），不再用 emit（前端可能还没加载）。
+            autoclear_self_quarantine_and_notify(&app.state::<AppState>());
 
             let show_item = MenuItem::with_id(app, "show", "显示看板", true, None::<&str>)?;
             let sync_item = MenuItem::with_id(app, "sync", "立即同步", true, None::<&str>)?;
@@ -400,6 +409,7 @@ pub fn run() {
             commands::device_login_poll,
             // v0.3.19+：关于页面 —— 当前版本号 + 检查更新。
             commands::get_app_version,
+            commands::get_quarantine_notice,
             commands::check_latest_release,
             // #231：应用内自动更新（检查 / 下载安装 / 重启生效）。
             commands::check_app_update,

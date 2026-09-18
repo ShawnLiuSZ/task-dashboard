@@ -84,6 +84,8 @@ export const api = {
     invoke<DeviceLoginPoll>('device_login_poll', { clientId, deviceCode, org, label }),
   // v0.3.19+：关于页面 —— 当前版本 + 检查更新。
   getAppVersion: () => invoke<string>('get_app_version'),
+  // #101：一次性读取 quarantine 清除消息（读取后后端自动清空）。
+  getQuarantineNotice: () => invoke<string | null>('get_quarantine_notice'),
   checkLatestRelease: () => invoke<CheckUpdate>('check_latest_release'),
   // #231：应用内自动更新（updater 通道：检查 / 下载安装 / 重启生效）。
   checkAppUpdate: () => invoke<AppUpdate>('check_app_update'),

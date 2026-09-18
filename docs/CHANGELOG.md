@@ -21,6 +21,7 @@
   - **Hooks 自动刷新缺空路径守卫 + 漏 `hooksBusy`**：切到 project 作用域但未填路径即触发刷新 → 错误 banner；操作中切作用域后回来不刷新。已补守卫并纳入 deps。
   - **`handleSwitchView` 读过期 `filterRef`**：`await loadSettings()` 后被动 effect 尚未刷新 `filterRef`，`load()` 用旧 `accountFilter` 查错账号。改为显式传 `accountId`（与 `handleSwitchAccount` 同款修复）。
   - **`onUpdateProgress` 监听器卸载前泄漏**：AboutPanel 的 `listen()` Promise 未 resolve 前卸载 → 监听器永不注销、持续 `setState`。加 `cancelled` 标志（与 App.tsx 同款模式）。
+  - **`quarantine-cleared` 事件前端收不到**：#101 的 macOS Gatekeeper 自动清除在 App 启动时 `emit` 事件，但前端此时尚未加载 → 消息永远丢失。改为存入 `AppState.quarantine_notice`（`Mutex<Option<String>>`），新增 `get_quarantine_notice` command 供前端轮询读取（一次性，读取后后端自动清空），App 启动时显示 warn banner（点击关闭）。
 
 - **v0.6.0（2026-09-17）— 修复 Rust 测试随机 disk I/O error（#266）**
 
