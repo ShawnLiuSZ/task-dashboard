@@ -103,6 +103,10 @@ export interface Settings {
   accounts: Account[];
   /** v0.3.17+：GitHub OAuth Device Flow 的 client_id（注册 OAuth App 后填一次）。 */
   oauthClientId: string;
+  /** v0.6.1 (#276)：每日自动检查更新。 */
+  autoCheckUpdates: boolean;
+  /** v0.6.1 (#276)：自动更新（静默下载 + 重启）。 */
+  autoUpdate: boolean;
 }
 
 /** v0.3.15+：`save_pat` / `test_pat` 命令的返回值。 */

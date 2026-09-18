@@ -63,6 +63,10 @@ pub struct Settings {
     pub accounts: Vec<Account>,
     /// v0.3.17+：GitHub OAuth Device Flow 的 client_id（注册 OAuth App 后填一次）。
     pub oauth_client_id: String,
+    /// v0.6.1 (#276)：每日自动检查更新。
+    pub auto_check_updates: bool,
+    /// v0.6.1 (#276)：自动更新（静默下载 + 重启，仅 auto_check_updates=true 时生效）。
+    pub auto_update: bool,
 }
 
 fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Option<i64>) -> Result<Vec<Task>, String> {
@@ -90,6 +94,64 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
             }
         }
     };
+
+    // #276：ownership == "my-created" 时按 author 过滤（仅显示我创建的）
+    if ownership == Some("my-created") {
+        let login = conn
+            .query_row("SELECT value FROM meta WHERE key = 'login'", [], |r| r.get::<_, String>(0))
+            .unwrap_or_default();
+        if login.is_empty() {
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "SELECT issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status,
+                    assignees, mentioned, latest_comment_url, pr_number, pr_url, branch,
+                    session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch, author
+             FROM tasks WHERE author = ?{where_extra}
+             ORDER BY candidate_done ASC, status ASC, updated_at DESC"
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let mapper = |r: &rusqlite::Row| {
+            Ok(Task {
+                issue_key: r.get(0)?,
+                owner: r.get(1)?,
+                repo: r.get(2)?,
+                number: r.get(3)?,
+                title: r.get(4)?,
+                url: r.get(5)?,
+                issue_state: r.get(6)?,
+                ownership: r.get(7)?,
+                status: r.get(8)?,
+                project_status: r.get(9)?,
+                assignees: r.get(10)?,
+                author: r.get(24)?,
+                mentioned: r.get::<_, i64>(11).unwrap_or(0) != 0,
+                latest_comment_url: r.get(12)?,
+                pr_number: r.get(13)?,
+                pr_url: r.get(14)?,
+                branch: r.get(15)?,
+                session_id: r.get(16)?,
+                session_agent: r.get(17)?,
+                session_at: r.get(18)?,
+                candidate_done: r.get::<_, i64>(19).unwrap_or(0) != 0,
+                handoff: r.get(20)?,
+                updated_at: r.get(21)?,
+                account_id: r.get(22)?,
+                work_branch: r.get(23)?,
+            })
+        };
+        let rows = if use_account_filter {
+            stmt.query_map(rusqlite::params![login, account_id], mapper)
+        } else {
+            stmt.query_map(rusqlite::params![login], mapper)
+        };
+        let mut out = Vec::new();
+        for r in rows.map_err(|e| e.to_string())? {
+            out.push(r.map_err(|e| e.to_string())?);
+        }
+        return Ok(out);
+    }
+
     let (sql, use_ownership_filter) = match ownership {
         Some(_) => (
             format!(
@@ -601,6 +663,8 @@ pub fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settin
         view_mode,
         accounts,
         oauth_client_id: crate::db::get_setting(&conn, "oauth_client_id"),
+        auto_check_updates: crate::db::get_setting(&conn, "auto_check_updates") == "true",
+        auto_update: crate::db::get_setting(&conn, "auto_update") == "true",
     })
 }
 
@@ -693,11 +757,19 @@ pub fn save_settings(
     state: State<'_, AppState>,
     schedule_minutes: u64,
     gh_path: String,
+    auto_check_updates: Option<bool>,
+    auto_update: Option<bool>,
 ) -> Result<Settings, String> {
     {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         crate::db::set_setting(&conn, "schedule_minutes", &schedule_minutes.max(5).to_string())?;
         crate::db::set_setting(&conn, "gh_path", &gh_path)?;
+        if let Some(v) = auto_check_updates {
+            crate::db::set_setting(&conn, "auto_check_updates", if v { "true" } else { "false" })?;
+        }
+        if let Some(v) = auto_update {
+            crate::db::set_setting(&conn, "auto_update", if v { "true" } else { "false" })?;
+        }
     }
     get_settings(app, state)
 }
@@ -1288,6 +1360,113 @@ pub async fn install_app_update(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn restart_app(app: AppHandle) {
     app.restart();
+}
+
+/// #276：每日自动检查更新。由 lib.rs 的定时线程调用（非 Tauri command）。
+///
+/// 逻辑：
+/// 1. auto_check_updates=false → 跳过
+/// 2. last_update_check_at 距今 < 24h → 跳过（防频繁开关 App 重复检查）
+/// 3. 检查更新（updater 通道）
+/// 4. 有新版 + auto_update=true → 静默下载安装 + 重启
+/// 5. 有新版 + auto_update=false → emit UPDATE_AVAILABLE_EVENT（前端弹框）
+/// 6. 无新版 → 更新 last_update_check_at，不做事
+///
+/// 任何失败只记日志，不影响主流程。
+pub fn run_auto_update_check(app: &AppHandle, state: &crate::AppState) {
+    use tauri_plugin_updater::UpdaterExt;
+
+    // 1. 检查开关
+    {
+        let conn = match state.db.lock() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        if crate::db::get_setting(&conn, "auto_check_updates") != "true" {
+            return;
+        }
+        let auto_update = crate::db::get_setting(&conn, "auto_update") == "true";
+        let last_check: i64 = crate::db::get_setting(&conn, "last_update_check_at")
+            .parse()
+            .unwrap_or(0);
+        drop(conn);
+
+        // 2. 24h 内已检查过则跳过
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        if now - last_check < 86_400 {
+            return;
+        }
+
+        // 3. 更新检查时间戳（无论结果如何都记）
+        let conn2 = match state.db.lock() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let _ = crate::db::set_setting(&conn2, "last_update_check_at", &now.to_string());
+        drop(conn2);
+
+        // 4. 用 tokio runtime 跑异步 updater 检查
+        let app_clone = app.clone();
+        let result = tauri::async_runtime::block_on(async {
+            let updater = match app_clone.updater() {
+                Ok(u) => u,
+                Err(e) => {
+                    eprintln!("[#276] auto update check failed: {e}");
+                    return None;
+                }
+            };
+            match updater.check().await {
+                Ok(Some(u)) => Some(u.version),
+                Ok(None) => None,
+                Err(e) => {
+                    eprintln!("[#276] auto update check error: {e}");
+                    None
+                }
+            }
+        });
+
+        let Some(version) = result else { return };
+
+        // 5. 有新版
+        if auto_update {
+            // 静默下载 + 安装 + 重启
+            eprintln!("[#276] auto-installing update v{version}");
+            let app_clone2 = app.clone();
+            let install_result = tauri::async_runtime::block_on(async {
+                let updater = match app_clone2.updater() {
+                    Ok(u) => u,
+                    Err(e) => return Err(e.to_string()),
+                };
+                let update = match updater.check().await {
+                    Ok(Some(u)) => u,
+                    _ => return Err("no update available".to_string()),
+                };
+                update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())
+            });
+            match install_result {
+                Ok(()) => {
+                    eprintln!("[#276] auto-install complete, restarting");
+                    app.restart();
+                }
+                Err(e) => {
+                    eprintln!("[#276] auto-install failed: {e}, falling back to emit");
+                    let _ = app.emit(
+                        crate::UPDATE_AVAILABLE_EVENT,
+                        serde_json::json!({ "version": version, "autoUpdate": false }),
+                    );
+                }
+            }
+        } else {
+            // 只提醒，不自动安装
+            let _ = app.emit(
+                crate::UPDATE_AVAILABLE_EVENT,
+                serde_json::json!({ "version": version, "autoUpdate": false }),
+            );
+        }
+    }
 }
 
 // ============================================================================

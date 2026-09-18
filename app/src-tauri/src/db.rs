@@ -212,6 +212,11 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     ("board_mode", "project"),
     // v0.3.17：GitHub OAuth Device Flow 的 client_id（用户注册 OAuth App 后填入一次）。
     ("oauth_client_id", ""),
+    // v0.6.1 (#276)：每日自动检查更新 + 可选静默更新。
+    ("auto_check_updates", "false"),
+    ("auto_update", "false"),
+    ("last_update_check_at", "0"),
+    ("last_update_snoozed_at", "0"),
 ];
 
 pub fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
