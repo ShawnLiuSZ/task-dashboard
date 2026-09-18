@@ -26,6 +26,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+# `import unittest` 不会自动挂上 `mock` 子模块，需显式 import 才能用 unittest.mock。
+import unittest.mock as mock
+
 
 def _load(name, filename):
     """按文件名加载带连字符的模块（`merge-cleanup.py` 不是合法的 import 标识符）。"""
@@ -223,11 +226,147 @@ class DryRunFlowTest(unittest.TestCase):
         self.assertIn("未从标题 / 正文提取到带关闭语义的 issue 引用", out)
 
     def test_dry_run_slashed_branch_name_is_quoted_path(self):
-        # head_ref 含 `/`（feature/issue-284-x）：URL 编码在 api() 里做，这里只确认
-        # 正常路径不因分支名形态而报错。
+        # head_ref 含 `/`（feature/issue-284-x）：路径拼接在 ref_head_path() 里做，
+        # 这里只确认正常路径不因分支名形态而报错。
         code, out = self._run()
         self.assertEqual(code, 0)
         self.assertIn("feature/issue-284-x", out)
+
+
+class RefPathTest(unittest.TestCase):
+    """#289：删分支端点必须是复数 `/git/refs/`。
+
+    首次真实运行（PR #287 合并后）DELETE 拿到 404。根因是 GitHub 上单数 `/git/ref/`
+    只有 GET 路由、没有 DELETE 路由，对任何分支名恒 404；而 GET 对单复数都能路由，
+    于是「分支存在 + sha 比对」照常有通过、走完全部护栏后才在 DELETE 那一步 404 ——
+    读路径把写路径的缺陷完全掩盖。dry-run 全程不打网络，所以上面 8 个用例全绿也拦不住。
+    """
+
+    def test_path_uses_plural_refs_endpoint(self):
+        self.assertEqual(
+            merge_cleanup.ref_head_path("feature/issue-284-merge-cleanup"),
+            "/git/refs/heads/feature/issue-284-merge-cleanup",
+        )
+
+    def test_path_is_not_the_singular_endpoint(self):
+        # 反向断言：单数前缀是 #289 的根因，写回就会让每次合并的删分支恒 404。
+        path = merge_cleanup.ref_head_path("feature/issue-284-merge-cleanup")
+        self.assertNotIn("/git/ref/", path)
+
+    def test_plain_branch_name(self):
+        self.assertEqual(merge_cleanup.ref_head_path("main"), "/git/refs/heads/main")
+
+    def test_encoding_preserves_slashes(self):
+        # 该端点对编码与未编码的 `/` 都接受；保留字面 `/` 便于日志直接读出分支名。
+        # 其余字符仍走 quote()（分支名里不可能出现空格，这里只验证不会被额外编码）。
+        self.assertEqual(merge_cleanup.ref_head_path("a/b/c"), "/git/refs/heads/a/b/c")
+
+
+class BranchDeleteFlowTest(unittest.TestCase):
+    """非 dry-run 的删分支路径：断言发出的 HTTP 方法与路径，并按应答分流。
+
+    用 `unittest.mock.patch.object` 打桩 `api`（不产生任何真实网络调用），复用 dry-run
+    测试的 GITHUB_EVENT_PATH 夹具。#289 真正该被测的就是这里 —— dry-run 在写操作前就
+    返回了，永远碰不到端点，所以端点拼错也能让全部单测保持全绿。
+    """
+
+    REPO = "ShawnLiuSZ/task-dashboard"
+    BRANCH = "feature/issue-284-merge-cleanup"
+    SHA = "7367fe0750abc9738a2e2383e8c88ba31aee5d08"
+
+    ARGS = [
+        "--repo",
+        REPO,
+        "--pr-number",
+        "287",
+        "--pr-title",
+        "feat(ci): 合并后自动收尾 (#284)",
+        "--body-text",
+        "Closes #284",
+        "--base-ref",
+        "develop",
+        "--head-ref",
+        BRANCH,
+        "--head-sha",
+        SHA,
+        "--head-repo",
+        REPO,
+    ]
+
+    def _ref_path(self):
+        return f"/repos/{self.REPO}{merge_cleanup.ref_head_path(self.BRANCH)}"
+
+    def _run(self, ref_status=200, ref_sha=None, delete_status=204):
+        calls = []
+
+        def fake(method, path, token, payload=None):
+            calls.append((method, path))
+            if path.startswith(self._ref_path()):
+                if method == "GET":
+                    return ref_status, ({"object": {"sha": ref_sha}} if ref_sha else {})
+                return delete_status, None
+            if path.startswith(f"/repos/{self.REPO}/issues/"):
+                if method == "GET":
+                    return 200, {"state": "open"}
+                if method == "PATCH":
+                    return 200, {"state": "closed"}
+                return 201, {"id": 1}
+            return 200, {}
+
+        old_event = os.environ.get("GITHUB_EVENT_PATH")
+        old_token = os.environ.get("GH_TOKEN")
+        fd, payload_path = tempfile.mkstemp(suffix=".json")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"pull_request": {"number": 287}}, f)
+        os.environ["GITHUB_EVENT_PATH"] = payload_path
+        # 非 dry-run 先校验 token 存在；api 已被打桩，dummy 值即可。
+        os.environ["GH_TOKEN"] = "test-token"
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), mock.patch.object(
+                merge_cleanup, "api", side_effect=fake
+            ):
+                code = merge_cleanup.main(list(self.ARGS))
+        finally:
+            os.unlink(payload_path)
+            if old_event is None:
+                os.environ.pop("GITHUB_EVENT_PATH", None)
+            else:
+                os.environ["GITHUB_EVENT_PATH"] = old_event
+            if old_token is None:
+                os.environ.pop("GH_TOKEN", None)
+            else:
+                os.environ["GH_TOKEN"] = old_token
+        return code, buf.getvalue(), calls
+
+    def test_deletes_via_plural_refs_endpoint(self):
+        code, out, calls = self._run(ref_sha=self.SHA)
+        self.assertEqual(code, 0)
+        self.assertEqual([m for m, _ in calls[:2]], ["GET", "DELETE"])
+        self.assertEqual(calls[0][1], self._ref_path())
+        self.assertEqual(calls[1][1], self._ref_path())
+        self.assertNotIn("/git/ref/", calls[1][1])
+        self.assertIn("已删除源分支", out)
+        self.assertIn("已关闭 #284", out)
+
+    def test_skips_delete_when_head_sha_moved(self):
+        code, out, calls = self._run(ref_sha="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+        self.assertEqual(code, 0)
+        self.assertNotIn("DELETE", [m for m, _ in calls])
+        self.assertIn("为避免误删保留分支", out)
+
+    def test_skips_delete_when_branch_missing(self):
+        code, out, calls = self._run(ref_status=404)
+        self.assertEqual(code, 0)
+        self.assertNotIn("DELETE", [m for m, _ in calls])
+        self.assertIn("不存在", out)
+
+    def test_delete_failure_only_warns_and_issue_still_closes(self):
+        code, out, calls = self._run(ref_sha=self.SHA, delete_status=404)
+        self.assertEqual(code, 0)
+        self.assertIn(f"删除分支 {self.BRANCH} 失败（HTTP 404）", out)
+        # 删分支失败不影响关 issue：两步独立
+        self.assertIn("已关闭 #284", out)
 
 
 if __name__ == "__main__":

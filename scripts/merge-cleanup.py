@@ -116,6 +116,21 @@ def api(method: str, path: str, token: str, *, payload: dict | None = None):
         raise RuntimeError(f"{method} {path} 失败: {e}") from e
 
 
+def ref_head_path(ref_name: str) -> str:
+    """拼 GitHub「分支 ref」REST 路径，GET 与 DELETE 共用。
+
+    #289：必须走**复数** `/git/refs/`。GitHub 上单数 `/git/ref/` 只有 GET 路由、**没有
+    DELETE 路由**，所以 DELETE 对任何分支名恒 404；而 GET 对单复数都能路由 —— 于是
+    「分支存在 + sha 比对」全部照常有通过，走完所有安全护栏后才在 DELETE 那一步 404，
+    读路径把写路径的缺陷完全掩盖。本仓库分支名全是 `feature/issue-N-xxx`（含 `/`），
+    所以该缺陷从第一天起对每个分支生效；dry-run 全程不打网络，单测也拦不住。
+
+    该端点对编码与未编码的 `/` 都接受（GitHub 文档要求编码，实测两者皆通），这里保留
+    `/` 不编码以贴近分支名字面形态；分支名内其他字符仍走 quote()。
+    """
+    return f"/git/refs/heads/{urllib.parse.quote(ref_name, safe='/')}"
+
+
 def head_branch(repo: str, head_ref: str, token: str) -> tuple[int, str | None]:
     """读取远端源分支，返回 (status, 当前 sha)。
 
@@ -123,9 +138,7 @@ def head_branch(repo: str, head_ref: str, token: str) -> tuple[int, str | None]:
     （与 PR head sha 对比，排除别人在合并后又往该分支推了新提交的情形）。
     此前这里拆成 `ref_exists` + `head_ref_at` 两个函数，对同一端点发了两次 GET。
     """
-    status, data = api(
-        "GET", f"/repos/{repo}/git/ref/heads/{urllib.parse.quote(head_ref, safe='/')}", token
-    )
+    status, data = api("GET", f"/repos/{repo}{ref_head_path(head_ref)}", token)
     return status, ((data or {}).get("object") or {}).get("sha")
 
 
@@ -261,9 +274,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             else:
                 status, _ = api(
-                    "DELETE",
-                    f"/repos/{args.repo}/git/ref/heads/{urllib.parse.quote(head_ref, safe='/')}",
-                    token,
+                    "DELETE", f"/repos/{args.repo}{ref_head_path(head_ref)}", token
                 )
                 if status in (200, 204):
                     print(f"已删除源分支 {head_ref}")
