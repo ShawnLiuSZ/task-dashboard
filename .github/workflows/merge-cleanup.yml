@@ -1,0 +1,58 @@
+# PR 合并后自动收尾（Issue #284）：删除源分支 + 关闭关联 Issue
+#
+# 存在的理由：此前每个 PR 合入 develop / main 后都要人工收尾 —— 删掉 feature 分支、
+# 再手动关闭 PR 标题 / 正文里提到的 issue（`Refs #N` 只在合入默认分支 main 时才自动
+# 生效，合入 develop 不触发）。这两个动作纯粹是维护负担，没有判断成分，交给 workflow。
+#
+# 关联 issue 的提取是**保守**的：正文只认带关闭关键词的引用（Closes / Fixes / Resolves /
+# Refs / 关闭 / 解决 / 修复），正文里裸写的 `#N` 一律不关。原因是本仓库的 PR 正文习惯
+# 引用历史 issue（如 CHANGELOG 里的「沿用 #155 / #175 / #237 的教训」），裸匹配会把那些
+# 早就关闭的编号当成要关闭的 issue 去留言。PR 标题则全量匹配（`... (#284)` 就是主旨引用）。
+# 提取规则抽在 `scripts/merge-cleanup.py::extract_issue_refs`，有单测兜住。
+#
+# 安全护栏：源分支属于 fork 时跳过删除；PR 标题含 `test` / `draft` 时跳过删分支（验证本
+# workflow 时保留现场）；远端分支 sha 与 PR head sha 不一致时不删；已关闭的 issue 跳过、
+# 不重复留言；单项失败只 `::warning::` 不中断。
+#
+# 步骤顺序：先校验全部 workflow 配置再动数据。此前没有任何 CI 会碰 workflow 语法，一个
+# 缩进错误会让 job 在静默状态里失败；把校验放最前，配置没验证就不执行任何写操作。
+name: merge-cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  # 删源分支（git/ref 归 contents 管辖）
+  contents: write
+  # 关 issue + 留言
+  issues: write
+  # PR 元数据（标题 / 正文 / head sha）全部来自 GITHUB_EVENT_PATH 事件负载，
+  # 不额外请求 pull-requests API，故不需要该 scope。
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    # 只在「真的合并了」且目标是 develop / main 时干活。closed 同时覆盖「合并」与
+    # 「仅关闭」两种情形，未合并的 PR 不做任何清理。
+    if: >-
+      ${{ github.event.pull_request.merged &&
+          (github.event.pull_request.base.ref == 'develop' ||
+           github.event.pull_request.base.ref == 'main') }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: 校验 workflow 配置（语法 / 触发 / 权限）
+        run: python3 scripts/check-workflow-yaml.py
+
+      # PR 正文可能含单引号 / 反引号 / 多行代码块，走 shell 变量转义风险大；
+      # 因此标题与正文直接指向 GITHUB_EVENT_PATH 的 JSON 负载文件，由脚本读取。
+      - name: 删除源分支并关闭关联 Issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: python3 scripts/merge-cleanup.py --repo "$REPO"
