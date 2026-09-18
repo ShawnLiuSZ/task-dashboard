@@ -313,6 +313,24 @@ pub fn clear_session(
     Ok(())
 }
 
+/// #279：单独设置任务的工作分支（agent 在**创建 / 切换分支之后**调用，纠正「开始任务」时
+/// 录到的基线分支 develop/master）。只写本地 `tasks.work_branch` 列，不碰同步的 PR `branch` 列。
+#[tauri::command]
+pub fn set_work_branch(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    key: String,
+    branch: String,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let n = crate::common::set_work_branch(&conn, &key, &branch)?;
+    if n == 0 {
+        return Err(format!("任务不存在: {key}"));
+    }
+    let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
+    Ok(())
+}
+
 /// 记录「交接任务」详情：由接入的 agent（claude / codex 等）在识别到用户「生成交接任务」类意图时调用，
 /// 把交接上下文写入该 issue 卡片的 handoff 字段，供后续接手者直接在详情页查看。
 #[tauri::command]

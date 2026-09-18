@@ -6,6 +6,12 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 开始任务后 work_branch 仍关联基线分支（develop/master）（#279）**
+
+  - **#279 开始任务后工作分支没更新**：用户把 issue 派给 agent，agent 先在 `develop` / `master` 上「开始任务」、随后才创建 / 切换到该 issue 的工作分支；结果 GitHub 上分支已建好，看板详情的 `work_branch` 却仍关联基线分支。根因是两个 `task-start` slash command 在第一步（agent 仍在基线分支）就取分支并写入 `work_branch`，opencode 版更在命令展开时即填入基线分支。详见 [docs/issue-279-work-branch-not-updated.md](./issue-279-work-branch-not-updated.md)。
+  - **做法**：两路互为兜底——① 重写两个 `task-start` 指令与 prompt-reminder 钩子，强制「先切 issue 工作分支、再记录会话」，分支捕获移到切换之后；② 新增窄工具 `set_work_branch(issue, branch)`，agent 切到 issue 分支后调用即可纠正 `work_branch`，只写 `work_branch`、不碰同步自动拉的 PR `branch`。Rust（`common.rs` / `commands.rs` / `mcp.rs`，含 3 例 mcp 测试）与 Python（`mcp_server/server.py`，含 3 例单测）双实现一致；`record_session` 的 `branch` 入参行为不变。
+  - **验证**：`cargo test --lib` 全绿（新增 3 例）、`python3 -m unittest discover -s mcp_server` 29 例全绿、`scripts/check-mcp-columns.py` ✅、`scripts/check-doc-links.py` ✅。
+
 - **未发布（Unreleased）— 手动下载流程补充「重启应用」按钮（#272）**
 
   - **#272 手动下载后无重启入口**：`about.restart` 按钮仅在 updater 通道安装成功后（`installed` 阶段）出现；当 updater 失败回退为手动下载（`manualUrl` 分支），用户点「前往下载」跳转浏览器后 App 内**没有任何重启按钮**，必须手动退出重开。详见 [docs/issue-272-restart-after-manual.md](./issue-272-restart-after-manual.md)。

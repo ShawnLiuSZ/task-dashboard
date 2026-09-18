@@ -164,6 +164,25 @@ pub fn touch_session(
     Ok(n)
 }
 
+/// #279：单独设置任务的工作分支 `work_branch`（agent 在**创建 / 切换分支之后**调用，
+/// 纠正 `record_session` 在「开始任务」时录到的基线分支 develop/master）。
+/// 与同步自动拉的 PR `branch` 列分离，同步不碰 work_branch。
+///
+/// 本函数只做 SQL 更新：`branch` 为空串会把该列清空（清空语义在本层保留，便于复用）。
+/// **MCP 工具边界拒绝空 `branch`**（`mcp.rs::tool_set_work_branch` 与 `server.py` 报
+/// 「branch 不能为空」），防止误清掉工作分支——本层不校验，调用方自行把关。
+/// 返回实际更新行数（0 表示任务不存在）。
+pub fn set_work_branch(conn: &Connection, key: &str, branch: &str) -> Result<usize, String> {
+    let br = branch.trim().to_string();
+    let n = conn
+        .execute(
+            "UPDATE tasks SET work_branch = ?1 WHERE issue_key = ?2",
+            rusqlite::params![br, key],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(n)
+}
+
 /// 清空 session（保留 `session_at` 审计）。返回实际更新行数。
 pub fn clear_task_session(conn: &Connection, key: &str) -> Result<usize, String> {
     let n = conn
