@@ -651,3 +651,141 @@ fn migrate_v2_rebuild_keeps_author_column() {
         .unwrap();
     assert_eq!(a, "alice");
 }
+
+// ===== #278 父子关系列（parent_issue / sub_issues）=====================
+
+#[test]
+fn open_db_backfills_issue_links_on_v2_db_without_it() {
+    // #278 回归（与 #175/#237 同款陷阱）：两列的 ALTER 若只写在 migrate_legacy_alters
+    // （仅 user_version<1 触发），对 user_version=2 的库永不补列。热路径幂等 ALTER 必须兜住。
+    let dir = tempdir();
+    let path = dir.join("taskboard.db");
+    db::open_db(&path).unwrap(); // 正常建库（含两列），user_version 置为 2
+
+    // 模拟 #278 之前的老库：把两列摘掉。
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute("ALTER TABLE tasks DROP COLUMN parent_issue", [])
+            .expect("前置：应能移除 parent_issue 列");
+        conn.execute("ALTER TABLE tasks DROP COLUMN sub_issues", [])
+            .expect("前置：应能移除 sub_issues 列");
+        assert!(!has_task_col(&conn, "parent_issue"));
+        assert!(!has_task_col(&conn, "sub_issues"));
+    }
+
+    // 再次 open_db：热路径必须幂等补回两列，且默认值为空串（NOT NULL DEFAULT ''）。
+    let conn = db::open_db(&path).unwrap();
+    assert!(has_task_col(&conn, "parent_issue"), "parent_issue 列应被热路径补齐");
+    assert!(has_task_col(&conn, "sub_issues"), "sub_issues 列应被热路径补齐");
+}
+
+#[test]
+fn migrate_v2_rebuild_keeps_issue_link_columns() {
+    // #278 关键回归：v2 物理重建的 `tasks_new` 定义 + INSERT..SELECT 是**写死的列白名单**，
+    // 不含后来新增的列。若两列的 ALTER 放在重建之前（或只写在 migrate_legacy_alters），
+    // 重建会把列丢掉 → 详情读路径一查就 `no such column`。
+    // 本用例走真实的重建路径（legacy `key` 布局 + user_version=0），断言重建后两列仍在。
+    let dir = tempdir();
+    let path = dir.join("taskboard.db");
+    legacy_tasks_db(&path); // 旧 key 布局，无 parent_issue / sub_issues
+
+    let conn = db::open_db(&path).unwrap(); // 触发 v2 物理重建
+    assert!(
+        has_task_col(&conn, "parent_issue"),
+        "v2 重建后 parent_issue 列必须仍存在（否则重建白名单把它丢了）"
+    );
+    assert!(
+        has_task_col(&conn, "sub_issues"),
+        "v2 重建后 sub_issues 列必须仍存在（否则重建白名单把它丢了）"
+    );
+
+    // 重建后写入两列应可被读回。
+    conn.execute(
+        "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
+                            ownership, status, synced_at, account_id, parent_issue, sub_issues)
+         VALUES ('o/r#278','o','r',278,'t','u','open','assigned','todo',1,1,
+                 '{\"number\":1,\"title\":\"epic\",\"url\":\"https://github.com/o/r/issues/1\"}',
+                 '[{\"number\":2,\"title\":\"a\",\"url\":\"https://github.com/o/r/issues/2\"}]');",
+        [],
+    )
+    .unwrap();
+    let (p, s): (String, String) = conn
+        .query_row(
+            "SELECT parent_issue, sub_issues FROM tasks WHERE issue_key='o/r#278'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert!(p.starts_with('{'));
+    assert!(s.starts_with('['));
+}
+
+#[test]
+fn write_task_roundtrips_issue_links_and_preserves_them_on_conflict() {
+    // 写路径回归：TaskUpsert 的两列必须真的落库（列清单与参数绑定共 25 个占位符，
+    // 错位会把关系写进别的列且不报错）。两列存 JSON 串，空串表示无关联。
+    const PARENT_JSON: &str = "{\"number\":1,\"title\":\"epic\",\"url\":\"https://github.com/o/r/issues/1\"}";
+    const SUBS_JSON: &str = "[{\"number\":2,\"title\":\"a\",\"url\":\"https://github.com/o/r/issues/2\"}]";
+
+    let conn = fresh_db();
+    db::insert_account(&conn, "L", "alice", "o", "p").unwrap();
+
+    let t = base_task_upsert(PARENT_JSON.into(), SUBS_JSON.into(), false);
+    db::write_task(&conn, &t, 1, db::TaskWriteMode::InsertIfAbsent).unwrap();
+    let existing = db::load_existing_tasks(&conn, 1).unwrap();
+    let row = existing.get("r#278").unwrap();
+    assert_eq!(row.parent_issue, PARENT_JSON, "parent_issue 应原样落库");
+    assert_eq!(row.sub_issues, SUBS_JSON, "sub_issues 应原样落库");
+
+    // 冲突覆盖（同步路径）：关系应被更新，且允许「清空」为无关联。
+    db::write_task(&conn, &base_task_upsert(String::new(), String::new(), true), 2, db::TaskWriteMode::Upsert)
+        .unwrap();
+    let existing2 = db::load_existing_tasks(&conn, 1).unwrap();
+    let row2 = existing2.get("r#278").unwrap();
+    assert_eq!(row2.parent_issue, "", "覆盖模式应能清空 parent_issue");
+    assert_eq!(row2.sub_issues, "", "覆盖模式应能清空 sub_issues");
+
+    // 重新写入关系：覆盖模式必须真的更新（而不是保留旧值）。
+    db::write_task(
+        &conn,
+        &base_task_upsert(PARENT_JSON.into(), String::new(), true),
+        3,
+        db::TaskWriteMode::Upsert,
+    )
+    .unwrap();
+    let existing3 = db::load_existing_tasks(&conn, 1).unwrap();
+    let row3 = existing3.get("r#278").unwrap();
+    assert_eq!(row3.parent_issue, PARENT_JSON);
+    assert!(row3.parent_issue.contains("issues/1"));
+}
+
+/// 一条最小可写的 TaskUpsert（其余字段留默认空值）。
+fn base_task_upsert(parent_issue: String, sub_issues: String, exists: bool) -> db::TaskUpsert {
+    db::TaskUpsert {
+        issue_key: "r#278".into(),
+        owner: "o".into(),
+        account_id: 1,
+        repo: "r".into(),
+        number: 278,
+        title: "t".into(),
+        url: "https://github.com/o/r/issues/278".into(),
+        issue_state: "open".into(),
+        ownership: "assigned".into(),
+        status: "todo".into(),
+        project_status: String::new(),
+        assignees: String::new(),
+        labels: String::new(),
+        author: "alice".into(),
+        done_at: 0,
+        mentioned: 0,
+        comments_count: 0,
+        latest_comment_url: String::new(),
+        pr_number: 0,
+        pr_url: String::new(),
+        branch: String::new(),
+        parent_issue,
+        sub_issues,
+        updated_at: 1,
+        exists,
+    }
+}

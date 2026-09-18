@@ -39,6 +39,13 @@ export interface ProjectStatus {
   orderIndex: number;
 }
 
+/** #278：关联 issue 的父/子链接（GitHub `parent` / `subIssues`，只读同步）。 */
+export interface IssueLink {
+  number: number;
+  title: string;
+  url: string;
+}
+
 export interface Task {
   issueKey: string;
   owner: string;
@@ -60,6 +67,10 @@ export interface Task {
   branch: string;
   /** #193：agent 工作分支（record_session 写入，与同步的 PR branch 分离）。 */
   workBranch: string;
+  /** #278：父 issue；无父为 null。 */
+  parentIssue: IssueLink | null;
+  /** #278：子 issue 列表；无子为空数组。 */
+  subIssues: IssueLink[];
   sessionId: string | null;
   sessionAgent: string | null;
   sessionAt: number | null;

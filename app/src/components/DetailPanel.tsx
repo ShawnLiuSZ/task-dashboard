@@ -46,6 +46,13 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
   const projectStatusLabel = (name: string) =>
     name === 'done' ? t('status.done') : name === 'unclassified' ? t('detail.unlabeled') : name;
 
+  // #278：关联 issue（父 / 子）。先落成 const 再判断——TS 只对 const 的收窄结果
+  // 保留到闭包里，直接写 `task.parentIssue && ...` 会让 onClick 回调中的类型退化成
+  // `IssueLink | null`（TS18047）。
+  const parentIssue = task.parentIssue;
+  const subIssues = task.subIssues;
+  const parentKey = parentIssue ? `parent-${parentIssue.number}` : '';
+
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
     setErr(null);
@@ -281,6 +288,62 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
         )}
         <div className="muted small top-gap">{t('detail.localOnly')}</div>
       </section>
+
+      {/* #278：关联 issue（父 / 子）—— 同步自 GitHub `parent` / `subIssues`（只读）。
+          仅在确实有关联时渲染整节，避免每个详情都多一个空块；
+          每项复用 openExternal + copyToClipboard，与上方 GitHub 行同一套交互。 */}
+      {(parentIssue || subIssues.length > 0) && (
+        <section className="detail-block">
+          <div className="block-title">{t('detail.linksTitle')}</div>
+          {parentIssue && (
+            <div className="link-line">
+              <span className="link-tag">{t('detail.parentIssue')}</span>
+              <span className="link-ref">#{parentIssue.number}</span>
+              {parentIssue.title && <span className="link-title">{parentIssue.title}</span>}
+              <button
+                className="btn ghost small inline"
+                onClick={() => openExternal(parentIssue.url)}
+              >
+                {t('detail.openInBrowser')}
+              </button>
+              <button
+                className="btn ghost small inline"
+                onClick={() => copyToClipboard(parentIssue.url, parentKey)}
+              >
+                {copiedKey === parentKey ? t('btn.copied') : t('btn.copy')}
+              </button>
+            </div>
+          )}
+          {subIssues.length > 0 && (
+            <div className="top-gap">
+              <div className="muted small">{t('detail.subIssues', { n: subIssues.length })}</div>
+              <ul className="link-list">
+                {subIssues.map((sub) => {
+                  const k = `sub-${sub.number}`;
+                  return (
+                    <li key={k} className="link-line">
+                      <span className="link-ref">#{sub.number}</span>
+                      {sub.title && <span className="link-title">{sub.title}</span>}
+                      <button
+                        className="btn ghost small inline"
+                        onClick={() => openExternal(sub.url)}
+                      >
+                        {t('detail.openInBrowser')}
+                      </button>
+                      <button
+                        className="btn ghost small inline"
+                        onClick={() => copyToClipboard(sub.url, k)}
+                      >
+                        {copiedKey === k ? t('btn.copied') : t('btn.copy')}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+        </section>
+      )}
 
       {err && <div className="banner error">{err}</div>}
     </aside>

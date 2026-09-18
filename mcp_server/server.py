@@ -67,11 +67,14 @@ STATUS_CN = {
 # 同一份列清单必须与 Rust 侧 `app/src-tauri/src/mcp.rs::SELECT_COLS` 完全一致，
 # 否则两个 MCP 实现返回给 agent 的字段会不一样。
 # v0.3.53 (#169)：完整列出 db.rs::SCHEMA 真实列；#171：work_branch 为 agent 工作分支。
+# #278：parent_issue / sub_issues 为 GitHub 父子关系（存 JSON 串，空串表示无关联）。
+# MCP 不做二次解析——agent 直接读 JSON，两个 MCP 实现语义一致。
 SELECT_COLS = (
     "issue_key, owner, repo, number, title, url, issue_state, ownership, "
     "status, project_status, assignees, mentioned, latest_comment_url, "
     "pr_number, pr_url, branch, work_branch, session_id, session_agent, "
-    "session_at, handoff, candidate_done, account_id, updated_at"
+    "session_at, handoff, candidate_done, account_id, updated_at, "
+    "parent_issue, sub_issues"
 )
 
 
@@ -150,6 +153,8 @@ def ensure_schema(c):
         "ALTER TABLE tasks ADD COLUMN work_branch TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE tasks ADD COLUMN author TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE tasks ADD COLUMN comments_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN parent_issue TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN sub_issues TEXT NOT NULL DEFAULT ''",
     ):
         try:
             c.execute(col_sql)

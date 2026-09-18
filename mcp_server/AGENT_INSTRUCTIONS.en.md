@@ -50,6 +50,17 @@ The MCP Server is registered as `taskboard` in WorkBuddy's `~/.workbuddy/mcp.jso
 - `owner/repo#number` — e.g. `FoodsUp-Inc/fad-backend#1247`
 - GitHub URL — e.g. `https://github.com/FoodsUp-Inc/fad-backend/issues/1247`
 
+### Return fields (`list_my_tasks` / `get_task_status`)
+
+Alongside the board status and session fields, the response also carries mirror fields synced **read-only** from GitHub; except for `work_branch`, no MCP tool writes them:
+
+- `branch` — the source branch of the issue's linked PR (pulled by sync; agents should not change it).
+- `work_branch` — the working branch recorded by the agent (written by `record_session` / `set_work_branch`, never overwritten by sync).
+- `parent_issue` — #278: a JSON object string `{"number","title","url"}` for the parent issue; empty string = no parent.
+- `sub_issues` — #278: a JSON array string of sub-issues; empty string = none.
+
+`parent_issue` / `sub_issues` are **JSON in string form** — `JSON.parse` them when needed; the `url` inside is directly openable, no need to build it yourself. Relationships are fetched per repository in batched requests; if a repository's fetch fails, its existing values are kept rather than cleared.
+
 ### State enum (`status` of `update_task_status`)
 - English keys: `todo` / `doing` / `processed` / `done`
 - Chinese equivalents: `待处理` / `处理中` / `已处理` / `已完成`
