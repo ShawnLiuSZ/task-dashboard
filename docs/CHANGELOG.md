@@ -6,6 +6,15 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 配置项目开源协议（#281）**
+
+  - **#281 仓库没有任何协议声明**：根目录无 `LICENSE`、`package.json` 与 `Cargo.toml` 也都没有 `license` 字段。法律上这等于**默认保留全部权利（all rights reserved）**——别人能 fork、能看，但没有任何条款允许复制、修改或分发，属 GitHub 上最常见的合规漏洞。协议声明散落在四个载体（`LICENSE` 文件、两个包管理器的 `license` 字段、README、CONTRIBUTING），任一缺失都会让下游工具读不到。详见 [docs/issue-281-license.md](./issue-281-license.md)。
+  - **协议选 MIT**：issue 内的推荐项，依据收敛为三点——① **技术栈惯例**：Tauri 核心与 `tauri-plugin-updater` 为 MIT，`rusqlite` / `serde` / `react` 均为 MIT，`@tauri-apps/cli` 为 Apache-2.0，依赖树与 MIT 零冲突；② **定位匹配**：个人效率工具而非被公司集成的商业组件，不需要 Apache-2.0 的显式专利授权，也不该用 copyleft 阻碍使用者改造（GPL / AGPL 与「个人工具、随取随用」直接冲突）；③ **贡献门槛**：MIT 只需保留版权声明，PR 作者不用理解修改声明义务。决策对比表（MIT / Apache-2.0 / GPL-3.0 / AGPL-3.0 的优劣）见 KB 文档 §2。
+  - **落地**：新建根目录 `LICENSE`（MIT 官方标准文本，只改版权行为 `Copyright (c) 2026 ShawnLiuSZ`——与 README / CI / Release 产物中的 owner 归属一致，`Cargo.toml` 里更早期的简写 `authors = ["liushizhao"]` 不动以免扩大改动面）；`app/package.json` 与 `app/src-tauri/Cargo.toml` 各加 `license = "MIT"`；`README.md` / `README.en.md` 预览图下方加 License 徽章、底部加「协议（License）」章节（点明唯一义务「保留版权声明」并复述免责条款的存在）；`CONTRIBUTING.md` 新增协议小节（PR 即按 MIT 授权、引入第三方代码需自行确认协议兼容、依赖协议以其自带 `LICENSE` 为准）。
+  - **刻意不做的事**：① 用 SPDX 标识符 `MIT` 而非自然语言 `"MIT License"`（后者会让 `npm license` / `cargo metadata` 归一化为 `Unknown`），也**不是** `MIT-0`（去掉了必须保留版权声明这一条，而保留要求对上游追溯是免费收益，去掉没有必要收益），更不是 npm 历史惯用的 `ISC`（文本不同，混用会误导依赖扫描器）；② 不动 `Cargo.lock`——Cargo 只对 registry 包记录 `license`，本地路径包（含 workspace 根包）只记 name / version / dependencies，`cargo metadata --locked` 已验证不受影响；③ 不动 `package-lock.json`——`license` 不参与依赖树解析，`npm ci` 的同步性检查只看 `dependencies` / `devDependencies`，且该 lock 根条目版本号历史就与 `package.json` 不同步，不扩大改动面。`package.json` 的 `"private": true` 与新增 `license` 不矛盾：前者只阻止 `npm publish`，后者是给使用者读的元数据。
+  - **验证**：`package.json` 仍为合法 JSON 且 `license` 解析为 `MIT`、`cargo metadata --locked` 通过（未报 license 非法）、`npm ci` 通过（exit 0，未报 lock 失配）、`scripts/check-doc-links.py` ✅（新增 `LICENSE` 相对链接与徽章 URL 均可达）、`scripts/check-workflow-yaml.py` ✅、`scripts` 单测全绿（后两项为回归防误伤，本次未动 workflow 与脚本）。
+  - **无 schema / 无代码变更**：不碰 SQLite、不碰 Rust 业务逻辑、不碰前端、不碰 MCP 双实现、不碰 CI 配置——纯仓库元数据与文档。
+
 - **未发布（Unreleased）— PR 合并后自动收尾：删分支 + 关关联 Issue（#284）**
 
   - **#284 每个 PR 合入后都要人工收尾**：删掉 `feature/issue-N-xxx` 分支、关闭 PR 标题 / 正文里声明的 issue —— 每合并一个 PR 重复一遍，且没有判断成分（分支名与 issue 号都在 PR 元数据里）。一个常被忽略的事实：GitHub 的 Closing keywords（`Closes #N`）只在合入**默认分支** `main` 时自动生效，而日常开发合入的是 `develop`，所以绝大多数 PR 的 `Refs #N` 从来不触发自动关闭，手动关是常态而非例外。详见 [docs/issue-284-merge-cleanup.md](./issue-284-merge-cleanup.md)。

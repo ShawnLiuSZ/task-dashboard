@@ -4,6 +4,10 @@
   <img src="social-preview.png" alt="TaskBoard — GitHub Task Board" width="720" />
 </p>
 
+<p align="center">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
+</p>
+
 > **English**
 >
 > 中文版见 [README.md](./README.md)
@@ -170,5 +174,11 @@ The MCP Server only provides tools (the **capability layer**). To make agents ca
 - [`docs/perf-audit-optimization.md`](./docs/perf-audit-optimization.md) — **performance / security batch index**: maps the `P0-1`…`P2-2` labels to issues and docs (`#143`–`#150`, shipped in v0.3.50)
 - [`docs/issue-118-expand-platform-support.md`](./docs/issue-118-expand-platform-support.md) — **expanded platform support**: release matrix declares explicit `target`, adds macOS dual-arch and Windows ARM64 builds
 - [`docs/issue-119-expand-release-matrix.md`](./docs/issue-119-expand-release-matrix.md) — **expanded release matrix**: Linux arm64, rpm, Windows msi; records the lesson that `zip` is **not** a valid Tauri 2 bundle type (rolled back same day)
+
+## License
+
+This project is released under the **MIT License** — full text in [LICENSE](./LICENSE). You are free to use, copy, modify, merge, publish, distribute, sublicense and/or sell copies of the software, on one condition: the copyright notice and this permission notice (i.e. the contents of the root `LICENSE` file) must be included in all copies or substantial portions of the software.
+
+The software is provided "AS IS", without warranty of any kind, and the authors and copyright holders accept no liability for any claims, damages or liability arising from its use. See the `LICENSE` file for the full disclaimer.
 
 > Version v0.6.0 · Local cross-platform app (Windows / macOS / Linux), 2026-09-17
