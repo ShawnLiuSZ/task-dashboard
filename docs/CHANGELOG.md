@@ -6,6 +6,13 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 任务详情关联 parent / sub issue 并支持打开与复制（#278）**
+
+  - **#278 详情看不出 issue 的父子关系**：GitHub issue 支持父子关系（子任务），但 TaskBoard 详情面板完全不体现——某 issue 挂在父任务下、或自身拆了子任务，看板里都看不出来，只能离开 App 去 GitHub 看。诉求：显示父 issue 编号 + 子 issue 编号列表，父与每个子项都能「在浏览器打开」「复制链接」。详见 [docs/issue-278-issue-links.md](./issue-278-issue-links.md)。
+  - **做法**：`tasks` 新增两列 `parent_issue` / `sub_issues`（`TEXT NOT NULL DEFAULT ''`，存 JSON 对象 / 数组串，仅 `number` / `title` / `url` 三字段），不建关联表——父子语义不对称（0..1 / 0..N）、不参与任何本地逻辑（状态同步 / 筛选 / 排序都不碰它）、MCP 读 JSON 串天然透明，省一张表、一组 CRUD、一处双实现同步。同步走**批量 alias GraphQL**：按 `(owner, repo)` 分组、编号排序去重后每 25 个合一个请求（`a0` / `a1` … 逐个 `issue(number: N)`），解析以节点自身 `number` 为键；`subIssues` 属特性开关，`GraphQL-Features: sub_issues` 头**统一注入到 `graphql()` 的每个请求**（而非为这条查询复制一份 POST 实现）。失败策略按仓库粒度 best-effort：整组失败只跳过该仓库并**保留既有值**（记 `tlog`、不中断同步），与 PR 关联同一取舍；拉取成功而关系已移除则正常写空串覆盖。
+  - **接口 / 迁移**：`common.rs` 增 `IssueLink` / `IssueLinks` + 静默降级的 `parse_parent_link` / `parse_sub_links`（脏数据不炸整个列表）；`github.rs` 增 `fetch_issue_links` 与两个纯函数；`commands.rs` 的 `Task` 暴露 `parentIssue` / `subIssues`（SELECT 追加在末尾，位置索引 25/26）；`on_demand.rs` 单 issue 按需拉取无法给出父子关系，两列写空串。`open_db()` 热路径幂等 `ALTER` 补列——**不能只放 `migrate_legacy_alters`**（它仅在 `user_version < 1` 执行，v2 物理重建走写死列白名单的 `INSERT..SELECT` 会丢列），沿用 #155 / #175 / #237 的迁移教训。前端新增「关联 Issue」块（**仅在有关联时渲染**，复用 `openExternal` / `copyToClipboard`），新增 3 个 i18n key；MCP `SELECT_COLS` 24 → 26 列，Rust 与 Python 逐列逐序一致、原样透传 JSON 串。
+  - **验证**：`cargo test` 135 例全绿（111 lib + 24 db，含 v2 旧库补齐 / 重建不丢列 / 冲突清空与更新三条迁移回归、GraphQL 查询布局与解析降级三条纯函数测试、MCP 26 列逐列不错位）、`cargo clippy -- -D warnings` 0 warning、`tsc --noEmit` 0 error、`npm run build` ✅、`npm test` 13 文件 136 例、`i18n:check` 中英各 356 key、`npm run lint` 18 warning（未超 `--max-warnings 20`）、`prettier --check` ✅、`python3 -m unittest discover -s mcp_server` 29 例全绿、`scripts/check-mcp-columns.py` ✅（26 列两侧一致）、`scripts/check-doc-links.py` ✅。真机实测 alias 查询（带特性头）：`errors: null`、`parent: null`、`subIssues.nodes: []`、alias 与 `owner.login` 回包正常。
+
 - **未发布（Unreleased）— 开始任务后 work_branch 仍关联基线分支（develop/master）（#279）**
 
   - **#279 开始任务后工作分支没更新**：用户把 issue 派给 agent，agent 先在 `develop` / `master` 上「开始任务」、随后才创建 / 切换到该 issue 的工作分支；结果 GitHub 上分支已建好，看板详情的 `work_branch` 却仍关联基线分支。根因是两个 `task-start` slash command 在第一步（agent 仍在基线分支）就取分支并写入 `work_branch`，opencode 版更在命令展开时即填入基线分支。详见 [docs/issue-279-work-branch-not-updated.md](./issue-279-work-branch-not-updated.md)。

@@ -50,6 +50,17 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 - `owner/repo#number` — 例：`FoodsUp-Inc/fad-backend#1247`
 - GitHub URL — 例：`https://github.com/FoodsUp-Inc/fad-backend/issues/1247`
 
+### 返回字段（`list_my_tasks` / `get_task_status`）
+
+除看板状态与 session 字段外，返回体还含 GitHub **只读同步**的镜像字段；除 `work_branch` 外 MCP 工具都不会写它们：
+
+- `branch` — 该 issue 关联 PR 的源分支（同步拉取，agent 不要改）。
+- `work_branch` — agent 记录的工作分支（`record_session` / `set_work_branch` 写入，同步不覆盖）。
+- `parent_issue` — #278：父 issue 的 JSON 对象串 `{"number","title","url"}`；空串 = 无父。
+- `sub_issues` — #278：子 issue 的 JSON 数组串；空串 = 无子。
+
+`parent_issue` / `sub_issues` 是**字符串形式的 JSON**，需要时自行 `JSON.parse`；其中的 `url` 即为可直接打开的地址，无需自行拼接。关系由同步按仓库批量拉取，某仓库拉取失败时会保留既有值（不置空）。
+
 ### 状态枚举（`update_task_status` 的 `status`）
 - 英文键：`todo` / `doing` / `processed` / `done`
 - 中文等价：`待处理` / `处理中` / `已处理` / `已完成`
