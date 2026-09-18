@@ -316,6 +316,26 @@ fn tool_record_session(
     Ok(json!({ "ok": true, "issue_key": key, "pulled": pulled }))
 }
 
+/// #279：单独设置任务的工作分支（agent 在**创建 / 切换分支之后**调用，纠正
+/// `record_session` 在「开始任务」时录到的基线分支 develop/master）。只写本地
+/// SQLite 的 `work_branch` 列，不碰 GitHub、不碰同步的 PR `branch` 列。
+fn tool_set_work_branch(
+    conn: &Connection,
+    issue: &str,
+    branch: &str,
+) -> Result<Value, String> {
+    let key = parse_issue_ref(issue)?;
+    let br = branch.trim();
+    if br.is_empty() {
+        return Err("branch 不能为空（清空请使用 clear_work_branch）".to_string());
+    }
+    // 走按需拉取：若该 issue 尚未同步到本地，先拉取这一个再写入。
+    let (_, pulled) = write_with_on_demand(conn, &key, issue, || {
+        crate::common::set_work_branch(conn, &key, br)
+    })?;
+    Ok(json!({ "ok": true, "issue_key": key, "work_branch": br, "pulled": pulled }))
+}
+
 fn tool_record_handoff(conn: &Connection, issue: &str, text: &str) -> Result<Value, String> {
     let key = parse_issue_ref(issue)?;
     // v0.3.49 (#147)：SQL 走公共模块（与 commands.rs 同一实现）。
@@ -429,6 +449,11 @@ fn call_tool(conn: &Connection, name: &str, args: &Map<String, Value>) -> Result
             let sid = get("session_id").ok_or("缺少 session_id 参数")?;
             tool_record_session(conn, &issue, &sid, get("agent").as_deref(), get("branch").as_deref())
         }
+        "set_work_branch" => {
+            let issue = get("issue").ok_or("缺少 issue 参数")?;
+            let branch = get("branch").ok_or("缺少 branch 参数")?;
+            tool_set_work_branch(conn, &issue, &branch)
+        }
         "record_handoff" => {
             let issue = get("issue").ok_or("缺少 issue 参数")?;
             let text = get("text").ok_or("缺少 text 参数")?;
@@ -510,6 +535,18 @@ fn tools_list() -> Value {
                     "branch": { "type": "string", "description": "可选，当前工作分支（如 git branch --show-current），非空才写入 work_branch 列" }
                 },
                 "required": ["issue", "session_id"]
+            }
+        },
+        {
+            "name": "set_work_branch",
+            "description": "单独设置任务的工作分支（work_branch 列），用于 agent 在**创建 / 切换分支之后**纠正「开始任务」时录到的基线分支（如 develop/master）。只写本地 SQLite，不碰 GitHub、不碰同步的 PR branch 列。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "issue": { "type": "string", "description": "issue 引用" },
+                    "branch": { "type": "string", "description": "当前实际工作分支（如 git branch --show-current 取到的值）" }
+                },
+                "required": ["issue", "branch"]
             }
         },
         {
@@ -951,5 +988,56 @@ mod tests {
         // 写工具同样给出可读错误，而不是含糊的「任务不存在」
         let werr = tool_update(&c, "task-dashboard#248", "处理中").unwrap_err();
         assert!(werr.contains("没有任何 GitHub 账号"), "{werr}");
+    }
+
+    // ── #279：set_work_branch 只更新 work_branch，不碰 PR branch ───────────────
+
+    /// set_work_branch 写入 work_branch，且不影响 PR 的 branch 列。
+    #[test]
+    fn set_work_branch_updates_only_work_branch() {
+        let c = test_conn();
+        insert_sample(&c);
+        // 样本中 branch=main、work_branch=feature/pay
+        let out = tool_set_work_branch(&c, "fad-backend#1247", "feature/issue-279-fix").unwrap();
+        assert_eq!(out["ok"].as_bool(), Some(true));
+        assert_eq!(out["work_branch"].as_str(), Some("feature/issue-279-fix"));
+
+        let obj = tool_get(&c, "fad-backend#1247").unwrap();
+        assert_eq!(obj["work_branch"].as_str(), Some("feature/issue-279-fix"));
+        // PR branch 列不受影响
+        assert_eq!(obj["branch"].as_str(), Some("main"));
+    }
+
+    /// set_work_branch 对不存在的 issue 报错（不清空、不静默）。
+    /// 需显式建空 `accounts` 表（与 `on_demand_without_account_fails_fast_with_reason` 同夹具），
+    /// 否则按需拉取在「查账号列表」时先报 no such table，掩盖真实错误文案。
+    #[test]
+    fn set_work_branch_errors_on_missing_issue() {
+        let c = test_conn();
+        c.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .unwrap();
+        c.execute_batch(
+            "CREATE TABLE accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL, login TEXT NOT NULL,
+                org TEXT NOT NULL, pat_token TEXT NOT NULL, is_default INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL);",
+        )
+        .unwrap();
+        let err = tool_set_work_branch(&c, "nope#999", "feature/x").unwrap_err();
+        // 无账号：走按需拉取 → 明确报「无法从 GitHub 拉取」，而不是含糊的「任务不存在」
+        assert!(
+            err.contains("无法从 GitHub 拉取") || err.contains("没有任何 GitHub 账号"),
+            "{err}"
+        );
+        assert!(!err.contains("no such table"), "{err}");
+    }
+
+    /// set_work_branch 的 branch 为空时报错（清空请用 clear_work_branch）。
+    #[test]
+    fn set_work_branch_rejects_empty_branch() {
+        let c = test_conn();
+        insert_sample(&c);
+        let err = tool_set_work_branch(&c, "fad-backend#1247", "   ").unwrap_err();
+        assert!(err.contains("branch 不能为空"), "{err}");
     }
 }

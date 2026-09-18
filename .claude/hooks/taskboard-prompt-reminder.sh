@@ -29,6 +29,7 @@ import json
 ctx = ("[TaskBoard 看板提醒] 本 prompt 疑似指向某个 GitHub issue："
        "开始前先用 MCP get_task_status 查现状，然后 /task-start <repo#num> "
        "（自动完成 update_task_status→处理中 + record_session 含分支）；"
-       "完工 /task-done，中途交接 /task-handoff。只写本地 SQLite，不碰 GitHub。")
+       "完工 /task-done，中途交接 /task-handoff。只写本地 SQLite，不碰 GitHub。"
+       "注意：开始记录前请先切到该 issue 的工作分支（/task-start 会读取当前分支写入 work_branch，在 develop/master 上展开会记成基线分支）。")
 print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": ctx}}, ensure_ascii=False))
 EOF

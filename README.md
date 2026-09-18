@@ -112,10 +112,11 @@ PRD §6 规划了「MCP Server + Skill」让 AI Agent 在执行任务时自动�
 | `record_session`     | `issue`, `session_id`, `agent?`, `branch?` | 记录中断会话 id + 工作分支（`branch` 非空写 `work_branch`，不碰 GitHub） |
 | `record_handoff`     | `issue`, `text`                 | 记录「交接任务」详情（不碰 GitHub）                    |
 | `clear_session`      | `issue`                         | 任务完成后清空 session 字段（保留 session\_at 审计）    |
+| `set_work_branch`    | `issue`, `branch`               | #279：创建 / 切换 issue 分支后纠正 `work_branch`（只写该列、不碰 PR `branch`） |
 
 `issue` 接受 `repo#number` / `owner/repo#number` / GitHub URL 三种形式。`status` 接受 `todo`/`doing`/`processed`/`done` 或中文「待处理/处理中/已处理/已完成」。
 
-**Agent 使用范式**（对应 PRD §6.4 时序）：任务开始 → `update_task_status(issue,"处理中")`；中途停止 → `record_session(issue, <会话id>, <agent>)`；识别到「生成交接任务」→ `record_handoff(issue, <详情>)`；完成 → `update_task_status(issue,"已完成")` → `clear_session(issue)`。
+**Agent 使用范式**（对应 PRD §6.4 时序）：任务开始 → 先切到该 issue 的工作分支（`feature/issue-N-xxx`），再 `update_task_status(issue,"处理中")` + `record_session(issue, <会话id>, <agent>, <当前分支>)`；若先跑了开始命令、之后才切分支，切完补一次 `set_work_branch(issue, <当前分支>)`；中途停止 → `record_session`；识别到「生成交接任务」→ `record_handoff(issue, <详情>)`；完成 → `update_task_status(issue,"已完成")` → `clear_session(issue)`。
 
 **接入各 Agent（配置 snippet）**：内置二进制已注册进 WorkBuddy 的 `~/.workbuddy/mcp.json`（`taskboard` 项）。其他本地 Agent 在其 MCP 配置里加同一条即可，例如 claude-code 的 `~/.claude.json`：
 
@@ -151,9 +152,9 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - **`CLAUDE.md`**（仓库根） —— 给 claude-code 的自动加载入口，指向上述指令文件并给出速记规则；在本仓库跑 claude-code 时会自动生效。
 
-- **`.claude/`**（#177，claude-code 确定性触发） —— `settings.json` 注册 `SessionStart`（注入 `$TASKBOARD_SESSION_ID` / `${CLAUDE_SESSION_ID}` + 看板规则）与 `UserPromptSubmit`（仅提到 issue 时轻提醒）两个 hooks（`bash + python3` 零依赖，不写 DB）；`commands/task-start|task-done|task-handoff.md` 提供显式一键命令。开始处理先 `/task-start <repo#num>`，做完 `/task-done`。
+- **`.claude/`**（#177，claude-code 确定性触发） —— `settings.json` 注册 `SessionStart`（注入 `$TASKBOARD_SESSION_ID` / `${CLAUDE_SESSION_ID}` + 看板规则）与 `UserPromptSubmit`（仅提到 issue 时轻提醒）两个 hooks（`bash + python3` 零依赖，不写 DB）；`commands/task-start|task-done|task-handoff.md` 提供显式一键命令。**#279：`/task-start` 已改为「先切 issue 工作分支、再记录会话」，避免 `work_branch` 被记成基线分支**。开始处理先 `/task-start <repo#num>`，做完 `/task-done`。
 
-- **`.opencode/`**（#177，opencode 确定性触发） —— `opencode.json` 已注册 `taskboard` MCP（`python3 mcp_server/server.py`，跨平台、免装 app）；`plugins/taskboard.js`（零依赖）在 `tool.execute.before` 自动补 `record_session` 的 `session_id` / `agent` / `branch`；`commands/task-start|task-done|task-handoff.md` 同 claude 侧语义（分支用 `!`git branch --show-current`` 自动填入）。同样先 `/task-start`，做完 `/task-done`。
+- **`.opencode/`**（#177，opencode 确定性触发） —— `opencode.json` 已注册 `taskboard` MCP（`python3 mcp_server/server.py`，跨平台、免装 app）；`plugins/taskboard.js`（零依赖）在 `tool.execute.before` 自动补 `record_session` 的 `session_id` / `agent` / `branch`；`commands/task-start|task-done|task-handoff.md` 同 claude 侧语义（分支用 `!`git branch --show-current`` 自动填入）。**#279：先切 issue 工作分支再调 `/task-start`，否则展开时填入的仍是基线分支；已切再补 `taskboard_set_work_branch`**。同样先 `/task-start`，做完 `/task-done`。
 
 - **App 设置 → Agent 接入**（#177，一键安装/卸载，实现参考 clawd-on-desk 的 Settings → Agents） —— 任务详情 session 下拉的 39 个 agent **全量可选**：
   - **一键安装**（hook 机制已逐项验证）：`claude-code` / `opencode` / `workbuddy` / `codebuddy` / `trae`；
@@ -191,6 +192,8 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 - [`docs/issue-265-sidebar-collapse.md`](./docs/issue-265-sidebar-collapse.md) — **侧边栏窄窗收起**：窗口宽度 < 900px 时 Sidebar 自动收起为纯图标模式（~56px），隐藏文字标签 / 分组标题，账号靠 `title` 提示辨识；纯响应式、不持久化
 
 - [`docs/issue-266-test-flake.md`](./docs/issue-266-test-flake.md) — **修复 Rust 测试随机 disk I/O error**：`mem_conn()` 临时库路径加每调用递增序号、连接存活期不再删文件，消除并行测试互相 unlink 的 CI flake；新增防回归断言
+
+- [`docs/issue-279-work-branch-not-updated.md`](./docs/issue-279-work-branch-not-updated.md) — **开始任务后 work_branch 仍关联基线分支**：`/task-start` 在 agent 尚处 develop/master 时就录分支，导致看板详情误导；改写为「先切 issue 分支再记录」+ 新增 `set_work_branch` 工具补偿纠正
 - [`docs/issue-262-multi-account-sync.md`](./docs/issue-262-multi-account-sync.md) — **多账号同步修复**：同步范围与视图模式解耦，恒覆盖全部账号（不再受 `view_mode` 限制）；恢复 topbar 显示模式切换，消除死代码 / 死 key；`SyncResult` 新增 `accountsSynced` 可观测性字段
 
 - [`docs/issue-235-in-app-api-log.md`](./docs/issue-235-in-app-api-log.md) — **应用内 API 调用明细**：`api_logs` 新表 + 可选 sink 收集器，同步/认领/状态写回的请求与返回参数可在日志面板展开查看（承接 #228 的 stderr 埋点）

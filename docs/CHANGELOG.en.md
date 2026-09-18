@@ -2,6 +2,12 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — `work_branch` still pinned to the baseline branch (develop/master) after starting a task (#279)**
+
+  - **#279 `work_branch` not updated after starting a task**: a user assigns an issue to an agent; the agent "starts the task" while still on `develop` / `master`, then only later creates / switches to that issue's work branch. The branch is created on GitHub, but the board detail's `work_branch` still points at the baseline branch. Root cause: both `task-start` slash commands captured the branch in step 1 — while the agent was still on the baseline branch — and wrote it into `work_branch`; the opencode variant filled it in even earlier, at command-expansion time. See [docs/issue-279-work-branch-not-updated.md](./issue-279-work-branch-not-updated.md).
+  - **How**: two complementary fixes — ① rewrote both `task-start` commands and the prompt-reminder hook to **switch to the issue's work branch first, then record the session** (branch capture moved after the switch); ② added a narrow tool `set_work_branch(issue, branch)` that the agent calls after switching to correct `work_branch` — it writes only `work_branch` and never touches the PR `branch` that sync pulls automatically. Implemented consistently in Rust (`common.rs` / `commands.rs` / `mcp.rs`, with 3 mcp tests) and Python (`mcp_server/server.py`, with 3 unit tests); `record_session`'s `branch` parameter is unchanged.
+  - **Verification**: `cargo test --lib` green (3 new cases), `python3 -m unittest discover -s mcp_server` 29 cases green, `scripts/check-mcp-columns.py` ✅, `scripts/check-doc-links.py` ✅.
+
 - **Unreleased — Restart button added to manual-download flow (#272)**
 
   - **#272 No restart option after manual download**: the `about.restart` button only appeared in the `installed` phase (after the updater channel's `installAppUpdate()` resolved). When the updater failed and the UI fell back to the manual download branch (`manualUrl`), clicking "Go to download" opened the browser and left the app with **no restart button at all** — the user had to manually quit and reopen. See [docs/issue-272-restart-after-manual.md](./issue-272-restart-after-manual.md).
