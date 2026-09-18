@@ -103,6 +103,14 @@ cd app && npm run i18n:check
 - 文档命名格式：`issue-{编号}-{简述}.md` 或 `v{版本}-{功能}.md`
 - 文档必须包含：背景/动机、设计/方案、接口/行为变更、测试/验收、相关链接
 
+## 协议（License）
+
+本项目采用 **MIT License**，完整文本见根目录 [`LICENSE`](./LICENSE)。
+
+- 提交 PR 即表示你同意所贡献的代码同样以 MIT 协议开源
+- 引入第三方代码时，请确认其协议与 MIT 兼容（宽松类协议可以），并在相应位置保留原作者版权声明
+- 依赖（前端 `node_modules` / Rust `Cargo.toml`）各自的协议以其自带 `LICENSE` 为准，不影响本项目的 MIT 授权
+
 ## 获取帮助
 
 - 查看 [README.md](./README.md) 了解项目概述

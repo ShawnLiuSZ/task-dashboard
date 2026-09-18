@@ -193,6 +193,8 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/issue-266-test-flake.md`](./docs/issue-266-test-flake.md) — **修复 Rust 测试随机 disk I/O error**：`mem_conn()` 临时库路径加每调用递增序号、连接存活期不再删文件，消除并行测试互相 unlink 的 CI flake；新增防回归断言
 
+- [`docs/issue-281-license.md`](./docs/issue-281-license.md) — **配置开源协议（MIT）**：根目录新建 `LICENSE` + `package.json` / `Cargo.toml` 补 `license` 字段 + README 徽章与协议章节 + CONTRIBUTING 贡献者协议说明；含 MIT / Apache-2.0 / GPL / AGPL 决策对比与「为何不用 `MIT-0`、不动两个 lockfile」的取舍
+
 - [`docs/issue-284-merge-cleanup.md`](./docs/issue-284-merge-cleanup.md) — **PR 合并后自动收尾**：删源分支 + 关闭关联 issue（`develop` 合入不触发 GitHub 自动关闭），提取规则刻意保守防误关；顺带新增 workflow 语法检查器与 `scripts` CI job，补齐此前对 `.github/workflows/` 的零覆盖
 - [`docs/issue-279-work-branch-not-updated.md`](./docs/issue-279-work-branch-not-updated.md) — **开始任务后 work_branch 仍关联基线分支**：`/task-start` 在 agent 尚处 develop/master 时就录分支，导致看板详情误导；改写为「先切 issue 分支再记录」+ 新增 `set_work_branch` 工具补偿纠正
 - [`docs/issue-278-issue-links.md`](./docs/issue-278-issue-links.md) — **详情关联 parent / sub issue**：批量 alias GraphQL 同步父子关系（25 个/请求 + 按仓库 best-effort 保留既有值），详情面板新增「关联 Issue」块支持打开与复制；含 26 列 MCP 双实现与迁移补列教训
@@ -215,6 +217,12 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 - [`docs/issue-118-expand-platform-support.md`](./docs/issue-118-expand-platform-support.md) — **扩展平台支持**：release 矩阵显式声明 `target`，新增 macOS 双架构与 Windows ARM64 构建
 
 - [`docs/issue-119-expand-release-matrix.md`](./docs/issue-119-expand-release-matrix.md) — **扩展 Release 打包矩阵**：Linux arm64、rpm、Windows msi；并记录 `zip` 作为 Tauri 2 bundle 类型**被当日回滚**的教训
+
+## 协议（License）
+
+本项目采用 **MIT License**，完整文本见 [LICENSE](./LICENSE)。可自由使用、复制、修改、合并、发布、分发、再授权乃至出售本软件的副本，前提是**在本软件或其大部分副本中保留上述版权声明与许可声明**（即根目录 `LICENSE` 文件的内容）。
+
+软件按「原样」提供，不作任何明示或默示的保证；作者与版权持有者不对使用本软件所引发的任何主张、损害或责任负责。详见 `LICENSE` 中的免责条款。
 
 > 版本 v0.6.0 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-17
 
