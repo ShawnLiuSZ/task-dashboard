@@ -465,6 +465,46 @@ fn sync_account_inner(
         );
     }
 
+    // #278：父子关系（GraphQL `parent` / `subIssues`，只读）。
+    // 按 `owner/repo` 分组批量拉取——每 25 个编号合一个请求，替代逐 issue 往返。
+    // best-effort：整组失败只跳过该仓库（并保留其既有关系），不中断同步；
+    // 与 PR 关联同一取舍：关系属展示信息，失败不能让看板状态回退。
+    let mut links_by_key: std::collections::HashMap<String, crate::common::IssueLinks> =
+        std::collections::HashMap::new();
+    let mut links_failed_repos: HashSet<String> = HashSet::new();
+    let mut link_groups: std::collections::HashMap<(String, String), Vec<i64>> =
+        std::collections::HashMap::new();
+    for t in &raw {
+        if t.is_pr {
+            continue;
+        }
+        link_groups
+            .entry((t.repo_owner.clone(), t.repo.clone()))
+            .or_default()
+            .push(t.number);
+    }
+    for ((owner, repo), mut nums) in link_groups {
+        nums.sort();
+        nums.dedup();
+        let repo_ref = format!("{owner}/{repo}");
+        match client.fetch_issue_links(&owner, &repo, &nums) {
+            Ok(m) => {
+                for (n, links) in m {
+                    // 无关联的 issue 不入 map——读取端 `get` 未命中时本就返回空串，
+                    // 语义等价但 map 更小；关系被移除时同样按「清空」写入。
+                    if links.is_empty() {
+                        continue;
+                    }
+                    links_by_key.insert(format!("{repo}#{n}"), links);
+                }
+            }
+            Err(e) => {
+                links_failed_repos.insert(repo_ref);
+                crate::tlog!("[sync] 拉取 {} 父子关系失败，保留既有值: {}", repo, e);
+            }
+        }
+    }
+
     // v0.3.49 (#144)：循环外一次预加载，循环内 O(1) 查，消灭逐任务 N+1 查询
     // （2 次 SELECT + 2×labels 点查 + 全表列加载 + match_rules 重复解析）。
     // 预加载失败则整账号同步失败，绝不用空快照继续——否则既有 status 会被
@@ -496,6 +536,8 @@ fn sync_account_inner(
         let existing_pr_url = existing.map(|e| e.pr_url.as_str()).unwrap_or("");
         let existing_comment_url = existing.map(|e| e.comment_url.as_str()).unwrap_or("");
         let existing_branch = existing.map(|e| e.branch.as_str()).unwrap_or("");
+        let existing_parent_issue = existing.map(|e| e.parent_issue.clone()).unwrap_or_default();
+        let existing_sub_issues = existing.map(|e| e.sub_issues.clone()).unwrap_or_default();
         let exists = existing.is_some();
 
         // 决定看板状态（优先级见 resolve_final_status）：closed→done；自定义列；
@@ -575,6 +617,19 @@ fn sync_account_inner(
                 (existing_comments, existing_comment_url.to_string())
             };
 
+        // #278：父子关系。仅当该仓库的整组拉取成功时更新；失败则保留既有值
+        // （与 PR 关联同款取舍，避免一次网络抖动把已有关联清空）。
+        let (parent_issue, sub_issues) = if links_failed_repos
+            .contains(&format!("{}/{}", t.repo_owner, t.repo))
+        {
+            (existing_parent_issue, existing_sub_issues)
+        } else {
+            links_by_key
+                .get(&key)
+                .map(|l| l.to_columns())
+                .unwrap_or((String::new(), String::new()))
+        };
+
         pending.push(crate::db::TaskUpsert {
             issue_key: key,
             owner: account.org.clone(),
@@ -597,6 +652,8 @@ fn sync_account_inner(
             pr_number,
             pr_url,
             branch,
+            parent_issue,
+            sub_issues,
             updated_at: crate::common::iso8601_to_secs(&t.updated_at),
             exists,
         });

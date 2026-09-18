@@ -22,6 +22,8 @@ function mkTask(projectStatus: string): Task {
     prUrl: '',
     branch: '',
     workBranch: '',
+    parentIssue: null,
+    subIssues: [],
     sessionId: null,
     sessionAgent: null,
     sessionAt: null,

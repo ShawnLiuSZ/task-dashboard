@@ -30,6 +30,10 @@ pub struct Task {
     pub branch: String,
     /// #193：agent 工作分支（record_session 写入，与同步的 PR branch 分离）。
     pub work_branch: String,
+    /// #278：父 issue（GitHub `parent`）；无父为 `None`。
+    pub parent_issue: Option<crate::common::IssueLink>,
+    /// #278：子 issue 列表（GitHub `subIssues`）；无子为空数组。
+    pub sub_issues: Vec<crate::common::IssueLink>,
     pub session_id: Option<String>,
     pub session_agent: Option<String>,
     pub session_at: Option<i64>,
@@ -106,7 +110,8 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
         let sql = format!(
             "SELECT issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status,
                     assignees, mentioned, latest_comment_url, pr_number, pr_url, branch,
-                    session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch, author
+                    session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch, author,
+                    parent_issue, sub_issues
              FROM tasks WHERE author = ?{where_extra}
              ORDER BY candidate_done ASC, status ASC, updated_at DESC"
         );
@@ -125,6 +130,9 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
                 project_status: r.get(9)?,
                 assignees: r.get(10)?,
                 author: r.get(24)?,
+                // #278：父子关系（JSON 串 → 结构化）。列固定在末尾，位置索引不变。
+                parent_issue: crate::common::parse_parent_link(r.get::<_, String>(25)?),
+                sub_issues: crate::common::parse_sub_links(r.get::<_, String>(26)?),
                 mentioned: r.get::<_, i64>(11).unwrap_or(0) != 0,
                 latest_comment_url: r.get(12)?,
                 pr_number: r.get(13)?,
@@ -190,6 +198,9 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
             project_status: r.get(9)?,
             assignees: r.get(10)?,
             author: r.get(24)?,
+            // #278：父子关系（JSON 串 → 结构化）。列固定在末尾，位置索引不变。
+            parent_issue: crate::common::parse_parent_link(r.get::<_, String>(25)?),
+            sub_issues: crate::common::parse_sub_links(r.get::<_, String>(26)?),
             mentioned: r.get::<_, i64>(11).unwrap_or(0) != 0,
             latest_comment_url: r.get(12)?,
             pr_number: r.get(13)?,
