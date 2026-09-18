@@ -123,6 +123,8 @@ pub const SYNCED_EVENT: &str = "taskboard://synced";
 /// #181：App 内写入（看板状态 / session / handoff）后通知前端重查。
 /// MCP 子进程无 AppHandle 发不出此事件，仍靠前端聚焦 + 轮询兜底。
 pub const TASKS_CHANGED_EVENT: &str = "taskboard://tasks-changed";
+/// #276：每日自动检查发现新版本时通知前端弹框提醒。
+pub const UPDATE_AVAILABLE_EVENT: &str = "taskboard://update-available";
 
 fn schedule_minutes(app: &AppHandle) -> u64 {
     let state = app.state::<AppState>();
@@ -372,6 +374,13 @@ pub fn run() {
                 let mins = schedule_minutes(&h_tick);
                 thread::sleep(Duration::from_secs(mins * 60));
                 run_sync(&h_tick, "auto");
+            });
+
+            // #276：每日自动检查更新（24h 周期，内部有 last_update_check_at 防重复）。
+            let h_update = handle.clone();
+            thread::spawn(move || loop {
+                thread::sleep(Duration::from_secs(3600)); // 1h 轮询，内部 24h 去重
+                commands::run_auto_update_check(&h_update, &h_update.state::<AppState>());
             });
 
             Ok(())

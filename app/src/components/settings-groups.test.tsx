@@ -32,6 +32,8 @@ function mkSettings(): Settings {
     viewMode: 'single',
     accounts: [],
     oauthClientId: '',
+    autoCheckUpdates: false,
+    autoUpdate: false,
   };
 }
 

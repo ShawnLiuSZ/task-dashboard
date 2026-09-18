@@ -220,18 +220,6 @@ export default function AboutPanel({ onClose }: Props) {
             </ul>
           </section>
 
-          <section className="about-section">
-            <h4>{t('about.dataTitle')}</h4>
-            <code className="about-data-path">{t('about.dataPath')}</code>
-          </section>
-
-          <section className="about-section">
-            <h4>{t('about.mcpTitle')}</h4>
-            <p className="muted small">{t('about.mcpDesc')}</p>
-            <pre className="about-code">{buildMcpSnippet()}</pre>
-            <p className="muted small">{t('about.mcpFallback')}</p>
-          </section>
-
           <div className="about-repo-row" style={{ marginTop: 4 }}>
             <span className="muted small">{t('about.repoPath')}</span>
             <button

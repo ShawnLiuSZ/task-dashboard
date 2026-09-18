@@ -1,5 +1,5 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { api, onSynced, onTasksChanged, TASKBOARD_ERROR_EVENT } from './api';
+import { api, onSynced, onTasksChanged, onUpdateAvailable, TASKBOARD_ERROR_EVENT } from './api';
 import { taskListSignature } from './utils/taskSig';
 import { coalescedLoad, createLoadCoalescer } from './utils/coalescedLoad';
 import { countHiddenChanged, snapshotTasks } from './utils/syncHint';
@@ -56,6 +56,8 @@ function BoardApp() {
   const [accountColumns, setAccountColumns] = useState<AccountColumn[]>([]);
   // #101：macOS quarantine 清除一次性提示（启动时后端存入 AppState，前端轮询读取后清空）。
   const [quarantineNotice, setQuarantineNotice] = useState<string | null>(null);
+  // #276：每日自动检查发现新版本时的弹框提醒。
+  const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
 
   // v0.3.28+：监听全局错误上报（如 openExternal 失败），统一在错误 banner 显示，
   // 避免无 UI 上下文的异步失败只落在 console 里造成「点了没反应」。
@@ -70,6 +72,17 @@ function BoardApp() {
     void api.getQuarantineNotice().then((msg) => {
       if (msg) setQuarantineNotice(msg);
     });
+  }, []);
+
+  // #276：监听每日自动检查发现新版本的提醒。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void onUpdateAvailable((p) => {
+      if (p.version) setUpdateAvailable(p.version);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
   }, []);
 
   // 同步结果 / 部分失败 banner 4 秒后自动消失（错误 banner 不受影响，由下次操作覆盖）。
@@ -427,7 +440,7 @@ function BoardApp() {
       await loadSettings();
       // M3：显式传新 accountFilter——filterRef 由被动 effect 刷新，
       // await loadSettings() 后仍可能读到旧值（与 handleSwitchAccount 同款修复）。
-      const accountId = mode === 'all' ? 0 : settings?.activeAccountId ?? 0;
+      const accountId = mode === 'all' ? 0 : (settings?.activeAccountId ?? 0);
       await loadWith(ownership, accountId);
     } catch (e) {
       setError(String(e));
@@ -564,6 +577,7 @@ function BoardApp() {
                   <option value="assigned">{t('ownership.assigned')}</option>
                   <option value="notassignee">{t('ownership.notassignee')}</option>
                   <option value="assigned-others">{t('ownership.assigned-others')}</option>
+                  <option value="my-created">{t('filter.myCreated')}</option>
                 </select>
                 {(query || repo || ownership) && (
                   <button
@@ -650,6 +664,44 @@ function BoardApp() {
       )}
 
       {showAbout && <AboutPanel onClose={() => setShowAbout(false)} />}
+
+      {/* #276：每日自动检查发现新版本的弹框提醒 */}
+      {updateAvailable && (
+        <div className="modal-mask" onClick={() => setUpdateAvailable(null)}>
+          <div
+            className="modal"
+            style={{ maxWidth: 420 }}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setUpdateAvailable(null);
+            }}
+          >
+            <h3 className="modal-title">{t('about.updateAvailableTitle')}</h3>
+            <p className="muted" style={{ margin: '12px 0' }}>
+              {t('about.updateAvailableMsg', { version: updateAvailable })}
+            </p>
+            <div className="modal-actions">
+              <button className="btn" onClick={() => setUpdateAvailable(null)}>
+                {t('about.updateLater')}
+              </button>
+              <button
+                className="btn primary"
+                onClick={async () => {
+                  setUpdateAvailable(null);
+                  try {
+                    await api.installAppUpdate();
+                    await api.restartApp();
+                  } catch (e) {
+                    setError(String(e));
+                  }
+                }}
+              >
+                {t('about.updateNow')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
