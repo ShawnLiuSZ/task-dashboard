@@ -54,6 +54,8 @@ function BoardApp() {
   const [hiddenAfterSync, setHiddenAfterSync] = useState(0);
   const [projectStatuses, setProjectStatuses] = useState<ProjectStatus[]>([]);
   const [accountColumns, setAccountColumns] = useState<AccountColumn[]>([]);
+  // #101：macOS quarantine 清除一次性提示（启动时后端存入 AppState，前端轮询读取后清空）。
+  const [quarantineNotice, setQuarantineNotice] = useState<string | null>(null);
 
   // v0.3.28+：监听全局错误上报（如 openExternal 失败），统一在错误 banner 显示，
   // 避免无 UI 上下文的异步失败只落在 console 里造成「点了没反应」。
@@ -61,6 +63,13 @@ function BoardApp() {
     const handler = (e: Event) => setError((e as CustomEvent<string>).detail);
     window.addEventListener(TASKBOARD_ERROR_EVENT, handler);
     return () => window.removeEventListener(TASKBOARD_ERROR_EVENT, handler);
+  }, []);
+
+  // #101：启动时轮询读取 quarantine 清除消息（一次性，后端读取后自动清空）。
+  useEffect(() => {
+    void api.getQuarantineNotice().then((msg) => {
+      if (msg) setQuarantineNotice(msg);
+    });
   }, []);
 
   // 同步结果 / 部分失败 banner 4 秒后自动消失（错误 banner 不受影响，由下次操作覆盖）。
@@ -479,11 +488,20 @@ function BoardApp() {
         </div>
       </header>
 
-      {(error || lastResult || lastWarning) && (
+      {(error || lastResult || lastWarning || quarantineNotice) && (
         <div className="banner-row">
           {error && <div className="banner error">{error}</div>}
-          {!error && lastWarning && <div className="banner warn">{lastWarning}</div>}
-          {!error && !lastWarning && lastResult && <div className="banner ok">{lastResult}</div>}
+          {!error && quarantineNotice && (
+            <div className="banner warn" onClick={() => setQuarantineNotice(null)}>
+              {quarantineNotice}
+            </div>
+          )}
+          {!error && !quarantineNotice && lastWarning && (
+            <div className="banner warn">{lastWarning}</div>
+          )}
+          {!error && !quarantineNotice && !lastWarning && lastResult && (
+            <div className="banner ok">{lastResult}</div>
+          )}
         </div>
       )}
       {!error && hiddenAfterSync > 0 && (query || repo || ownership) && (

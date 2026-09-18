@@ -17,6 +17,7 @@
   - **Hooks auto-refresh missing empty-target guard + omitted `hooksBusy`**: switching to project scope without typing a path triggered a refresh → error banner; changing scope mid-operation never re-refreshed. Added guard and deps.
   - **`handleSwitchView` read stale `filterRef`**: after `await loadSettings()`, the passive effect hadn't refreshed `filterRef` yet, so `load()` queried with the old `accountFilter`. Changed to pass `accountId` explicitly (same fix as `handleSwitchAccount`).
   - **`onUpdateProgress` listener leaked if unmounted before `listen()` resolved**: AboutPanel's `listen()` Promise hadn't resolved when the modal closed → listener never unregistered, kept firing `setState`. Added `cancelled` flag (same pattern as App.tsx).
+  - **`quarantine-cleared` event never received by frontend**: #101's macOS Gatekeeper auto-clear `emit`s an event at app startup, but the frontend hasn't loaded yet → the message is always lost. Changed to store in `AppState.quarantine_notice` (`Mutex<Option<String>>`), added `get_quarantine_notice` command for frontend polling (one-shot, backend auto-clears after read), App shows a warn banner on startup (click to dismiss).
 
 - **v0.6.0 (2026-09-17) — Fix Rust test random disk I/O error (CI flake) (#266)**
 
