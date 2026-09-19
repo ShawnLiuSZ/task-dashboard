@@ -70,6 +70,9 @@ pub struct RawTask {
     pub comments: u64,
     #[serde(default)]
     pub is_pr: bool,
+    /// #280：issue 创建时间（GitHub `created_at`，RFC3339 字符串）。
+    #[serde(default)]
+    pub created_at: String,
 }
 
 /// 从 `[{login: "..."}]` 形态的数组字段提取 login 列表。
@@ -165,6 +168,7 @@ impl RawTask {
             author,
             comments: v.get("comments").and_then(|x| x.as_u64()).unwrap_or(0),
             is_pr: v.get("pull_request").is_some(),
+            created_at: v.get("created_at").and_then(|x| x.as_str()).unwrap_or("").to_string(),
         })
     }
 
@@ -204,6 +208,7 @@ impl RawTask {
             comments: v.get("comments").and_then(|x| x.as_u64()).unwrap_or(0),
             // 与 from_item 一致：`pull_request` 字段存在即为 PR（REST 也返回 PR）。
             is_pr: v.get("pull_request").is_some(),
+            created_at: v.get("created_at").and_then(|x| x.as_str()).unwrap_or("").to_string(),
         })
     }
 }
@@ -1167,6 +1172,7 @@ impl GitHubClient {
                     author,
                     comments,
                     is_pr: false,
+                    created_at: String::new(),
                 });
             }
             if items["pageInfo"]["hasNextPage"].as_bool() == Some(true) {

@@ -43,6 +43,8 @@ pub struct Task {
     pub updated_at: Option<i64>,
     /// v0.3.16：归属账号 id（指向 accounts.id），用于多账号视图过滤。
     pub account_id: i64,
+    /// #280：issue 创建时间（秒级时间戳，0 表示未知）。
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,7 +87,7 @@ const TASK_SELECT_COLUMNS: &str = concat!(
     "issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status, ",
     "assignees, mentioned, latest_comment_url, pr_number, pr_url, branch, ",
     "session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch, author, ",
-    "parent_issue, sub_issues"
+    "parent_issue, sub_issues, created_at"
 );
 
 /// 单行 → `Task`。列顺序由 [`TASK_SELECT_COLUMNS`] 固定，位置索引不可调整。
@@ -119,6 +121,7 @@ fn task_mapper(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         updated_at: r.get(21)?,
         account_id: r.get(22)?,
         work_branch: r.get(23)?,
+        created_at: r.get(27)?,
     })
 }
 

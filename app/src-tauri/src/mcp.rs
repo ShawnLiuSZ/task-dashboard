@@ -38,7 +38,7 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 /// #171：`work_branch` 为 agent 记录的工作分支，与同步的 PR `branch` 分离。
 /// #278：`parent_issue` / `sub_issues` 为 GitHub 父子关系（与 DB 一致，存 JSON 串；
 /// 空串表示无关联）。MCP 不做二次解析——agent 直接读 JSON，两个 MCP 实现语义一致。
-const SELECT_COLS: &str = "issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status, assignees, mentioned, latest_comment_url, pr_number, pr_url, branch, work_branch, session_id, session_agent, session_at, handoff, candidate_done, account_id, updated_at, parent_issue, sub_issues";
+const SELECT_COLS: &str = "issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status, assignees, mentioned, latest_comment_url, pr_number, pr_url, branch, work_branch, session_id, session_agent, session_at, handoff, candidate_done, account_id, updated_at, parent_issue, sub_issues, created_at";
 
 fn db_path_for_mcp() -> Result<std::path::PathBuf, String> {
     if let Ok(p) = std::env::var("TASKBOARD_DB") {
@@ -134,6 +134,10 @@ fn row_to_value(r: &rusqlite::Row) -> rusqlite::Result<Value> {
         Value::String(r.get::<_, String>(24)?), // 24
     );
     m.insert("sub_issues".into(), Value::String(r.get::<_, String>(25)?)); // 25
+    m.insert(
+        "created_at".into(),
+        Value::Number(r.get::<_, i64>(26)?.into()), // 26
+    );
     Ok(Value::Object(m))
 }
 
@@ -869,7 +873,7 @@ mod tests {
                 assignees TEXT, mentioned INTEGER, latest_comment_url TEXT, pr_number INTEGER,
                 pr_url TEXT, branch TEXT, work_branch TEXT, session_id TEXT, session_agent TEXT,
                 session_at INTEGER, handoff TEXT, candidate_done INTEGER, account_id INTEGER,
-                updated_at INTEGER, parent_issue TEXT, sub_issues TEXT
+                updated_at INTEGER, parent_issue TEXT, sub_issues TEXT, created_at INTEGER
             );",
         )
         .unwrap();
@@ -883,7 +887,7 @@ mod tests {
                 issue_key, owner, repo, number, title, url, issue_state, ownership, status,
                 project_status, assignees, mentioned, latest_comment_url, pr_number, pr_url,
                 branch, work_branch, session_id, session_agent, session_at, handoff,
-                candidate_done, account_id, updated_at, parent_issue, sub_issues
+                candidate_done, account_id, updated_at, parent_issue, sub_issues, created_at
             ) VALUES (
                 'fad-backend#1247', 'FoodsUp-Inc', 'fad-backend', 1247, '修复支付回调',
                 'https://github.com/FoodsUp-Inc/fad-backend/issues/1247', 'open', 'notassignee',
@@ -891,7 +895,8 @@ mod tests {
                 'main', 'feature/pay', 'sess-1', 'claude-code', 1700000000, 'handoff-1',
                 0, 1, 1700000100,
                 '{\"number\":900,\"title\":\"支付重构\",\"url\":\"https://github.com/FoodsUp-Inc/fad-backend/issues/900\"}',
-                '[{\"number\":1300,\"title\":\"支付回调子任务\",\"url\":\"https://github.com/FoodsUp-Inc/fad-backend/issues/1300\"}]'
+                '[{\"number\":1300,\"title\":\"支付回调子任务\",\"url\":\"https://github.com/FoodsUp-Inc/fad-backend/issues/1300\"}]',
+                1690000000
             );",
             [],
         )
@@ -934,6 +939,8 @@ mod tests {
         assert_eq!(obj["candidate_done"].as_i64(), Some(0));
         assert_eq!(obj["account_id"].as_i64(), Some(1));
         assert_eq!(obj["updated_at"].as_i64(), Some(1700000100));
+        // #280：创建时间（秒级时间戳）。
+        assert_eq!(obj["created_at"].as_i64(), Some(1690000000));
         // #278：父子关系原样透传（JSON 串，非结构化）——位置索引 24/25 不能错位。
         assert_eq!(
             obj["parent_issue"].as_str(),
@@ -969,6 +976,7 @@ mod tests {
         assert_eq!(obj["session_id"].as_str(), Some("sess-1"));
         assert_eq!(obj["handoff"].as_str(), Some("handoff-1"));
         assert_eq!(obj["updated_at"].as_i64(), Some(1700000100));
+        assert_eq!(obj["created_at"].as_i64(), Some(1690000000));
         // #278：父子关系同样透传到单 issue 查询。
         assert!(obj["parent_issue"].as_str().unwrap().starts_with("{\"number\":900"));
         assert!(obj["sub_issues"].as_str().unwrap().starts_with("[{\"number\":1300"));

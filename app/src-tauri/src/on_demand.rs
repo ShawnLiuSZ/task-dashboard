@@ -299,6 +299,7 @@ fn build_task_row(
         branch: String::new(),
         parent_issue: String::new(),
         sub_issues: String::new(),
+        created_at: crate::common::iso8601_to_secs(&raw.created_at),
         updated_at: crate::common::iso8601_to_secs(&raw.updated_at),
         exists: false,
     })

@@ -30,6 +30,7 @@ function mkTask(projectStatus: string): Task {
     candidateDone: false,
     handoff: '',
     updatedAt: null,
+    createdAt: 0,
     accountId: 1,
   };
 }

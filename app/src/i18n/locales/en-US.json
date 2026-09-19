@@ -95,6 +95,7 @@
   "hint.processed": "Work done, pending confirmation",
   "hint.done": "Confirmed done, archived",
   "card.creatorLabel": "Created by",
+  "card.createdAt": "Created",
   "card.ghStatusTitle": "GitHub Project status",
   "card.ghState.open": "Open",
   "card.ghState.closed": "Closed",
