@@ -69,6 +69,8 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
   const { t, mode, setMode } = useI18n();
   const [minutes, setMinutes] = useState(settings.scheduleMinutes);
   const [ghPath, setGhPath] = useState(settings.ghPath);
+  const [autoCheckUpdates, setAutoCheckUpdates] = useState(settings.autoCheckUpdates);
+  const [autoUpdate, setAutoUpdate] = useState(settings.autoUpdate);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [diagBusy, setDiagBusy] = useState(false);
@@ -143,7 +145,7 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
     setSaving(true);
     setErr(null);
     try {
-      onSaved(await api.saveSettings(minutes, ghPath));
+      onSaved(await api.saveSettings(minutes, ghPath, autoCheckUpdates, autoUpdate));
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -397,6 +399,33 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
               ))}
             </div>
             <div className="muted small">{t('settings.intervalHint')}</div>
+          </div>
+
+          <div className="field">
+            <label>{t('settings.autoCheckUpdates')}</label>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={autoCheckUpdates}
+                onChange={(e) => setAutoCheckUpdates(e.target.checked)}
+              />
+              <span className="slider" />
+            </label>
+            <div className="muted small">{t('settings.autoCheckUpdatesHint')}</div>
+          </div>
+
+          <div className="field">
+            <label>{t('settings.autoUpdate')}</label>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={autoUpdate}
+                disabled={!autoCheckUpdates}
+                onChange={(e) => setAutoUpdate(e.target.checked)}
+              />
+              <span className="slider" />
+            </label>
+            <div className="muted small">{t('settings.autoUpdateHint')}</div>
           </div>
 
           <div className="field">

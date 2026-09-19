@@ -7,6 +7,7 @@
 //! v0.3.49（#149）：追加日志门控与浏览器外链白名单。
 
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 
 /// 检查是否启用详细日志（TASKBOARD_LOG=1 或 TASKBOARD_LOG=debug）。
 /// MCP 调用时默认静默，仅在排障时显式开启。
@@ -42,6 +43,71 @@ pub fn validate_browser_url(url: &str) -> Result<String, String> {
     } else {
         Err(format!("仅允许打开 GitHub 链接: {u}"))
     }
+}
+
+/// #278：关联 issue（parent / sub-issue）的最小描述。
+///
+/// 只缓存详情页展示必需的三件套（编号 / 标题 / 网页链接）——不含 `state` / 标签 /
+/// 更新时间等会漂移的字段，避免一次同步延迟就把过期信息呈现给用户。
+/// 跨仓库时 owner/repo 由 `url` 隐含（GitHub URL 必为 `/issues/<n>` 形态），
+/// 因此无需再单独存 `repo`，详情「打开 / 复制」直接复用 `url`。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IssueLink {
+    pub number: i64,
+    pub title: String,
+    pub url: String,
+}
+
+/// #278：一条 issue 的父子关系（GraphQL `parent` / `subIssues` 的落库形态）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IssueLinks {
+    pub parent: Option<IssueLink>,
+    pub sub_issues: Vec<IssueLink>,
+}
+
+impl IssueLinks {
+    pub fn is_empty(&self) -> bool {
+        self.parent.is_none() && self.sub_issues.is_empty()
+    }
+
+    /// 序列化为 `tasks.parent_issue` / `tasks.sub_issues` 两列的值。
+    ///
+    /// 无关系时返回空串，保持两列 `NOT NULL DEFAULT ''` 的既有约定
+    /// （与 `branch` / `work_branch` / `author` 一致，前端按空值判定「无关联」）。
+    pub fn to_columns(&self) -> (String, String) {
+        let parent = match &self.parent {
+            Some(p) => serde_json::to_string(p).unwrap_or_default(),
+            None => String::new(),
+        };
+        let sub_issues = if self.sub_issues.is_empty() {
+            String::new()
+        } else {
+            serde_json::to_string(&self.sub_issues).unwrap_or_default()
+        };
+        (parent, sub_issues)
+    }
+}
+
+/// 解析 `tasks.parent_issue` 列（JSON 对象）。空串 / 非法 JSON → `None`。
+///
+/// 解析失败静默降级：关联信息属装饰性展示，不该让 `list_tasks` 因一行脏数据报错
+/// （与 `author_from_user` 的「取不到就空串」同策略）。
+/// 参数取 `impl AsRef<str>`，便于在 SQL 行映射里直接传 `r.get::<_, String>(n)?`。
+pub fn parse_parent_link(s: impl AsRef<str>) -> Option<IssueLink> {
+    let t = s.as_ref().trim();
+    if t.is_empty() {
+        return None;
+    }
+    serde_json::from_str(t).ok()
+}
+
+/// 解析 `tasks.sub_issues` 列（JSON 数组）。空串 / 非法 JSON → 空列表。
+pub fn parse_sub_links(s: impl AsRef<str>) -> Vec<IssueLink> {
+    let t = s.as_ref().trim();
+    if t.is_empty() {
+        return Vec::new();
+    }
+    serde_json::from_str(t).unwrap_or_default()
 }
 
 /// RFC3339 "YYYY-MM-DDTHH:MM:SSZ" → Unix 秒；空/解析失败返回 0。
@@ -164,6 +230,25 @@ pub fn touch_session(
     Ok(n)
 }
 
+/// #279：单独设置任务的工作分支 `work_branch`（agent 在**创建 / 切换分支之后**调用，
+/// 纠正 `record_session` 在「开始任务」时录到的基线分支 develop/master）。
+/// 与同步自动拉的 PR `branch` 列分离，同步不碰 work_branch。
+///
+/// 本函数只做 SQL 更新：`branch` 为空串会把该列清空（清空语义在本层保留，便于复用）。
+/// **MCP 工具边界拒绝空 `branch`**（`mcp.rs::tool_set_work_branch` 与 `server.py` 报
+/// 「branch 不能为空」），防止误清掉工作分支——本层不校验，调用方自行把关。
+/// 返回实际更新行数（0 表示任务不存在）。
+pub fn set_work_branch(conn: &Connection, key: &str, branch: &str) -> Result<usize, String> {
+    let br = branch.trim().to_string();
+    let n = conn
+        .execute(
+            "UPDATE tasks SET work_branch = ?1 WHERE issue_key = ?2",
+            rusqlite::params![br, key],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(n)
+}
+
 /// 清空 session（保留 `session_at` 审计）。返回实际更新行数。
 pub fn clear_task_session(conn: &Connection, key: &str) -> Result<usize, String> {
     let n = conn
@@ -227,6 +312,66 @@ mod tests {
         assert_eq!(normalize_note_label(Some("  ")).unwrap(), "low");
         assert_eq!(normalize_note_label(Some("HIGH")).unwrap(), "high");
         assert!(normalize_note_label(Some("bogus")).is_err());
+    }
+
+    #[test]
+    fn issue_links_roundtrip_and_degrade_on_bad_data() {
+        // 空关系 → 两列都空串（保持 NOT NULL DEFAULT '' 约定）。
+        let (p, s) = IssueLinks::default().to_columns();
+        assert_eq!((p, s), (String::new(), String::new()));
+        assert!(IssueLinks::default().is_empty());
+
+        // 有父无子：parent 列是 JSON 对象，sub_issues 列仍是空串。
+        let links = IssueLinks {
+            parent: Some(IssueLink {
+                number: 12,
+                title: "epic".into(),
+                url: "https://github.com/o/r/issues/12".into(),
+            }),
+            sub_issues: Vec::new(),
+        };
+        assert!(!links.is_empty());
+        let (p, s) = links.to_columns();
+        assert!(p.starts_with('{'));
+        assert_eq!(s, "");
+        assert_eq!(parse_parent_link(&p), links.parent.clone());
+        assert!(parse_sub_links(&s).is_empty());
+
+        // 无父有子：sub_issues 列是 JSON 数组，parent 列空串。
+        let links2 = IssueLinks {
+            parent: None,
+            sub_issues: vec![
+                IssueLink {
+                    number: 13,
+                    title: "a".into(),
+                    url: "https://github.com/o/r/issues/13".into(),
+                },
+                IssueLink {
+                    number: 14,
+                    title: "b".into(),
+                    url: "https://github.com/o/r/issues/14".into(),
+                },
+            ],
+        };
+        let (p, s) = links2.to_columns();
+        assert_eq!(p, "");
+        assert!(s.starts_with('['));
+        assert!(parse_parent_link(&p).is_none());
+        assert_eq!(parse_sub_links(&s), links2.sub_issues);
+    }
+
+    #[test]
+    fn issue_link_parsers_degrade_silently() {
+        // 空串 / 空白 → 空值（老库迁移前与「无关联」同义）。
+        assert!(parse_parent_link("").is_none());
+        assert!(parse_parent_link("   ").is_none());
+        assert!(parse_sub_links("").is_empty());
+        // 脏数据（截断的 JSON / 类型不符）不报错、不 panic。
+        assert!(parse_parent_link("{not json").is_none());
+        assert!(parse_sub_links("]{").is_empty());
+        // 父列存了数组（形状错）→ None；子列存了对象 → 空列表。
+        assert!(parse_parent_link("[1]").is_none());
+        assert!(parse_sub_links("{}").is_empty());
     }
 
     #[test]

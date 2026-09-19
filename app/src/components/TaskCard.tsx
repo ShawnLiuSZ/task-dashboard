@@ -102,6 +102,23 @@ function TaskCard({ task, active, onSelectKey, repoIndex, showGhStatus }: Props)
         </div>
       )}
 
+      {/* #280：创建时间，位于创建人与分配人之间；值为 0 时不渲染。 */}
+      {task.createdAt > 0 && (
+        <div className="meta-row">
+          <span className="muted small">
+            {t('card.createdAt')}:{' '}
+            {new Date(task.createdAt * 1000).toLocaleString(undefined, {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+            })}
+          </span>
+        </div>
+      )}
+
       {/* 时间上方一行：分配人 / @我 / 无人认领；分支不再展示在卡片（仅在详情中显示）。 */}
       <div className="meta-row">
         {assigneeNames.length > 0 && (

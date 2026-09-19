@@ -22,12 +22,15 @@ function mkTask(projectStatus: string): Task {
     prUrl: '',
     branch: '',
     workBranch: '',
+    parentIssue: null,
+    subIssues: [],
     sessionId: null,
     sessionAgent: null,
     sessionAt: null,
     candidateDone: false,
     handoff: '',
     updatedAt: null,
+    createdAt: 0,
     accountId: 1,
   };
 }

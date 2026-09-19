@@ -1451,18 +1451,6 @@ button.unassigned-tag:disabled {
   line-height: 1.7;
 }
 
-.about-modal .about-data-path {
-  display: block;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  line-height: 1.5;
-  background: var(--bg);
-  padding: 6px 8px;
-  border-radius: 6px;
-  color: var(--text-2);
-  overflow-wrap: anywhere;
-}
-
 .about-modal .about-code {
   margin: 6px 0;
   padding: 8px 10px;
@@ -1553,6 +1541,55 @@ button.unassigned-tag:disabled {
   color: var(--text);
   font-family: 'SF Mono', Menlo, monospace;
   word-break: break-all;
+}
+
+/* ===== #278 关联 issue（父 / 子）=================================
+   详情面板底部新增的一节：父 issue + 子 issue 列表，每项可「在浏览器打开」
+   与「复制链接」。标题过长用 ellipsis 截断（面板 overflow-y:auto，不会裁切）。 */
+
+.link-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.link-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.link-list .link-line {
+  margin-top: 4px;
+}
+
+.link-tag {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-2);
+  border: 0.5px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+.link-ref {
+  flex: 0 0 auto;
+  font-family: 'SF Mono', Menlo, monospace;
+  color: var(--text);
+}
+
+.link-title {
+  flex: 1 1 12em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
 }
 
 /* ===== v0.3.23+ 同步日志面板 ============================================ */
@@ -2574,4 +2611,48 @@ button.unassigned-tag:disabled {
   * {
     transition: none !important;
   }
+}
+
+/* Toggle switch */
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle .slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--border);
+  border-radius: 20px;
+  transition: background 0.2s;
+}
+
+.toggle .slider::before {
+  content: '';
+  position: absolute;
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  bottom: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.toggle input:checked + .slider {
+  background: var(--accent);
+}
+
+.toggle input:checked + .slider::before {
+  transform: translateX(16px);
 }

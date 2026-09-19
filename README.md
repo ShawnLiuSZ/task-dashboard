@@ -112,10 +112,11 @@ PRD §6 规划了「MCP Server + Skill」让 AI Agent 在执行任务时自动�
 | `record_session`     | `issue`, `session_id`, `agent?`, `branch?` | 记录中断会话 id + 工作分支（`branch` 非空写 `work_branch`，不碰 GitHub） |
 | `record_handoff`     | `issue`, `text`                 | 记录「交接任务」详情（不碰 GitHub）                    |
 | `clear_session`      | `issue`                         | 任务完成后清空 session 字段（保留 session\_at 审计）    |
+| `set_work_branch`    | `issue`, `branch`               | #279：创建 / 切换 issue 分支后纠正 `work_branch`（只写该列、不碰 PR `branch`） |
 
 `issue` 接受 `repo#number` / `owner/repo#number` / GitHub URL 三种形式。`status` 接受 `todo`/`doing`/`processed`/`done` 或中文「待处理/处理中/已处理/已完成」。
 
-**Agent 使用范式**（对应 PRD §6.4 时序）：任务开始 → `update_task_status(issue,"处理中")`；中途停止 → `record_session(issue, <会话id>, <agent>)`；识别到「生成交接任务」→ `record_handoff(issue, <详情>)`；完成 → `update_task_status(issue,"已完成")` → `clear_session(issue)`。
+**Agent 使用范式**（对应 PRD §6.4 时序）：任务开始 → 先切到该 issue 的工作分支（`feature/issue-N-xxx`），再 `update_task_status(issue,"处理中")` + `record_session(issue, <会话id>, <agent>, <当前分支>)`；若先跑了开始命令、之后才切分支，切完补一次 `set_work_branch(issue, <当前分支>)`；中途停止 → `record_session`；识别到「生成交接任务」→ `record_handoff(issue, <详情>)`；完成 → `update_task_status(issue,"已完成")` → `clear_session(issue)`。
 
 **接入各 Agent（配置 snippet）**：内置二进制已注册进 WorkBuddy 的 `~/.workbuddy/mcp.json`（`taskboard` 项）。其他本地 Agent 在其 MCP 配置里加同一条即可，例如 claude-code 的 `~/.claude.json`：
 
@@ -151,9 +152,9 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - **`CLAUDE.md`**（仓库根） —— 给 claude-code 的自动加载入口，指向上述指令文件并给出速记规则；在本仓库跑 claude-code 时会自动生效。
 
-- **`.claude/`**（#177，claude-code 确定性触发） —— `settings.json` 注册 `SessionStart`（注入 `$TASKBOARD_SESSION_ID` / `${CLAUDE_SESSION_ID}` + 看板规则）与 `UserPromptSubmit`（仅提到 issue 时轻提醒）两个 hooks（`bash + python3` 零依赖，不写 DB）；`commands/task-start|task-done|task-handoff.md` 提供显式一键命令。开始处理先 `/task-start <repo#num>`，做完 `/task-done`。
+- **`.claude/`**（#177，claude-code 确定性触发） —— `settings.json` 注册 `SessionStart`（注入 `$TASKBOARD_SESSION_ID` / `${CLAUDE_SESSION_ID}` + 看板规则）与 `UserPromptSubmit`（仅提到 issue 时轻提醒）两个 hooks（`bash + python3` 零依赖，不写 DB）；`commands/task-start|task-done|task-handoff.md` 提供显式一键命令。**#279：`/task-start` 已改为「先切 issue 工作分支、再记录会话」，避免 `work_branch` 被记成基线分支**。开始处理先 `/task-start <repo#num>`，做完 `/task-done`。
 
-- **`.opencode/`**（#177，opencode 确定性触发） —— `opencode.json` 已注册 `taskboard` MCP（`python3 mcp_server/server.py`，跨平台、免装 app）；`plugins/taskboard.js`（零依赖）在 `tool.execute.before` 自动补 `record_session` 的 `session_id` / `agent` / `branch`；`commands/task-start|task-done|task-handoff.md` 同 claude 侧语义（分支用 `!`git branch --show-current`` 自动填入）。同样先 `/task-start`，做完 `/task-done`。
+- **`.opencode/`**（#177，opencode 确定性触发） —— `opencode.json` 已注册 `taskboard` MCP（`python3 mcp_server/server.py`，跨平台、免装 app）；`plugins/taskboard.js`（零依赖）在 `tool.execute.before` 自动补 `record_session` 的 `session_id` / `agent` / `branch`；`commands/task-start|task-done|task-handoff.md` 同 claude 侧语义（分支用 `!`git branch --show-current`` 自动填入）。**#279：先切 issue 工作分支再调 `/task-start`，否则展开时填入的仍是基线分支；已切再补 `taskboard_set_work_branch`**。同样先 `/task-start`，做完 `/task-done`。
 
 - **App 设置 → Agent 接入**（#177，一键安装/卸载，实现参考 clawd-on-desk 的 Settings → Agents） —— 任务详情 session 下拉的 39 个 agent **全量可选**：
   - **一键安装**（hook 机制已逐项验证）：`claude-code` / `opencode` / `workbuddy` / `codebuddy` / `trae`；
@@ -175,6 +176,8 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.6.0）
 
+- [`docs/issue-285-sync-empty-board.md`](./docs/issue-285-sync-empty-board.md) — **立即同步后看板空白、重启才恢复**：`rows_to_tasks` 两处缺陷——归属筛选分支漏 2 列（`Row::get(25)` 越界报错）+ `my-created` 误读恒空的 `meta.login` 恒返回空集；统一 SELECT 列清单 + 从 `accounts` 表取 login；`doSync` 走合并器并同步后重拉项目状态列
+
 - [`docs/v0.3.15-pat-auth.md`](./docs/v0.3.15-pat-auth.md) — v0.3.15 PAT 认证与 visual polish 设计文档（gh 替换、卡片配色、多账号规划）
 
 - [`docs/troubleshoot-mcp-timeout.md`](./docs/troubleshoot-mcp-timeout.md) — 排障：MCP 连接超时（30000ms）——macOS Gatekeeper / quarantine 隔离属性排查与修复
@@ -191,6 +194,12 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 - [`docs/issue-265-sidebar-collapse.md`](./docs/issue-265-sidebar-collapse.md) — **侧边栏窄窗收起**：窗口宽度 < 900px 时 Sidebar 自动收起为纯图标模式（~56px），隐藏文字标签 / 分组标题，账号靠 `title` 提示辨识；纯响应式、不持久化
 
 - [`docs/issue-266-test-flake.md`](./docs/issue-266-test-flake.md) — **修复 Rust 测试随机 disk I/O error**：`mem_conn()` 临时库路径加每调用递增序号、连接存活期不再删文件，消除并行测试互相 unlink 的 CI flake；新增防回归断言
+
+- [`docs/issue-281-license.md`](./docs/issue-281-license.md) — **配置开源协议（MIT）**：根目录新建 `LICENSE` + `package.json` / `Cargo.toml` 补 `license` 字段 + README 徽章与协议章节 + CONTRIBUTING 贡献者协议说明；含 MIT / Apache-2.0 / GPL / AGPL 决策对比与「为何不用 `MIT-0`、不动两个 lockfile」的取舍
+
+- [`docs/issue-284-merge-cleanup.md`](./docs/issue-284-merge-cleanup.md) — **PR 合并后自动收尾**：删源分支 + 关闭关联 issue（`develop` 合入不触发 GitHub 自动关闭），提取规则刻意保守防误关；顺带新增 workflow 语法检查器与 `scripts` CI job，补齐此前对 `.github/workflows/` 的零覆盖
+- [`docs/issue-279-work-branch-not-updated.md`](./docs/issue-279-work-branch-not-updated.md) — **开始任务后 work_branch 仍关联基线分支**：`/task-start` 在 agent 尚处 develop/master 时就录分支，导致看板详情误导；改写为「先切 issue 分支再记录」+ 新增 `set_work_branch` 工具补偿纠正
+- [`docs/issue-278-issue-links.md`](./docs/issue-278-issue-links.md) — **详情关联 parent / sub issue**：批量 alias GraphQL 同步父子关系（25 个/请求 + 按仓库 best-effort 保留既有值），详情面板新增「关联 Issue」块支持打开与复制；含 26 列 MCP 双实现与迁移补列教训
 - [`docs/issue-262-multi-account-sync.md`](./docs/issue-262-multi-account-sync.md) — **多账号同步修复**：同步范围与视图模式解耦，恒覆盖全部账号（不再受 `view_mode` 限制）；恢复 topbar 显示模式切换，消除死代码 / 死 key；`SyncResult` 新增 `accountsSynced` 可观测性字段
 
 - [`docs/issue-235-in-app-api-log.md`](./docs/issue-235-in-app-api-log.md) — **应用内 API 调用明细**：`api_logs` 新表 + 可选 sink 收集器，同步/认领/状态写回的请求与返回参数可在日志面板展开查看（承接 #228 的 stderr 埋点）
@@ -210,6 +219,12 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 - [`docs/issue-118-expand-platform-support.md`](./docs/issue-118-expand-platform-support.md) — **扩展平台支持**：release 矩阵显式声明 `target`，新增 macOS 双架构与 Windows ARM64 构建
 
 - [`docs/issue-119-expand-release-matrix.md`](./docs/issue-119-expand-release-matrix.md) — **扩展 Release 打包矩阵**：Linux arm64、rpm、Windows msi；并记录 `zip` 作为 Tauri 2 bundle 类型**被当日回滚**的教训
+
+## 协议（License）
+
+本项目采用 **MIT License**，完整文本见 [LICENSE](./LICENSE)。可自由使用、复制、修改、合并、发布、分发、再授权乃至出售本软件的副本，前提是**在本软件或其大部分副本中保留上述版权声明与许可声明**（即根目录 `LICENSE` 文件的内容）。
+
+软件按「原样」提供，不作任何明示或默示的保证；作者与版权持有者不对使用本软件所引发的任何主张、损害或责任负责。详见 `LICENSE` 中的免责条款。
 
 > 版本 v0.6.0 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-17
 

@@ -4,6 +4,10 @@
   <img src="social-preview.png" alt="TaskBoard — GitHub Task Board" width="720" />
 </p>
 
+<p align="center">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
+</p>
+
 > **English**
 >
 > 中文版见 [README.md](./README.md)
@@ -165,10 +169,18 @@ The MCP Server only provides tools (the **capability layer**). To make agents ca
 - [`PRD.md`](./PRD.md) — requirements and decision evolution (including the dropped Projects v2 approach, ownership design, API pitfalls)
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — design notes (multi-source fetch, three-way ownership, four-state maintenance, PR linking) and GitHub Actions CI packaging
 - [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — per-version update & fix log (v0.3.1 → latest v0.6.0)
+
+- [`docs/issue-285-sync-empty-board.md`](./docs/issue-285-sync-empty-board.md) — **board goes blank after "Sync now" until restart**: two `rows_to_tasks` defects — ownership-filter branch dropped 2 columns (`Row::get(25)` out-of-bounds error) + `my-created` read the always-empty `meta.login` and returned an empty set; unified SELECT column list + resolve login from the `accounts` table; `doSync` uses the coalescer and re-pulls project-status columns after sync
 - [`docs/v0.3.15-pat-auth.md`](./docs/v0.3.15-pat-auth.md) — v0.3.15 PAT auth & visual polish design doc (gh replacement, card colors, multi-account plan)
 - [`docs/issue-239-doc-integrity.md`](./docs/issue-239-doc-integrity.md) — **doc integrity fix**: broken links / non-portable `file://` paths / stale line anchors + v0.3.50 CHANGELOG backfill; introduces `scripts/check-doc-links.py`
 - [`docs/perf-audit-optimization.md`](./docs/perf-audit-optimization.md) — **performance / security batch index**: maps the `P0-1`…`P2-2` labels to issues and docs (`#143`–`#150`, shipped in v0.3.50)
 - [`docs/issue-118-expand-platform-support.md`](./docs/issue-118-expand-platform-support.md) — **expanded platform support**: release matrix declares explicit `target`, adds macOS dual-arch and Windows ARM64 builds
 - [`docs/issue-119-expand-release-matrix.md`](./docs/issue-119-expand-release-matrix.md) — **expanded release matrix**: Linux arm64, rpm, Windows msi; records the lesson that `zip` is **not** a valid Tauri 2 bundle type (rolled back same day)
+
+## License
+
+This project is released under the **MIT License** — full text in [LICENSE](./LICENSE). You are free to use, copy, modify, merge, publish, distribute, sublicense and/or sell copies of the software, on one condition: the copyright notice and this permission notice (i.e. the contents of the root `LICENSE` file) must be included in all copies or substantial portions of the software.
+
+The software is provided "AS IS", without warranty of any kind, and the authors and copyright holders accept no liability for any claims, damages or liability arising from its use. See the `LICENSE` file for the full disclaimer.
 
 > Version v0.6.0 · Local cross-platform app (Windows / macOS / Linux), 2026-09-17

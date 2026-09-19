@@ -291,12 +291,15 @@ fn build_task_row(
         // 记 0。下次全量同步会按真实情况修正。
         mentioned: 0,
         comments_count: raw.comments as i64,
-        // 以下字段来自多源聚合（评论回源 / PR 关联 / 分支反查），单 issue REST 给不了，
-        // 留空；下次全量同步补。
+        // 以下字段来自多源聚合（评论回源 / PR 关联 / 分支反查 / 父子关系 GraphQL），
+        // 单 issue REST 给不了，留空；下次全量同步补。
         latest_comment_url: String::new(),
         pr_number: 0,
         pr_url: String::new(),
         branch: String::new(),
+        parent_issue: String::new(),
+        sub_issues: String::new(),
+        created_at: crate::common::iso8601_to_secs(&raw.created_at),
         updated_at: crate::common::iso8601_to_secs(&raw.updated_at),
         exists: false,
     })

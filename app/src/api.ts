@@ -33,6 +33,7 @@ export const TASKS_CHANGED_EVENT = 'taskboard://tasks-changed';
 
 // #231：应用内更新下载进度事件（后端 install_app_update 下载期间持续发出）。
 export const UPDATE_PROGRESS_EVENT = 'taskboard://update-progress';
+export const UPDATE_AVAILABLE_EVENT = 'taskboard://update-available';
 
 export const api = {
   listTasks: (ownership?: string, accountId?: number | null) =>
@@ -53,8 +54,18 @@ export const api = {
   setProjectStatus: (key: string, status: string) =>
     invoke<void>('set_project_status', { key, status }),
   getSettings: () => invoke<Settings>('get_settings'),
-  saveSettings: (scheduleMinutes: number, ghPath: string) =>
-    invoke<Settings>('save_settings', { scheduleMinutes, ghPath }),
+  saveSettings: (
+    scheduleMinutes: number,
+    ghPath: string,
+    autoCheckUpdates?: boolean,
+    autoUpdate?: boolean,
+  ) =>
+    invoke<Settings>('save_settings', {
+      scheduleMinutes,
+      ghPath,
+      autoCheckUpdates,
+      autoUpdate,
+    }),
   openInBrowser: (url: string) => invoke<void>('open_in_browser', { url }),
   // v0.3.15+：GitHub PAT 相关命令（保留兼容，新版用账号管理）。
   savePat: (pat: string) => invoke<PatStatus>('save_pat', { pat }),
@@ -84,6 +95,8 @@ export const api = {
     invoke<DeviceLoginPoll>('device_login_poll', { clientId, deviceCode, org, label }),
   // v0.3.19+：关于页面 —— 当前版本 + 检查更新。
   getAppVersion: () => invoke<string>('get_app_version'),
+  // #101：一次性读取 quarantine 清除消息（读取后后端自动清空）。
+  getQuarantineNotice: () => invoke<string | null>('get_quarantine_notice'),
   checkLatestRelease: () => invoke<CheckUpdate>('check_latest_release'),
   // #231：应用内自动更新（updater 通道：检查 / 下载安装 / 重启生效）。
   checkAppUpdate: () => invoke<AppUpdate>('check_app_update'),
@@ -182,6 +195,13 @@ export function onTasksChanged(cb: () => void) {
 // #231：订阅应用内更新的下载进度。
 export function onUpdateProgress(cb: (p: UpdateProgress) => void) {
   return listen<UpdateProgress>(UPDATE_PROGRESS_EVENT, (e) => cb(e.payload));
+}
+
+// #276：订阅每日自动检查发现新版本的提醒。
+export function onUpdateAvailable(cb: (p: { version: string; autoUpdate: boolean }) => void) {
+  return listen<{ version: string; autoUpdate: boolean }>(UPDATE_AVAILABLE_EVENT, (e) =>
+    cb(e.payload),
+  );
 }
 
 /**

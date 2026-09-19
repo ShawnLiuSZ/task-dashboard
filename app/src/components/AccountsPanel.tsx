@@ -53,6 +53,14 @@ export default function AccountsPanel({ settings, onClose, onAccountsChanged }: 
     return () => clearInterval(timer);
   }, [oauthPhase, oauthStart]);
 
+  // H1：组件卸载时取消 device-login 轮询（否则 while 循环永不停止，
+  // 持续调用 device_login_poll 并在已卸载的组件上 setState）。
+  useEffect(() => {
+    return () => {
+      oauthRunRef.current += 1;
+    };
+  }, []);
+
   const deleteAccount = async (id: number) => {
     setErr(null);
     try {

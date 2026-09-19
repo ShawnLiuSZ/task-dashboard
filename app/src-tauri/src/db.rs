@@ -46,6 +46,10 @@ CREATE TABLE IF NOT EXISTS tasks (
   assignees      TEXT NOT NULL DEFAULT '',
   -- #237：issue 创建人（GitHub author login，不含 @）。卡片「创建人」行用。
   author         TEXT NOT NULL DEFAULT '',
+  -- #278：关联 issue 的父子关系（GraphQL `parent` / `subIssues`，只读同步）。
+  -- 两列都是 JSON 串：`parent_issue` 为对象或空串，`sub_issues` 为数组或空串。
+  parent_issue   TEXT NOT NULL DEFAULT '',
+  sub_issues     TEXT NOT NULL DEFAULT '',
   labels         TEXT NOT NULL DEFAULT '',
   done_at        INTEGER NOT NULL DEFAULT 0,
   mentioned      INTEGER NOT NULL DEFAULT 0,
@@ -61,6 +65,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   handoff        TEXT NOT NULL DEFAULT '',
   updated_at     INTEGER,
   synced_at      INTEGER NOT NULL,
+  -- #280：issue 创建时间（GitHub `created_at` 秒级时间戳）。
+  created_at     INTEGER NOT NULL DEFAULT 0,
   -- 任务归属账号（来自 accounts.id）。
   account_id     INTEGER NOT NULL DEFAULT 1,
   UNIQUE(repo, number, account_id)
@@ -212,6 +218,11 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     ("board_mode", "project"),
     // v0.3.17：GitHub OAuth Device Flow 的 client_id（用户注册 OAuth App 后填入一次）。
     ("oauth_client_id", ""),
+    // v0.6.1 (#276)：每日自动检查更新 + 可选静默更新。
+    ("auto_check_updates", "false"),
+    ("auto_update", "false"),
+    ("last_update_check_at", "0"),
+    ("last_update_snoozed_at", "0"),
 ];
 
 pub fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -400,6 +411,30 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
     ) {
         if crate::common::verbose_enabled() {
             crate::tlog!("[db] author 列迁移跳过（已存在）: {}", e);
+        }
+    }
+    // #278：父子关系两列。同款教训——必须放在 `migrate_tasks_v2_rebuild` 之后
+    // （重建的 INSERT..SELECT 白名单是写死的，会把新列丢掉），且不能只写在
+    // `migrate_legacy_alters`（仅 user_version<1 触发）。
+    for col_sql in [
+        "ALTER TABLE tasks ADD COLUMN parent_issue TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN sub_issues TEXT NOT NULL DEFAULT ''",
+    ] {
+        if let Err(e) = conn.execute(col_sql, []) {
+            if crate::common::verbose_enabled() {
+                crate::tlog!("[db] 父子关系列迁移跳过（已存在）: {} | sql={}", e, col_sql);
+            }
+        }
+    }
+    // #280：issue 创建时间。同款教训——必须放在 migrate_tasks_v2_rebuild 之后
+    // （重建的 INSERT..SELECT 白名单是写死的，会把新列丢掉），且不能只写在
+    // migrate_legacy_alters（仅 user_version<1 触发）。
+    if let Err(e) = conn.execute(
+        "ALTER TABLE tasks ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0",
+        [],
+    ) {
+        if crate::common::verbose_enabled() {
+            crate::tlog!("[db] created_at 列迁移跳过（已存在）: {}", e);
         }
     }
     // v0.3.50 (#155)：新库（SCHEMA 顶层无此索引）与重建后均由此处幂等补齐 issue_key 索引。
@@ -1521,6 +1556,9 @@ pub struct ExistingTask {
     pub pr_url: String,
     pub comment_url: String,
     pub branch: String,
+    /// #278：既有父子关系（关系拉取失败时保留，避免误清空）。
+    pub parent_issue: String,
+    pub sub_issues: String,
 }
 
 /// 一次加载某账号下全部任务的既有快照，key 为 `repo#number`。
@@ -1531,7 +1569,7 @@ pub fn load_existing_tasks(
     let mut stmt = conn
         .prepare(
             "SELECT issue_key, status, comments_count, mentioned, pr_number, pr_url,
-                    latest_comment_url, branch
+                    latest_comment_url, branch, parent_issue, sub_issues
              FROM tasks WHERE account_id = ?1",
         )
         .map_err(|e| format!("预加载既有任务失败: {e}"))?;
@@ -1547,6 +1585,8 @@ pub fn load_existing_tasks(
                     pr_url: r.get(5)?,
                     comment_url: r.get(6)?,
                     branch: r.get(7)?,
+                    parent_issue: r.get(8)?,
+                    sub_issues: r.get(9)?,
                 },
             ))
         })
@@ -1594,6 +1634,12 @@ pub struct TaskUpsert {
     pub pr_number: i64,
     pub pr_url: String,
     pub branch: String,
+    /// #278：父 issue（JSON 对象串 `{"number","title","url"}`），无父为空串。
+    pub parent_issue: String,
+    /// #278：子 issue 列表（JSON 数组串），无子为空串。
+    pub sub_issues: String,
+    /// #280：issue 创建时间（秒级时间戳，0 表示未知）。
+    pub created_at: i64,
     pub updated_at: i64,
     /// 调用方据此统计「新增 / 更新」，**不参与 SQL**。
     pub exists: bool,
@@ -1603,13 +1649,13 @@ pub struct TaskUpsert {
 ///
 /// 两种写入模式共用本常量做前缀，**列清单只有这一份**——新增/改名列时不可能只改一边。
 /// 占位符编号：`?1`–`?19` 为行内容，`?20` 为 `updated_at`，`?21` 为 `synced_at`(now)，
-/// `?22` 为 `account_id`，`?23` 为 `author`。
+/// `?22` 为 `account_id`，`?23` 为 `author`，`?24`/`?25` 为 #278 的父子关系两列。
 const TASK_INSERT_HEAD: &str = "INSERT INTO tasks
    (issue_key, owner, repo, number, title, url, issue_state, ownership,
     status, project_status, assignees, labels, done_at, mentioned, comments_count,
     latest_comment_url, pr_number, pr_url, branch, candidate_done, stale, updated_at, synced_at,
-    account_id, author)
-  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 0, 0, ?20, ?21, ?22, ?23)";
+    account_id, author, parent_issue, sub_issues, created_at)
+  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 0, 0, ?20, ?21, ?22, ?23, ?24, ?25, ?26)";
 
 /// 冲突时**覆盖**：同步路径用（该账号的数据是刚拉取的权威值）。
 const TASK_CONFLICT_UPDATE: &str = "ON CONFLICT(repo, number, account_id) DO UPDATE SET
@@ -1637,7 +1683,10 @@ const TASK_CONFLICT_UPDATE: &str = "ON CONFLICT(repo, number, account_id) DO UPD
     pr_url = excluded.pr_url,
     branch = excluded.branch,
     account_id = excluded.account_id,
-    author = excluded.author";
+    author = excluded.author,
+    parent_issue = excluded.parent_issue,
+    sub_issues = excluded.sub_issues,
+    created_at = excluded.created_at";
 
 /// 冲突时**不动**：按需拉取路径用。
 ///
@@ -1697,6 +1746,9 @@ pub fn write_task(
             now,
             t.account_id,
             t.author,
+            t.parent_issue,
+            t.sub_issues,
+            t.created_at,
         ],
     )
     .map_err(|e| format!("写入任务失败: {e}"))

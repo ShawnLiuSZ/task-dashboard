@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use rusqlite::types::Value;
 use serde::Serialize;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -30,6 +31,10 @@ pub struct Task {
     pub branch: String,
     /// #193：agent 工作分支（record_session 写入，与同步的 PR branch 分离）。
     pub work_branch: String,
+    /// #278：父 issue（GitHub `parent`）；无父为 `None`。
+    pub parent_issue: Option<crate::common::IssueLink>,
+    /// #278：子 issue 列表（GitHub `subIssues`）；无子为空数组。
+    pub sub_issues: Vec<crate::common::IssueLink>,
     pub session_id: Option<String>,
     pub session_agent: Option<String>,
     pub session_at: Option<i64>,
@@ -38,6 +43,8 @@ pub struct Task {
     pub updated_at: Option<i64>,
     /// v0.3.16：归属账号 id（指向 accounts.id），用于多账号视图过滤。
     pub account_id: i64,
+    /// #280：issue 创建时间（秒级时间戳，0 表示未知）。
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,99 +70,164 @@ pub struct Settings {
     pub accounts: Vec<Account>,
     /// v0.3.17+：GitHub OAuth Device Flow 的 client_id（注册 OAuth App 后填一次）。
     pub oauth_client_id: String,
+    /// v0.6.1 (#276)：每日自动检查更新。
+    pub auto_check_updates: bool,
+    /// v0.6.1 (#276)：自动更新（静默下载 + 重启，仅 auto_check_updates=true 时生效）。
+    pub auto_update: bool,
+}
+
+/// `tasks` 查询的完整列清单。
+///
+/// **每一条** SELECT 都必须用这个常量：[`task_mapper`] 固定按位置索引读列，
+/// 末尾 25/26 是 #278 新增的 `parent_issue` / `sub_issues`。#285 的根因之一正是
+/// ownership 筛选分支的 SELECT 漏了这两列（27 → 25 列），`Row::get(25)` 越界让
+/// `list_tasks` 整体报错——「分配给我 / 未分配 / 分配给他人」三种筛选全挂；
+/// 而同步完成后必跑一次 `listTasks`，于是表现为「同步后看板为空」。
+const TASK_SELECT_COLUMNS: &str = concat!(
+    "issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status, ",
+    "assignees, mentioned, latest_comment_url, pr_number, pr_url, branch, ",
+    "session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch, author, ",
+    "parent_issue, sub_issues, created_at"
+);
+
+/// 单行 → `Task`。列顺序由 [`TASK_SELECT_COLUMNS`] 固定，位置索引不可调整。
+fn task_mapper(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
+    Ok(Task {
+        issue_key: r.get(0)?,
+        owner: r.get(1)?,
+        repo: r.get(2)?,
+        number: r.get(3)?,
+        title: r.get(4)?,
+        url: r.get(5)?,
+        issue_state: r.get(6)?,
+        ownership: r.get(7)?,
+        status: r.get(8)?,
+        project_status: r.get(9)?,
+        assignees: r.get(10)?,
+        author: r.get(24)?,
+        // #278：父子关系（JSON 串 → 结构化）。列固定在末尾，位置索引不变。
+        parent_issue: crate::common::parse_parent_link(r.get::<_, String>(25)?),
+        sub_issues: crate::common::parse_sub_links(r.get::<_, String>(26)?),
+        mentioned: r.get::<_, i64>(11).unwrap_or(0) != 0,
+        latest_comment_url: r.get(12)?,
+        pr_number: r.get(13)?,
+        pr_url: r.get(14)?,
+        branch: r.get(15)?,
+        session_id: r.get(16)?,
+        session_agent: r.get(17)?,
+        session_at: r.get(18)?,
+        candidate_done: r.get::<_, i64>(19).unwrap_or(0) != 0,
+        handoff: r.get(20)?,
+        updated_at: r.get(21)?,
+        account_id: r.get(22)?,
+        work_branch: r.get(23)?,
+        created_at: r.get(27)?,
+    })
+}
+
+/// 读取 `meta.active_account_id`；缺失或非法为 0。
+fn read_active_account_id(conn: &Connection) -> i64 {
+    crate::db::get_setting(conn, "active_account_id").parse().unwrap_or(0)
+}
+
+/// #285：解析「我创建的」过滤所用的 login 集。
+///
+/// 按视图范围取账号：`Some(0)`（全部账号聚合）→ 全部已配置账号的 login；
+/// `Some(n)` 或 `None`（单账号视图，`None` 时回退激活账号）→ 仅该账号。
+///
+/// **不能**读 `meta.login`：那是 v0.3.15 单账号时代的遗留字段，只有 `save_pat`
+/// 会写；`add_account` / `device_login_poll` 从不写它（多账号生产库实测恒为空串），
+/// 拿它当「我」会让该筛选恒返回空集。而 `ownership` 是前端本地状态、重启即复位
+/// 为「全部归属」，所以表现为「同步后看板为空、重启恢复」（#285）。
+fn my_logins(
+    conn: &Connection,
+    account_filter: Option<i64>,
+    active_account_id: i64,
+) -> Result<Vec<String>, String> {
+    if account_filter == Some(0) {
+        // 聚合视图：跨全部账号的「我创建的」。
+        return crate::db::list_accounts(conn).map(|accounts| {
+            accounts
+                .into_iter()
+                .map(|a| a.login)
+                .filter(|l| !l.trim().is_empty())
+                .collect()
+        });
+    }
+    let id = account_filter.unwrap_or(active_account_id);
+    if id <= 0 {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare("SELECT login FROM accounts WHERE id = ?1")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([id], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for item in rows {
+        let login = item.map_err(|e| e.to_string())?;
+        if !login.trim().is_empty() {
+            out.push(login);
+        }
+    }
+    Ok(out)
 }
 
 fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Option<i64>) -> Result<Vec<Task>, String> {
     // v0.3.16：account_filter 解析。
-    // - None / Some(n>0) → 按指定账号 id 过滤
-    // - Some(0) → 不加 account_id 条件（即"全部账号"聚合视图）
-    let (where_extra, use_account_filter, account_id) = match account_filter {
-        Some(0) => (String::new(), false, 0i64),
-        Some(n) => (" AND account_id = ?".to_string(), true, n),
+    // - Some(0) → 全部账号聚合视图（不加 account_id 条件）
+    // - Some(n>0) → 指定账号 id
+    // - None → 单账号视图：读 meta.active_account_id；无账号则不过滤
+    let active_account_id = read_active_account_id(conn);
+    let account_id: Option<i64> = match account_filter {
+        Some(0) => None,
+        Some(n) => Some(n),
         None => {
-            // 默认：单账号视图（active_account_id）；若无任何账号则不过滤（空集）。
-            let active: i64 = conn
-                .query_row(
-                    "SELECT value FROM meta WHERE key = 'active_account_id'",
-                    [],
-                    |r| r.get::<_, String>(0),
-                )
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
-            if active > 0 {
-                (" AND account_id = ?".to_string(), true, active)
+            if active_account_id > 0 {
+                Some(active_account_id)
             } else {
-                (String::new(), false, 0i64)
+                None
             }
         }
     };
-    let (sql, use_ownership_filter) = match ownership {
-        Some(_) => (
-            format!(
-                "SELECT issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status,
-                        assignees, mentioned, latest_comment_url, pr_number, pr_url, branch,
-                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch, author
-                 FROM tasks WHERE ownership = ?{where_extra}
-                 ORDER BY candidate_done ASC, status ASC, updated_at DESC"
-            ),
-            true,
-        ),
-        None => (
-            format!(
-                "SELECT issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status,
-                        assignees, mentioned, latest_comment_url, pr_number, pr_url, branch,
-                        session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch, author
-                 FROM tasks WHERE 1=1{where_extra}
-                 ORDER BY candidate_done ASC, status ASC, updated_at DESC"
-            ),
-            false,
-        ),
-    };
 
+    // WHERE 主体（account_id 条件在下方统一追加）+ 按占位符顺序排列的绑定参数。
+    let (mut where_sql, mut bind): (String, Vec<Value>) = match ownership {
+        // #276/#285：按 author 过滤；login 集按视图范围解析（见 my_logins）。
+        Some("my-created") => {
+            let logins = my_logins(conn, account_filter, active_account_id)?;
+            if logins.is_empty() {
+                return Ok(Vec::new());
+            }
+            let author_clause: Vec<String> =
+                std::iter::repeat("author = ?".to_string()).take(logins.len()).collect();
+            (
+                format!("WHERE ({})", author_clause.join(" OR ")),
+                logins.into_iter().map(Value::Text).collect(),
+            )
+        }
+        Some(o) => (
+            String::from("WHERE ownership = ?"),
+            vec![Value::Text(o.to_string())],
+        ),
+        None => (String::from("WHERE 1=1"), Vec::new()),
+    };
+    if let Some(id) = account_id {
+        where_sql.push_str(" AND account_id = ?");
+        bind.push(Value::Integer(id));
+    }
+
+    let sql = format!(
+        "SELECT {TASK_SELECT_COLUMNS} FROM tasks {where_sql} \
+         ORDER BY candidate_done ASC, status ASC, updated_at DESC"
+    );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-    let mapper = |r: &rusqlite::Row| {
-        Ok(Task {
-            issue_key: r.get(0)?,
-            owner: r.get(1)?,
-            repo: r.get(2)?,
-            number: r.get(3)?,
-            title: r.get(4)?,
-            url: r.get(5)?,
-            issue_state: r.get(6)?,
-            ownership: r.get(7)?,
-            status: r.get(8)?,
-            project_status: r.get(9)?,
-            assignees: r.get(10)?,
-            author: r.get(24)?,
-            mentioned: r.get::<_, i64>(11).unwrap_or(0) != 0,
-            latest_comment_url: r.get(12)?,
-            pr_number: r.get(13)?,
-            pr_url: r.get(14)?,
-            branch: r.get(15)?,
-            session_id: r.get(16)?,
-            session_agent: r.get(17)?,
-            session_at: r.get(18)?,
-            candidate_done: r.get::<_, i64>(19).unwrap_or(0) != 0,
-            handoff: r.get(20)?,
-            updated_at: r.get(21)?,
-            account_id: r.get(22)?,
-            work_branch: r.get(23)?,
-        })
-    };
-
-    // 动态参数：归属 + account_id（按 use_*_filter 标志决定传几个）
-    let rows: rusqlite::Result<rusqlite::MappedRows<'_, _>> = match (use_ownership_filter, use_account_filter) {
-        (true, true) => stmt.query_map(
-            rusqlite::params![ownership.unwrap_or(""), account_id],
-            mapper,
-        ),
-        (true, false) => stmt.query_map(rusqlite::params![ownership.unwrap_or("")], mapper),
-        (false, true) => stmt.query_map(rusqlite::params![account_id], mapper),
-        (false, false) => stmt.query_map([], mapper),
-    };
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(bind), task_mapper)
+        .map_err(|e| e.to_string())?;
     let mut out = Vec::new();
-    for r in rows.map_err(|e| e.to_string())? {
+    for r in rows {
         out.push(r.map_err(|e| e.to_string())?);
     }
     Ok(out)
@@ -167,6 +239,10 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
 /// - `None` → 单账号视图（默认）；后端读 `meta.active_account_id`
 /// - `Some(0)` → 全部账号聚合视图
 /// - `Some(n>0)` → 指定账号 id
+///
+/// `ownership == "my-created"`（#276/#285）→ 按 `author` 过滤，login 集按视图范围
+/// 取自 `accounts` 表（聚合视图取全部账号，单账号视图取过滤/激活账号）。
+/// **不读** `meta.login`——多账号模式下该遗留字段恒为空，会让此筛选恒返回空集。
 #[tauri::command]
 pub fn list_tasks(
     app: AppHandle,
@@ -247,6 +323,24 @@ pub fn clear_session(
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     crate::common::clear_task_session(&conn, &key)?;
     // #181：同上，多窗口同步。
+    let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
+    Ok(())
+}
+
+/// #279：单独设置任务的工作分支（agent 在**创建 / 切换分支之后**调用，纠正「开始任务」时
+/// 录到的基线分支 develop/master）。只写本地 `tasks.work_branch` 列，不碰同步的 PR `branch` 列。
+#[tauri::command]
+pub fn set_work_branch(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    key: String,
+    branch: String,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let n = crate::common::set_work_branch(&conn, &key, &branch)?;
+    if n == 0 {
+        return Err(format!("任务不存在: {key}"));
+    }
     let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
 }
@@ -601,6 +695,8 @@ pub fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settin
         view_mode,
         accounts,
         oauth_client_id: crate::db::get_setting(&conn, "oauth_client_id"),
+        auto_check_updates: crate::db::get_setting(&conn, "auto_check_updates") == "true",
+        auto_update: crate::db::get_setting(&conn, "auto_update") == "true",
     })
 }
 
@@ -693,11 +789,19 @@ pub fn save_settings(
     state: State<'_, AppState>,
     schedule_minutes: u64,
     gh_path: String,
+    auto_check_updates: Option<bool>,
+    auto_update: Option<bool>,
 ) -> Result<Settings, String> {
     {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         crate::db::set_setting(&conn, "schedule_minutes", &schedule_minutes.max(5).to_string())?;
         crate::db::set_setting(&conn, "gh_path", &gh_path)?;
+        if let Some(v) = auto_check_updates {
+            crate::db::set_setting(&conn, "auto_check_updates", if v { "true" } else { "false" })?;
+        }
+        if let Some(v) = auto_update {
+            crate::db::set_setting(&conn, "auto_update", if v { "true" } else { "false" })?;
+        }
     }
     get_settings(app, state)
 }
@@ -1101,6 +1205,12 @@ pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// #101：前端轮询读取 quarantine 清除消息（一次性，读取后清空）。
+#[tauri::command]
+pub fn get_quarantine_notice(state: tauri::State<'_, crate::AppState>) -> Option<String> {
+    state.quarantine_notice.lock().ok()?.take()
+}
+
 /// 「检查更新」返回信息。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1282,6 +1392,113 @@ pub async fn install_app_update(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn restart_app(app: AppHandle) {
     app.restart();
+}
+
+/// #276：每日自动检查更新。由 lib.rs 的定时线程调用（非 Tauri command）。
+///
+/// 逻辑：
+/// 1. auto_check_updates=false → 跳过
+/// 2. last_update_check_at 距今 < 24h → 跳过（防频繁开关 App 重复检查）
+/// 3. 检查更新（updater 通道）
+/// 4. 有新版 + auto_update=true → 静默下载安装 + 重启
+/// 5. 有新版 + auto_update=false → emit UPDATE_AVAILABLE_EVENT（前端弹框）
+/// 6. 无新版 → 更新 last_update_check_at，不做事
+///
+/// 任何失败只记日志，不影响主流程。
+pub fn run_auto_update_check(app: &AppHandle, state: &crate::AppState) {
+    use tauri_plugin_updater::UpdaterExt;
+
+    // 1. 检查开关
+    {
+        let conn = match state.db.lock() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        if crate::db::get_setting(&conn, "auto_check_updates") != "true" {
+            return;
+        }
+        let auto_update = crate::db::get_setting(&conn, "auto_update") == "true";
+        let last_check: i64 = crate::db::get_setting(&conn, "last_update_check_at")
+            .parse()
+            .unwrap_or(0);
+        drop(conn);
+
+        // 2. 24h 内已检查过则跳过
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        if now - last_check < 86_400 {
+            return;
+        }
+
+        // 3. 更新检查时间戳（无论结果如何都记）
+        let conn2 = match state.db.lock() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let _ = crate::db::set_setting(&conn2, "last_update_check_at", &now.to_string());
+        drop(conn2);
+
+        // 4. 用 tokio runtime 跑异步 updater 检查
+        let app_clone = app.clone();
+        let result = tauri::async_runtime::block_on(async {
+            let updater = match app_clone.updater() {
+                Ok(u) => u,
+                Err(e) => {
+                    eprintln!("[#276] auto update check failed: {e}");
+                    return None;
+                }
+            };
+            match updater.check().await {
+                Ok(Some(u)) => Some(u.version),
+                Ok(None) => None,
+                Err(e) => {
+                    eprintln!("[#276] auto update check error: {e}");
+                    None
+                }
+            }
+        });
+
+        let Some(version) = result else { return };
+
+        // 5. 有新版
+        if auto_update {
+            // 静默下载 + 安装 + 重启
+            eprintln!("[#276] auto-installing update v{version}");
+            let app_clone2 = app.clone();
+            let install_result = tauri::async_runtime::block_on(async {
+                let updater = match app_clone2.updater() {
+                    Ok(u) => u,
+                    Err(e) => return Err(e.to_string()),
+                };
+                let update = match updater.check().await {
+                    Ok(Some(u)) => u,
+                    _ => return Err("no update available".to_string()),
+                };
+                update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())
+            });
+            match install_result {
+                Ok(()) => {
+                    eprintln!("[#276] auto-install complete, restarting");
+                    app.restart();
+                }
+                Err(e) => {
+                    eprintln!("[#276] auto-install failed: {e}, falling back to emit");
+                    let _ = app.emit(
+                        crate::UPDATE_AVAILABLE_EVENT,
+                        serde_json::json!({ "version": version, "autoUpdate": false }),
+                    );
+                }
+            }
+        } else {
+            // 只提醒，不自动安装
+            let _ = app.emit(
+                crate::UPDATE_AVAILABLE_EVENT,
+                serde_json::json!({ "version": version, "autoUpdate": false }),
+            );
+        }
+    }
 }
 
 // ============================================================================
@@ -1923,5 +2140,135 @@ mod tests {
         assert!(crate::common::validate_task_status(&conn, "a#1", "col_beta").is_err());
         // 任务不存在：非四态一律拒绝（无账号可判定）
         assert!(crate::common::validate_task_status(&conn, "ghost#1", "col_alpha").is_err());
+    }
+
+    // ===== #285：立即同步后看板为空（需重启恢复） =====
+
+    /// 插入一个账号 + 若干任务的公共夹具。`author` / `ownership` 用于两条筛选路径。
+    fn seed_account_tasks(
+        conn: &Connection,
+        account_id: i64,
+        login: &str,
+        rows: &[(i64, &str, &str)],
+    ) {
+        conn.execute(
+            "INSERT INTO accounts (id, label, login, org, pat_token, is_default, created_at)
+             VALUES (?1, ?2, ?2, '', 'pat', 0, 0)",
+            rusqlite::params![account_id, login],
+        )
+        .unwrap();
+        for (n, ownership, author) in rows {
+            conn.execute(
+                "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
+                                    ownership, author, synced_at, account_id)
+                 VALUES (?1, 'a', 'a', ?2, 't', 'u', 'open', ?3, ?4, 0, ?5)",
+                rusqlite::params![format!("a#{n}"), n, ownership, author, account_id],
+            )
+            .unwrap();
+        }
+    }
+
+    /// #285 防回归：ownership 筛选分支的 SELECT 必须与 mapper 的列清单一致。
+    ///
+    /// 旧实现的该分支漏了 #278 新增的 `parent_issue` / `sub_issues` 两列（27 → 25 列），
+    /// 而 mapper 固定读位置索引 25/26 → `Row::get(25)` 越界 → `list_tasks` 整体报错。
+    /// 「分配给我 / 未分配 / 分配给他人」三种筛选因此全挂；同步完成后前端必跑一次
+    /// `listTasks`，只要带着任一归属筛选，同步后看板就取不到数据（#285 主症状）。
+    #[test]
+    fn ownership_filter_returns_matching_rows_without_column_error() {
+        let conn = mem_conn();
+        seed_account_tasks(
+            &conn,
+            4,
+            "me",
+            &[(1, "assigned", "me"), (2, "notassignee", "x"), (3, "assigned", "me"), (4, "assigned-others", "y")],
+        );
+        seed_account_tasks(&conn, 5, "other", &[(9, "assigned", "other")]);
+
+        // 无筛选：该账号全部行
+        let all = super::rows_to_tasks(&conn, None, Some(4)).unwrap();
+        assert_eq!(all.len(), 4, "无归属筛选应返回账号 4 全部任务");
+
+        // 归属筛选：旧实现在此处 Row::get(25) 越界报错
+        let assigned = super::rows_to_tasks(&conn, Some("assigned"), Some(4)).unwrap();
+        assert_eq!(assigned.len(), 2, "assigned 应命中 2 行（旧实现此处直接 Err）");
+        assert!(assigned.iter().all(|t| t.ownership == "assigned"));
+
+        let notassignee = super::rows_to_tasks(&conn, Some("notassignee"), Some(4)).unwrap();
+        assert_eq!(notassignee.len(), 1);
+
+        let others = super::rows_to_tasks(&conn, Some("assigned-others"), Some(4)).unwrap();
+        assert_eq!(others.len(), 1);
+
+        // 账号隔离不受筛选影响
+        let a5 = super::rows_to_tasks(&conn, Some("assigned"), Some(5)).unwrap();
+        assert_eq!(a5.len(), 1, "账号 5 的 assigned 应为 1 行");
+        let both = super::rows_to_tasks(&conn, Some("assigned"), Some(0)).unwrap();
+        assert_eq!(both.len(), 3, "聚合视图（Some(0)）应合并两个账号");
+    }
+
+    /// #285 防回归：「我创建的」必须按 `accounts` 表的 login 判定，不能读 `meta.login`。
+    ///
+    /// `meta.login` 只有 v0.3.15 单账号的 `save_pat` 会写；`add_account` /
+    /// `device_login_poll` 从不写它（多账号生产库实测恒为空串），旧实现因此让该
+    /// 筛选恒返回空集。而 `ownership` 是前端本地状态、重启即复位为「全部归属」，
+    /// 于是表现为「同步后看板为空、重启恢复」。
+    #[test]
+    fn my_created_uses_account_login_not_legacy_meta_login() {
+        let conn = mem_conn();
+        seed_account_tasks(&conn, 4, "me", &[(1, "assigned", "me"), (3, "notassignee", "other")]);
+        seed_account_tasks(
+            &conn,
+            5,
+            "other",
+            &[(2, "assigned", "me"), (4, "assigned-others", "other")],
+        );
+        // 多账号模式下的真实状态：meta.login 从未被写入。
+        assert_eq!(crate::db::get_setting(&conn, "login"), "", "夹具应复现多账号生产库状态");
+
+        // 激活账号 = 4（login=me），account_id=None → 回退激活账号。
+        crate::db::set_setting(&conn, "active_account_id", "4").unwrap();
+        let mine = super::rows_to_tasks(&conn, Some("my-created"), None).unwrap();
+        assert_eq!(mine.len(), 1, "旧实现因 meta.login 为空恒返回空集");
+        assert_eq!(mine[0].issue_key, "a#1");
+
+        // 显式过滤账号 5（login=other）→ 只看该账号内 other 创建的。
+        let in5 = super::rows_to_tasks(&conn, Some("my-created"), Some(5)).unwrap();
+        assert_eq!(in5.len(), 1);
+        assert_eq!(in5[0].issue_key, "a#4");
+
+        // 聚合视图：两个账号的 login 都算「我」。
+        let all_mine = super::rows_to_tasks(&conn, Some("my-created"), Some(0)).unwrap();
+        assert_eq!(all_mine.len(), 4, "聚合视图下 4 行全部由已配置账号创建");
+
+        // 账号 login 为空时不匹配任何行（不误匹配 author='').
+        conn.execute("UPDATE accounts SET login = '' WHERE id = 4", []).unwrap();
+        let empty_login = super::rows_to_tasks(&conn, Some("my-created"), Some(4)).unwrap();
+        assert!(empty_login.is_empty(), "账号 login 为空时应返回空集");
+    }
+
+    /// active_account_id 的兜底：>0 时按账号过滤，指向无任务账号时返回空集。
+    #[test]
+    fn active_account_id_drives_default_filter() {
+        let conn = mem_conn();
+        // 不插账号行，直接写 account_id=1 的任务（默认 active_account_id=1）。
+        for n in 1..=3i64 {
+            conn.execute(
+                "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
+                                    ownership, author, synced_at, account_id)
+                 VALUES (?1, 'a', 'a', ?2, 't', 'u', 'open', 'assigned', 'me', 0, 1)",
+                rusqlite::params![format!("a#{n}"), n],
+            )
+            .unwrap();
+        }
+        assert_eq!(super::read_active_account_id(&conn), 1);
+        let rows = super::rows_to_tasks(&conn, None, None).unwrap();
+        assert_eq!(rows.len(), 3, "默认激活账号 1 时应命中该账号全部任务");
+
+        crate::db::set_setting(&conn, "active_account_id", "99").unwrap();
+        assert!(
+            super::rows_to_tasks(&conn, None, None).unwrap().is_empty(),
+            "激活账号指向无任务账号时应返回空集"
+        );
     }
 }

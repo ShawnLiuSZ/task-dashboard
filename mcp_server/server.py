@@ -21,6 +21,7 @@ Tools
 - record_session(issue, session_id, agent?) -> 记录中断会话 id（不碰 GitHub）
 - record_handoff(issue, text)            -> 记录交接任务详情（不碰 GitHub）
 - clear_session(issue)                   -> 任务完成后清空 session 字段
+- set_work_branch(issue, branch)         -> #279：创建 / 切换分支后纠正 work_branch
 
 `issue` 接受多种格式：
 - `repo#number`            e.g. `fad-backend#1234`
@@ -66,11 +67,14 @@ STATUS_CN = {
 # 同一份列清单必须与 Rust 侧 `app/src-tauri/src/mcp.rs::SELECT_COLS` 完全一致，
 # 否则两个 MCP 实现返回给 agent 的字段会不一样。
 # v0.3.53 (#169)：完整列出 db.rs::SCHEMA 真实列；#171：work_branch 为 agent 工作分支。
+# #278：parent_issue / sub_issues 为 GitHub 父子关系（存 JSON 串，空串表示无关联）。
+# MCP 不做二次解析——agent 直接读 JSON，两个 MCP 实现语义一致。
 SELECT_COLS = (
     "issue_key, owner, repo, number, title, url, issue_state, ownership, "
     "status, project_status, assignees, mentioned, latest_comment_url, "
     "pr_number, pr_url, branch, work_branch, session_id, session_agent, "
-    "session_at, handoff, candidate_done, account_id, updated_at"
+    "session_at, handoff, candidate_done, account_id, updated_at, "
+    "parent_issue, sub_issues, created_at"
 )
 
 
@@ -138,10 +142,19 @@ _conn = None
 
 def ensure_schema(c):
     """幂等补齐应用新增列（与 Tauri 后端 db.rs::init 的迁移一致）。
-    即使 TaskBoard App 尚未启动过，MCP Server 也能直接读写既有数据库。"""
+    即使 TaskBoard App 尚未启动过，MCP Server 也能直接读写既有数据库。
+    """
     for col_sql in (
         "ALTER TABLE tasks ADD COLUMN branch TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE tasks ADD COLUMN handoff TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN project_status TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN candidate_done INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN account_id INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN work_branch TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN author TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN comments_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN parent_issue TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tasks ADD COLUMN sub_issues TEXT NOT NULL DEFAULT ''",
     ):
         try:
             c.execute(col_sql)
@@ -613,6 +626,28 @@ def tool_clear_session(issue):
     return {"ok": True, "issue_key": key, "pulled": pulled}
 
 
+def tool_set_work_branch(issue, branch):
+    """#279：单独设置任务的工作分支 `work_branch`。
+
+    agent 在**创建 / 切换 issue 分支之后**调用，纠正 `record_session` 在「开始任务」
+    时录到的基线分支 develop/master。与同步自动拉的 PR `branch` 列分离，同步不碰
+    work_branch。`branch` 为空串报错（清空该列请使用 clear_work_branch）。
+    若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。
+    """
+    key = parse_issue_ref(issue)
+    br = (branch or "").strip()
+    if not br:
+        raise ValueError("branch 不能为空（清空请使用 clear_work_branch）")
+    # v0.4.1 (#250)：本地未命中时按需拉取。
+    pulled = _ensure_before_write(key, issue)
+    cur = conn().execute(
+        "UPDATE tasks SET work_branch=? WHERE issue_key=?", (br, key)
+    )
+    if cur.rowcount == 0:
+        raise ValueError(f"任务不存在: {key}")
+    return {"ok": True, "issue_key": key, "work_branch": br, "pulled": pulled}
+
+
 # --------------------------------------------------------------------------- #
 # v0.3.24+：记事本工具
 # --------------------------------------------------------------------------- #
@@ -789,6 +824,22 @@ TOOLS = [
         },
         "handler": tool_clear_session,
     },
+    {
+        "name": "set_work_branch",
+        "description": "单独设置任务的工作分支 work_branch（#279）。agent 在创建 / 切换 issue 分支之后调用，纠正 record_session 在「开始任务」时录到的基线分支 develop/master。与同步自动拉的 PR branch 列分离，同步不碰 work_branch。branch 为空会报错（清空该列请使用 clear_work_branch）。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "issue": {"type": "string", "description": "issue 引用"},
+                "branch": {
+                    "type": "string",
+                    "description": "目标工作分支名，如 feature/issue-279-fix",
+                },
+            },
+            "required": ["issue", "branch"],
+        },
+        "handler": tool_set_work_branch,
+    },
     # v0.3.24+：记事本工具
     {
         "name": "list_notes",
@@ -950,7 +1001,7 @@ def handle(msg):
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "taskboard", "version": "0.3.47"},
+                "serverInfo": {"name": "taskboard", "version": "0.6.0"},
             },
         }
 

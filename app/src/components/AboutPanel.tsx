@@ -166,15 +166,24 @@ export default function AboutPanel({ onClose }: Props) {
 
   // #231：订阅下载进度，仅在 installing 阶段刷新百分比。
   useEffect(() => {
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     void onUpdateProgress((p) => {
+      if (cancelled) return;
       const percent =
         p.total && p.total > 0 ? Math.min(100, Math.floor((p.downloaded / p.total) * 100)) : null;
       setState((prev) => (prev.phase === 'installing' ? { phase: 'installing', percent } : prev));
     }).then((fn) => {
-      unlisten = fn;
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
     });
-    return () => unlisten?.();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   const busy = state.phase === 'loading' || state.phase === 'installing';
@@ -211,18 +220,6 @@ export default function AboutPanel({ onClose }: Props) {
             </ul>
           </section>
 
-          <section className="about-section">
-            <h4>{t('about.dataTitle')}</h4>
-            <code className="about-data-path">{t('about.dataPath')}</code>
-          </section>
-
-          <section className="about-section">
-            <h4>{t('about.mcpTitle')}</h4>
-            <p className="muted small">{t('about.mcpDesc')}</p>
-            <pre className="about-code">{buildMcpSnippet()}</pre>
-            <p className="muted small">{t('about.mcpFallback')}</p>
-          </section>
-
           <div className="about-repo-row" style={{ marginTop: 4 }}>
             <span className="muted small">{t('about.repoPath')}</span>
             <button
@@ -256,13 +253,22 @@ export default function AboutPanel({ onClose }: Props) {
               )}
               {state.updaterNote && <p className="muted small">{state.updaterNote}</p>}
               {state.manualUrl ? (
-                <button
-                  className="btn primary"
-                  style={{ marginTop: 6 }}
-                  onClick={() => openExternal(state.manualUrl as string)}
-                >
-                  {t('about.download')} ↗
-                </button>
+                <>
+                  <button
+                    className="btn primary"
+                    style={{ marginTop: 6 }}
+                    onClick={() => openExternal(state.manualUrl as string)}
+                  >
+                    {t('about.download')} ↗
+                  </button>
+                  <button
+                    className="btn"
+                    style={{ marginTop: 4 }}
+                    onClick={() => void api.restartApp()}
+                  >
+                    {t('about.restartAfterManual')}
+                  </button>
+                </>
               ) : (
                 <button
                   className="btn primary"

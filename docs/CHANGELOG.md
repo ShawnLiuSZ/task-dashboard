@@ -6,6 +6,64 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 立即同步后看板空白、重启才恢复（#285）**
+
+  - **#285 点「立即同步」后当前账号看板整体变空，必须重启 App 才恢复**：根因在产品层而非同步本身——同步完成后前端必跑一次 `listTasks`，而该查询在某些筛选下会直接报错或恒返回空集，于是「无数据」被写进 state 清空看板；`ownership` 是前端本地状态、重启即复位为「全部归属」，所以重启自然恢复。两处缺陷都在 `commands.rs::rows_to_tasks`（详见 [docs/issue-285-sync-empty-board.md](./issue-285-sync-empty-board.md)）。
+  - **缺陷 A（列数错位）**：归属筛选分支的 SELECT 漏了 #278 新增的 `parent_issue` / `sub_issues` 两列（27 → 25 列），但 mapper 固定按位置索引读 25/26 列 → `Row::get(25)` 越界 → `list_tasks` 整体报错，拖垮「分配给我 / 未分配 / 分配给他人」三种筛选。
+  - **缺陷 B（`meta.login` 恒空）**：`my-created` 过滤原读 `meta.login` 当「我」，但该字段只有 v0.3.15 单账号的 `save_pat` 会写，`add_account` / `device_login_poll` 从不写，多账号生产库实测恒为空串 → 该筛选无条件返回空集。
+  - **做法**：统一所有筛选分支走同一条 `TASK_SELECT_COLUMNS`（27 列）+ 同一个 `task_mapper`，消除「归属分支漏列」；新增 `my_logins` 从 `accounts` 表按视图范围解析 login 集（聚合取全部账号、单账号取过滤/激活账号，**不读 `meta.login`**）；`read_active_account_id` 抽出来兜底。`doSync`（#19）改为快照点击时筛选 + 走合并器 `loadWith` 刷新（避免与 `onSynced` 并发的 coalesced load 互相覆盖），并在同步后显式重拉 `project_statuses` / 自定义列（同步会清空重写 `project_statuses`，沿用旧列也会让新任务落到任何列之外）。
+  - **无 schema 变更**：不碰 SQLite、不新增列、不改迁移。
+  - **验证**：新增 3 个 Rust 回归测试（`ownership_filter_returns_matching_rows_without_column_error` / `my_created_uses_account_login_not_legacy_meta_login` / `active_account_id_drives_default_filter`）——复现并修复两缺陷，含聚合视图与「账号 login 为空返回空集」边界；`cargo test --lib` 命令模块 9 例全绿、`cargo clippy -- -D warnings` 0 warning、`tsc --noEmit` 0 error、`npm run build` ✅、`npm test` 13 文件 136 例、`i18n:check` 中英各 356 key、`npm run lint` 18 warning（未超 `--max-warnings 20`）、`prettier --check` ✅、`scripts/check-mcp-columns.py` ✅、`scripts/check-doc-links.py` ✅。
+
+- **未发布（Unreleased）— 配置项目开源协议（#281）**
+
+  - **#281 仓库没有任何协议声明**：根目录无 `LICENSE`、`package.json` 与 `Cargo.toml` 也都没有 `license` 字段。法律上这等于**默认保留全部权利（all rights reserved）**——别人能 fork、能看，但没有任何条款允许复制、修改或分发，属 GitHub 上最常见的合规漏洞。协议声明散落在四个载体（`LICENSE` 文件、两个包管理器的 `license` 字段、README、CONTRIBUTING），任一缺失都会让下游工具读不到。详见 [docs/issue-281-license.md](./issue-281-license.md)。
+  - **协议选 MIT**：issue 内的推荐项，依据收敛为三点——① **技术栈惯例**：Tauri 核心与 `tauri-plugin-updater` 为 MIT，`rusqlite` / `serde` / `react` 均为 MIT，`@tauri-apps/cli` 为 Apache-2.0，依赖树与 MIT 零冲突；② **定位匹配**：个人效率工具而非被公司集成的商业组件，不需要 Apache-2.0 的显式专利授权，也不该用 copyleft 阻碍使用者改造（GPL / AGPL 与「个人工具、随取随用」直接冲突）；③ **贡献门槛**：MIT 只需保留版权声明，PR 作者不用理解修改声明义务。决策对比表（MIT / Apache-2.0 / GPL-3.0 / AGPL-3.0 的优劣）见 KB 文档 §2。
+  - **落地**：新建根目录 `LICENSE`（MIT 官方标准文本，只改版权行为 `Copyright (c) 2026 ShawnLiuSZ`——与 README / CI / Release 产物中的 owner 归属一致，`Cargo.toml` 里更早期的简写 `authors = ["liushizhao"]` 不动以免扩大改动面）；`app/package.json` 与 `app/src-tauri/Cargo.toml` 各加 `license = "MIT"`；`README.md` / `README.en.md` 预览图下方加 License 徽章、底部加「协议（License）」章节（点明唯一义务「保留版权声明」并复述免责条款的存在）；`CONTRIBUTING.md` 新增协议小节（PR 即按 MIT 授权、引入第三方代码需自行确认协议兼容、依赖协议以其自带 `LICENSE` 为准）。
+  - **刻意不做的事**：① 用 SPDX 标识符 `MIT` 而非自然语言 `"MIT License"`（后者会让 `npm license` / `cargo metadata` 归一化为 `Unknown`），也**不是** `MIT-0`（去掉了必须保留版权声明这一条，而保留要求对上游追溯是免费收益，去掉没有必要收益），更不是 npm 历史惯用的 `ISC`（文本不同，混用会误导依赖扫描器）；② 不动 `Cargo.lock`——Cargo 只对 registry 包记录 `license`，本地路径包（含 workspace 根包）只记 name / version / dependencies，`cargo metadata --locked` 已验证不受影响；③ 不动 `package-lock.json`——`license` 不参与依赖树解析，`npm ci` 的同步性检查只看 `dependencies` / `devDependencies`，且该 lock 根条目版本号历史就与 `package.json` 不同步，不扩大改动面。`package.json` 的 `"private": true` 与新增 `license` 不矛盾：前者只阻止 `npm publish`，后者是给使用者读的元数据。
+  - **验证**：`package.json` 仍为合法 JSON 且 `license` 解析为 `MIT`、`cargo metadata --locked` 通过（未报 license 非法）、`npm ci` 通过（exit 0，未报 lock 失配）、`scripts/check-doc-links.py` ✅（新增 `LICENSE` 相对链接与徽章 URL 均可达）、`scripts/check-workflow-yaml.py` ✅、`scripts` 单测全绿（后两项为回归防误伤，本次未动 workflow 与脚本）。
+  - **无 schema / 无代码变更**：不碰 SQLite、不碰 Rust 业务逻辑、不碰前端、不碰 MCP 双实现、不碰 CI 配置——纯仓库元数据与文档。
+
+- **未发布（Unreleased）— PR 合并后自动收尾：删分支 + 关关联 Issue（#284）**
+
+  - **#284 每个 PR 合入后都要人工收尾**：删掉 `feature/issue-N-xxx` 分支、关闭 PR 标题 / 正文里声明的 issue —— 每合并一个 PR 重复一遍，且没有判断成分（分支名与 issue 号都在 PR 元数据里）。一个常被忽略的事实：GitHub 的 Closing keywords（`Closes #N`）只在合入**默认分支** `main` 时自动生效，而日常开发合入的是 `develop`，所以绝大多数 PR 的 `Refs #N` 从来不触发自动关闭，手动关是常态而非例外。详见 [docs/issue-284-merge-cleanup.md](./issue-284-merge-cleanup.md)。
+  - **做法**：新增 `merge-cleanup.yml`，在 `pull_request: closed` 且 `merged == true` 且 base ∈ {`develop`, `main`} 时触发；先 `check-workflow-yaml.py` 校验全部 workflow 配置、再执行写操作（配置没验证就不动数据）。提取规则抽成纯函数 `extract_issue_refs`，**刻意保守、宁可漏关不可误关**：PR 标题全量匹配 `#N`；正文**只认带关闭关键词**的引用（Closes / Fixes / Resolves / Refs / 关闭 / 解决 / 修复），正文裸 `#N` 一律不关 —— 本仓库 PR 正文习惯引用历史 issue（「沿用 #155 / #175 / #237 的教训」），裸匹配会往早已关闭的无关 issue 里留言。安全护栏：fork 源分支跳过删除、标题含 `test` / `draft` 跳过删除（验证本 workflow 时保留现场）、远端分支 sha 与 PR head sha 不一致不删、已关闭的 issue 跳过且不重复留言、单项失败只 `::warning::` 不中断。正文走 `GITHUB_EVENT_PATH` 事件负载文件而非 shell 变量（正文含单引号 / 反引号 / 多行代码块，转义风险大）。
+  - **顺带补齐 workflow 语法零覆盖**：此前 CI 只跑 i18n / MCP 列名 / 文档链接，**没有任何检查会碰 `.github/workflows/`**。新增 `check-workflow-yaml.py`（零依赖、逐行结构校验，刻意不用 PyYAML —— `${{ }}` 表达式、`on:` 被 YAML 1.1 解析成布尔值等 GitHub 专有写法通用解析器更易误报），拦下 9 类缺陷：tab 缩进 / 结构行奇数缩进 / 重复 key / 缺 `name`·`on`·`jobs` / `on:` 无触发 / job 缺 `runs-on`·`uses` / step 缺 `uses`·`run` / 第三方 action 未固定版本 / `${{ "..." }}` 引号冲突 / `if:` 含 `: ` 裸标量 / `permissions:` 空或 scope 非法 / 引用 `scripts/` 却没有 checkout。该检查器自己也被 CI 跑，故有**双向**要求（一个误报就让每个 PR 的 CI 都红），两类都有测试兜住。`quality-check.yml` 新增 `scripts-checks` job 随每个 PR 运行。
+  - **测试拦下的真实缺陷**：`args.dry-run`（Python 解析成 `args.dry - run` → AttributeError，纯逻辑单测覆盖不到 `main()`）；`rest = s[len(key):]` 把冒号留在 value 里（`if: >-` 变 `": >-"`，初版对全部 6 个 workflow 报 30 处误报）；`on_block` / `jobs` 在每个顶层 key 处被重置（循环后恒空）；step 子键被记到 `job.keys`（两步式 step 全误判「空步骤 + 重复 key」）；`run: |` 在标记 `has_run` 前被 flush；块标量内强制偶数缩进（`if: >-` 续行非偶数缩进是合法格式）；`USE_RE` 不匹配 `- uses:` 内联形式（本仓库最常用写法从未被校验）；`strip_comment` 用 `line[i:i+3] == "}}"`（3 字符切片永不相等，只有 `}}` 落在行尾时才复位表达式深度）；`merge-cleanup.yml` 缺 `actions/checkout`（runner workspace 默认是空的，会以 file not found 静默失败）。review 另拦下两条：`CLOSE_RE` 用 `\b` 做词边界（汉字都是 `\w`，「已关闭 #284」永远匹配不上）；删分支对同一端点发两次 GET（合并为单次请求的 `head_branch()`，省一次网络往返）。
+  - **验证**：`python3 -m unittest discover -s scripts -p 'test_*.py'` **62 例全绿**（`test_merge_cleanup.py` 29 例 = 提取逻辑 21 + dry-run 走完整 `main()` 8；`test_workflow_yaml.py` 33 例 = 现存 6 个 workflow 正向回归 + 每类缺陷反向验证 + 解析器单测）、`scripts/check-workflow-yaml.py` 6 个 workflow 全绿、`scripts/check-mcp-columns.py` ✅（26 列两侧一致）、`scripts/check-doc-links.py` ✅（135 个 markdown 无断链）。dry-run 四场景实测：正常路径 / fork 跳过删分支但仍关 issue / `test` 标记跳过删分支 / 正文仅裸引用不关任何 issue，退出码均 0 且全程无网络调用。
+  - **追加（[#289](https://github.com/ShawnLiuSZ/task-dashboard/issues/289)，首个真实合并才暴露）**：PR #287 合并后 workflow 首次真实运行，issue 关闭成功（#284 已自动 CLOSED）但**删分支失败** —— runner 报 `::warning::删除分支 feature/issue-284-merge-cleanup 失败（HTTP 404）`，远端分支仍在。根因：DELETE 用了**单数** `/git/ref/heads/{branch}`，而 GitHub 上单数 `git/ref/{ref}` **只有 GET 路由、没有 DELETE 路由**，对任何分支名恒 404；更隐蔽的是 GET 对单复数都能路由，于是「分支存在 + sha 比对」全部照常有通过、走完所有护栏后才在 DELETE 那一步 404 —— **读路径把写路径的缺陷完全掩盖**。本仓库分支名全是 `feature/issue-N-xxx`（含 `/`），所以该缺陷从第一天起对每个分支生效；dry-run 全程不打网络，62 个全绿单测也拦不住。修法：抽出 `ref_head_path()` 纯函数让 GET 与 DELETE **共用同一路径**（复数 `/git/refs/heads/`；`/` 保留不编码 —— 该端点实测对编码与未编码的 `/` 都接受，保留字面 `/` 便于日志直接读出分支名）；新增 `RefPathTest` 4 例（含显式反向断言路径里不得出现 `/git/ref/`）与 `BranchDeleteFlowTest` 4 例（`mock.patch.object` 打桩 `api`、零真实网络，覆盖非 dry-run 的端点正确 / sha 不匹配保留分支 / 分支已不存在 / DELETE 失败只告警且不影响关 issue），**70 例全绿**；反向验证：端点退回单数时 5 个用例失败。真机复验：临时分支 `probe/merge-cleanup-verify` 被脚本实际删除、`git ls-remote` 确认远端已清空、退出码 0。
+  - **无 schema / 无前端变更**：不碰 SQLite、不碰 Rust、不碰前端、不碰 MCP 双实现 —— 纯仓库工程自动化。
+
+- **未发布（Unreleased）— 任务详情关联 parent / sub issue 并支持打开与复制（#278）**
+
+  - **#278 详情看不出 issue 的父子关系**：GitHub issue 支持父子关系（子任务），但 TaskBoard 详情面板完全不体现——某 issue 挂在父任务下、或自身拆了子任务，看板里都看不出来，只能离开 App 去 GitHub 看。诉求：显示父 issue 编号 + 子 issue 编号列表，父与每个子项都能「在浏览器打开」「复制链接」。详见 [docs/issue-278-issue-links.md](./issue-278-issue-links.md)。
+  - **做法**：`tasks` 新增两列 `parent_issue` / `sub_issues`（`TEXT NOT NULL DEFAULT ''`，存 JSON 对象 / 数组串，仅 `number` / `title` / `url` 三字段），不建关联表——父子语义不对称（0..1 / 0..N）、不参与任何本地逻辑（状态同步 / 筛选 / 排序都不碰它）、MCP 读 JSON 串天然透明，省一张表、一组 CRUD、一处双实现同步。同步走**批量 alias GraphQL**：按 `(owner, repo)` 分组、编号排序去重后每 25 个合一个请求（`a0` / `a1` … 逐个 `issue(number: N)`），解析以节点自身 `number` 为键；`subIssues` 属特性开关，`GraphQL-Features: sub_issues` 头**统一注入到 `graphql()` 的每个请求**（而非为这条查询复制一份 POST 实现）。失败策略按仓库粒度 best-effort：整组失败只跳过该仓库并**保留既有值**（记 `tlog`、不中断同步），与 PR 关联同一取舍；拉取成功而关系已移除则正常写空串覆盖。
+  - **接口 / 迁移**：`common.rs` 增 `IssueLink` / `IssueLinks` + 静默降级的 `parse_parent_link` / `parse_sub_links`（脏数据不炸整个列表）；`github.rs` 增 `fetch_issue_links` 与两个纯函数；`commands.rs` 的 `Task` 暴露 `parentIssue` / `subIssues`（SELECT 追加在末尾，位置索引 25/26）；`on_demand.rs` 单 issue 按需拉取无法给出父子关系，两列写空串。`open_db()` 热路径幂等 `ALTER` 补列——**不能只放 `migrate_legacy_alters`**（它仅在 `user_version < 1` 执行，v2 物理重建走写死列白名单的 `INSERT..SELECT` 会丢列），沿用 #155 / #175 / #237 的迁移教训。前端新增「关联 Issue」块（**仅在有关联时渲染**，复用 `openExternal` / `copyToClipboard`），新增 3 个 i18n key；MCP `SELECT_COLS` 24 → 26 列，Rust 与 Python 逐列逐序一致、原样透传 JSON 串。
+  - **验证**：`cargo test` 135 例全绿（111 lib + 24 db，含 v2 旧库补齐 / 重建不丢列 / 冲突清空与更新三条迁移回归、GraphQL 查询布局与解析降级三条纯函数测试、MCP 26 列逐列不错位）、`cargo clippy -- -D warnings` 0 warning、`tsc --noEmit` 0 error、`npm run build` ✅、`npm test` 13 文件 136 例、`i18n:check` 中英各 356 key、`npm run lint` 18 warning（未超 `--max-warnings 20`）、`prettier --check` ✅、`python3 -m unittest discover -s mcp_server` 29 例全绿、`scripts/check-mcp-columns.py` ✅（26 列两侧一致）、`scripts/check-doc-links.py` ✅。真机实测 alias 查询（带特性头）：`errors: null`、`parent: null`、`subIssues.nodes: []`、alias 与 `owner.login` 回包正常。
+
+- **未发布（Unreleased）— 开始任务后 work_branch 仍关联基线分支（develop/master）（#279）**
+
+  - **#279 开始任务后工作分支没更新**：用户把 issue 派给 agent，agent 先在 `develop` / `master` 上「开始任务」、随后才创建 / 切换到该 issue 的工作分支；结果 GitHub 上分支已建好，看板详情的 `work_branch` 却仍关联基线分支。根因是两个 `task-start` slash command 在第一步（agent 仍在基线分支）就取分支并写入 `work_branch`，opencode 版更在命令展开时即填入基线分支。详见 [docs/issue-279-work-branch-not-updated.md](./issue-279-work-branch-not-updated.md)。
+  - **做法**：两路互为兜底——① 重写两个 `task-start` 指令与 prompt-reminder 钩子，强制「先切 issue 工作分支、再记录会话」，分支捕获移到切换之后；② 新增窄工具 `set_work_branch(issue, branch)`，agent 切到 issue 分支后调用即可纠正 `work_branch`，只写 `work_branch`、不碰同步自动拉的 PR `branch`。Rust（`common.rs` / `commands.rs` / `mcp.rs`，含 3 例 mcp 测试）与 Python（`mcp_server/server.py`，含 3 例单测）双实现一致；`record_session` 的 `branch` 入参行为不变。
+  - **验证**：`cargo test --lib` 全绿（新增 3 例）、`python3 -m unittest discover -s mcp_server` 29 例全绿、`scripts/check-mcp-columns.py` ✅、`scripts/check-doc-links.py` ✅。
+
+- **未发布（Unreleased）— 手动下载流程补充「重启应用」按钮（#272）**
+
+  - **#272 手动下载后无重启入口**：`about.restart` 按钮仅在 updater 通道安装成功后（`installed` 阶段）出现；当 updater 失败回退为手动下载（`manualUrl` 分支），用户点「前往下载」跳转浏览器后 App 内**没有任何重启按钮**，必须手动退出重开。详见 [docs/issue-272-restart-after-manual.md](./issue-272-restart-after-manual.md)。
+  - **做法**：在 `available` 阶段的手动下载分支追加次级按钮「我已安装，重启应用」，复用已有 `api.restartApp()`（Tauri 2 `app.restart()`），文案明确「先下载安装、再点重启」的时序。纯前端 + i18n 改动，零 Rust / schema 改动。
+  - **验证**：`tsc --noEmit` 0 error、`npm test` 136 例 passed、`i18n:check` 350 key / locale。
+
+- **未发布（Unreleased）— 全库 review 隐藏 bug 批量修复**
+
+  - **Python MCP `serverInfo.version` 硬编码落后 7 个版本**：`mcp_server/server.py:953` 返回 `"version": "0.3.47"`（实际 App 已 0.6.0），与 Rust 侧 `mcp.rs` 的 `env!("CARGO_PKG_VERSION")` 不一致。Agent 读 `initialize.serverInfo.version` 获得错误能力信号。已更新为 `"0.6.0"`。
+  - **Python MCP `ensure_schema` 只补 2 列、缺 6 列**：`server.py:139` 只 ALTER `branch` / `handoff`，但 `SELECT_COLS` 引用 `project_status` / `candidate_done` / `account_id` / `work_branch` / `author` / `comments_count` 等列。对部分迁移的 DB 会报 `no such column` 硬失败。已补齐 6 列。
+  - **device-login 轮询卸载后永不停止**：`AccountsPanel.tsx` 的 `while` 循环仅靠 UI 触发取消，组件卸载时不中断——持续调用 `device_login_poll` 并在已卸载组件上 `setState`（每几秒一次网络请求，内存泄漏）。新增 `useEffect` 清理函数递增 `oauthRunRef`。
+  - **AgentPanel 读过期 `targetDir`**：`refreshHooksStatus` 的 `useCallback` deps 缺 `targetDir`，用户输入路径后刷新仍发 `target_dir=null` → 后端报「目标目录不能为空」。已补 deps。
+  - **Hooks 自动刷新缺空路径守卫 + 漏 `hooksBusy`**：切到 project 作用域但未填路径即触发刷新 → 错误 banner；操作中切作用域后回来不刷新。已补守卫并纳入 deps。
+  - **`handleSwitchView` 读过期 `filterRef`**：`await loadSettings()` 后被动 effect 尚未刷新 `filterRef`，`load()` 用旧 `accountFilter` 查错账号。改为显式传 `accountId`（与 `handleSwitchAccount` 同款修复）。
+  - **`onUpdateProgress` 监听器卸载前泄漏**：AboutPanel 的 `listen()` Promise 未 resolve 前卸载 → 监听器永不注销、持续 `setState`。加 `cancelled` 标志（与 App.tsx 同款模式）。
+  - **`quarantine-cleared` 事件前端收不到**：#101 的 macOS Gatekeeper 自动清除在 App 启动时 `emit` 事件，但前端此时尚未加载 → 消息永远丢失。改为存入 `AppState.quarantine_notice`（`Mutex<Option<String>>`），新增 `get_quarantine_notice` command 供前端轮询读取（一次性，读取后后端自动清空），App 启动时显示 warn banner（点击关闭）。
+
 - **v0.6.0（2026-09-17）— 修复 Rust 测试随机 disk I/O error（#266）**
 
   - **#266 测试临时库命名未隔离导致 CI 偶发失败**：`commands.rs` 的测试辅助 `mem_conn()` 把临时库只按 `process::id()` 命名并每次 `remove_file` 两次，Rust 测试同进程内并行执行时所有调用共用同一文件、互相 unlink 对方正在使用的库，初始化 schema 时随机撞 `disk I/O error`（重跑即绿）。`sync.rs:843` 的 `taskboard_headless_test.db` 也是完全固定名，属同一类隐患。详见 [docs/issue-266-test-flake.md](./issue-266-test-flake.md)。

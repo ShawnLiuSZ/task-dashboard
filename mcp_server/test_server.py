@@ -38,7 +38,8 @@ CREATE TABLE tasks (
   pr_url TEXT, branch TEXT DEFAULT '', author TEXT, session_id TEXT, session_agent TEXT,
   session_at INTEGER, handoff TEXT DEFAULT '', candidate_done INTEGER DEFAULT 0,
   stale INTEGER DEFAULT 0, updated_at INTEGER, synced_at INTEGER, work_branch TEXT DEFAULT '',
-  account_id INTEGER, UNIQUE(repo, number, account_id));
+  parent_issue TEXT DEFAULT '', sub_issues TEXT DEFAULT '',
+  account_id INTEGER, created_at INTEGER DEFAULT 0, UNIQUE(repo, number, account_id));
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE label_mappings (
   id INTEGER PRIMARY KEY AUTOINCREMENT, org TEXT, repo TEXT, label TEXT, status TEXT);
@@ -377,6 +378,57 @@ class OnDemandTest(unittest.TestCase):
         outcome, reason = S.ensure_task_available("ShawnLiuSZ/task-dashboard#248")
         self.assertEqual(outcome, "unavailable")
         self.assertIn("boom", reason)
+
+    # ── #279：set_work_branch 只更新 work_branch，不碰 PR branch ───────────
+    def test_set_work_branch_updates_only_work_branch(self):
+        # 插入一条已有 PR branch=main 的任务，验证 set_work_branch 只改 work_branch。
+        account_id = self._add_account()
+        c = sqlite3.connect(_DB)
+        c.execute(
+            "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,"
+            " ownership, status, account_id, branch, work_branch)"
+            " VALUES ('fad-backend#1247','ShawnLiuSZ','fad-backend',1247,'t','u','open',"
+            " 'assigned','todo',?, 'main', '')",
+            (account_id,),
+        )
+        c.commit()
+        c.close()
+        result = S.tool_set_work_branch("fad-backend#1247", "feature/issue-279-fix")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["work_branch"], "feature/issue-279-fix")
+        self.assertFalse(result["pulled"])
+        row = dict(
+            S.conn()
+            .execute(
+                "SELECT branch, work_branch FROM tasks WHERE issue_key='fad-backend#1247'"
+            )
+            .fetchone()
+        )
+        # PR 自动拉的 branch 不被触碰
+        self.assertEqual(row["branch"], "main")
+        self.assertEqual(row["work_branch"], "feature/issue-279-fix")
+
+    def test_set_work_branch_errors_on_missing_issue(self):
+        # 无账号 → 直接 unavailable，不发网络请求；错误文案带「无法从 GitHub 拉取」。
+        with self.assertRaises(ValueError) as ctx:
+            S.tool_set_work_branch("nope#999", "feature/x")
+        self.assertIn("无法从 GitHub 拉取", str(ctx.exception))
+
+    def test_set_work_branch_rejects_empty_branch(self):
+        account_id = self._add_account()
+        c = sqlite3.connect(_DB)
+        c.execute(
+            "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,"
+            " ownership, status, account_id, work_branch)"
+            " VALUES ('fad-backend#1247','ShawnLiuSZ','fad-backend',1247,'t','u','open',"
+            " 'assigned','todo',?, '')",
+            (account_id,),
+        )
+        c.commit()
+        c.close()
+        with self.assertRaises(ValueError) as ctx:
+            S.tool_set_work_branch("fad-backend#1247", "   ")
+        self.assertIn("branch 不能为空", str(ctx.exception))
 
 
 if __name__ == "__main__":

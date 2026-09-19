@@ -14,6 +14,8 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::common::{IssueLink, IssueLinks};
+
 /// fetch_project_issues 返回类型：(status_map, issues, item_ids)
 pub type ProjectIssuesResult = (HashMap<String, String>, Vec<RawTask>, HashMap<String, String>);
 
@@ -26,6 +28,26 @@ const SEARCH_GATE_MS: u128 = 2000;
 /// 单次请求主动 sleep 上限（毫秒）。某些场景下 `Retry-After` 可能给出极大值，
 /// 这里限制上限以免一次同步被挂死——超出后直接放弃本次调用。
 const MAX_BACKOFF_MS: u64 = 30_000;
+
+/// #278：`Issue.subIssues` 受 GraphQL feature flag 保护，缺 `GraphQL-Features: sub_issues`
+/// 头时该字段可能恒返回 null。值只含 flag 名，header 名在 `GitHubClient::graphql` 里给。
+const GRAPHQL_FEATURE_SUB_ISSUES: &str = "sub_issues";
+
+/// #278：父子关系拉取的分块大小。
+///
+/// 一次 GraphQL 请求用 `a0`/`a1`… 别名把多个 `issue(number:)` 塞进同一查询，
+/// 把 N 次往返压成 ⌈N/25⌉ 次。GitHub 对单个编号不存在的 issue 会在响应里塞
+/// `errors`（`NOT_FOUND`）——本客户端把带 errors 的 GraphQL 一律判为失败，
+/// 所以一次块里只要有一个编号失效，整块 25 个 issue 的关系都拿不到。
+/// 取 25 是为了把这种失效的影响面限制住，同时仍比逐 issue 调用快一个量级；
+/// 同步侧对本步骤是 best-effort，失败时保留既有值，下次同步自愈。
+const LINKS_CHUNK_SIZE: usize = 25;
+
+/// #278：单个 `issue(number:)` 字段选集。只取详情页展示必需的三件套
+/// （编号 / 标题 / 网页链接）——`url` 已隐含跨仓库的 owner/repo，无需再选 `repository`。
+const LINK_FRAGMENT: &str = "number title url \
+parent { ... on Issue { number title url } } \
+subIssues(first: 50) { nodes { number title url } }";
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct RawTask {
@@ -48,6 +70,9 @@ pub struct RawTask {
     pub comments: u64,
     #[serde(default)]
     pub is_pr: bool,
+    /// #280：issue 创建时间（GitHub `created_at`，RFC3339 字符串）。
+    #[serde(default)]
+    pub created_at: String,
 }
 
 /// 从 `[{login: "..."}]` 形态的数组字段提取 login 列表。
@@ -143,6 +168,7 @@ impl RawTask {
             author,
             comments: v.get("comments").and_then(|x| x.as_u64()).unwrap_or(0),
             is_pr: v.get("pull_request").is_some(),
+            created_at: v.get("created_at").and_then(|x| x.as_str()).unwrap_or("").to_string(),
         })
     }
 
@@ -182,6 +208,7 @@ impl RawTask {
             comments: v.get("comments").and_then(|x| x.as_u64()).unwrap_or(0),
             // 与 from_item 一致：`pull_request` 字段存在即为 PR（REST 也返回 PR）。
             is_pr: v.get("pull_request").is_some(),
+            created_at: v.get("created_at").and_then(|x| x.as_str()).unwrap_or("").to_string(),
         })
     }
 }
@@ -353,6 +380,82 @@ pub struct StatusOption {
 pub struct StatusField {
     pub field_id: String,
     pub options: Vec<StatusOption>,
+}
+
+/// #278：从一个 `issue` 节点（或 `parent` / `subIssues.nodes[]` 子节点）取关联信息。
+///
+/// 纯函数、对形状异常宽容：`number` 缺失即返回 `None`，不 panic。
+fn link_from_node(n: &serde_json::Value) -> Option<IssueLink> {
+    let number = n.get("number")?.as_i64()?;
+    Some(IssueLink {
+        number,
+        title: n
+            .get("title")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+        url: n
+            .get("url")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+    })
+}
+
+/// #278：拼一块父子关系查询。抽成纯函数以便单测锁住别名与字段选集的形状
+/// （GraphQL 语法错只在真实请求时才暴露，代价高）。
+pub fn build_links_query(owner: &str, repo: &str, numbers: &[i64]) -> String {
+    let mut fields = String::new();
+    for (i, n) in numbers.iter().enumerate() {
+        fields.push_str(&format!("  a{i}: issue(number: {n}) {{ {LINK_FRAGMENT} }}\n"));
+    }
+    format!(
+        "query {{ r: repository(owner:\"{owner}\", name:\"{repo}\") {{ name owner {{ login }} {fields} }} }}"
+    )
+}
+
+/// #278：解析 `fetch_issue_links` 的 GraphQL 返回，纯函数（不发网络）。
+///
+/// 入参形如 `{"data": {"r": {"name", "owner", "a0": {...}, "a1": null, ...}}}`。
+/// 按返回节点自身的 `number` 建键（不依赖别名顺序），键缺失的编号由调用方按
+/// 「本次未取到」处理。形状不对时返回空 map——关系属装饰性信息，不能让它让同步报错。
+pub fn parse_links_from_graphql(v: &serde_json::Value) -> HashMap<i64, IssueLinks> {
+    let mut out = HashMap::new();
+    let Some(repo) = v
+        .get("data")
+        .and_then(|d| d.get("r"))
+        .and_then(|r| r.as_object())
+    else {
+        return out;
+    };
+    for (key, node) in repo {
+        // 别名固定为 `a<序号>`；`name` / `owner` 是仓库自身字段，跳过。
+        if !key.starts_with('a') || !key.chars().skip(1).all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let Some(n) = node.as_object() else { continue };
+        let Some(number) = n.get("number").and_then(|x| x.as_i64()) else { continue };
+        // `parent` 为 `IssueOrPullRequest` union：不是 issue（PR 作父）时字段形状不同，
+        // 直接交给 link_from_node 判空取号；此处只过滤 JSON null。
+        let parent = n
+            .get("parent")
+            .filter(|p| !p.is_null())
+            .and_then(link_from_node);
+        let mut sub_issues = Vec::new();
+        if let Some(nodes) = n
+            .get("subIssues")
+            .and_then(|s| s.get("nodes"))
+            .and_then(|a| a.as_array())
+        {
+            for c in nodes {
+                if let Some(link) = link_from_node(c) {
+                    sub_issues.push(link);
+                }
+            }
+        }
+        out.insert(number, IssueLinks { parent, sub_issues });
+    }
+    out
 }
 
 impl GitHubClient {
@@ -736,6 +839,31 @@ impl GitHubClient {
         }
     }
 
+    /// #278：批量拉取同一仓库内一组 issue 的父子关系（GraphQL，只读）。
+    ///
+    /// 一次请求覆盖 `LINKS_CHUNK_SIZE` 个编号（别名 `a0`…），把 N 次往返压成
+    /// ⌈N/25⌉ 次；调用方（sync.rs）按 `(owner, repo)` 分组后整组传入。
+    ///
+    /// 返回 `number -> IssueLinks`。某编号本次取不到（如同步期间被删）则不出现在
+    /// map 里，由调用方按「未取到」处理；整块请求失败返回 `Err`，调用方保留既有值。
+    pub fn fetch_issue_links(
+        &self,
+        owner: &str,
+        repo: &str,
+        numbers: &[i64],
+    ) -> Result<HashMap<i64, IssueLinks>, String> {
+        let mut out = HashMap::new();
+        for chunk in numbers.chunks(LINKS_CHUNK_SIZE) {
+            if chunk.is_empty() {
+                continue;
+            }
+            out.extend(parse_links_from_graphql(
+                &self.graphql(&build_links_query(owner, repo, chunk))?,
+            ));
+        }
+        Ok(out)
+    }
+
     pub fn fetch_all_projects(&self) -> Result<Vec<(String, String, i64, String)>, String> {
         let mut out: Vec<(String, String, i64, String)> = Vec::new();
 
@@ -1044,6 +1172,7 @@ impl GitHubClient {
                     author,
                     comments,
                     is_pr: false,
+                    created_at: String::new(),
                 });
             }
             if items["pageInfo"]["hasNextPage"].as_bool() == Some(true) {
@@ -1297,6 +1426,10 @@ impl GitHubClient {
             .post(url)
             .header("Authorization", format!("Bearer {}", self.pat))
             .header("Accept", "application/json")
+            // #278：`Issue.subIssues` 受 GraphQL feature flag 保护，缺 `GraphQL-Features: sub_issues`
+            // 时该字段可能恒返回 null。对不使用该字段的既有查询无副作用，故在所有 GraphQL
+            // 请求上一并带上，避免为单一调用点维护第二份 POST 实现（列清单/日志/重试都重复）。
+            .header("GraphQL-Features", GRAPHQL_FEATURE_SUB_ISSUES)
             .json(&body)
             .send()
             .map_err(|e| format!("GraphQL 网络请求失败: {}", e))?;
@@ -1820,5 +1953,108 @@ mod tests {
         assert_eq!(pr.head_ref, "fix/deliver-assign-at");
         assert_eq!(pr.body, "Closes #1248");
         assert_eq!(pr.repo, "", "repo 由调用方回填");
+    }
+
+    // ── #278：父子关系（GraphQL `parent` / `subIssues`）──
+    //
+    // 网络往返在单测里跑不起，所以把「查询构造」与「返回解析」都抽成纯函数来测：
+    // GraphQL 语法错只在真实请求时才暴露（代价高），解析错位会让详情页张冠李戴。
+
+    #[test]
+    fn build_links_query_layout() {
+        let q = build_links_query("ShawnLiuSZ", "task-dashboard", &[278, 279]);
+        assert!(q.starts_with("query { r: repository(owner:\"ShawnLiuSZ\", name:\"task-dashboard\") {"));
+        assert!(q.contains("name owner { login }"));
+        // 别名按序号递增，编号原样嵌入。
+        assert!(q.contains("a0: issue(number: 278)"));
+        assert!(q.contains("a1: issue(number: 279)"));
+        // 字段选集：parent 必须走 `... on Issue` 内联片段（父节点是 union 类型）。
+        assert!(q.contains("parent { ... on Issue { number title url } }"));
+        assert!(q.contains("subIssues(first: 50) { nodes { number title url } }"));
+        // 每个别名字段都独立闭合，查询整体闭合。
+        assert_eq!(q.matches("issue(number:").count(), 2);
+        assert!(q.ends_with("} }"));
+    }
+
+    #[test]
+    fn parse_links_handles_parent_and_sub_issues() {
+        let v = serde_json::json!({
+            "data": {
+                "r": {
+                    "name": "task-dashboard",
+                    "owner": {"login": "ShawnLiuSZ"},
+                    "a0": {
+                        "number": 278,
+                        "title": "子任务",
+                        "url": "https://github.com/o/r/issues/278",
+                        "parent": {"number": 100, "title": "epic",
+                                   "url": "https://github.com/o/r/issues/100"},
+                        "subIssues": {
+                            "nodes": [
+                                {"number": 279, "title": "a", "url": "https://github.com/o/r/issues/279"},
+                                {"number": 280, "title": "跨仓库",
+                                 "url": "https://github.com/other/repo/issues/7"}
+                            ]
+                        }
+                    },
+                    "a1": {
+                        "number": 279,
+                        "title": "无关联",
+                        "url": "https://github.com/o/r/issues/279",
+                        "parent": null,
+                        "subIssues": {"nodes": []}
+                    }
+                }
+            }
+        });
+        let m = parse_links_from_graphql(&v);
+        assert_eq!(m.len(), 2);
+        let l = &m[&278];
+        assert_eq!(
+            l.parent,
+            Some(IssueLink {
+                number: 100,
+                title: "epic".into(),
+                url: "https://github.com/o/r/issues/100".into()
+            })
+        );
+        assert_eq!(l.sub_issues.len(), 2);
+        assert_eq!(l.sub_issues[1].number, 280);
+        assert_eq!(
+            l.sub_issues[1].url,
+            "https://github.com/other/repo/issues/7",
+            "跨仓库子 issue 的 owner/repo 由 url 隐含"
+        );
+        // 无关联：parent 为 None、sub_issues 为空 vec（非缺键）。
+        let l2 = &m[&279];
+        assert!(l2.parent.is_none());
+        assert!(l2.sub_issues.is_empty());
+        assert!(l2.is_empty());
+        assert!(!l.is_empty());
+    }
+
+    #[test]
+    fn parse_links_is_tolerant_of_shape_errors() {
+        // 缺 data / r → 空 map，不 panic。
+        assert!(parse_links_from_graphql(&serde_json::json!({})).is_empty());
+        assert!(parse_links_from_graphql(&serde_json::json!({"data": {}})).is_empty());
+        // 编号缺失的节点、非对象别名、缺 number 的子节点都被跳过。
+        let v = serde_json::json!({
+            "data": {"r": {
+                "name": "r", "owner": {"login": "o"},
+                "a0": {"title": "no number", "url": "u"},
+                "a1": null,
+                "a2": {"number": 5, "title": "ok", "url": "https://github.com/o/r/issues/5",
+                       "parent": {"title": "parent without number"},
+                       "subIssues": {"nodes": [{"number": 6, "title": "x", "url": "u6"},
+                                               {"title": "missing number"}]}}
+            }}
+        });
+        let m = parse_links_from_graphql(&v);
+        assert_eq!(m.len(), 1);
+        let l = &m[&5];
+        assert!(l.parent.is_none(), "缺 number 的 parent 应丢弃");
+        assert_eq!(l.sub_issues.len(), 1);
+        assert_eq!(l.sub_issues[0].number, 6);
     }
 }

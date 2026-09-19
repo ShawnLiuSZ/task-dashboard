@@ -43,11 +43,23 @@ The MCP Server is registered as `taskboard` in WorkBuddy's `~/.workbuddy/mcp.jso
 | `record_session` | `issue`, `session_id`, `agent?`, `branch?` | Record an interrupted session id; if `branch` is non-empty, also record the current working branch (into `work_branch`, kept separate from the synced PR `branch`) |
 | `record_handoff` | `issue`, `text` | Record "handoff task" details |
 | `clear_session` | `issue` | Clear the session field after completion (kept for audit) |
+| `set_work_branch` | `issue`, `branch` | #279: after creating / switching the issue branch, correct `work_branch` (writes only that column, never touches the synced PR `branch`; empty `branch` errors) |
 
 ### issue reference format (any of these — auto-normalized)
 - `repo#number` — e.g. `fad-backend#1247`
 - `owner/repo#number` — e.g. `FoodsUp-Inc/fad-backend#1247`
 - GitHub URL — e.g. `https://github.com/FoodsUp-Inc/fad-backend/issues/1247`
+
+### Return fields (`list_my_tasks` / `get_task_status`)
+
+Alongside the board status and session fields, the response also carries mirror fields synced **read-only** from GitHub; except for `work_branch`, no MCP tool writes them:
+
+- `branch` — the source branch of the issue's linked PR (pulled by sync; agents should not change it).
+- `work_branch` — the working branch recorded by the agent (written by `record_session` / `set_work_branch`, never overwritten by sync).
+- `parent_issue` — #278: a JSON object string `{"number","title","url"}` for the parent issue; empty string = no parent.
+- `sub_issues` — #278: a JSON array string of sub-issues; empty string = none.
+
+`parent_issue` / `sub_issues` are **JSON in string form** — `JSON.parse` them when needed; the `url` inside is directly openable, no need to build it yourself. Relationships are fetched per repository in batched requests; if a repository's fetch fails, its existing values are kept rather than cleared.
 
 ### State enum (`status` of `update_task_status`)
 - English keys: `todo` / `doing` / `processed` / `done`
@@ -59,7 +71,8 @@ The MCP Server is registered as `taskboard` in WorkBuddy's `~/.workbuddy/mcp.jso
 
 | Timing | Action |
 |---|---|
-| **Start working** on an issue (assigned by the user / you claim it / you begin changing it) | `update_task_status(issue, "处理中")` + `record_session(issue, <current session id>, "<agent name>", branch=<current working branch>)` |
+| **Start working** on an issue (assigned by the user / you claim it / you begin changing it) | **First switch to that issue's work branch** (`feature/issue-<N>-<scope>`, new from develop), then `update_task_status(issue, "处理中")` + `record_session(issue, <current session id>, "<agent name>", branch=<current working branch>)` |
+| **After switching to the issue branch** (#279 correction) | If you ran "start working" first (still on develop/master) and **only later** switched to the issue branch, after the switch call `set_work_branch(issue, branch=<current issue branch>)` to correct `work_branch` (writes only that column, never the synced PR `branch`) |
 | **Pause / session interrupted / switching to another task** | `record_session(issue, <current session id>, "<your agent name>")` |
 | The user says "**generate a handoff task**", "hand off", "handoff", etc. | `record_handoff(issue, "<done / not done / blockers / how to resume>")`; to preserve a resumable session, also call `record_session` |
 | **Task complete** (you verify it's done, wrapping up) | `update_task_status(issue, "已完成")` + `clear_session(issue)` |
@@ -73,9 +86,9 @@ The `session_id` is **supplied by the caller**, with this priority (don't mix id
 - codex / zcode / helix: pick a recoverable id from each one's current session
 - **always pass the `agent` argument** (`claude-code` / `codex` / `opencode` / `zcode` / `helix` …) so multiple processes can tell who recorded what
 
-`branch` is **also supplied by the caller, in two steps**: first run `git branch --show-current` (or `git -C <the project dir for that issue> branch --show-current`) with the Bash tool to get the plain branch name, then pass the result as the string `branch` argument to `record_session`. **Never paste `$(...)` / backticks literally into MCP arguments** (MCP never runs a shell — that would store a literal dirty string).
+`branch` is **also supplied by the caller, in two steps**: **first switch to that issue's work branch** (see the "Start working" row above), then run `git branch --show-current` (or `git -C <the project dir for that issue> branch --show-current`) with the Bash tool to get the plain branch name, and pass the result as the string `branch` argument to `record_session`. **Never paste `$(...)` / backticks literally into MCP arguments** (MCP never runs a shell — that would store a literal dirty string).
 **pass an empty string if it can't be resolved** (no git repo / no branch — don't stuff in dirty data). It's written to a separate `work_branch` column, kept apart
-from the synced PR `branch`, so sync never overwrites it.
+from the synced PR `branch`, so sync never overwrites it. **#279 root cause**: if you ran `git branch --show-current` while still on develop/master and passed it to `record_session`, `work_branch` ends up pinned to the baseline branch — so branch capture must happen **after** switching to the issue branch. If it was already recorded wrong, after switching call `set_work_branch(issue, branch=<current issue branch>)` to correct it.
 
 ### How state is kept when interrupting
 After an interrupt, **keep the state as "处理中"** (do not fall back to "待处理") — falling back would lose the signal that "this task already has partial work", which is exactly what a session id is for. On resume, explicitly move back to "处理中".
@@ -86,9 +99,14 @@ After an interrupt, **keep the state as "处理中"** (do not fall back to "待�
 
 ```
 # 1) Got the task; start working (shortcut: /task-start fad-backend#1247)
-# First run `git branch --show-current` with the Bash tool, then call the two steps below
+# First switch to the issue's work branch (feature/issue-1247-xxx, new from develop), then read it
+# Bash: git switch -c feature/issue-1247-xxx develop   # skip if already on it
+# Bash: git branch --show-current                       # get the issue branch name
 update_task_status(issue="fad-backend#1247", status="处理中")
-record_session(issue="fad-backend#1247", session_id="${CLAUDE_SESSION_ID}", agent="claude-code", branch="<Bash output from previous step, may be empty>")
+record_session(issue="fad-backend#1247", session_id="${CLAUDE_SESSION_ID}", agent="claude-code", branch="feature/issue-1247-xxx")
+
+# 1b) #279 correction: if you ran start first (on develop/master) then switched, call this after
+set_work_branch(issue="fad-backend#1247", branch="feature/issue-1247-xxx")
 
 # 2) Switching to something else mid-way; record the session first
 record_session(issue="fad-backend#1247", session_id="tmux:work-1247", agent="claude-code")

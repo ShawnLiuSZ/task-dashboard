@@ -1,5 +1,5 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { api, onSynced, onTasksChanged, TASKBOARD_ERROR_EVENT } from './api';
+import { api, onSynced, onTasksChanged, onUpdateAvailable, TASKBOARD_ERROR_EVENT } from './api';
 import { taskListSignature } from './utils/taskSig';
 import { coalescedLoad, createLoadCoalescer } from './utils/coalescedLoad';
 import { countHiddenChanged, snapshotTasks } from './utils/syncHint';
@@ -54,6 +54,10 @@ function BoardApp() {
   const [hiddenAfterSync, setHiddenAfterSync] = useState(0);
   const [projectStatuses, setProjectStatuses] = useState<ProjectStatus[]>([]);
   const [accountColumns, setAccountColumns] = useState<AccountColumn[]>([]);
+  // #101：macOS quarantine 清除一次性提示（启动时后端存入 AppState，前端轮询读取后清空）。
+  const [quarantineNotice, setQuarantineNotice] = useState<string | null>(null);
+  // #276：每日自动检查发现新版本时的弹框提醒。
+  const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
 
   // v0.3.28+：监听全局错误上报（如 openExternal 失败），统一在错误 banner 显示，
   // 避免无 UI 上下文的异步失败只落在 console 里造成「点了没反应」。
@@ -61,6 +65,24 @@ function BoardApp() {
     const handler = (e: Event) => setError((e as CustomEvent<string>).detail);
     window.addEventListener(TASKBOARD_ERROR_EVENT, handler);
     return () => window.removeEventListener(TASKBOARD_ERROR_EVENT, handler);
+  }, []);
+
+  // #101：启动时轮询读取 quarantine 清除消息（一次性，后端读取后自动清空）。
+  useEffect(() => {
+    void api.getQuarantineNotice().then((msg) => {
+      if (msg) setQuarantineNotice(msg);
+    });
+  }, []);
+
+  // #276：监听每日自动检查发现新版本的提醒。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void onUpdateAvailable((p) => {
+      if (p.version) setUpdateAvailable(p.version);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
   }, []);
 
   // 同步结果 / 部分失败 banner 4 秒后自动消失（错误 banner 不受影响，由下次操作覆盖）。
@@ -145,101 +167,109 @@ function BoardApp() {
     }
   }, []);
 
-  const loadProjectStatuses = useCallback(async () => {
-    try {
-      if (!settings) return;
-      const activeId = settings.activeAccountId;
-      if (!activeId) return;
+  // #285：可显式传入 settings 快照。同步会刷新 settings（activeAccountId /
+  // viewMode 变更），doSync 里 await 后闭包内的 settings 还是旧值，必须显式传。
+  const loadProjectStatuses = useCallback(
+    async (s: SettingsT | null = settings) => {
+      try {
+        if (!s) return;
+        const activeId = s.activeAccountId;
+        if (!activeId) return;
 
-      // viewMode="all" 时聚合所有账号的 project_statuses，按字母序合并去重
-      // （聚合视图下每个账号可能属于不同项目，无法用单一 order_index）
-      // v0.3.49 (#145)：并行拉取 + 单账号失败隔离（该账号列缺失不断整板）。
-      if (settings.viewMode === 'all') {
-        const accounts = settings.accounts ?? [];
-        const results = await Promise.all(
-          accounts
-            .filter((a) => a.id)
-            .map((a) =>
-              api.listProjectStatuses(a.id).catch((e) => {
-                console.warn(`加载账号 @${a.login} 的项目状态失败:`, e);
-                return [] as ProjectStatus[];
+        // viewMode="all" 时聚合所有账号的 project_statuses，按字母序合并去重
+        // （聚合视图下每个账号可能属于不同项目，无法用单一 order_index）
+        // v0.3.49 (#145)：并行拉取 + 单账号失败隔离（该账号列缺失不断整板）。
+        if (s.viewMode === 'all') {
+          const accounts = s.accounts ?? [];
+          const results = await Promise.all(
+            accounts
+              .filter((a) => a.id)
+              .map((a) =>
+                api.listProjectStatuses(a.id).catch((e) => {
+                  console.warn(`加载账号 @${a.login} 的项目状态失败:`, e);
+                  return [] as ProjectStatus[];
+                }),
+              ),
+          );
+          const merged = new Map<string, ProjectStatus>();
+          for (const list of results) {
+            for (const ps of list) {
+              // 去重：同名状态只保留第一个（按首次出现顺序）
+              if (!merged.has(ps.name)) merged.set(ps.name, ps);
+            }
+          }
+          setProjectStatuses([...merged.values()].sort((a, b) => a.name.localeCompare(b.name)));
+          return;
+        }
+
+        // 单账号视图：取条目数最多的项目（主项目）的状态，按 order_index 排序
+        const all = await api.listProjectStatuses(activeId);
+        const byProject = new Map<string, typeof all>();
+        for (const ps of all) {
+          const arr = byProject.get(ps.projectGithubId) ?? [];
+          arr.push(ps);
+          byProject.set(ps.projectGithubId, arr);
+        }
+        let best: typeof all = [];
+        for (const arr of byProject.values()) {
+          if (arr.length > best.length) best = arr;
+        }
+        // 确保按 order_index 正序（后端已按此排序，但重新过滤后可能丢失）
+        best.sort((a, b) => a.orderIndex - b.orderIndex);
+        setProjectStatuses(best);
+      } catch (e) {
+        // 项目状态决定看板列，失败必须可见，否则列静默缺失用户无从判断。
+        console.warn('加载项目状态选项失败:', e);
+        setError(String(e));
+      }
+    },
+    [settings],
+  );
+
+  // v0.3.28+：加载自定义列配置。#285：同 loadProjectStatuses，可显式传 settings。
+  const loadAccountColumns = useCallback(
+    async (s: SettingsT | null = settings) => {
+      try {
+        if (!s) return;
+        const activeId = s.activeAccountId;
+        if (!activeId) {
+          setAccountColumns([]);
+          return;
+        }
+
+        if (s.viewMode === 'all') {
+          // 聚合视图：合并所有账号的自定义列（按 col_key 去重）
+          // v0.3.49 (#145)：并行拉取 + 单账号失败隔离。
+          const accounts = (s.accounts ?? []).filter((a) => a.id);
+          const results = await Promise.all(
+            accounts.map((a) =>
+              api.listAccountColumns(a.id).catch((e) => {
+                console.warn(`加载账号 @${a.login} 的自定义列失败:`, e);
+                return [] as AccountColumn[];
               }),
             ),
-        );
-        const merged = new Map<string, ProjectStatus>();
-        for (const list of results) {
-          for (const ps of list) {
-            // 去重：同名状态只保留第一个（按首次出现顺序）
-            if (!merged.has(ps.name)) merged.set(ps.name, ps);
+          );
+          const merged = new Map<string, AccountColumn>();
+          for (const list of results) {
+            for (const col of list) {
+              if (!merged.has(col.colKey)) merged.set(col.colKey, col);
+            }
           }
+          setAccountColumns([...merged.values()].sort((a, b) => a.orderIndex - b.orderIndex));
+          return;
         }
-        setProjectStatuses([...merged.values()].sort((a, b) => a.name.localeCompare(b.name)));
-        return;
-      }
 
-      // 单账号视图：取条目数最多的项目（主项目）的状态，按 order_index 排序
-      const all = await api.listProjectStatuses(activeId);
-      const byProject = new Map<string, typeof all>();
-      for (const ps of all) {
-        const arr = byProject.get(ps.projectGithubId) ?? [];
-        arr.push(ps);
-        byProject.set(ps.projectGithubId, arr);
+        // 单账号视图
+        const cols = await api.listAccountColumns(activeId);
+        setAccountColumns(cols.sort((a, b) => a.orderIndex - b.orderIndex));
+      } catch (e) {
+        console.warn('加载自定义列配置失败:', e);
+        // 同上：自定义列缺失会让看板列不完整，失败需可见。
+        setError(String(e));
       }
-      let best: typeof all = [];
-      for (const arr of byProject.values()) {
-        if (arr.length > best.length) best = arr;
-      }
-      // 确保按 order_index 正序（后端已按此排序，但重新过滤后可能丢失）
-      best.sort((a, b) => a.orderIndex - b.orderIndex);
-      setProjectStatuses(best);
-    } catch (e) {
-      // 项目状态决定看板列，失败必须可见，否则列静默缺失用户无从判断。
-      console.warn('加载项目状态选项失败:', e);
-      setError(String(e));
-    }
-  }, [settings]);
-
-  // v0.3.28+：加载自定义列配置
-  const loadAccountColumns = useCallback(async () => {
-    try {
-      if (!settings) return;
-      const activeId = settings.activeAccountId;
-      if (!activeId) {
-        setAccountColumns([]);
-        return;
-      }
-
-      if (settings.viewMode === 'all') {
-        // 聚合视图：合并所有账号的自定义列（按 col_key 去重）
-        // v0.3.49 (#145)：并行拉取 + 单账号失败隔离。
-        const accounts = (settings.accounts ?? []).filter((a) => a.id);
-        const results = await Promise.all(
-          accounts.map((a) =>
-            api.listAccountColumns(a.id).catch((e) => {
-              console.warn(`加载账号 @${a.login} 的自定义列失败:`, e);
-              return [] as AccountColumn[];
-            }),
-          ),
-        );
-        const merged = new Map<string, AccountColumn>();
-        for (const list of results) {
-          for (const col of list) {
-            if (!merged.has(col.colKey)) merged.set(col.colKey, col);
-          }
-        }
-        setAccountColumns([...merged.values()].sort((a, b) => a.orderIndex - b.orderIndex));
-        return;
-      }
-
-      // 单账号视图
-      const cols = await api.listAccountColumns(activeId);
-      setAccountColumns(cols.sort((a, b) => a.orderIndex - b.orderIndex));
-    } catch (e) {
-      console.warn('加载自定义列配置失败:', e);
-      // 同上：自定义列缺失会让看板列不完整，失败需可见。
-      setError(String(e));
-    }
-  }, [settings]);
+    },
+    [settings],
+  );
 
   useEffect(() => {
     void load();
@@ -345,12 +375,13 @@ function BoardApp() {
     setSyncing(true);
     setError(null);
     setHiddenAfterSync(0);
+    // #285：点击瞬间快照筛选。同步会刷新 settings（activeAccountId / viewMode），
+    // ownership / accountFilter 靠渲染周期传播，同步返回后再读闭包值是过期的。
+    const ow = ownership;
+    const af = accountFilter;
     // #178：同步前快照。归属筛选是后端维度——生效时用无归属全量做 diff 基准，
     // 否则后端筛掉的旧任务会被误判为“新增”。
-    const needPool = Boolean(ownership);
-    const beforePool = needPool
-      ? await api.listTasks(undefined, accountFilter).catch(() => tasks)
-      : tasks;
+    const beforePool = ow ? await api.listTasks(undefined, af).catch(() => tasks) : tasks;
     const before = snapshotTasks(beforePool);
     try {
       const r = await api.syncNow();
@@ -361,13 +392,21 @@ function BoardApp() {
         `${t('sync.result', { added: r.added, updated: r.updated, done: r.candidateDone })}${scope}${prune}`,
         r.warning,
       );
-      const fresh = await api.listTasks(ownership || undefined, accountFilter);
-      applyTasks(fresh);
-      await loadSettings();
-      const pool = needPool
-        ? await api.listTasks(undefined, accountFilter).catch(() => fresh)
-        : fresh;
-      setHiddenAfterSync(countHiddenChanged(before, pool, { repo, query, ownership }));
+      // #285：同步会先清空、再按 GraphQL 结果重写该账号的 project_statuses
+      // （sync.rs::clear_project_statuses → upsert_project_statuses）。项目状态列
+      // 可能整体换掉，沿用旧列渲染就会让新状态的任务落到任何列之外——
+      // 表现为「同步后看板为空、重启恢复」（重启会重拉列）。
+      const freshSettings = await api.getSettings().catch(() => settings);
+      setSettings(freshSettings);
+      await Promise.all([loadProjectStatuses(freshSettings), loadAccountColumns(freshSettings)]);
+      // #19：刷新走合并器，不直连 listTasks + applyTasks——onSynced 事件会并发
+      // 触发 load()，直连写 state 可能被并发的 coalesced load 覆盖回旧数据。
+      await loadWith(ow, af);
+      // #178：被新筛选隐藏的数量（diff 基准恒为无归属全量）。
+      const pool = await api.listTasks(undefined, af).catch(() => []);
+      setHiddenAfterSync(
+        pool.length ? countHiddenChanged(before, pool, { repo, query, ownership: ow }) : 0,
+      );
     } catch (e) {
       setError(String(e));
     } finally {
@@ -416,7 +455,10 @@ function BoardApp() {
     try {
       await api.setViewMode(mode);
       await loadSettings();
-      await load();
+      // M3：显式传新 accountFilter——filterRef 由被动 effect 刷新，
+      // await loadSettings() 后仍可能读到旧值（与 handleSwitchAccount 同款修复）。
+      const accountId = mode === 'all' ? 0 : (settings?.activeAccountId ?? 0);
+      await loadWith(ownership, accountId);
     } catch (e) {
       setError(String(e));
     }
@@ -476,11 +518,20 @@ function BoardApp() {
         </div>
       </header>
 
-      {(error || lastResult || lastWarning) && (
+      {(error || lastResult || lastWarning || quarantineNotice) && (
         <div className="banner-row">
           {error && <div className="banner error">{error}</div>}
-          {!error && lastWarning && <div className="banner warn">{lastWarning}</div>}
-          {!error && !lastWarning && lastResult && <div className="banner ok">{lastResult}</div>}
+          {!error && quarantineNotice && (
+            <div className="banner warn" onClick={() => setQuarantineNotice(null)}>
+              {quarantineNotice}
+            </div>
+          )}
+          {!error && !quarantineNotice && lastWarning && (
+            <div className="banner warn">{lastWarning}</div>
+          )}
+          {!error && !quarantineNotice && !lastWarning && lastResult && (
+            <div className="banner ok">{lastResult}</div>
+          )}
         </div>
       )}
       {!error && hiddenAfterSync > 0 && (query || repo || ownership) && (
@@ -543,6 +594,7 @@ function BoardApp() {
                   <option value="assigned">{t('ownership.assigned')}</option>
                   <option value="notassignee">{t('ownership.notassignee')}</option>
                   <option value="assigned-others">{t('ownership.assigned-others')}</option>
+                  <option value="my-created">{t('filter.myCreated')}</option>
                 </select>
                 {(query || repo || ownership) && (
                   <button
@@ -629,6 +681,44 @@ function BoardApp() {
       )}
 
       {showAbout && <AboutPanel onClose={() => setShowAbout(false)} />}
+
+      {/* #276：每日自动检查发现新版本的弹框提醒 */}
+      {updateAvailable && (
+        <div className="modal-mask" onClick={() => setUpdateAvailable(null)}>
+          <div
+            className="modal"
+            style={{ maxWidth: 420 }}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setUpdateAvailable(null);
+            }}
+          >
+            <h3 className="modal-title">{t('about.updateAvailableTitle')}</h3>
+            <p className="muted" style={{ margin: '12px 0' }}>
+              {t('about.updateAvailableMsg', { version: updateAvailable })}
+            </p>
+            <div className="modal-actions">
+              <button className="btn" onClick={() => setUpdateAvailable(null)}>
+                {t('about.updateLater')}
+              </button>
+              <button
+                className="btn primary"
+                onClick={async () => {
+                  setUpdateAvailable(null);
+                  try {
+                    await api.installAppUpdate();
+                    await api.restartApp();
+                  } catch (e) {
+                    setError(String(e));
+                  }
+                }}
+              >
+                {t('about.updateNow')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

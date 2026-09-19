@@ -108,3 +108,20 @@ jobs:
       - name: Type check
         working-directory: app
         run: npx tsc --noEmit
+
+  scripts-checks:
+    name: Scripts Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # #284：仓库内脚本（workflow 配置校验 / PR 收尾逻辑）此前没有任何 CI 覆盖。
+      - name: Workflow 配置校验
+        run: python3 scripts/check-workflow-yaml.py
+
+      - name: scripts 单测
+        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v

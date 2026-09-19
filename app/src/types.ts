@@ -39,6 +39,13 @@ export interface ProjectStatus {
   orderIndex: number;
 }
 
+/** #278：关联 issue 的父/子链接（GitHub `parent` / `subIssues`，只读同步）。 */
+export interface IssueLink {
+  number: number;
+  title: string;
+  url: string;
+}
+
 export interface Task {
   issueKey: string;
   owner: string;
@@ -60,12 +67,18 @@ export interface Task {
   branch: string;
   /** #193：agent 工作分支（record_session 写入，与同步的 PR branch 分离）。 */
   workBranch: string;
+  /** #278：父 issue；无父为 null。 */
+  parentIssue: IssueLink | null;
+  /** #278：子 issue 列表；无子为空数组。 */
+  subIssues: IssueLink[];
   sessionId: string | null;
   sessionAgent: string | null;
   sessionAt: number | null;
   candidateDone: boolean;
   handoff: string;
   updatedAt: number | null;
+  /** #280：issue 创建时间（秒级时间戳，0 表示未知）。 */
+  createdAt: number;
   /** v0.3.16+：归属账号 id（指向 accounts.id）。 */
   accountId: number;
 }
@@ -103,6 +116,10 @@ export interface Settings {
   accounts: Account[];
   /** v0.3.17+：GitHub OAuth Device Flow 的 client_id（注册 OAuth App 后填一次）。 */
   oauthClientId: string;
+  /** v0.6.1 (#276)：每日自动检查更新。 */
+  autoCheckUpdates: boolean;
+  /** v0.6.1 (#276)：自动更新（静默下载 + 重启）。 */
+  autoUpdate: boolean;
 }
 
 /** v0.3.15+：`save_pat` / `test_pat` 命令的返回值。 */
