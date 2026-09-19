@@ -74,7 +74,7 @@ SELECT_COLS = (
     "status, project_status, assignees, mentioned, latest_comment_url, "
     "pr_number, pr_url, branch, work_branch, session_id, session_agent, "
     "session_at, handoff, candidate_done, account_id, updated_at, "
-    "parent_issue, sub_issues"
+    "parent_issue, sub_issues, created_at"
 )
 
 

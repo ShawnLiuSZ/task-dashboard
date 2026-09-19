@@ -654,6 +654,7 @@ fn sync_account_inner(
             branch,
             parent_issue,
             sub_issues,
+            created_at: crate::common::iso8601_to_secs(&t.created_at),
             updated_at: crate::common::iso8601_to_secs(&t.updated_at),
             exists,
         });

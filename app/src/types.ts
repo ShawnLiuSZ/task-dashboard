@@ -77,6 +77,8 @@ export interface Task {
   candidateDone: boolean;
   handoff: string;
   updatedAt: number | null;
+  /** #280：issue 创建时间（秒级时间戳，0 表示未知）。 */
+  createdAt: number;
   /** v0.3.16+：归属账号 id（指向 accounts.id）。 */
   accountId: number;
 }

@@ -46,6 +46,7 @@ function mkTask(partial: Partial<Task> & { issueKey: string }): Task {
     candidateDone: false,
     handoff: '',
     updatedAt: null,
+    createdAt: 0,
     accountId: 1,
     ...partial,
   };
