@@ -6,6 +6,15 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 立即同步后看板空白、重启才恢复（#285）**
+
+  - **#285 点「立即同步」后当前账号看板整体变空，必须重启 App 才恢复**：根因在产品层而非同步本身——同步完成后前端必跑一次 `listTasks`，而该查询在某些筛选下会直接报错或恒返回空集，于是「无数据」被写进 state 清空看板；`ownership` 是前端本地状态、重启即复位为「全部归属」，所以重启自然恢复。两处缺陷都在 `commands.rs::rows_to_tasks`（详见 [docs/issue-285-sync-empty-board.md](./issue-285-sync-empty-board.md)）。
+  - **缺陷 A（列数错位）**：归属筛选分支的 SELECT 漏了 #278 新增的 `parent_issue` / `sub_issues` 两列（27 → 25 列），但 mapper 固定按位置索引读 25/26 列 → `Row::get(25)` 越界 → `list_tasks` 整体报错，拖垮「分配给我 / 未分配 / 分配给他人」三种筛选。
+  - **缺陷 B（`meta.login` 恒空）**：`my-created` 过滤原读 `meta.login` 当「我」，但该字段只有 v0.3.15 单账号的 `save_pat` 会写，`add_account` / `device_login_poll` 从不写，多账号生产库实测恒为空串 → 该筛选无条件返回空集。
+  - **做法**：统一所有筛选分支走同一条 `TASK_SELECT_COLUMNS`（27 列）+ 同一个 `task_mapper`，消除「归属分支漏列」；新增 `my_logins` 从 `accounts` 表按视图范围解析 login 集（聚合取全部账号、单账号取过滤/激活账号，**不读 `meta.login`**）；`read_active_account_id` 抽出来兜底。`doSync`（#19）改为快照点击时筛选 + 走合并器 `loadWith` 刷新（避免与 `onSynced` 并发的 coalesced load 互相覆盖），并在同步后显式重拉 `project_statuses` / 自定义列（同步会清空重写 `project_statuses`，沿用旧列也会让新任务落到任何列之外）。
+  - **无 schema 变更**：不碰 SQLite、不新增列、不改迁移。
+  - **验证**：新增 3 个 Rust 回归测试（`ownership_filter_returns_matching_rows_without_column_error` / `my_created_uses_account_login_not_legacy_meta_login` / `active_account_id_drives_default_filter`）——复现并修复两缺陷，含聚合视图与「账号 login 为空返回空集」边界；`cargo test --lib` 命令模块 9 例全绿、`cargo clippy -- -D warnings` 0 warning、`tsc --noEmit` 0 error、`npm run build` ✅、`npm test` 13 文件 136 例、`i18n:check` 中英各 356 key、`npm run lint` 18 warning（未超 `--max-warnings 20`）、`prettier --check` ✅、`scripts/check-mcp-columns.py` ✅、`scripts/check-doc-links.py` ✅。
+
 - **未发布（Unreleased）— 配置项目开源协议（#281）**
 
   - **#281 仓库没有任何协议声明**：根目录无 `LICENSE`、`package.json` 与 `Cargo.toml` 也都没有 `license` 字段。法律上这等于**默认保留全部权利（all rights reserved）**——别人能 fork、能看，但没有任何条款允许复制、修改或分发，属 GitHub 上最常见的合规漏洞。协议声明散落在四个载体（`LICENSE` 文件、两个包管理器的 `license` 字段、README、CONTRIBUTING），任一缺失都会让下游工具读不到。详见 [docs/issue-281-license.md](./issue-281-license.md)。
