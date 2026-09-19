@@ -39,7 +39,7 @@ CREATE TABLE tasks (
   session_at INTEGER, handoff TEXT DEFAULT '', candidate_done INTEGER DEFAULT 0,
   stale INTEGER DEFAULT 0, updated_at INTEGER, synced_at INTEGER, work_branch TEXT DEFAULT '',
   parent_issue TEXT DEFAULT '', sub_issues TEXT DEFAULT '',
-  account_id INTEGER, UNIQUE(repo, number, account_id));
+  account_id INTEGER, created_at INTEGER DEFAULT 0, UNIQUE(repo, number, account_id));
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE label_mappings (
   id INTEGER PRIMARY KEY AUTOINCREMENT, org TEXT, repo TEXT, label TEXT, status TEXT);

@@ -1172,6 +1172,7 @@ impl GitHubClient {
                     author,
                     comments,
                     is_pr: false,
+                    created_at: String::new(),
                 });
             }
             if items["pageInfo"]["hasNextPage"].as_bool() == Some(true) {
