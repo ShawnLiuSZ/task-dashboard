@@ -785,6 +785,7 @@ fn base_task_upsert(parent_issue: String, sub_issues: String, exists: bool) -> d
         branch: String::new(),
         parent_issue,
         sub_issues,
+        created_at: 0,
         updated_at: 1,
         exists,
     }
