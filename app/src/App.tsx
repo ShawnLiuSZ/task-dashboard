@@ -434,9 +434,13 @@ function BoardApp() {
   }, [query, repo, ownership]);
 
   // v0.3.16+：切换激活账号（单账号视图）。#259：同时切回看板视图。
+  // #286：切换账号时重置搜索与仓库筛选——搜索词在新账号下无匹配会导致看板为空。
   const handleSwitchAccount = async (id: number) => {
     setError(null);
     setNav('board');
+    setQuery('');
+    setRepo('');
+    setHiddenAfterSync(0);
     try {
       await api.setActiveAccount(id);
       await loadSettings();
