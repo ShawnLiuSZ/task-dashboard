@@ -167,101 +167,109 @@ function BoardApp() {
     }
   }, []);
 
-  const loadProjectStatuses = useCallback(async () => {
-    try {
-      if (!settings) return;
-      const activeId = settings.activeAccountId;
-      if (!activeId) return;
+  // #285：可显式传入 settings 快照。同步会刷新 settings（activeAccountId /
+  // viewMode 变更），doSync 里 await 后闭包内的 settings 还是旧值，必须显式传。
+  const loadProjectStatuses = useCallback(
+    async (s: SettingsT | null = settings) => {
+      try {
+        if (!s) return;
+        const activeId = s.activeAccountId;
+        if (!activeId) return;
 
-      // viewMode="all" 时聚合所有账号的 project_statuses，按字母序合并去重
-      // （聚合视图下每个账号可能属于不同项目，无法用单一 order_index）
-      // v0.3.49 (#145)：并行拉取 + 单账号失败隔离（该账号列缺失不断整板）。
-      if (settings.viewMode === 'all') {
-        const accounts = settings.accounts ?? [];
-        const results = await Promise.all(
-          accounts
-            .filter((a) => a.id)
-            .map((a) =>
-              api.listProjectStatuses(a.id).catch((e) => {
-                console.warn(`加载账号 @${a.login} 的项目状态失败:`, e);
-                return [] as ProjectStatus[];
+        // viewMode="all" 时聚合所有账号的 project_statuses，按字母序合并去重
+        // （聚合视图下每个账号可能属于不同项目，无法用单一 order_index）
+        // v0.3.49 (#145)：并行拉取 + 单账号失败隔离（该账号列缺失不断整板）。
+        if (s.viewMode === 'all') {
+          const accounts = s.accounts ?? [];
+          const results = await Promise.all(
+            accounts
+              .filter((a) => a.id)
+              .map((a) =>
+                api.listProjectStatuses(a.id).catch((e) => {
+                  console.warn(`加载账号 @${a.login} 的项目状态失败:`, e);
+                  return [] as ProjectStatus[];
+                }),
+              ),
+          );
+          const merged = new Map<string, ProjectStatus>();
+          for (const list of results) {
+            for (const ps of list) {
+              // 去重：同名状态只保留第一个（按首次出现顺序）
+              if (!merged.has(ps.name)) merged.set(ps.name, ps);
+            }
+          }
+          setProjectStatuses([...merged.values()].sort((a, b) => a.name.localeCompare(b.name)));
+          return;
+        }
+
+        // 单账号视图：取条目数最多的项目（主项目）的状态，按 order_index 排序
+        const all = await api.listProjectStatuses(activeId);
+        const byProject = new Map<string, typeof all>();
+        for (const ps of all) {
+          const arr = byProject.get(ps.projectGithubId) ?? [];
+          arr.push(ps);
+          byProject.set(ps.projectGithubId, arr);
+        }
+        let best: typeof all = [];
+        for (const arr of byProject.values()) {
+          if (arr.length > best.length) best = arr;
+        }
+        // 确保按 order_index 正序（后端已按此排序，但重新过滤后可能丢失）
+        best.sort((a, b) => a.orderIndex - b.orderIndex);
+        setProjectStatuses(best);
+      } catch (e) {
+        // 项目状态决定看板列，失败必须可见，否则列静默缺失用户无从判断。
+        console.warn('加载项目状态选项失败:', e);
+        setError(String(e));
+      }
+    },
+    [settings],
+  );
+
+  // v0.3.28+：加载自定义列配置。#285：同 loadProjectStatuses，可显式传 settings。
+  const loadAccountColumns = useCallback(
+    async (s: SettingsT | null = settings) => {
+      try {
+        if (!s) return;
+        const activeId = s.activeAccountId;
+        if (!activeId) {
+          setAccountColumns([]);
+          return;
+        }
+
+        if (s.viewMode === 'all') {
+          // 聚合视图：合并所有账号的自定义列（按 col_key 去重）
+          // v0.3.49 (#145)：并行拉取 + 单账号失败隔离。
+          const accounts = (s.accounts ?? []).filter((a) => a.id);
+          const results = await Promise.all(
+            accounts.map((a) =>
+              api.listAccountColumns(a.id).catch((e) => {
+                console.warn(`加载账号 @${a.login} 的自定义列失败:`, e);
+                return [] as AccountColumn[];
               }),
             ),
-        );
-        const merged = new Map<string, ProjectStatus>();
-        for (const list of results) {
-          for (const ps of list) {
-            // 去重：同名状态只保留第一个（按首次出现顺序）
-            if (!merged.has(ps.name)) merged.set(ps.name, ps);
+          );
+          const merged = new Map<string, AccountColumn>();
+          for (const list of results) {
+            for (const col of list) {
+              if (!merged.has(col.colKey)) merged.set(col.colKey, col);
+            }
           }
+          setAccountColumns([...merged.values()].sort((a, b) => a.orderIndex - b.orderIndex));
+          return;
         }
-        setProjectStatuses([...merged.values()].sort((a, b) => a.name.localeCompare(b.name)));
-        return;
-      }
 
-      // 单账号视图：取条目数最多的项目（主项目）的状态，按 order_index 排序
-      const all = await api.listProjectStatuses(activeId);
-      const byProject = new Map<string, typeof all>();
-      for (const ps of all) {
-        const arr = byProject.get(ps.projectGithubId) ?? [];
-        arr.push(ps);
-        byProject.set(ps.projectGithubId, arr);
+        // 单账号视图
+        const cols = await api.listAccountColumns(activeId);
+        setAccountColumns(cols.sort((a, b) => a.orderIndex - b.orderIndex));
+      } catch (e) {
+        console.warn('加载自定义列配置失败:', e);
+        // 同上：自定义列缺失会让看板列不完整，失败需可见。
+        setError(String(e));
       }
-      let best: typeof all = [];
-      for (const arr of byProject.values()) {
-        if (arr.length > best.length) best = arr;
-      }
-      // 确保按 order_index 正序（后端已按此排序，但重新过滤后可能丢失）
-      best.sort((a, b) => a.orderIndex - b.orderIndex);
-      setProjectStatuses(best);
-    } catch (e) {
-      // 项目状态决定看板列，失败必须可见，否则列静默缺失用户无从判断。
-      console.warn('加载项目状态选项失败:', e);
-      setError(String(e));
-    }
-  }, [settings]);
-
-  // v0.3.28+：加载自定义列配置
-  const loadAccountColumns = useCallback(async () => {
-    try {
-      if (!settings) return;
-      const activeId = settings.activeAccountId;
-      if (!activeId) {
-        setAccountColumns([]);
-        return;
-      }
-
-      if (settings.viewMode === 'all') {
-        // 聚合视图：合并所有账号的自定义列（按 col_key 去重）
-        // v0.3.49 (#145)：并行拉取 + 单账号失败隔离。
-        const accounts = (settings.accounts ?? []).filter((a) => a.id);
-        const results = await Promise.all(
-          accounts.map((a) =>
-            api.listAccountColumns(a.id).catch((e) => {
-              console.warn(`加载账号 @${a.login} 的自定义列失败:`, e);
-              return [] as AccountColumn[];
-            }),
-          ),
-        );
-        const merged = new Map<string, AccountColumn>();
-        for (const list of results) {
-          for (const col of list) {
-            if (!merged.has(col.colKey)) merged.set(col.colKey, col);
-          }
-        }
-        setAccountColumns([...merged.values()].sort((a, b) => a.orderIndex - b.orderIndex));
-        return;
-      }
-
-      // 单账号视图
-      const cols = await api.listAccountColumns(activeId);
-      setAccountColumns(cols.sort((a, b) => a.orderIndex - b.orderIndex));
-    } catch (e) {
-      console.warn('加载自定义列配置失败:', e);
-      // 同上：自定义列缺失会让看板列不完整，失败需可见。
-      setError(String(e));
-    }
-  }, [settings]);
+    },
+    [settings],
+  );
 
   useEffect(() => {
     void load();
@@ -367,12 +375,13 @@ function BoardApp() {
     setSyncing(true);
     setError(null);
     setHiddenAfterSync(0);
+    // #285：点击瞬间快照筛选。同步会刷新 settings（activeAccountId / viewMode），
+    // ownership / accountFilter 靠渲染周期传播，同步返回后再读闭包值是过期的。
+    const ow = ownership;
+    const af = accountFilter;
     // #178：同步前快照。归属筛选是后端维度——生效时用无归属全量做 diff 基准，
     // 否则后端筛掉的旧任务会被误判为“新增”。
-    const needPool = Boolean(ownership);
-    const beforePool = needPool
-      ? await api.listTasks(undefined, accountFilter).catch(() => tasks)
-      : tasks;
+    const beforePool = ow ? await api.listTasks(undefined, af).catch(() => tasks) : tasks;
     const before = snapshotTasks(beforePool);
     try {
       const r = await api.syncNow();
@@ -383,13 +392,21 @@ function BoardApp() {
         `${t('sync.result', { added: r.added, updated: r.updated, done: r.candidateDone })}${scope}${prune}`,
         r.warning,
       );
-      const fresh = await api.listTasks(ownership || undefined, accountFilter);
-      applyTasks(fresh);
-      await loadSettings();
-      const pool = needPool
-        ? await api.listTasks(undefined, accountFilter).catch(() => fresh)
-        : fresh;
-      setHiddenAfterSync(countHiddenChanged(before, pool, { repo, query, ownership }));
+      // #285：同步会先清空、再按 GraphQL 结果重写该账号的 project_statuses
+      // （sync.rs::clear_project_statuses → upsert_project_statuses）。项目状态列
+      // 可能整体换掉，沿用旧列渲染就会让新状态的任务落到任何列之外——
+      // 表现为「同步后看板为空、重启恢复」（重启会重拉列）。
+      const freshSettings = await api.getSettings().catch(() => settings);
+      setSettings(freshSettings);
+      await Promise.all([loadProjectStatuses(freshSettings), loadAccountColumns(freshSettings)]);
+      // #19：刷新走合并器，不直连 listTasks + applyTasks——onSynced 事件会并发
+      // 触发 load()，直连写 state 可能被并发的 coalesced load 覆盖回旧数据。
+      await loadWith(ow, af);
+      // #178：被新筛选隐藏的数量（diff 基准恒为无归属全量）。
+      const pool = await api.listTasks(undefined, af).catch(() => []);
+      setHiddenAfterSync(
+        pool.length ? countHiddenChanged(before, pool, { repo, query, ownership: ow }) : 0,
+      );
     } catch (e) {
       setError(String(e));
     } finally {
