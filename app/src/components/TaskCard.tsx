@@ -106,7 +106,15 @@ function TaskCard({ task, active, onSelectKey, repoIndex, showGhStatus }: Props)
       {task.createdAt > 0 && (
         <div className="meta-row">
           <span className="muted small">
-            {t('card.createdAt')}: {new Date(task.createdAt * 1000).toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}
+            {t('card.createdAt')}:{' '}
+            {new Date(task.createdAt * 1000).toLocaleString(undefined, {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+            })}
           </span>
         </div>
       )}
