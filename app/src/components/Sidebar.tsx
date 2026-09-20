@@ -2,7 +2,8 @@ import { useT } from '../i18n';
 import type { Account } from '../types';
 
 /** 主区视图键：由侧边栏选中项驱动。 */
-export type NavKey = 'notes' | 'board' | 'sessions' | 'settings' | 'agents' | 'synclogs' | 'accounts';
+export type NavKey =
+  'notes' | 'board' | 'sessions' | 'settings' | 'agents' | 'synclogs' | 'accounts';
 
 interface Props {
   accounts: Account[];
@@ -49,8 +50,7 @@ const ICON = {
     'M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z M12 8v4 M9 11h.01 M15 11h.01 M9 14c1.5 1.2 4.5 1.2 6 0',
   synclogs:
     'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z M14 2v6h6 M16 13H8 M16 17H8 M10 9H8',
-  sessions:
-    'M9 11l3 3L22 4 M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11',
+  sessions: 'M9 11l3 3L22 4 M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11',
   about: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z M12 16v-4 M12 8h.01',
 };
 
