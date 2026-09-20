@@ -394,6 +394,8 @@ pub fn run() {
             commands::record_handoff,
             // #279：创建 / 切换 issue 分支后纠正 work_branch（agent 显式调用）。
             commands::set_work_branch,
+            // #287：列出活跃会话（session_id 非空的任务）。
+            commands::list_active_sessions,
             // #214：认领任务（首个 GitHub 写回操作，用户确认后显式调用）。
             commands::claim_issue,
             // #215：详情 Project 状态写回（用户确认后显式调用）。

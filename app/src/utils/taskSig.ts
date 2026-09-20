@@ -29,6 +29,7 @@ export function taskListSignature(tasks: Task[]): string {
           t.sessionAt ?? 0,
           t.handoff,
           t.workBranch,
+          t.workDir,
           t.projectStatus,
           t.branch,
           t.updatedAt ?? 0,

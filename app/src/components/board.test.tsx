@@ -38,6 +38,7 @@ function mkTask(partial: Partial<Task> & { issueKey: string }): Task {
     prUrl: '',
     branch: '',
     workBranch: '',
+    workDir: '',
     parentIssue: null,
     subIssues: [],
     sessionId: null,

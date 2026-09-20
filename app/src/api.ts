@@ -134,6 +134,8 @@ export const api = {
   clearApiLogs: () => invoke<number>('clear_api_logs'),
   // v0.3.24+：记事本管理。
   listNotes: () => invoke<Note[]>('list_notes'),
+  // #287：列出活跃会话（session_id 非空的任务）。
+  listActiveSessions: () => invoke<Task[]>('list_active_sessions'),
   addNote: (content: string, label?: string) =>
     invoke<Note>('add_note', { content, label: label ?? null }),
   updateNote: (id: number, content: string) => invoke<Note>('update_note', { id, content }),
