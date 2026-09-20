@@ -40,7 +40,7 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 | `list_my_tasks` | `status?` / `ownership?` | 列出看板任务（可按四态 / 归属过滤） |
 | `get_task_status` | `issue` | 查某任务当前状态 + 已记录的 session / handoff |
 | `update_task_status` | `issue`, `status` | 改本地看板状态 |
-| `record_session` | `issue`, `session_id`, `agent?`, `branch?` | 记录中断会话 id；`branch` 非空则一并记录当前工作分支（写 `work_branch`，与同步的 PR `branch` 分离） |
+| `record_session` | `issue`, `session_id`, `agent?`, `branch?`, `work_dir?` | 记录中断会话 id；`branch` 非空则一并记录当前工作分支（写 `work_branch`，与同步的 PR `branch` 分离）；`work_dir` 非空则一并记录工作目录（写 `work_dir`） |
 | `record_handoff` | `issue`, `text` | 记录「交接任务」详情 |
 | `clear_session` | `issue` | 任务完成后清空 session 字段（保留审计） |
 | `set_work_branch` | `issue`, `branch` | #279：创建 / 切换 issue 分支后纠正 `work_branch`（只写该列、不碰 PR `branch`；`branch` 为空报错） |
@@ -56,6 +56,7 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 
 - `branch` — 该 issue 关联 PR 的源分支（同步拉取，agent 不要改）。
 - `work_branch` — agent 记录的工作分支（`record_session` / `set_work_branch` 写入，同步不覆盖）。
+- `work_dir` — #287：agent 记录的工作目录（`record_session` 写入，同步不覆盖）。
 - `parent_issue` — #278：父 issue 的 JSON 对象串 `{"number","title","url"}`；空串 = 无父。
 - `sub_issues` — #278：子 issue 的 JSON 数组串；空串 = 无子。
 

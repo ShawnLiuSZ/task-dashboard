@@ -256,9 +256,10 @@ async function autoStart(ctx, issueKey) {
       return;
     }
     const branch = await currentBranch($);
+    const workDir = repoDir || ".";
     const [upd, rec] = await mcpCall(bin, [
       { name: "update_task_status", args: { issue: issueKey, status: "doing" } },
-      { name: "record_session", args: { issue: issueKey, session_id: sid, agent: "opencode", branch } },
+      { name: "record_session", args: { issue: issueKey, session_id: sid, agent: "opencode", branch, work_dir: workDir } },
     ]);
     if (upd.error || rec.error) {
       await applog(client, "warn", `[taskboard] 自动执行失败 ${issueKey}：${upd.error || rec.error}（可重试）`);
@@ -313,7 +314,7 @@ export const TaskboardPlugin = async ({ directory, $, client }) => {
     },
 
     // record_session 调用前补参：session_id 用真实会话 id（覆盖编造值）；
-    // agent 缺省 opencode；branch 缺省且 git 可取时填入。
+    // agent 缺省 opencode；branch 缺省且 git 可取时填入；work_dir 缺省用项目目录。
     "tool.execute.before": async (input, output) => {
       if (!isRecordSessionTool(input && input.tool)) return;
       const args = (output && output.args) || {};
@@ -325,6 +326,9 @@ export const TaskboardPlugin = async ({ directory, $, client }) => {
       if ((!args.branch || !String(args.branch).trim()) && $) {
         const br = await currentBranch($);
         if (br) args.branch = br;
+      }
+      if (!args.work_dir || !String(args.work_dir).trim()) {
+        args.work_dir = repoDir || ".";
       }
     },
 

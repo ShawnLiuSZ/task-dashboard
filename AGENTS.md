@@ -255,7 +255,7 @@ CI：`/.github/workflows/i18n-check.yml` 在 PR 时自动校验 i18n 一致性�
 
 | 时机 | 动作 |
 |---|---|
-| 开始处理某 issue | `update_task_status(issue, "处理中")` |
+| 开始处理某 issue | `update_task_status(issue, "处理中")` + `record_session(issue, <id>, "<agent-name>", branch=<分支>, work_dir=<项目目录>)` |
 | 中途停止 / 切换任务 | `record_session(issue, <id>, "<agent-name>")` |
 | 用户说「生成交接任务」 | `record_handoff(issue, <详情>)` |
 | 任务完成 | `update_task_status(issue, "已完成")` + `clear_session(issue)` |

@@ -38,7 +38,7 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 /// #171：`work_branch` 为 agent 记录的工作分支，与同步的 PR `branch` 分离。
 /// #278：`parent_issue` / `sub_issues` 为 GitHub 父子关系（与 DB 一致，存 JSON 串；
 /// 空串表示无关联）。MCP 不做二次解析——agent 直接读 JSON，两个 MCP 实现语义一致。
-const SELECT_COLS: &str = "issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status, assignees, mentioned, latest_comment_url, pr_number, pr_url, branch, work_branch, session_id, session_agent, session_at, handoff, candidate_done, account_id, updated_at, parent_issue, sub_issues, created_at";
+const SELECT_COLS: &str = "issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status, assignees, mentioned, latest_comment_url, pr_number, pr_url, branch, work_branch, work_dir, session_id, session_agent, session_at, handoff, candidate_done, account_id, updated_at, parent_issue, sub_issues, created_at";
 
 fn db_path_for_mcp() -> Result<std::path::PathBuf, String> {
     if let Ok(p) = std::env::var("TASKBOARD_DB") {
@@ -94,35 +94,36 @@ fn row_to_value(r: &rusqlite::Row) -> rusqlite::Result<Value> {
     m.insert("pr_url".into(), Value::String(r.get::<_, String>(14)?)); // 14
     m.insert("branch".into(), Value::String(r.get::<_, String>(15)?)); // 15
     m.insert("work_branch".into(), Value::String(r.get::<_, String>(16)?)); // 16
-    let sid: Option<String> = r.get(17)?; // 17 可空
+    m.insert("work_dir".into(), Value::String(r.get::<_, String>(17)?)); // 17
+    let sid: Option<String> = r.get(18)?; // 18 可空
     m.insert(
         "session_id".into(),
         sid.map(Value::String).unwrap_or(Value::Null),
     );
-    let sag: Option<String> = r.get(18)?; // 18 可空
+    let sag: Option<String> = r.get(19)?; // 19 可空
     m.insert(
         "session_agent".into(),
         sag.map(Value::String).unwrap_or(Value::Null),
     );
     m.insert(
         "session_at".into(),
-        match r.get::<_, Option<i64>>(19)? {
+        match r.get::<_, Option<i64>>(20)? {
             Some(s) => Value::Number(s.into()),
             None => Value::Null,
         },
     );
-    m.insert("handoff".into(), Value::String(r.get::<_, String>(20)?)); // 20
+    m.insert("handoff".into(), Value::String(r.get::<_, String>(21)?)); // 21
     m.insert(
         "candidate_done".into(),
-        Value::Number(r.get::<_, i64>(21)?.into()), // 21
-    );
-    m.insert(
-        "account_id".into(),
         Value::Number(r.get::<_, i64>(22)?.into()), // 22
     );
     m.insert(
+        "account_id".into(),
+        Value::Number(r.get::<_, i64>(23)?.into()), // 23
+    );
+    m.insert(
         "updated_at".into(),
-        match r.get::<_, Option<i64>>(23)? {
+        match r.get::<_, Option<i64>>(24)? {
             Some(s) => Value::Number(s.into()),
             None => Value::Null,
         },
@@ -131,12 +132,12 @@ fn row_to_value(r: &rusqlite::Row) -> rusqlite::Result<Value> {
     // 与 Python 侧 `dict(row)` 的取值方式一致。
     m.insert(
         "parent_issue".into(),
-        Value::String(r.get::<_, String>(24)?), // 24
+        Value::String(r.get::<_, String>(25)?), // 25
     );
-    m.insert("sub_issues".into(), Value::String(r.get::<_, String>(25)?)); // 25
+    m.insert("sub_issues".into(), Value::String(r.get::<_, String>(26)?)); // 26
     m.insert(
         "created_at".into(),
-        Value::Number(r.get::<_, i64>(26)?.into()), // 26
+        Value::Number(r.get::<_, i64>(27)?.into()), // 27
     );
     Ok(Value::Object(m))
 }
@@ -314,6 +315,7 @@ fn tool_record_session(
     session_id: &str,
     agent: Option<&str>,
     branch: Option<&str>,
+    work_dir: Option<&str>,
 ) -> Result<Value, String> {
     let key = parse_issue_ref(issue)?;
     let sid = session_id.trim();
@@ -322,9 +324,8 @@ fn tool_record_session(
     }
     let agent = agent.unwrap_or_default().trim().to_string();
     let now = crate::sync::now_secs();
-    // v0.3.49 (#147)：SQL 走公共模块（与 commands.rs 同一实现）；branch 非空才写。
     let (_, pulled) = write_with_on_demand(conn, &key, issue, || {
-        crate::common::touch_session(conn, &key, sid, Some(&agent), now, branch)
+        crate::common::touch_session(conn, &key, sid, Some(&agent), now, branch, work_dir)
     })?;
     Ok(json!({ "ok": true, "issue_key": key, "pulled": pulled }))
 }
@@ -460,7 +461,7 @@ fn call_tool(conn: &Connection, name: &str, args: &Map<String, Value>) -> Result
         "record_session" => {
             let issue = get("issue").ok_or("缺少 issue 参数")?;
             let sid = get("session_id").ok_or("缺少 session_id 参数")?;
-            tool_record_session(conn, &issue, &sid, get("agent").as_deref(), get("branch").as_deref())
+            tool_record_session(conn, &issue, &sid, get("agent").as_deref(), get("branch").as_deref(), get("work_dir").as_deref())
         }
         "set_work_branch" => {
             let issue = get("issue").ok_or("缺少 issue 参数")?;
@@ -538,14 +539,15 @@ fn tools_list() -> Value {
         },
         {
             "name": "record_session",
-            "description": "记录中断会话的 session id 到该任务卡片（session_id / session_agent / session_at；branch 非空则一并记录工作分支到 work_branch，与同步的 PR branch 分离）。只写本地 SQLite，不碰 GitHub。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。",
+            "description": "记录中断会话的 session id 到该任务卡片（session_id / session_agent / session_at；branch 非空则一并记录工作分支到 work_branch，work_dir 非空则一并记录工作目录）。只写本地 SQLite，不碰 GitHub。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "issue": { "type": "string", "description": "issue 引用" },
                     "session_id": { "type": "string", "description": "会话 id（如 claude-code / codex 的会话标识）" },
                     "agent": { "type": "string", "description": "可选，来源 agent：claude-code / codex / opencode / zcode / workbuddy …" },
-                    "branch": { "type": "string", "description": "可选，当前工作分支（如 git branch --show-current），非空才写入 work_branch 列" }
+                    "branch": { "type": "string", "description": "可选，当前工作分支（如 git branch --show-current），非空才写入 work_branch 列" },
+                    "work_dir": { "type": "string", "description": "可选，当前工作目录（项目路径），非空才写入 work_dir 列" }
                 },
                 "required": ["issue", "session_id"]
             }
@@ -871,7 +873,7 @@ mod tests {
                 issue_key TEXT, owner TEXT, repo TEXT, number INTEGER, title TEXT,
                 url TEXT, issue_state TEXT, ownership TEXT, status TEXT, project_status TEXT,
                 assignees TEXT, mentioned INTEGER, latest_comment_url TEXT, pr_number INTEGER,
-                pr_url TEXT, branch TEXT, work_branch TEXT, session_id TEXT, session_agent TEXT,
+                pr_url TEXT, branch TEXT, work_branch TEXT, work_dir TEXT, session_id TEXT, session_agent TEXT,
                 session_at INTEGER, handoff TEXT, candidate_done INTEGER, account_id INTEGER,
                 updated_at INTEGER, parent_issue TEXT, sub_issues TEXT, created_at INTEGER
             );",
@@ -886,13 +888,13 @@ mod tests {
             "INSERT INTO tasks (
                 issue_key, owner, repo, number, title, url, issue_state, ownership, status,
                 project_status, assignees, mentioned, latest_comment_url, pr_number, pr_url,
-                branch, work_branch, session_id, session_agent, session_at, handoff,
+                branch, work_branch, work_dir, session_id, session_agent, session_at, handoff,
                 candidate_done, account_id, updated_at, parent_issue, sub_issues, created_at
             ) VALUES (
                 'fad-backend#1247', 'FoodsUp-Inc', 'fad-backend', 1247, '修复支付回调',
                 'https://github.com/FoodsUp-Inc/fad-backend/issues/1247', 'open', 'notassignee',
                 'doing', 'In Progress', 'alice', 1, 'www.comment', 42, 'www.pr',
-                'main', 'feature/pay', 'sess-1', 'claude-code', 1700000000, 'handoff-1',
+                'main', 'feature/pay', '/Users/dev/fad-backend', 'sess-1', 'claude-code', 1700000000, 'handoff-1',
                 0, 1, 1700000100,
                 '{\"number\":900,\"title\":\"支付重构\",\"url\":\"https://github.com/FoodsUp-Inc/fad-backend/issues/900\"}',
                 '[{\"number\":1300,\"title\":\"支付回调子任务\",\"url\":\"https://github.com/FoodsUp-Inc/fad-backend/issues/1300\"}]',

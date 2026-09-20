@@ -38,6 +38,7 @@ CREATE TABLE tasks (
   pr_url TEXT, branch TEXT DEFAULT '', author TEXT, session_id TEXT, session_agent TEXT,
   session_at INTEGER, handoff TEXT DEFAULT '', candidate_done INTEGER DEFAULT 0,
   stale INTEGER DEFAULT 0, updated_at INTEGER, synced_at INTEGER, work_branch TEXT DEFAULT '',
+  work_dir TEXT DEFAULT '',
   parent_issue TEXT DEFAULT '', sub_issues TEXT DEFAULT '',
   account_id INTEGER, created_at INTEGER DEFAULT 0, UNIQUE(repo, number, account_id));
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

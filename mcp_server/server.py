@@ -72,7 +72,7 @@ STATUS_CN = {
 SELECT_COLS = (
     "issue_key, owner, repo, number, title, url, issue_state, ownership, "
     "status, project_status, assignees, mentioned, latest_comment_url, "
-    "pr_number, pr_url, branch, work_branch, session_id, session_agent, "
+    "pr_number, pr_url, branch, work_branch, work_dir, session_id, session_agent, "
     "session_at, handoff, candidate_done, account_id, updated_at, "
     "parent_issue, sub_issues, created_at"
 )
@@ -578,7 +578,7 @@ def tool_update_task_status(issue, status):
     return {"ok": True, "issue_key": key, "status": sk, "pulled": pulled}
 
 
-def tool_record_session(issue, session_id, agent=None, branch=None):
+def tool_record_session(issue, session_id, agent=None, branch=None, work_dir=None):
     key = parse_issue_ref(issue)
     sid = (session_id or "").strip()
     if not sid:
@@ -586,10 +586,21 @@ def tool_record_session(issue, session_id, agent=None, branch=None):
     # v0.4.1 (#250)：本地未命中时按需拉取。
     pulled = _ensure_before_write(key, issue)
     br = (branch or "").strip()
-    if br:
+    wd = (work_dir or "").strip()
+    if br and wd:
+        cur = conn().execute(
+            "UPDATE tasks SET session_id=?, session_agent=?, session_at=?, work_branch=?, work_dir=? WHERE issue_key=?",
+            (sid, (agent or "").strip(), int(time.time()), br, wd, key),
+        )
+    elif br:
         cur = conn().execute(
             "UPDATE tasks SET session_id=?, session_agent=?, session_at=?, work_branch=? WHERE issue_key=?",
             (sid, (agent or "").strip(), int(time.time()), br, key),
+        )
+    elif wd:
+        cur = conn().execute(
+            "UPDATE tasks SET session_id=?, session_agent=?, session_at=?, work_dir=? WHERE issue_key=?",
+            (sid, (agent or "").strip(), int(time.time()), wd, key),
         )
     else:
         cur = conn().execute(
@@ -778,7 +789,7 @@ TOOLS = [
     },
     {
         "name": "record_session",
-        "description": "记录中断会话的 session id 到该任务卡片（session_id / session_agent / session_at；branch 非空则一并记录工作分支到 work_branch，与同步的 PR branch 分离）。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。"
+        "description": "记录中断会话的 session id 到该任务卡片（session_id / session_agent / session_at；branch 非空则一并记录工作分支到 work_branch，work_dir 非空则一并记录工作目录）。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。"
         "只写本地 SQLite，不碰 GitHub。",
         "inputSchema": {
             "type": "object",
@@ -792,6 +803,10 @@ TOOLS = [
                 "branch": {
                     "type": "string",
                     "description": "可选，当前工作分支（如 git branch --show-current），非空才写入 work_branch 列",
+                },
+                "work_dir": {
+                    "type": "string",
+                    "description": "可选，当前工作目录（项目路径），非空才写入 work_dir 列",
                 },
             },
             "required": ["issue", "session_id"],

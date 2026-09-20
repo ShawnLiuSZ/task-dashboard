@@ -61,6 +61,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   branch         TEXT NOT NULL DEFAULT '',
   -- agent 通过 record_session 写入的工作分支；同步不碰（#171）。
   work_branch    TEXT NOT NULL DEFAULT '',
+  -- #287：agent 通过 record_session 写入的工作目录（项目路径）。
+  work_dir       TEXT NOT NULL DEFAULT '',
   -- agent 写入的交接任务详情。
   handoff        TEXT NOT NULL DEFAULT '',
   updated_at     INTEGER,
@@ -426,6 +428,15 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
             }
         }
     }
+    // #287：工作目录列（agent 通过 record_session 写入的项目路径）。
+    if let Err(e) = conn.execute(
+        "ALTER TABLE tasks ADD COLUMN work_dir TEXT NOT NULL DEFAULT ''",
+        [],
+    ) {
+        if crate::common::verbose_enabled() {
+            crate::tlog!("[db] work_dir 列迁移跳过（已存在）: {}", e);
+        }
+    }
     // #280：issue 创建时间。同款教训——必须放在 migrate_tasks_v2_rebuild 之后
     // （重建的 INSERT..SELECT 白名单是写死的，会把新列丢掉），且不能只写在
     // migrate_legacy_alters（仅 user_version<1 触发）。
@@ -467,6 +478,8 @@ fn migrate_legacy_alters(conn: &Connection) {
         "ALTER TABLE tasks ADD COLUMN branch TEXT NOT NULL DEFAULT ''",
         // v0.3.53 (#171)：agent 通过 record_session 写入的工作分支（同步不碰）。
         "ALTER TABLE tasks ADD COLUMN work_branch TEXT NOT NULL DEFAULT ''",
+        // #287：agent 通过 record_session 写入的工作目录（项目路径）。
+        "ALTER TABLE tasks ADD COLUMN work_dir TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE tasks ADD COLUMN handoff TEXT NOT NULL DEFAULT ''",
         // v0.3.16：任务归属账号；旧库默认 1（迁移会先插一条 accounts，再保证该 id 命中）。
         "ALTER TABLE tasks ADD COLUMN account_id INTEGER NOT NULL DEFAULT 1",
@@ -529,6 +542,7 @@ fn migrate_tasks_v2_rebuild(conn: &Connection) -> Result<(), String> {
           pr_url         TEXT NOT NULL DEFAULT '',
           branch         TEXT NOT NULL DEFAULT '',
           work_branch    TEXT NOT NULL DEFAULT '',
+          work_dir       TEXT NOT NULL DEFAULT '',
           handoff        TEXT NOT NULL DEFAULT '',
           updated_at     INTEGER,
           synced_at      INTEGER NOT NULL,

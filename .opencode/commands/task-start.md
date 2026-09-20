@@ -13,7 +13,7 @@ description: 开始处理某 issue，自动更新看板并记录会话（#279：
 严格按顺序执行（MCP 工具名为 `taskboard_` 前缀）：
 1. 调 `taskboard_get_task_status` 查该任务现状（确认 issue_key 正确）。
 2. 调 `taskboard_update_task_status`，`issue=$ARGUMENTS`，`status=处理中`。
-3. 调 `taskboard_record_session`，`issue=$ARGUMENTS`（`session_id` / `agent` / `branch` 由 TaskBoard 插件自动填充，不要编造 session id，直接调即可）。
+3. 调 `taskboard_record_session`，`issue=$ARGUMENTS`（`session_id` / `agent` / `branch` / `work_dir` 由 TaskBoard 插件自动填充，不要编造 session id，直接调即可）。
 4. #279 兜底：若你**先**跑了本命令（当时在 develop/master）**后**才切到 issue 分支，切完后**再调一次** `taskboard_set_work_branch`，`issue=$ARGUMENTS`，`branch=<当前 issue 分支>`，纠正 `work_branch`。
 
 任务：$ARGUMENTS

@@ -31,6 +31,8 @@ pub struct Task {
     pub branch: String,
     /// #193：agent 工作分支（record_session 写入，与同步的 PR branch 分离）。
     pub work_branch: String,
+    /// #287：agent 工作目录（record_session 写入的项目路径）。
+    pub work_dir: String,
     /// #278：父 issue（GitHub `parent`）；无父为 `None`。
     pub parent_issue: Option<crate::common::IssueLink>,
     /// #278：子 issue 列表（GitHub `subIssues`）；无子为空数组。
@@ -86,7 +88,7 @@ pub struct Settings {
 const TASK_SELECT_COLUMNS: &str = concat!(
     "issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status, ",
     "assignees, mentioned, latest_comment_url, pr_number, pr_url, branch, ",
-    "session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch, author, ",
+    "session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch, work_dir, author, ",
     "parent_issue, sub_issues, created_at"
 );
 
@@ -104,10 +106,6 @@ fn task_mapper(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         status: r.get(8)?,
         project_status: r.get(9)?,
         assignees: r.get(10)?,
-        author: r.get(24)?,
-        // #278：父子关系（JSON 串 → 结构化）。列固定在末尾，位置索引不变。
-        parent_issue: crate::common::parse_parent_link(r.get::<_, String>(25)?),
-        sub_issues: crate::common::parse_sub_links(r.get::<_, String>(26)?),
         mentioned: r.get::<_, i64>(11).unwrap_or(0) != 0,
         latest_comment_url: r.get(12)?,
         pr_number: r.get(13)?,
@@ -121,7 +119,12 @@ fn task_mapper(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         updated_at: r.get(21)?,
         account_id: r.get(22)?,
         work_branch: r.get(23)?,
-        created_at: r.get(27)?,
+        work_dir: r.get(24)?,
+        author: r.get(25)?,
+        // #278：父子关系（JSON 串 → 结构化）。列固定在末尾，位置索引不变。
+        parent_issue: crate::common::parse_parent_link(r.get::<_, String>(26)?),
+        sub_issues: crate::common::parse_sub_links(r.get::<_, String>(27)?),
+        created_at: r.get(28)?,
     })
 }
 
@@ -292,6 +295,10 @@ pub fn update_task_status(
     let normalized = crate::common::normalize_status(t).unwrap_or_else(|| t.to_string());
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     crate::common::set_task_status(&conn, &key, &normalized)?;
+    // #287：任务完成自动清理 session。
+    if normalized == "done" {
+        let _ = crate::common::clear_task_session(&conn, &key);
+    }
     // #181：通知前端（含其他窗口）重查；MCP 子进程无 AppHandle，走不到这里。
     let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
@@ -304,12 +311,19 @@ pub fn record_session(
     key: String,
     session_id: String,
     agent: Option<String>,
+    work_dir: Option<String>,
 ) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let now = crate::sync::now_secs();
-    // v0.3.49 (#147)：SQL 走公共模块（与 mcp.rs 同一实现）；0 行也静默 Ok（原有行为）。
-    crate::common::touch_session(&conn, &key, &session_id, agent.as_deref(), now, None)?;
-    // #181：同上，多窗口同步。
+    crate::common::touch_session(
+        &conn,
+        &key,
+        &session_id,
+        agent.as_deref(),
+        now,
+        None,
+        work_dir.as_deref(),
+    )?;
     let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
 }
@@ -343,6 +357,26 @@ pub fn set_work_branch(
     }
     let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
+}
+
+/// #287：列出所有活跃会话（session_id 非空的任务），供前端「任务会话」Tab 显示。
+#[tauri::command]
+pub fn list_active_sessions(
+    state: State<'_, AppState>,
+) -> Result<Vec<Task>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {} FROM tasks WHERE session_id IS NOT NULL ORDER BY session_at DESC",
+            TASK_SELECT_COLUMNS
+        ))
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], task_mapper).map_err(|e| e.to_string())?;
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(result)
 }
 
 /// 记录「交接任务」详情：由接入的 agent（claude / codex 等）在识别到用户「生成交接任务」类意图时调用，
