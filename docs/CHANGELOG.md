@@ -6,6 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.6.2（2026-09-20）— 任务会话总览：独立面板一览活跃 session（#287）**
+
+  - **#287 同时在做几个任务、各自在哪个分支**：用户需要快速一览「同时在做哪几个任务、各自在哪个分支」——即所有活跃 session 的集中视图。核心需求：(1) 记录项目目录+分支+session+agent+时间 (2) 独立面板展示 (3) 自动写入+手动查看 (4) 任务完成自动清理 (5) 快速一览。详见 [docs/issue-287-task-sessions.md](./issue-287-task-sessions.md)。
+  - **数据模型**：`tasks` 新增 `work_dir` 列（`TEXT NOT NULL DEFAULT ''`），复用已有 `work_branch` / `session_id` / `session_agent` / `session_at`。`touch_session`（common.rs）新增 `work_dir: Option<&str>` 参数，非空才写，与 `work_branch` 同款逻辑。
+  - **读取路径**：新增 Tauri command `list_active_sessions`，返回所有 `session_id IS NOT NULL` 的任务（按 `session_at DESC` 排序）。MCP `SELECT_COLS` 同步（Rust 28 列 + Python 28 列），`row_to_value` 位置索引更新。
+  - **自动清理**：`update_task_status` 在状态变为 `done` 时自动调用 `clear_task_session`（清空 `session_id` / `session_agent`，保留 `session_at` 审计）。
+  - **前端**：新建独立 `SessionsPanel.tsx`（与备忘录平级），侧边栏新增「任务会话」导航项。会话卡片显示：任务标题+编号、工作分支（可复制）、工作目录（可复制）、Agent 名称、开始时间（相对时间）、点击可打开 GitHub issue。`Task` 类型新增 `workDir` 字段，`taskSig.ts` 指纹纳入 `workDir`。
+  - **task-start 贯通**：`.claude/commands/task-start.md` 增加 `work_dir=$(pwd)` 参数；`.opencode/plugins/taskboard.js` 自动执行和 `tool.execute.before` 补参时自动填入 `work_dir`（项目目录）；`.opencode/commands/task-start.md` 说明 work_dir 由插件自动填充。
+  - **文档**：`AGENTS.md` / `mcp_server/AGENT_INSTRUCTIONS.md` / `AGENT_INSTRUCTIONS.en.md` 同步更新 `record_session` 工具签名（增加 `work_dir?` 参数说明）。
+  - **验证**：`scripts/check-mcp-columns.py` ✅（28 列两侧一致）、`scripts/check-doc-links.py` ✅、`npm run i18n:check` 中英各 369 key、`npx tsc --noEmit` 0 error、`npm test` 13 文件 136 例、`cargo check` 编译通过。
+
 - **v0.6.1（2026-09-19）— 立即同步后看板空白、重启才恢复（#285）**
 
   - **#285 点「立即同步」后当前账号看板整体变空，必须重启 App 才恢复**：根因在产品层而非同步本身——同步完成后前端必跑一次 `listTasks`，而该查询在某些筛选下会直接报错或恒返回空集，于是「无数据」被写进 state 清空看板；`ownership` 是前端本地状态、重启即复位为「全部归属」，所以重启自然恢复。两处缺陷都在 `commands.rs::rows_to_tasks`（详见 [docs/issue-285-sync-empty-board.md](./issue-285-sync-empty-board.md)）。
