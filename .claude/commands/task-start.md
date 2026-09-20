@@ -13,7 +13,7 @@ allowed-tools: Bash, mcp__taskboard__update_task_status, mcp__taskboard__record_
 2. 用 Bash 执行 `git branch --show-current` 拿到当前工作分支（此时应已是 issue 分支，非 develop/master；不在仓库则记为空字符串）。
 3. 调 MCP `get_task_status` 查该任务现状（确认 issue_key 正确）。
 4. 调 MCP `update_task_status`，`issue=$ARGUMENTS`，`status=处理中`。
-5. 调 MCP `record_session`，`issue=$ARGUMENTS`，`session_id=${CLAUDE_SESSION_ID}`（若为空则用 `$TASKBOARD_SESSION_ID`），`agent=claude-code`，`branch=<第 2 步的分支，可空>`。
+5. 调 MCP `record_session`，`issue=$ARGUMENTS`，`session_id=${CLAUDE_SESSION_ID}`（若为空则用 `$TASKBOARD_SESSION_ID`），`agent=claude-code`，`branch=<第 2 步的分支，可空>`，`work_dir=$(pwd)`。
 6. #279 兜底：若你之前在 develop/master 上已经跑过本命令、之后才切到 issue 分支，切完后**再调一次** MCP `set_work_branch`，`issue=$ARGUMENTS`，`branch=<当前 issue 分支>`，纠正 `work_branch`。
 
 任务：$ARGUMENTS

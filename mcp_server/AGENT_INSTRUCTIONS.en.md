@@ -40,7 +40,7 @@ The MCP Server is registered as `taskboard` in WorkBuddy's `~/.workbuddy/mcp.jso
 | `list_my_tasks` | `status?` / `ownership?` | List board tasks (filterable by four-state / ownership) |
 | `get_task_status` | `issue` | Query a task's current state + recorded session / handoff |
 | `update_task_status` | `issue`, `status` | Update the local board state |
-| `record_session` | `issue`, `session_id`, `agent?`, `branch?` | Record an interrupted session id; if `branch` is non-empty, also record the current working branch (into `work_branch`, kept separate from the synced PR `branch`) |
+| `record_session` | `issue`, `session_id`, `agent?`, `branch?`, `work_dir?` | Record an interrupted session id; if `branch` is non-empty, also record the current working branch (into `work_branch`, kept separate from the synced PR `branch`); if `work_dir` is non-empty, also record the working directory (into `work_dir`) |
 | `record_handoff` | `issue`, `text` | Record "handoff task" details |
 | `clear_session` | `issue` | Clear the session field after completion (kept for audit) |
 | `set_work_branch` | `issue`, `branch` | #279: after creating / switching the issue branch, correct `work_branch` (writes only that column, never touches the synced PR `branch`; empty `branch` errors) |
@@ -56,6 +56,7 @@ Alongside the board status and session fields, the response also carries mirror 
 
 - `branch` — the source branch of the issue's linked PR (pulled by sync; agents should not change it).
 - `work_branch` — the working branch recorded by the agent (written by `record_session` / `set_work_branch`, never overwritten by sync).
+- `work_dir` — #287: the working directory recorded by the agent (written by `record_session`, never overwritten by sync).
 - `parent_issue` — #278: a JSON object string `{"number","title","url"}` for the parent issue; empty string = no parent.
 - `sub_issues` — #278: a JSON array string of sub-issues; empty string = none.
 
