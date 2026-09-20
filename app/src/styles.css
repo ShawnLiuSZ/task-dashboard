@@ -2093,9 +2093,10 @@ button.unassigned-tag:disabled {
   overflow-y: auto;
 }
 .sessions-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 10px;
+  align-content: start;
 }
 .session-card {
   background: var(--surface-2);
@@ -2104,6 +2105,7 @@ button.unassigned-tag:disabled {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
 }
 .session-card-header {
   display: flex;
