@@ -2,6 +2,17 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.6.2 (2026-09-20) — Task Sessions overview: standalone panel for active sessions (#287)**
+
+  - **#287 How many tasks am I working on, and on which branches**: users need a quick overview of "how many tasks am I working on simultaneously, and on which branch each one is" — a consolidated view of all active sessions. Core requirements: (1) record project directory + branch + session + agent + time (2) standalone panel display (3) auto-write on task-start + manual view (4) auto-cleanup on task completion (5) quick overview. See [docs/issue-287-task-sessions.md](./issue-287-task-sessions.md).
+  - **Data model**: `tasks` gains `work_dir` column (`TEXT NOT NULL DEFAULT ''`), reusing existing `work_branch` / `session_id` / `session_agent` / `session_at`. `touch_session` (common.rs) gains `work_dir: Option<&str>` parameter, only written when non-empty (same pattern as `work_branch`).
+  - **Read path**: new Tauri command `list_active_sessions`, returns all tasks where `session_id IS NOT NULL` (sorted by `session_at DESC`). MCP `SELECT_COLS` synced (Rust 28 cols + Python 28 cols), `row_to_value` positional indices updated.
+  - **Auto-cleanup**: `update_task_status` auto-calls `clear_task_session` when status becomes `done` (clears `session_id` / `session_agent`, preserves `session_at` for audit).
+  - **Frontend**: new standalone `SessionsPanel.tsx` (parallel to Notes panel), sidebar gains "Task Sessions" nav item. Session cards show: task title + number, work branch (copyable), work directory (copyable), agent name, start time (relative), click to open GitHub issue. `Task` type gains `workDir` field, `taskSig.ts` fingerprint includes `workDir`.
+  - **task-start integration**: `.claude/commands/task-start.md` adds `work_dir=$(pwd)` parameter; `.opencode/plugins/taskboard.js` auto-fills `work_dir` (project directory) in auto-start and `tool.execute.before`; `.opencode/commands/task-start.md` documents that `work_dir` is auto-filled by the plugin.
+  - **Docs**: `AGENTS.md` / `mcp_server/AGENT_INSTRUCTIONS.md` / `AGENT_INSTRUCTIONS.en.md` updated with `record_session` tool signature (added `work_dir?` parameter).
+  - **Verification**: `scripts/check-mcp-columns.py` ✅ (28 cols consistent), `scripts/check-doc-links.py` ✅, `npm run i18n:check` 369 keys per locale, `npx tsc --noEmit` 0 errors, `npm test` 13 files / 136 cases, `cargo check` compiles.
+
 - **v0.6.1 (2026-09-19) — Board goes blank after "Sync now" until app restart (#285)**
 
   - **#285 After clicking "Sync now", the current account's board went completely blank and only recovered after restarting the app**: the root cause was in the product layer, not the sync itself — once a sync finishes, the frontend always runs one `listTasks`, and under some filters that query either errored out or returned an empty set unconditionally, so "no data" was written into state and the board cleared; `ownership` is local frontend state that resets to "all" on restart, which is why a restart recovered it. Both defects live in `commands.rs::rows_to_tasks` (see [docs/issue-285-sync-empty-board.md](./issue-285-sync-empty-board.md)).
