@@ -11,6 +11,7 @@ import AboutPanel from './components/AboutPanel';
 import AccountsPanel from './components/AccountsPanel';
 import SyncLogsPanel from './components/SyncLogsPanel';
 import NotesPanel from './components/NotesPanel';
+import SessionsPanel from './components/SessionsPanel';
 import Sidebar, { type NavKey } from './components/Sidebar';
 import AgentPanel from './components/AgentPanel';
 import type {
@@ -629,6 +630,7 @@ function BoardApp() {
               <NotesPanel />
             </div>
           )}
+          {nav === 'sessions' && <SessionsPanel />}
           {nav === 'settings' && settings && (
             <div className="panel-page">
               <SettingsPanel

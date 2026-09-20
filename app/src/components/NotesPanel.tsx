@@ -2,10 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { api } from '../api';
 import { useT } from '../i18n';
-import type { Note, Task } from '../types';
+import type { Note } from '../types';
 
 type NoteLabel = Note['label'];
-type NotesTab = 'notes' | 'sessions';
 
 // v0.3.49 (#148)：标签名走 i18n；颜色保持不变。
 const LABEL_DEFS: { value: NoteLabel; color: string }[] = [
@@ -163,13 +162,6 @@ export default function NotesPanel() {
   const [notice, setNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // #287：Tab 切换（备忘录 / 任务会话）。
-  const [activeTab, setActiveTab] = useState<NotesTab>('notes');
-  const [sessions, setSessions] = useState<Task[]>([]);
-  const [sessionsLoading, setSessionsLoading] = useState(false);
-  const [sessionsError, setSessionsError] = useState<string | null>(null);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
-
   // 添加列（左栏）收起状态——**只影响创建列，不影响右侧四列**（#259）。
   const [addColCollapsed, setAddColCollapsed] = useState(
     () => localStorage.getItem(ADD_COL_COLLAPSED_KEY) === '1',
@@ -196,37 +188,6 @@ export default function NotesPanel() {
   useEffect(() => {
     void loadNotes();
   }, [loadNotes]);
-
-  // #287：加载活跃会话列表（切换 Tab 时触发）。
-  const loadSessions = useCallback(async () => {
-    setSessionsLoading(true);
-    try {
-      setSessions(await api.listActiveSessions());
-      setSessionsError(null);
-    } catch (e) {
-      console.error('加载会话失败:', e);
-      setSessionsError(errText(e));
-    } finally {
-      setSessionsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (activeTab === 'sessions') {
-      void loadSessions();
-    }
-  }, [activeTab, loadSessions]);
-
-  const handleCopy = useCallback((text: string, key: string) => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopiedKey(key);
-      setTimeout(() => setCopiedKey(null), 1500);
-    });
-  }, []);
-
-  const handleOpenTask = useCallback((task: Task) => {
-    void api.openInBrowser(task.url);
-  }, []);
 
   // 排序：优先级 urgent(0) > high(1) > medium(2) > low(3)；同优先级按倒序创建时间。
   const sortedNotes = useMemo(() => {
@@ -495,253 +456,143 @@ export default function NotesPanel() {
     // 挪进创建列顶部工具行，把纵向空间还给列。
     <aside className="notes-panel">
       <div className="notes-body">
-        {/* #287：Tab 切换栏（备忘录 / 任务会话）。 */}
-        <div className="notes-tabs">
-          <button
-            type="button"
-            className={`notes-tab${activeTab === 'notes' ? ' active' : ''}`}
-            onClick={() => setActiveTab('notes')}
-          >
-            <Icon d={ICON.notebook} size={13} />
-            <span>{t('notes.tab.notes')}</span>
-          </button>
-          <button
-            type="button"
-            className={`notes-tab${activeTab === 'sessions' ? ' active' : ''}`}
-            onClick={() => setActiveTab('sessions')}
-          >
-            <Icon d={ICON.check} size={13} />
-            <span>{t('notes.tab.sessions')}</span>
-          </button>
-        </div>
-
-        {activeTab === 'sessions' ? (
-          <div className="notes-sessions-view">
-            {sessionsLoading ? (
-              <div className="notes-placeholder">{t('notes.loading')}</div>
-            ) : sessionsError ? (
-              <div className="note-error" role="alert">
-                <span>{sessionsError}</span>
-              </div>
-            ) : sessions.length === 0 ? (
-              <div className="notes-placeholder">{t('notes.sessions.empty')}</div>
-            ) : (
-              <div className="notes-sessions-list">
-                {sessions.map((task) => (
-                  <div key={task.issueKey} className="session-card">
-                    <div className="session-card-header">
-                      <span className="session-card-title">
-                        {t('notes.sessions.title', {
-                          num: task.number,
-                          title: task.title,
-                        })}
-                      </span>
-                      <button
-                        type="button"
-                        className="note-tool"
-                        title={t('notes.sessions.openTask')}
-                        onClick={() => handleOpenTask(task)}
-                      >
-                        <Icon d={ICON.expand} size={13} />
-                      </button>
-                    </div>
-                    <div className="session-card-meta">
-                      {task.workBranch && (
-                        <div className="session-meta-row">
-                          <span className="session-meta-label">{t('notes.sessions.branch')}</span>
-                          <code className="session-meta-value">{task.workBranch}</code>
-                          <button
-                            type="button"
-                            className="note-tool"
-                            title={t('notes.sessions.copyBranch')}
-                            onClick={() => handleCopy(task.workBranch, `branch-${task.issueKey}`)}
-                          >
-                            {copiedKey === `branch-${task.issueKey}`
-                              ? t('notes.sessions.copyDone')
-                              : t('btn.copy')}
-                          </button>
-                        </div>
-                      )}
-                      {task.workDir && (
-                        <div className="session-meta-row">
-                          <span className="session-meta-label">{t('notes.sessions.workDir')}</span>
-                          <code className="session-meta-value">{task.workDir}</code>
-                          <button
-                            type="button"
-                            className="note-tool"
-                            title={t('notes.sessions.copyDir')}
-                            onClick={() => handleCopy(task.workDir, `dir-${task.issueKey}`)}
-                          >
-                            {copiedKey === `dir-${task.issueKey}`
-                              ? t('notes.sessions.copyDone')
-                              : t('btn.copy')}
-                          </button>
-                        </div>
-                      )}
-                      {task.sessionAgent && (
-                        <div className="session-meta-row">
-                          <span className="session-meta-label">{t('notes.sessions.agent')}</span>
-                          <span className="session-meta-value">{task.sessionAgent}</span>
-                        </div>
-                      )}
-                      {task.sessionAt && (
-                        <div className="session-meta-row">
-                          <span className="session-meta-label">{t('notes.sessions.time')}</span>
-                          <span className="session-meta-value">{relTime(task.sessionAt, t)}</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          <>
-            {/* 左侧：创建列（仅 composer，textarea 撑满列高；不展示已添加的记事）。
+        {/* 左侧：创建列（仅 composer，textarea 撑满列高；不展示已添加的记事）。
             收起时只换成一条窄导轨——右侧四列不受影响（#259）。 */}
-            {addColCollapsed ? (
+        {addColCollapsed ? (
+          <button
+            type="button"
+            className="notes-add-rail"
+            title={t('notes.expandAddCol')}
+            aria-expanded={false}
+            onClick={() => setAddColCollapsed(false)}
+          >
+            <Icon d={ICON.expand} size={13} />
+            <span className="notes-add-rail-text">{t('notes.title')}</span>
+            <Icon d={ICON.plus} size={12} />
+          </button>
+        ) : (
+          <div className="notes-add-col">
+            {/* 创建列顶部工具行：收起创建列（左）+ 导入/导出（右）。 */}
+            <div className="notes-add-col-tools">
               <button
                 type="button"
-                className="notes-add-rail"
-                title={t('notes.expandAddCol')}
-                aria-expanded={false}
-                onClick={() => setAddColCollapsed(false)}
+                className="note-tool"
+                title={t('notes.collapseAddCol')}
+                aria-expanded
+                onClick={() => setAddColCollapsed(true)}
               >
-                <Icon d={ICON.expand} size={13} />
-                <span className="notes-add-rail-text">{t('notes.title')}</span>
-                <Icon d={ICON.plus} size={12} />
+                <Icon d={ICON.collapse} size={13} />
               </button>
-            ) : (
-              <div className="notes-add-col">
-                {/* 创建列顶部工具行：收起创建列（左）+ 导入/导出（右）。 */}
-                <div className="notes-add-col-tools">
-                  <button
-                    type="button"
-                    className="note-tool"
-                    title={t('notes.collapseAddCol')}
-                    aria-expanded
-                    onClick={() => setAddColCollapsed(true)}
-                  >
-                    <Icon d={ICON.collapse} size={13} />
-                  </button>
-                  <span className="notes-add-col-spacer" />
-                  <button
-                    type="button"
-                    className="note-tool"
-                    title={t('notes.exportTitle')}
-                    onClick={() => void handleExport()}
-                    disabled={busy !== null}
-                  >
-                    <Icon d={ICON.download} size={13} />
-                  </button>
-                  <button
-                    type="button"
-                    className="note-tool"
-                    title={t('notes.importTitle')}
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={busy !== null}
-                  >
-                    <Icon d={ICON.upload} size={13} />
-                  </button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="application/json,.json"
-                    style={{ display: 'none' }}
-                    onChange={(e) => void handleImport(e.target.files?.[0] ?? null)}
-                  />
-                </div>
-                {notice && (
-                  <div className="note-notice" role="status">
-                    <span>{notice}</span>
-                    <button
-                      type="button"
-                      className="note-tool"
-                      title={t('notes.closeTitle')}
-                      onClick={() => setNotice(null)}
-                    >
-                      <Icon d={ICON.close} size={12} />
-                    </button>
-                  </div>
-                )}
-                {error && (
-                  <div className="note-error" role="alert">
-                    <span>{error}</span>
-                    <button
-                      type="button"
-                      className="note-tool"
-                      title={t('notes.closeTitle')}
-                      onClick={() => setError(null)}
-                    >
-                      <Icon d={ICON.close} size={12} />
-                    </button>
-                  </div>
-                )}
-
-                <div className="note-composer note-composer-full">
-                  <textarea
-                    className="note-textarea note-textarea-full"
-                    placeholder={t('notes.composer.placeholder')}
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (
-                        e.key === 'Enter' &&
-                        (e.metaKey || e.ctrlKey) &&
-                        !adding &&
-                        draft.trim()
-                      ) {
-                        e.preventDefault();
-                        void handleAdd();
-                      }
-                    }}
-                  />
-                  <div className="note-composer-foot">
-                    <LabelPicker value={draftLabel} onChange={setDraftLabel} />
-                    <button
-                      type="button"
-                      className="btn primary"
-                      onClick={() => void handleAdd()}
-                      disabled={adding || !draft.trim()}
-                    >
-                      {!adding && <Icon d={ICON.plus} size={13} />}
-                      {adding ? t('notes.adding') : t('notes.add')}
-                    </button>
-                  </div>
-                </div>
+              <span className="notes-add-col-spacer" />
+              <button
+                type="button"
+                className="note-tool"
+                title={t('notes.exportTitle')}
+                onClick={() => void handleExport()}
+                disabled={busy !== null}
+              >
+                <Icon d={ICON.download} size={13} />
+              </button>
+              <button
+                type="button"
+                className="note-tool"
+                title={t('notes.importTitle')}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={busy !== null}
+              >
+                <Icon d={ICON.upload} size={13} />
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/json,.json"
+                style={{ display: 'none' }}
+                onChange={(e) => void handleImport(e.target.files?.[0] ?? null)}
+              />
+            </div>
+            {notice && (
+              <div className="note-notice" role="status">
+                <span>{notice}</span>
+                <button
+                  type="button"
+                  className="note-tool"
+                  title={t('notes.closeTitle')}
+                  onClick={() => setNotice(null)}
+                >
+                  <Icon d={ICON.close} size={12} />
+                </button>
+              </div>
+            )}
+            {error && (
+              <div className="note-error" role="alert">
+                <span>{error}</span>
+                <button
+                  type="button"
+                  className="note-tool"
+                  title={t('notes.closeTitle')}
+                  onClick={() => setError(null)}
+                >
+                  <Icon d={ICON.close} size={12} />
+                </button>
               </div>
             )}
 
-            {/* 右侧：固定四列（紧急 / 高 / 中 / 低），与看板列同构：等宽、全高、列内纵向滚动。 */}
-            <div className="notes-card-cols">
-              {loading ? (
-                <div className="notes-placeholder">{t('notes.loading')}</div>
-              ) : (
-                priorityColumns.map((col) => (
-                  <div
-                    key={col.label}
-                    className={`note-col note-col--${col.label}`}
-                    style={{ '--col-accent': col.opt.color } as CSSProperties}
-                  >
-                    <div className="note-col-head">
-                      <span className="note-col-dot" aria-hidden="true" />
-                      <span className="note-col-title">{col.opt.label}</span>
-                      <span className="note-col-count">{col.items.length}</span>
-                    </div>
-                    <div className="note-col-body">
-                      {col.items.length === 0 ? (
-                        <div className="note-col-empty">{t('notes.colEmpty')}</div>
-                      ) : (
-                        col.items.map(renderNoteCard)
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
+            <div className="note-composer note-composer-full">
+              <textarea
+                className="note-textarea note-textarea-full"
+                placeholder={t('notes.composer.placeholder')}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !adding && draft.trim()) {
+                    e.preventDefault();
+                    void handleAdd();
+                  }
+                }}
+              />
+              <div className="note-composer-foot">
+                <LabelPicker value={draftLabel} onChange={setDraftLabel} />
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={() => void handleAdd()}
+                  disabled={adding || !draft.trim()}
+                >
+                  {!adding && <Icon d={ICON.plus} size={13} />}
+                  {adding ? t('notes.adding') : t('notes.add')}
+                </button>
+              </div>
             </div>
-          </>
+          </div>
         )}
+
+        {/* 右侧：固定四列（紧急 / 高 / 中 / 低），与看板列同构：等宽、全高、列内纵向滚动。 */}
+        <div className="notes-card-cols">
+          {loading ? (
+            <div className="notes-placeholder">{t('notes.loading')}</div>
+          ) : (
+            priorityColumns.map((col) => (
+              <div
+                key={col.label}
+                className={`note-col note-col--${col.label}`}
+                style={{ '--col-accent': col.opt.color } as CSSProperties}
+              >
+                <div className="note-col-head">
+                  <span className="note-col-dot" aria-hidden="true" />
+                  <span className="note-col-title">{col.opt.label}</span>
+                  <span className="note-col-count">{col.items.length}</span>
+                </div>
+                <div className="note-col-body">
+                  {col.items.length === 0 ? (
+                    <div className="note-col-empty">{t('notes.colEmpty')}</div>
+                  ) : (
+                    col.items.map(renderNoteCard)
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
       </div>
     </aside>
   );

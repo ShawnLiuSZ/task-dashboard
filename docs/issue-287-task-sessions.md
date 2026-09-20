@@ -64,10 +64,11 @@ SELECT * FROM tasks WHERE session_id IS NOT NULL ORDER BY session_at DESC
 
 ### 2.5 前端展示
 
-NotesPanel 新增 Tab 切换栏：
+新增独立面板 `SessionsPanel.tsx`，与备忘录面板平级：
 
-- **备忘录** Tab：原有四列布局（不变）
-- **任务会话** Tab：会话列表，每条显示：
+- 侧边栏新增「任务会话」导航项（与「备忘录」同级）
+- 面板布局：`panel-page` 结构，顶部页头 + 内容区
+- 会话列表，每条显示：
   - 任务标题 + 编号
   - 工作分支（可复制）
   - 工作目录（可复制）
@@ -147,7 +148,7 @@ ALTER TABLE tasks ADD COLUMN work_dir TEXT NOT NULL DEFAULT ''
 ### 5.2 验收标准
 
 1. 执行 `record_session` 带 `work_dir` 参数 → 任务卡片显示工作目录
-2. 打开备忘录 → 点击「任务会话」Tab → 显示活跃会话列表
+2. 侧边栏点击「任务会话」→ 显示独立会话面板
 3. 会话列表显示：任务标题、分支、目录、agent、时间
 4. 点击复制按钮 → 分支/目录复制到剪贴板
 5. 任务状态改为「已完成」→ 会话自动从列表中消失
