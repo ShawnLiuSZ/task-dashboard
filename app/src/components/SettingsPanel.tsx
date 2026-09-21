@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
-import { useI18n, type LangMode } from '../i18n';
+import { useI18n } from '../i18n';
 import type { Account, AccountColumn, BoardMode, Project, Settings } from '../types';
 import { themeManager, type ThemeMode } from '../theme';
 
@@ -67,7 +67,7 @@ interface AccountEditState {
 }
 
 export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
-  const { t, mode, setMode } = useI18n();
+  const { t } = useI18n();
   const [themeMode, setThemeMode] = useState<ThemeMode>(themeManager.getMode());
   const [minutes, setMinutes] = useState(settings.scheduleMinutes);
   const [ghPath, setGhPath] = useState(settings.ghPath);
@@ -371,15 +371,15 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
         {/* 基础设置 */}
         <div style={{ display: tab === 'base' ? 'block' : 'none' }}>
           <div className="field">
-            <label>{t('settings.language')}</label>
+            <label>{t('settings.theme')}</label>
             <select
               className="select"
-              value={mode}
-              onChange={(e) => setMode(e.target.value as LangMode)}
+              value={themeMode}
+              onChange={(e) => handleThemeChange(e.target.value as 'auto' | 'light' | 'dark')}
             >
-              <option value="auto">{t('settings.langAuto')}</option>
-              <option value="zh-CN">{t('settings.langZh')}</option>
-              <option value="en-US">{t('settings.langEn')}</option>
+              <option value="auto">{t('settings.themeAuto')}</option>
+              <option value="light">{t('settings.themeLight')}</option>
+              <option value="dark">{t('settings.themeDark')}</option>
             </select>
           </div>
 
@@ -388,13 +388,10 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
             <select
               className="select"
               value={themeMode}
-              onChange={(e) =>
-                handleThemeChange(e.target.value as 'auto' | 'light' | 'sepia' | 'dark')
-              }
+              onChange={(e) => handleThemeChange(e.target.value as 'auto' | 'light' | 'dark')}
             >
               <option value="auto">{t('settings.themeAuto')}</option>
               <option value="light">{t('settings.themeLight')}</option>
-              <option value="sepia">{t('settings.themeSepia')}</option>
               <option value="dark">{t('settings.themeDark')}</option>
             </select>
           </div>

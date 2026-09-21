@@ -56,37 +56,6 @@
   --session-card-border-4: #8b5cf6;
 }
 
-/* #308: 护眼模式（sepia） */
-[data-theme='sepia'] {
-  --bg: #f4ecd8;
-  --surface: #faf4e6;
-  --surface-2: #ede4cc;
-  --border: rgba(80, 60, 20, 0.15);
-  --border-strong: rgba(80, 60, 20, 0.25);
-  --text: #3d2e14;
-  --text-2: #7a6440;
-  --text-3: #6b5a3a;
-  --accent: #8b6914;
-  --accent-hover: #6f540f;
-  --amber-bg: #f5e6c8;
-  --amber-text: #7a5a00;
-  --teal-bg: #e0e8d8;
-  --teal-text: #4a6b3f;
-  --error: #8b2020;
-  --error-bg: #f5e0dc;
-  --success: #4a6b3f;
-  --success-bg: #e8f0d8;
-  --warning: #7a5a00;
-  --warning-bg: #f5ecd0;
-  --danger: #a03030;
-  --danger-hover: #8b2020;
-  --code-bg: #ede4cc;
-  --code-text: #3d2e14;
-  --shadow: rgba(80, 60, 20, 0.08);
-  --shadow-strong: rgba(80, 60, 20, 0.15);
-  --overlay: rgba(60, 40, 10, 0.3);
-}
-
 /* #308: 深色模式 */
 [data-theme='dark'] {
   --bg: #1a1a2e;
