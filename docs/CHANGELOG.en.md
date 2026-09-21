@@ -2,6 +2,13 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — PR body bare #N references incorrectly associated (#299)**
+
+  - **#299 PR body bare #N references incorrectly associated**: `parse_issue_refs` in `sync.rs` treated every bare `#N` in PR bodies as a linked issue, so a passing mention of an issue number (e.g. PR #1342 mentioning `#1340`) caused a false association even when the two were unrelated. See [docs/issue-299-pr-linkage.md](./issue-299-pr-linkage.md).
+  - **How**: `parse_issue_refs` now only matches references preceded by closing keywords (Closes/Fixes/Resolves/Refs/References/关闭/解决/修复), consistent with `scripts/merge-cleanup.py`'s `CLOSE_RE`. Word-boundary check before keywords prevents substring false-matches (e.g. `prefixfixed`), but allows preceding Chinese characters (e.g. `已关闭 #284`). After keywords: whitespace, optional colon, repo prefix, and consecutive references (`Closes #1 #2 #3` matches all three in one pass).
+  - **Impact**: PR body bare `#N` no longer associates; only keyword-prefixed references do. Previously mis-associated PRs will be cleared on next sync. MCP `record_session` / `set_work_branch` unaffected (they query by `issue_key`, not PR association).
+  - **Verification**: 9 new test cases covering keyword matching, bare-reference rejection, Chinese keywords, URL anchors, prefix substrings; `cargo test --lib parse_issue_refs` 9/9 pass, `cargo test --lib` 116/116 pass, `cargo clippy -- -D warnings` 0 warnings, `scripts/check-doc-links.py` ✅, `scripts/check-mcp-columns.py` ✅.
+
 - **v0.6.2 (2026-09-20) — Task Sessions overview: standalone panel for active sessions (#287)**
 
   - **#287 How many tasks am I working on, and on which branches**: users need a quick overview of "how many tasks am I working on simultaneously, and on which branch each one is" — a consolidated view of all active sessions. Core requirements: (1) record project directory + branch + session + agent + time (2) standalone panel display (3) auto-write on task-start + manual view (4) auto-cleanup on task completion (5) quick overview. See [docs/issue-287-task-sessions.md](./issue-287-task-sessions.md).
