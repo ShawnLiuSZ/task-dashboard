@@ -6,7 +6,33 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **未发布（Unreleased）— 会话卡片：移除元数据白底 + 图标颜色调整（#310）**
+- **v0.6.3（2026-09-21）— 接入指引文案更新（#315）**
+
+  - **#315 接入指引缺少 set_work_branch 触发时机**：record_session 也缺少 work_dir 参数说明。详见 [docs/issue-315-guide-text.md](./issue-315-guide-text.md)。
+  - **补齐触发时机**：新增「切到 issue 分支之后」→ `set_work_branch(issue, branch=<当前 issue 分支>)`。
+  - **补齐参数说明**：record_session 动作加上 `work_dir=<目录>` 参数。
+  - **新增 2 个 i18n key**：`agent.guide.setBranch.when` + `agent.guide.setBranch.action`，中英文各 2 处。
+  - **无 schema / 无后端变更**：纯前端 UI + i18n 改动。
+  - **验证**：`npx tsc --noEmit` 0 error ✅、`npm test` 141 例 passed ✅、`npm run build` ✅、`npm run i18n:check` 385 keys ✅、`npx prettier --check` ✅。
+
+- **v0.6.3（2026-09-21）— Agent 面板可用工具列表更新（#314）**
+
+  - **#314 AgentPanel 可用工具表不完整**：只列了 6 个看板工具，但 MCP Server 实际提供 12 个工具（7 个看板 + 5 个记事）。详见 [docs/issue-314-agent-tools.md](./issue-314-agent-tools.md)。
+  - **补齐工具列表**：TOOLS 数组从 6 项扩展到 12 项，新增 set_work_branch + 5 个记事工具（list_notes/add_note/update_note/update_note_label/delete_note）。
+  - **新增 6 个 i18n key**：`agent.tools.setWorkBranch` + 5 个 `agent.tools.notes*`，中英文各 6 处。
+  - **更新描述文案**：从「6 个看板工具」改为「12 个工具」。
+  - **无 schema / 无后端变更**：纯前端 UI + i18n 改动。
+  - **验证**：`npx tsc --noEmit` 0 error ✅、`npm test` 141 例 passed ✅、`npm run build` ✅、`npm run i18n:check` 383 keys ✅、`npx prettier --check` ✅、`scripts/check-mcp-columns.py` ✅、`scripts/check-doc-links.py` ✅。
+
+- **v0.6.3（2026-09-21）— 移除护眼模式，只保留浅色和深色（#313）**
+
+  - **#313 护眼色偏黄**：用户反馈护眼模式（sepia）颜色偏黄，要求移除，只保留浅色和深色两种主题。详见 [docs/issue-313-remove-sepia.md](./issue-313-remove-sepia.md)。
+  - **移除 sepia 主题**：删除 `[data-theme='sepia']` CSS 块，theme.ts 类型从 `'auto'|'light'|'sepia'|'dark'` 改为 `'auto'|'light'|'dark'`。
+  - **移除 i18n key**：删除 `settings.themeSepia`（中英文各 1 处）。
+  - **无 schema / 无后端变更**：纯前端 CSS + TS + i18n 改动。
+  - **验证**：`npx tsc --noEmit` 0 error ✅、`npm test` 141 例 passed ✅、`npm run build` ✅、`npm run i18n:check` 377 keys ✅、`npx prettier --check` ✅、`scripts/check-mcp-columns.py` ✅、`scripts/check-doc-links.py` ✅。
+
+- **v0.6.3（2026-09-21）— 会话卡片：移除元数据白底 + 图标颜色调整（#310）**
 
   - **#310 会话卡片元数据白底突兀 + 图标辨识度低**：`.session-meta-value` 带白色背景块与卡片底色不统一；复制/删除图标颜色偏灰（`--text-2`），与可点击操作预期不一致。详见 [docs/issue-310-session-card-icon.md](./issue-310-session-card-icon.md)。
   - **移除白底**：`.session-meta-value` 删除 `background: var(--surface-3, var(--bg));`，文字与卡片底色自然融合。
@@ -14,7 +40,7 @@
   - **无 schema / 无后端变更**：纯 CSS + 1 行 TSX 类名改动。
   - **验证**：`npx tsc --noEmit` 0 error ✅、`npm test` 141 例 passed ✅、`npm run build` ✅、`npx prettier --check` ✅、`scripts/check-mcp-columns.py` ✅、`scripts/check-doc-links.py` ✅。
 
-- **未发布（Unreleased）— 主题系统：护眼/深色/跟随系统（#308）**
+- **v0.6.3（2026-09-21）— 主题系统：护眼/深色/跟随系统（#308）**
 
   - **#308 应用只有浅色背景**：长时间看板浏览偏刺眼，无深色/护眼可选，无法跟随操作系统主题。详见 [docs/issue-308-theme-system.md](./issue-308-theme-system.md)。
   - **3 套主题**：浅色（默认）、护眼（低饱和米黄/sepia）、深色（深紫蓝底 + 浅色文字）。
@@ -26,7 +52,7 @@
   - **新增文件**：`app/src/theme.ts`（主题管理模块，无 React 副作用，可被测试环境安全导入）。
   - **验证**：`npx tsc --noEmit` 0 error ✅、`npm test` 141 例 passed ✅、`npm run build` ✅、`npm run i18n:check` 378 keys ✅、`npx prettier --check` ✅、`scripts/check-mcp-columns.py` ✅、`scripts/check-doc-links.py` ✅。
 
-- **未发布（Unreleased）— 会话卡片彩色边框区分相邻卡片（#304）**
+- **v0.6.3（2026-09-21）— 会话卡片彩色边框区分相邻卡片（#304）**
 
   - **#304 会话卡片底色与面板背景过于接近**：整面墙缺乏区分度，扫一眼难以定位某张卡片。需要每张卡片加边框，使用几种颜色随机区分，且上下左右相邻卡片颜色必须不同。详见 [docs/issue-304-session-border.md](./issue-304-session-border.md)。
   - **4 色调色板**：定义蓝/绿/橙/紫 4 种边框色 CSS 变量（`--session-card-border-1` ~ `-4`），低饱和中等明度，浅底可辨识。
@@ -35,7 +61,7 @@
   - **静态断言回归**：`styles.test.ts` 新增 5 条断言覆盖调色板、border 声明、着色公式、列数实测、ref 挂载。
   - **验证**：`npx tsc --noEmit` 0 error ✅、`npm test` 141 例 passed ✅、`npm run build` ✅、`npx prettier --check` ✅、`scripts/check-mcp-columns.py` ✅、`scripts/check-doc-links.py` ✅。
 
-- **未发布（Unreleased）— 会话卡片补「清除会话」+ 复制按钮改 icon（#301）**
+- **v0.6.3（2026-09-21）— 会话卡片补「清除会话」+ 复制按钮改 icon（#301）**
 
   - **#301 会话卡片缺清除入口 + 复制按钮视觉噪音大**：每张卡片只有「在浏览器打开」一个操作，用户想清除已结束/误记的会话只能去 SQLite 手动 UPDATE。后端 `clear_session` 命令已齐备，前端 `api.clearSession(key)` 已封装，只缺前端按钮。评论补充：卡片里的复制按钮目前是竖排文字，占位突兀。详见 [docs/issue-301-session-clear.md](./issue-301-session-clear.md)。
   - **清除会话**：卡片操作区新增 trash icon 按钮，点击弹出 `ConfirmDialog` 二次确认，确认后调 `api.clearSession` + `loadSessions()` 刷新，卡片即时移除。失败走 error 通道提示。
@@ -44,7 +70,7 @@
   - **无 schema / 无后端变更**：纯前端 UI + i18n 改动，复用已有 `clear_session` 命令。
   - **验证**：`npm run i18n:check` 373 keys / locale ✅、`npx tsc --noEmit` 0 error、`npm test` 136 例 passed、`npm run build` ✅、`npx prettier --check` ✅、`cargo test` 24 例 passed、`scripts/check-mcp-columns.py` ✅、`scripts/check-doc-links.py` ✅。
 
-- **未发布（Unreleased）— 会话卡片补 Session ID 展示 + 补齐 work_dir 写入链路（#300）**
+- **v0.6.3（2026-09-21）— 会话卡片补 Session ID 展示 + 补齐 work_dir 写入链路（#300）**
 
   - **#300 会话卡片缺 Session ID + 工作目录恒不显示**：`list_tasks` 后端已返回 `sessionId`，但卡片没有任何行显示它；`record_session` 的 `work_dir` 参数是 #287 才加的，但写入入口覆盖不全（hooks.rs 提示词、session-start.sh、AGENT_INSTRUCTIONS.md、task-handoff.md 均未提 `work_dir`），导致生产库 17 条活跃会话的 `work_dir` 全部为空串。详见 [docs/issue-300-session-card.md](./issue-300-session-card.md)。
   - **Session ID 展示**：卡片新增「Session」行，完整显示 `task.sessionId`（不截断），等宽字体 + 一键复制按钮。放在「目录」行之后、Agent 行之前。
@@ -53,14 +79,14 @@
   - **无 schema / 无 Rust 变更**：纯前端 UI + i18n + hooks 脚本 + 文档改动。
   - **验证**：`npm run i18n:check` 371 keys / locale ✅、`npx tsc --noEmit` 0 error、`npm test` 136 例 passed、`npm run build` ✅、`npx prettier --check` ✅、`cargo test` 24 例 passed、`scripts/check-mcp-columns.py` ✅、`scripts/check-doc-links.py` ✅。
 
-- **未发布（Unreleased）— 去掉「任务会话」面板顶部的页面标题（#298）**
+- **v0.6.3（2026-09-21）— 去掉「任务会话」面板顶部的页面标题（#298）**
 
   - **#298 面板标题与侧边栏重复**：「任务会话」面板顶部显示大标题「任务会话」，而左侧侧边栏当前导航项已经高亮显示「任务会话」，信息完全重复，且占据面板顶部一整行空间。详见 [docs/issue-298-sessions-title.md](./issue-298-sessions-title.md)。
   - **做法**：移除 `SessionsPanel.tsx` 顶部的 `<header>` 和 `<h2>` 元素，面板内容区直接占据顶部空间。参考 Agent 面板处理方式——Agent 保留标题是因为顶部有操作按钮需要标题行承载工具栏，Sessions 面板顶部无任何操作按钮，标题行纯属冗余。同步清理 `sessions.title` i18n key（中英文各 1 处），保留 `sessions.title_format`（卡片内标题格式，与本次无关）。
   - **无 schema / 无 Rust 变更**：纯前端 UI + i18n 改动。
   - **验证**：`npm run i18n:check` 369 keys / locale ✅、`npx tsc --noEmit` 0 error、`npm test` 136 例 passed、`npm run build` ✅、`npx prettier --check` ✅、`scripts/check-doc-links.py` ✅。
 
-- **未发布（Unreleased）— PR 正文裸提 #N 被误关联（#299）**
+- **v0.6.3（2026-09-21）— PR 正文裸提 #N 被误关联（#299）**
 
   - **#299 PR 正文裸提 #N 被误关联**：`sync.rs` 的 `parse_issue_refs` 把所有裸 `#N` 都当作关联目标，导致 PR 正文里顺带提一下某个 issue 编号就被错误关联。例如 PR #1342 正文里提了 `#1340` 就被关联上去，即使这两个根本不是同一个任务。详见 [docs/issue-299-pr-linkage.md](./issue-299-pr-linkage.md)。
   - **做法**：`parse_issue_refs` 改为只匹配有关闭关键词的引用（Closes/Fixes/Resolves/Refs/References/关闭/解决/修复），与 `scripts/merge-cleanup.py` 的 `CLOSE_RE` 保持一致。关键词前检查词边界（避免 `prefixfixed` 误匹配），但允许前面是中文（`已关闭 #284` 应匹配）；关键词后允许空白、可选冒号、repo 前缀；连续引用 `Closes #1 #2 #3` 一次匹配三个。
