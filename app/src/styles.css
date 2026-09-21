@@ -35,6 +35,12 @@
   --status-17: #14b8a6;
   --status-18: #d946ef;
   --status-19: #eab308;
+
+  /* #304: 会话卡片边框色（4 色调色板，相邻卡片颜色必不同） */
+  --session-card-border-1: #3b82f6;
+  --session-card-border-2: #10b981;
+  --session-card-border-3: #f59e0b;
+  --session-card-border-4: #8b5cf6;
 }
 
 * {
@@ -2100,6 +2106,7 @@ button.unassigned-tag:disabled {
 }
 .session-card {
   background: var(--surface-2);
+  border: 1px solid var(--session-card-border-1);
   border-radius: 10px;
   padding: 12px 14px;
   display: flex;

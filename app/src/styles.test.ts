@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 // 而 CI（`npm ci` + `tsc --noEmit`）里并没有该类型包，会报 TS2307。
 import stylesRaw from './styles.css?raw';
 import panelRaw from './components/SyncLogsPanel.tsx?raw';
+import sessionsPanelRaw from './components/SessionsPanel.tsx?raw';
 
 /**
  * 同步日志面板的横向滚动回归测试。
@@ -72,5 +73,42 @@ describe('侧边栏窄窗收起 #265', () => {
     expect(decls('.sidebar.collapsed .sidebar-item-label')).toMatch(/display\s*:\s*none/);
     expect(decls('.sidebar.collapsed .sidebar-group-title')).toMatch(/display\s*:\s*none/);
     expect(decls('.sidebar.collapsed .sidebar-empty')).toMatch(/display\s*:\s*none/);
+  });
+});
+
+/**
+ * 会话卡片彩色边框（#304）回归测试。
+ *
+ * 背景：会话卡片底色与面板背景过于接近，用户希望每张卡片加边框并随机使用
+ * 几种颜色，相邻卡片颜色必须不同。着色公式 `(row + col) % palette.length`
+ * 确保水平相邻（col 差 1）与垂直相邻（row 差 1）颜色必不同。
+ * 列数由 CSS grid `auto-fill` 响应式决定，运行时通过 `getComputedStyle` 实测。
+ *
+ * 该行为纯 CSS + 运行时布局，vitest 无布局引擎，故沿用 `?raw` 静态断言。
+ */
+describe('会话卡片彩色边框 #304', () => {
+  it(':root 定义 4 种边框色 CSS 变量', () => {
+    const root = stylesRaw.replace(/\/\*[\s\S]*?\*\//g, '');
+    for (let i = 1; i <= 4; i++) {
+      expect(root).toMatch(new RegExp(`--session-card-border-${i}\\s*:`));
+    }
+  });
+
+  it('.session-card 声明 border', () => {
+    const d = decls('.session-card');
+    expect(d).toMatch(/border\s*:\s*1px\s+solid/);
+  });
+
+  it('着色公式 (row + col) % 4 存在', () => {
+    expect(sessionsPanelRaw).toMatch(/\(row\s*\+\s*col\)\s*%\s*4/);
+  });
+
+  it('运行时通过 getComputedStyle 实测列数', () => {
+    expect(sessionsPanelRaw).toMatch(/getComputedStyle/);
+    expect(sessionsPanelRaw).toMatch(/gridTemplateColumns/);
+  });
+
+  it('sessions-list 容器有 ref 用于列数测量', () => {
+    expect(sessionsPanelRaw).toMatch(/ref=\{listRef\}/);
   });
 });
