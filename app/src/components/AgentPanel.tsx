@@ -71,6 +71,7 @@ const TOOLS: { name: string; params: string; key: string }[] = [
 
 const TRIGGERS: { when: string; action: string }[] = [
   { when: 'start', action: 'start' },
+  { when: 'setBranch', action: 'setBranch' },
   { when: 'interrupt', action: 'interrupt' },
   { when: 'handoff', action: 'handoff' },
   { when: 'done', action: 'done' },
