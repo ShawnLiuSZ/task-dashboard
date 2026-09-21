@@ -6,6 +6,15 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 会话卡片彩色边框区分相邻卡片（#304）**
+
+  - **#304 会话卡片底色与面板背景过于接近**：整面墙缺乏区分度，扫一眼难以定位某张卡片。需要每张卡片加边框，使用几种颜色随机区分，且上下左右相邻卡片颜色必须不同。详见 [docs/issue-304-session-border.md](./issue-304-session-border.md)。
+  - **4 色调色板**：定义蓝/绿/橙/紫 4 种边框色 CSS 变量（`--session-card-border-1` ~ `-4`），低饱和中等明度，浅底可辨识。
+  - **着色公式 `(row + col) % 4`**：水平相邻（col 差 1）与垂直相邻（row 差 1）颜色必不同，无需第三方着色库。
+  - **响应式列数实测**：CSS grid `auto-fill` 列数随窗口宽度变化，通过 `getComputedStyle` 读取 `gridTemplateColumns` 实测，窗口 resize 时重算。
+  - **静态断言回归**：`styles.test.ts` 新增 5 条断言覆盖调色板、border 声明、着色公式、列数实测、ref 挂载。
+  - **验证**：`npx tsc --noEmit` 0 error ✅、`npm test` 141 例 passed ✅、`npm run build` ✅、`npx prettier --check` ✅、`scripts/check-mcp-columns.py` ✅、`scripts/check-doc-links.py` ✅。
+
 - **未发布（Unreleased）— 会话卡片补「清除会话」+ 复制按钮改 icon（#301）**
 
   - **#301 会话卡片缺清除入口 + 复制按钮视觉噪音大**：每张卡片只有「在浏览器打开」一个操作，用户想清除已结束/误记的会话只能去 SQLite 手动 UPDATE。后端 `clear_session` 命令已齐备，前端 `api.clearSession(key)` 已封装，只缺前端按钮。评论补充：卡片里的复制按钮目前是竖排文字，占位突兀。详见 [docs/issue-301-session-clear.md](./issue-301-session-clear.md)。

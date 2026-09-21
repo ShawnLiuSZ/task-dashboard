@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import ConfirmDialog from './ConfirmDialog';
 import { useT } from '../i18n';
@@ -56,6 +56,27 @@ export default function SessionsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [clearKey, setClearKey] = useState<string | null>(null);
+  const [columns, setColumns] = useState(3);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const updateColumns = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const tracks = getComputedStyle(el)
+      .gridTemplateColumns.split(/\s+/)
+      .filter((s) => s && s !== 'none');
+    if (tracks.length > 0) setColumns(tracks.length);
+  }, []);
+
+  useEffect(() => {
+    updateColumns();
+    window.addEventListener('resize', updateColumns);
+    return () => window.removeEventListener('resize', updateColumns);
+  }, [updateColumns]);
+
+  useEffect(() => {
+    updateColumns();
+  }, [sessions, updateColumns]);
 
   const loadSessions = useCallback(async () => {
     setLoading(true);
@@ -111,118 +132,124 @@ export default function SessionsPanel() {
         ) : sessions.length === 0 ? (
           <div className="notes-placeholder">{t('sessions.empty')}</div>
         ) : (
-          <div className="sessions-list">
-            {sessions.map((task) => (
-              <div key={task.issueKey} className="session-card">
-                <div className="session-card-header">
-                  <span className="session-card-title">
-                    {t('sessions.title_format', {
-                      num: task.number,
-                      title: task.title,
-                    })}
-                  </span>
-                  <button
-                    type="button"
-                    className="note-tool"
-                    title={t('sessions.clear')}
-                    onClick={() => setClearKey(task.issueKey)}
-                  >
-                    <Icon d={ICON.trash} />
-                  </button>
-                  <button
-                    type="button"
-                    className="note-tool"
-                    title={t('sessions.openTask')}
-                    onClick={() => handleOpenTask(task)}
-                  >
-                    <Icon d={ICON.expand} />
-                  </button>
+          <div className="sessions-list" ref={listRef}>
+            {sessions.map((task, index) => {
+              const row = Math.floor(index / columns);
+              const col = index % columns;
+              const colorIdx = (row + col) % 4;
+              const borderColor = `var(--session-card-border-${colorIdx + 1})`;
+              return (
+                <div key={task.issueKey} className="session-card" style={{ borderColor }}>
+                  <div className="session-card-header">
+                    <span className="session-card-title">
+                      {t('sessions.title_format', {
+                        num: task.number,
+                        title: task.title,
+                      })}
+                    </span>
+                    <button
+                      type="button"
+                      className="note-tool"
+                      title={t('sessions.clear')}
+                      onClick={() => setClearKey(task.issueKey)}
+                    >
+                      <Icon d={ICON.trash} />
+                    </button>
+                    <button
+                      type="button"
+                      className="note-tool"
+                      title={t('sessions.openTask')}
+                      onClick={() => handleOpenTask(task)}
+                    >
+                      <Icon d={ICON.expand} />
+                    </button>
+                  </div>
+                  <div className="session-card-meta">
+                    {task.createdAt > 0 && (
+                      <div className="session-meta-row">
+                        <span className="session-meta-label">{t('sessions.createdAt')}</span>
+                        <span className="session-meta-value">
+                          {new Date(task.createdAt * 1000).toLocaleString(undefined, {
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            hour12: false,
+                          })}
+                        </span>
+                      </div>
+                    )}
+                    {task.workBranch && (
+                      <div className="session-meta-row">
+                        <span className="session-meta-label">{t('sessions.branch')}</span>
+                        <code className="session-meta-value">{task.workBranch}</code>
+                        <button
+                          type="button"
+                          className="note-tool"
+                          title={t('sessions.copyBranch')}
+                          onClick={() => handleCopy(task.workBranch, `branch-${task.issueKey}`)}
+                        >
+                          {copiedKey === `branch-${task.issueKey}` ? (
+                            <Icon d={ICON.check} />
+                          ) : (
+                            <Icon d={ICON.copy} />
+                          )}
+                        </button>
+                      </div>
+                    )}
+                    {task.workDir && (
+                      <div className="session-meta-row">
+                        <span className="session-meta-label">{t('sessions.workDir')}</span>
+                        <code className="session-meta-value">{task.workDir}</code>
+                        <button
+                          type="button"
+                          className="note-tool"
+                          title={t('sessions.copyDir')}
+                          onClick={() => handleCopy(task.workDir, `dir-${task.issueKey}`)}
+                        >
+                          {copiedKey === `dir-${task.issueKey}` ? (
+                            <Icon d={ICON.check} />
+                          ) : (
+                            <Icon d={ICON.copy} />
+                          )}
+                        </button>
+                      </div>
+                    )}
+                    {task.sessionId && (
+                      <div className="session-meta-row">
+                        <span className="session-meta-label">{t('sessions.sessionId')}</span>
+                        <code className="session-meta-value">{task.sessionId}</code>
+                        <button
+                          type="button"
+                          className="note-tool"
+                          title={t('sessions.copySession')}
+                          onClick={() => handleCopy(task.sessionId!, `session-${task.issueKey}`)}
+                        >
+                          {copiedKey === `session-${task.issueKey}` ? (
+                            <Icon d={ICON.check} />
+                          ) : (
+                            <Icon d={ICON.copy} />
+                          )}
+                        </button>
+                      </div>
+                    )}
+                    {task.sessionAgent && (
+                      <div className="session-meta-row">
+                        <span className="session-meta-label">{t('sessions.agent')}</span>
+                        <span className="session-meta-value">{task.sessionAgent}</span>
+                      </div>
+                    )}
+                    {task.sessionAt && (
+                      <div className="session-meta-row">
+                        <span className="session-meta-label">{t('sessions.time')}</span>
+                        <span className="session-meta-value">{relTime(task.sessionAt, t)}</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="session-card-meta">
-                  {task.createdAt > 0 && (
-                    <div className="session-meta-row">
-                      <span className="session-meta-label">{t('sessions.createdAt')}</span>
-                      <span className="session-meta-value">
-                        {new Date(task.createdAt * 1000).toLocaleString(undefined, {
-                          year: 'numeric',
-                          month: '2-digit',
-                          day: '2-digit',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                          hour12: false,
-                        })}
-                      </span>
-                    </div>
-                  )}
-                  {task.workBranch && (
-                    <div className="session-meta-row">
-                      <span className="session-meta-label">{t('sessions.branch')}</span>
-                      <code className="session-meta-value">{task.workBranch}</code>
-                      <button
-                        type="button"
-                        className="note-tool"
-                        title={t('sessions.copyBranch')}
-                        onClick={() => handleCopy(task.workBranch, `branch-${task.issueKey}`)}
-                      >
-                        {copiedKey === `branch-${task.issueKey}` ? (
-                          <Icon d={ICON.check} />
-                        ) : (
-                          <Icon d={ICON.copy} />
-                        )}
-                      </button>
-                    </div>
-                  )}
-                  {task.workDir && (
-                    <div className="session-meta-row">
-                      <span className="session-meta-label">{t('sessions.workDir')}</span>
-                      <code className="session-meta-value">{task.workDir}</code>
-                      <button
-                        type="button"
-                        className="note-tool"
-                        title={t('sessions.copyDir')}
-                        onClick={() => handleCopy(task.workDir, `dir-${task.issueKey}`)}
-                      >
-                        {copiedKey === `dir-${task.issueKey}` ? (
-                          <Icon d={ICON.check} />
-                        ) : (
-                          <Icon d={ICON.copy} />
-                        )}
-                      </button>
-                    </div>
-                  )}
-                  {task.sessionId && (
-                    <div className="session-meta-row">
-                      <span className="session-meta-label">{t('sessions.sessionId')}</span>
-                      <code className="session-meta-value">{task.sessionId}</code>
-                      <button
-                        type="button"
-                        className="note-tool"
-                        title={t('sessions.copySession')}
-                        onClick={() => handleCopy(task.sessionId!, `session-${task.issueKey}`)}
-                      >
-                        {copiedKey === `session-${task.issueKey}` ? (
-                          <Icon d={ICON.check} />
-                        ) : (
-                          <Icon d={ICON.copy} />
-                        )}
-                      </button>
-                    </div>
-                  )}
-                  {task.sessionAgent && (
-                    <div className="session-meta-row">
-                      <span className="session-meta-label">{t('sessions.agent')}</span>
-                      <span className="session-meta-value">{task.sessionAgent}</span>
-                    </div>
-                  )}
-                  {task.sessionAt && (
-                    <div className="session-meta-row">
-                      <span className="session-meta-label">{t('sessions.time')}</span>
-                      <span className="session-meta-value">{relTime(task.sessionAt, t)}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
         {clearKey && (

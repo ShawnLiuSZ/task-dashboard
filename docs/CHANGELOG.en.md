@@ -2,6 +2,15 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — Colored borders on session cards to distinguish adjacent cards (#304)**
+
+  - **#304 Session card background too close to panel background**: The entire wall lacked visual distinction, making it hard to locate a specific card at a glance. Each card needed a border with random colors from a palette, and adjacent cards (up/down/left/right) must have different colors. See [docs/issue-304-session-border.md](./issue-304-session-border.md).
+  - **4-color palette**: Defined 4 border color CSS variables (blue/green/orange/purple, `--session-card-border-1` ~ `-4`), low saturation, medium brightness, readable on light backgrounds.
+  - **Coloring formula `(row + col) % 4`**: Guarantees horizontal neighbors (col differs by 1) and vertical neighbors (row differs by 1) have different colors. No third-party coloring library needed.
+  - **Responsive column count**: CSS grid `auto-fill` column count changes with window width; measured at runtime via `getComputedStyle` reading `gridTemplateColumns`, recalculated on window resize.
+  - **Static assertion regression**: `styles.test.ts` adds 5 assertions covering palette, border declaration, coloring formula, column measurement, and ref mount.
+  - **Verification**: `npx tsc --noEmit` 0 errors ✅, `npm test` 141 cases passed ✅, `npm run build` ✅, `npx prettier --check` ✅, `scripts/check-mcp-columns.py` ✅, `scripts/check-doc-links.py` ✅.
+
 - **Unreleased — Add "Clear Session" to session cards + change copy buttons to icons (#301)**
 
   - **#301 Session cards missing clear button + copy buttons visually noisy**: Each card only had one action — "Open in browser". Users wanting to clear ended/mistaken sessions had no UI path, only manual SQLite UPDATE. Backend `clear_session` command was already in place, frontend `api.clearSession(key)` was already wrapped, only the frontend button was missing. Comment also noted: copy buttons were vertical text, visually noisy. See [docs/issue-301-session-clear.md](./issue-301-session-clear.md).
