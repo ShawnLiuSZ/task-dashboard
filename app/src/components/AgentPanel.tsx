@@ -52,9 +52,19 @@ const TOOLS: { name: string; params: string; key: string }[] = [
   { name: 'list_my_tasks', params: 'status? / ownership?', key: 'list' },
   { name: 'get_task_status', params: 'issue', key: 'get' },
   { name: 'update_task_status', params: 'issue, status', key: 'update' },
-  { name: 'record_session', params: 'issue, session_id, agent?, branch?', key: 'session' },
+  {
+    name: 'record_session',
+    params: 'issue, session_id, agent?, branch?, work_dir?',
+    key: 'session',
+  },
+  { name: 'set_work_branch', params: 'issue, branch', key: 'setWorkBranch' },
   { name: 'record_handoff', params: 'issue, text', key: 'handoff' },
   { name: 'clear_session', params: 'issue', key: 'clear' },
+  { name: 'list_notes', params: '-', key: 'notesList' },
+  { name: 'add_note', params: 'content, label?', key: 'notesAdd' },
+  { name: 'update_note', params: 'note_id, content', key: 'notesUpdate' },
+  { name: 'update_note_label', params: 'note_id, label', key: 'notesUpdateLabel' },
+  { name: 'delete_note', params: 'note_id', key: 'notesDelete' },
 ];
 
 /* ---------- 触发时机 → 动作（与 mcp_server/AGENT_INSTRUCTIONS.md §2 保持一致） ---------- */
