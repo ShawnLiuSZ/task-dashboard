@@ -342,6 +342,8 @@
   "sessions.copySession": "Copy session ID",
   "sessions.openTask": "Open task",
   "sessions.copyDone": "Copied",
+  "sessions.clear": "Clear session",
+  "sessions.clearConfirm": "Clear this session record? The card will be removed immediately. You can re-record via record_session.",
   "agent.title": "Agent Setup",
   "agent.tab.hooks": "Agent Hooks",
   "agent.tab.mcp": "MCP Setup",

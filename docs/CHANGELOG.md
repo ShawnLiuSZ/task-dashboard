@@ -6,6 +6,15 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 会话卡片补「清除会话」+ 复制按钮改 icon（#301）**
+
+  - **#301 会话卡片缺清除入口 + 复制按钮视觉噪音大**：每张卡片只有「在浏览器打开」一个操作，用户想清除已结束/误记的会话只能去 SQLite 手动 UPDATE。后端 `clear_session` 命令已齐备，前端 `api.clearSession(key)` 已封装，只缺前端按钮。评论补充：卡片里的复制按钮目前是竖排文字，占位突兀。详见 [docs/issue-301-session-clear.md](./issue-301-session-clear.md)。
+  - **清除会话**：卡片操作区新增 trash icon 按钮，点击弹出 `ConfirmDialog` 二次确认，确认后调 `api.clearSession` + `loadSessions()` 刷新，卡片即时移除。失败走 error 通道提示。
+  - **复制按钮改 icon**：三个可复制行（分支/目录/Session）统一改为 icon 按钮，默认 copy icon，成功后短暂切换 check icon（1.5s），tooltip 保留。
+  - **新增 2 个 i18n key**：`sessions.clear` + `sessions.clearConfirm`，中英文各 1 处。
+  - **无 schema / 无后端变更**：纯前端 UI + i18n 改动，复用已有 `clear_session` 命令。
+  - **验证**：`npm run i18n:check` 373 keys / locale ✅、`npx tsc --noEmit` 0 error、`npm test` 136 例 passed、`npm run build` ✅、`npx prettier --check` ✅、`cargo test` 24 例 passed、`scripts/check-mcp-columns.py` ✅、`scripts/check-doc-links.py` ✅。
+
 - **未发布（Unreleased）— 会话卡片补 Session ID 展示 + 补齐 work_dir 写入链路（#300）**
 
   - **#300 会话卡片缺 Session ID + 工作目录恒不显示**：`list_tasks` 后端已返回 `sessionId`，但卡片没有任何行显示它；`record_session` 的 `work_dir` 参数是 #287 才加的，但写入入口覆盖不全（hooks.rs 提示词、session-start.sh、AGENT_INSTRUCTIONS.md、task-handoff.md 均未提 `work_dir`），导致生产库 17 条活跃会话的 `work_dir` 全部为空串。详见 [docs/issue-300-session-card.md](./issue-300-session-card.md)。

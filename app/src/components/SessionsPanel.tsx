@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
+import ConfirmDialog from './ConfirmDialog';
 import { useT } from '../i18n';
 import type { Task } from '../types';
 
@@ -24,6 +25,9 @@ function Icon({ d, size = 13 }: { d: string; size?: number }) {
 
 const ICON = {
   expand: 'M10 6l6 6-6 6',
+  copy: 'M8 8v10h8V8z M12 4H5a1 1 0 0 0-1 1v12',
+  check: 'M5 12.5l4.5 4.5L19 7.5',
+  trash: 'M4 7h16 M9 7V5h6v2 M6 7l1 13h10l1-13',
 };
 
 function relTime(
@@ -51,6 +55,7 @@ export default function SessionsPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [clearKey, setClearKey] = useState<string | null>(null);
 
   const loadSessions = useCallback(async () => {
     setLoading(true);
@@ -80,6 +85,20 @@ export default function SessionsPanel() {
     void api.openInBrowser(task.url);
   }, []);
 
+  const handleClear = useCallback(
+    async (key: string) => {
+      try {
+        await api.clearSession(key);
+        setClearKey(null);
+        void loadSessions();
+      } catch (e) {
+        console.error('清除会话失败:', e);
+        setClearKey(null);
+      }
+    },
+    [loadSessions],
+  );
+
   return (
     <div className="panel-page">
       <div className="panel-content sessions-content">
@@ -102,6 +121,14 @@ export default function SessionsPanel() {
                       title: task.title,
                     })}
                   </span>
+                  <button
+                    type="button"
+                    className="note-tool"
+                    title={t('sessions.clear')}
+                    onClick={() => setClearKey(task.issueKey)}
+                  >
+                    <Icon d={ICON.trash} />
+                  </button>
                   <button
                     type="button"
                     className="note-tool"
@@ -137,9 +164,11 @@ export default function SessionsPanel() {
                         title={t('sessions.copyBranch')}
                         onClick={() => handleCopy(task.workBranch, `branch-${task.issueKey}`)}
                       >
-                        {copiedKey === `branch-${task.issueKey}`
-                          ? t('sessions.copyDone')
-                          : t('btn.copy')}
+                        {copiedKey === `branch-${task.issueKey}` ? (
+                          <Icon d={ICON.check} />
+                        ) : (
+                          <Icon d={ICON.copy} />
+                        )}
                       </button>
                     </div>
                   )}
@@ -153,9 +182,11 @@ export default function SessionsPanel() {
                         title={t('sessions.copyDir')}
                         onClick={() => handleCopy(task.workDir, `dir-${task.issueKey}`)}
                       >
-                        {copiedKey === `dir-${task.issueKey}`
-                          ? t('sessions.copyDone')
-                          : t('btn.copy')}
+                        {copiedKey === `dir-${task.issueKey}` ? (
+                          <Icon d={ICON.check} />
+                        ) : (
+                          <Icon d={ICON.copy} />
+                        )}
                       </button>
                     </div>
                   )}
@@ -169,9 +200,11 @@ export default function SessionsPanel() {
                         title={t('sessions.copySession')}
                         onClick={() => handleCopy(task.sessionId!, `session-${task.issueKey}`)}
                       >
-                        {copiedKey === `session-${task.issueKey}`
-                          ? t('sessions.copyDone')
-                          : t('btn.copy')}
+                        {copiedKey === `session-${task.issueKey}` ? (
+                          <Icon d={ICON.check} />
+                        ) : (
+                          <Icon d={ICON.copy} />
+                        )}
                       </button>
                     </div>
                   )}
@@ -191,6 +224,13 @@ export default function SessionsPanel() {
               </div>
             ))}
           </div>
+        )}
+        {clearKey && (
+          <ConfirmDialog
+            message={t('sessions.clearConfirm')}
+            onConfirm={() => void handleClear(clearKey)}
+            onCancel={() => setClearKey(null)}
+          />
         )}
       </div>
     </div>
