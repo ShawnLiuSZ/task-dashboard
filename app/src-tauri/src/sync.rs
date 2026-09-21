@@ -102,53 +102,162 @@ pub struct SyncResult {
     pub accounts_synced: usize,
 }
 
+/// 关闭关键词列表（与 `scripts/merge-cleanup.py` 的 CLOSE_RE 保持一致）。
+const CLOSE_KEYWORDS: &[&str] = &[
+    "closes",
+    "closed",
+    "close",
+    "fixes",
+    "fixed",
+    "fix",
+    "resolves",
+    "resolved",
+    "resolve",
+    "refs",
+    "references",
+    "ref",
+    "关闭",
+    "解决",
+    "修复",
+];
+
+fn is_whitespace(b: u8) -> bool {
+    b == b' ' || b == b'\t' || b == b'\n' || b == b'\r'
+}
+
+fn is_repo_prefix_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.' || b == b'/'
+}
+
+/// 检查 `text[pos..]` 是否以某个关闭关键词开头（大小写不敏感）。
+/// 返回关键词结束位置，或 None。
+///
+/// 词边界检查：关键词前面不能是字母数字或下划线（避免 "prefixfixed" 误匹配），
+/// 但允许前面是中文（"已关闭" 应匹配）。
+fn match_close_keyword(text: &str, pos: usize) -> Option<usize> {
+    // pos 必须在 char boundary 上，否则无法安全切片
+    if !text.is_char_boundary(pos) {
+        return None;
+    }
+    // 词边界检查：前面不能是字母数字或下划线
+    if pos > 0 {
+        let prev_byte = text.as_bytes()[pos - 1];
+        if prev_byte.is_ascii_alphanumeric() || prev_byte == b'_' {
+            return None;
+        }
+    }
+    for kw in CLOSE_KEYWORDS {
+        let kw = *kw;
+        let kw_bytes = kw.as_bytes();
+        let end = pos + kw_bytes.len();
+        if end <= text.len() && text.is_char_boundary(end) {
+            let candidate = &text[pos..end];
+            // 大小写不敏感比较（ASCII 关键词）或精确比较（中文关键词）
+            let matched = if kw.is_ascii() {
+                candidate.eq_ignore_ascii_case(kw)
+            } else {
+                candidate == kw
+            };
+            if matched {
+                // 词边界检查：关键词后面不能是字母数字或下划线
+                if end >= text.len() {
+                    return Some(end);
+                }
+                let next_byte = text.as_bytes()[end];
+                if next_byte.is_ascii_alphanumeric() || next_byte == b'_' {
+                    continue;
+                }
+                return Some(end);
+            }
+        }
+    }
+    None
+}
+
 /// 从文本（PR 正文）里提取 issue 引用，返回 `repo#number` 形式的键。
 /// 支持两种形式：
 /// - `#123`：归属 PR 所在仓库（即传入的 `default_repo`）
 /// - `owner/repo#123`：跨仓库，回退到 `repo`（路径最后一段）
 ///
-/// 用纯 ASCII 手扫；不依赖任何 crate。本函数是「PR 对应哪个 issue」反向关联的权威解析器。
+/// **只匹配有关闭关键词的引用**（Closes/Fixes/Resolves/Refs/References/关闭/解决/修复），
+/// 避免 PR 正文里裸提 `#N` 被误关联。关键词后允许冒号与空白，可连续跟多个编号。
+/// 关键词与 `#N` 之间允许 repo 前缀（如 `Fixes owner/repo#123`）。
 ///
-/// **已知限制**：URL 锚 `https://example.com/page#42` 会被解析成 `default_repo#42`——
-/// 这是协议层的事实，规则无法可靠地区分「URL 锚」与「issue 引用」。
-/// 实践里 PR body 中的 URL 锚对应的几乎都不是本组织仓库的 issue，问题可忽略；
-/// 如确需排除，可在调用方对 URL 段过滤。
+/// 用纯 ASCII 手扫；不依赖任何 crate。本函数是「PR 对应哪个 issue」反向关联的权威解析器。
 fn parse_issue_refs(text: &str, default_repo: &str) -> Vec<String> {
     let bytes = text.as_bytes();
     let mut out: Vec<String> = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'#' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
-            let num_start = i + 1;
-            let mut j = num_start;
-            while j < bytes.len() && bytes[j].is_ascii_digit() {
+        // 尝试匹配关闭关键词
+        if let Some(kw_end) = match_close_keyword(text, i) {
+            // 跳过空白和可选的冒号
+            let mut j = kw_end;
+            while j < bytes.len() && is_whitespace(bytes[j]) {
                 j += 1;
             }
-            if let Ok(num) = text[num_start..j].parse::<i64>() {
-                if num > 0 {
-                    // 向左扫描「owner/repo」前缀：允许字母数字 + `_` + `-` + `.` + `/`。
-                    // 这里的关键是把 `/` 放进来，否则 owner/repo#N 永远切不出仓库名
-                    // （循环在 `/` 处退出，最终 seg 只剩 repo 部分，跨仓库失效）。
-                    let mut k = i as isize - 1;
-                    while k >= 0
-                        && (bytes[k as usize].is_ascii_alphanumeric()
-                            || bytes[k as usize] == b'_'
-                            || bytes[k as usize] == b'-'
-                            || bytes[k as usize] == b'.'
-                            || bytes[k as usize] == b'/')
-                    {
-                        k -= 1;
+            // 可选冒号（半角或全角）
+            if j < bytes.len() && bytes[j] == b':' {
+                j += 1;
+            } else if j < bytes.len() && bytes[j] == 0xEF && j + 2 < bytes.len() && bytes[j + 1] == 0xBC && bytes[j + 2] == 0x9A {
+                j += 3;
+            }
+            // 冒号后再跳过空白
+            while j < bytes.len() && is_whitespace(bytes[j]) {
+                j += 1;
+            }
+            // 提取 #N 引用（允许 repo 前缀）
+            // 第一个 #N 前允许 repo 前缀和冒号，后续 #N 之间只允许空白
+            let mut found_first = false;
+            loop {
+                if !found_first {
+                    // 第一个 #N：跳过 repo 前缀字符
+                    while j < bytes.len() && is_repo_prefix_char(bytes[j]) {
+                        j += 1;
                     }
-                    let seg = &text[(k + 1) as usize..i];
-                    // seg 含 `/` 时取最后一段（兼容 `org/sub/group/repo#N` 多段路径）；
-                    // 不含 `/` 时回退 PR 所在仓库。
-                    let repo = seg
-                        .rfind('/')
-                        .map(|s| &seg[s + 1..])
-                        .unwrap_or(default_repo);
-                    if !repo.is_empty() {
-                        out.push(format!("{}#{}", repo, num));
+                    // 跳过可选的冒号（半角或全角）
+                    if j < bytes.len() && bytes[j] == b':' {
+                        j += 1;
+                    } else if j < bytes.len() && bytes[j] == 0xEF && j + 2 < bytes.len() && bytes[j + 1] == 0xBC && bytes[j + 2] == 0x9A {
+                        j += 3;
                     }
+                    // 跳过空白
+                    while j < bytes.len() && is_whitespace(bytes[j]) {
+                        j += 1;
+                    }
+                } else {
+                    // 后续 #N：只跳过空白（不允许 repo 前缀或冒号）
+                    while j < bytes.len() && is_whitespace(bytes[j]) {
+                        j += 1;
+                    }
+                }
+                if j < bytes.len() && bytes[j] == b'#' && j + 1 < bytes.len() && bytes[j + 1].is_ascii_digit() {
+                    found_first = true;
+                    let num_start = j + 1;
+                    let mut k = num_start;
+                    while k < bytes.len() && bytes[k].is_ascii_digit() {
+                        k += 1;
+                    }
+                    if let Ok(num) = text[num_start..k].parse::<i64>() {
+                        if num > 0 {
+                            // 向左扫描「owner/repo」前缀
+                            let mut m = j as isize - 1;
+                            while m >= 0 && is_repo_prefix_char(bytes[m as usize]) {
+                                m -= 1;
+                            }
+                            let seg = &text[(m + 1) as usize..j];
+                            let repo = seg
+                                .rfind('/')
+                                .map(|s| &seg[s + 1..])
+                                .unwrap_or(default_repo);
+                            if !repo.is_empty() {
+                                out.push(format!("{}#{}", repo, num));
+                            }
+                        }
+                    }
+                    j = k;
+                } else {
+                    break;
                 }
             }
             i = j;
@@ -1074,16 +1183,24 @@ mod tests {
         assert_eq!(r, vec!["myrepo#123"]);
 
         // `owner/repo#123` 跨仓库
-        let r = parse_issue_refs("See foo/bar#456", "myrepo");
+        let r = parse_issue_refs("Fixes foo/bar#456", "myrepo");
         assert_eq!(r, vec!["bar#456"]);
 
         // 多个引用
         let r = parse_issue_refs("Fix #1; refs a/b#2", "def");
         assert_eq!(r, vec!["def#1", "b#2"]);
 
-        // 重复引用去重去重在调用方做；本函数返回自然顺序的全部命中
-        let r = parse_issue_refs("refs #1 again #1", "def");
-        assert_eq!(r, vec!["def#1", "def#1"]);
+        // 连续引用：Closes #1 #2 #3
+        let r = parse_issue_refs("Closes #1 #2 #3", "def");
+        assert_eq!(r, vec!["def#1", "def#2", "def#3"]);
+
+        // 带冒号：Closes: #42
+        let r = parse_issue_refs("Closes: #42", "def");
+        assert_eq!(r, vec!["def#42"]);
+
+        // 全角冒号：关闭：#42
+        let r = parse_issue_refs("关闭：#42", "def");
+        assert_eq!(r, vec!["def#42"]);
     }
 
     #[test]
@@ -1101,18 +1218,36 @@ mod tests {
         // 无 # 前缀
         assert!(parse_issue_refs("plain text 123", "def").is_empty());
         // # 后非数字
-        assert!(parse_issue_refs("hash #abc, #0?", "def").is_empty());
+        assert!(parse_issue_refs("Closes #abc, #0?", "def").is_empty());
         // 空
         assert!(parse_issue_refs("", "def").is_empty());
         // #0 也被忽略（GitHub issue 编号从 1 起）
-        assert!(parse_issue_refs("refs #0", "def").is_empty());
+        assert!(parse_issue_refs("Closes #0", "def").is_empty());
+    }
+
+    #[test]
+    fn parse_issue_refs_requires_keyword() {
+        // 裸 #N 不匹配（PR 正文裸提不应关联）
+        assert!(parse_issue_refs("#123", "myrepo").is_empty());
+        // "See" 不是关闭关键词
+        assert!(parse_issue_refs("See foo/bar#456", "myrepo").is_empty());
+        // "Again" 不是关闭关键词，第二个 #1 不匹配
+        let r = parse_issue_refs("refs #1 again #1", "def");
+        assert_eq!(r, vec!["def#1"]);
     }
 
     #[test]
     fn parse_issue_refs_handles_unicode_context() {
-        // 中文 PR body 里夹 #123 仍命中（按字节扫描）
+        // 中文关闭关键词
         let r = parse_issue_refs("修复 issue：#999 谢谢", "def");
         assert_eq!(r, vec!["def#999"]);
+
+        let r = parse_issue_refs("关闭 #284\n解决 #285", "def");
+        assert_eq!(r, vec!["def#284", "def#285"]);
+
+        // 已关闭（"已" 是中文，不是字母数字，放行）
+        let r = parse_issue_refs("已关闭 #284", "def");
+        assert_eq!(r, vec!["def#284"]);
     }
 
     #[test]
@@ -1123,15 +1258,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_issue_refs_documents_url_anchor_caveat() {
-        // 已知限制：URL 锚 `#42` 也会被解析。函数本身无法区分「URL 锚」与「issue 引用」——
-        // 见文档注释。若需排除 URL，应在调用方做预过滤。这里仅记录这个事实，
-        // 不做正确性断言（protocol-level 的固有歧义）。
-        let r = parse_issue_refs("see https://example.com/page#42", "myrepo");
-        // 现在的实际行为是「page#42」（seg="com/page"，rfind 取 "page"）。
-        // 至少要确认 seg 中扫描 `/` 后确实能识别 — 不是空。
-        assert_eq!(r.len(), 1);
-        assert!(r[0].ends_with("#42"));
+    fn parse_issue_refs_ignores_url_anchor() {
+        // URL 锚 `#42` 前面没有关闭关键词，不匹配
+        assert!(parse_issue_refs("see https://example.com/page#42", "myrepo").is_empty());
     }
 
     #[test]
@@ -1139,6 +1268,14 @@ mod tests {
         // GitHub 偶尔会出现 `org/sub/group/repo#N` 多段路径：rfind 取最后一段。
         let r = parse_issue_refs("fixes a/b/c/d#9", "x");
         assert_eq!(r, vec!["d#9"]);
+    }
+
+    #[test]
+    fn parse_issue_refs_rejects_prefix_substrings() {
+        // prefixfixed 不是关键词（前面有字母数字）
+        assert!(parse_issue_refs("prefixfixed #5", "def").is_empty());
+        // notresolved 不是关键词
+        assert!(parse_issue_refs("notresolved #5", "def").is_empty());
     }
 
     // ===== accounts + 多账号视图的纯逻辑校验 ==========================
