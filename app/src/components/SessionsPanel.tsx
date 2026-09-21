@@ -82,9 +82,6 @@ export default function SessionsPanel() {
 
   return (
     <div className="panel-page">
-      <header className="panel-page-head">
-        <h2 className="panel-page-title">{t('sessions.title')}</h2>
-      </header>
       <div className="panel-content sessions-content">
         {loading ? (
           <div className="notes-placeholder">{t('notes.loading')}</div>

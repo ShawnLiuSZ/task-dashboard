@@ -6,6 +6,13 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 去掉「任务会话」面板顶部的页面标题（#298）**
+
+  - **#298 面板标题与侧边栏重复**：「任务会话」面板顶部显示大标题「任务会话」，而左侧侧边栏当前导航项已经高亮显示「任务会话」，信息完全重复，且占据面板顶部一整行空间。详见 [docs/issue-298-sessions-title.md](./issue-298-sessions-title.md)。
+  - **做法**：移除 `SessionsPanel.tsx` 顶部的 `<header>` 和 `<h2>` 元素，面板内容区直接占据顶部空间。参考 Agent 面板处理方式——Agent 保留标题是因为顶部有操作按钮需要标题行承载工具栏，Sessions 面板顶部无任何操作按钮，标题行纯属冗余。同步清理 `sessions.title` i18n key（中英文各 1 处），保留 `sessions.title_format`（卡片内标题格式，与本次无关）。
+  - **无 schema / 无 Rust 变更**：纯前端 UI + i18n 改动。
+  - **验证**：`npm run i18n:check` 369 keys / locale ✅、`npx tsc --noEmit` 0 error、`npm test` 136 例 passed、`npm run build` ✅、`npx prettier --check` ✅、`scripts/check-doc-links.py` ✅。
+
 - **未发布（Unreleased）— PR 正文裸提 #N 被误关联（#299）**
 
   - **#299 PR 正文裸提 #N 被误关联**：`sync.rs` 的 `parse_issue_refs` 把所有裸 `#N` 都当作关联目标，导致 PR 正文里顺带提一下某个 issue 编号就被错误关联。例如 PR #1342 正文里提了 `#1340` 就被关联上去，即使这两个根本不是同一个任务。详见 [docs/issue-299-pr-linkage.md](./issue-299-pr-linkage.md)。

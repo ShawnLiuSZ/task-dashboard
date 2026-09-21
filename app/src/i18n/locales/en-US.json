@@ -329,7 +329,6 @@
   "notes.imported": "Import done: {imported} added, {skipped} duplicates skipped",
   "notes.noImportable": "No importable notes in file",
   "notes.badFormat": "Unrecognized format: expected a notes-backup export",
-  "sessions.title": "Task Sessions",
   "sessions.empty": "No active sessions",
   "sessions.title_format": "#{num} {title}",
   "sessions.createdAt": "Created",

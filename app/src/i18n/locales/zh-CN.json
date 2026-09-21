@@ -329,7 +329,6 @@
   "notes.imported": "导入完成：新增 {imported} 条，跳过重复 {skipped} 条",
   "notes.noImportable": "文件中没有可导入的备忘录",
   "notes.badFormat": "无法识别的格式：应为 notes-backup 导出文件",
-  "sessions.title": "任务会话",
   "sessions.empty": "暂无活跃会话",
   "sessions.title_format": "#{num} {title}",
   "sessions.createdAt": "创建于",
