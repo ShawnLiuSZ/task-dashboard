@@ -6,6 +6,15 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 会话卡片补 Session ID 展示 + 补齐 work_dir 写入链路（#300）**
+
+  - **#300 会话卡片缺 Session ID + 工作目录恒不显示**：`list_tasks` 后端已返回 `sessionId`，但卡片没有任何行显示它；`record_session` 的 `work_dir` 参数是 #287 才加的，但写入入口覆盖不全（hooks.rs 提示词、session-start.sh、AGENT_INSTRUCTIONS.md、task-handoff.md 均未提 `work_dir`），导致生产库 17 条活跃会话的 `work_dir` 全部为空串。详见 [docs/issue-300-session-card.md](./issue-300-session-card.md)。
+  - **Session ID 展示**：卡片新增「Session」行，完整显示 `task.sessionId`（不截断），等宽字体 + 一键复制按钮。放在「目录」行之后、Agent 行之前。
+  - **work_dir 写入链路补齐**：hooks.rs `script_variant` 提示词补 `（含 branch、work_dir）`；taskboard-session-start.sh 示例补 `work_dir` 参数；AGENT_INSTRUCTIONS.md 触发规则表 + 两个示例补 `work_dir`；task-handoff.md（claude 版）补 `work_dir=$(pwd)`；task-handoff.md（opencode 版）补 `work_dir` 自动填充说明。opencode 插件已有 `work_dir` 自动填充逻辑，不需要改。
+  - **新增 2 个 i18n key**：`sessions.sessionId`（Session）+ `sessions.copySession`（Copy session ID），中英文各 1 处。
+  - **无 schema / 无 Rust 变更**：纯前端 UI + i18n + hooks 脚本 + 文档改动。
+  - **验证**：`npm run i18n:check` 371 keys / locale ✅、`npx tsc --noEmit` 0 error、`npm test` 136 例 passed、`npm run build` ✅、`npx prettier --check` ✅、`cargo test` 24 例 passed、`scripts/check-mcp-columns.py` ✅、`scripts/check-doc-links.py` ✅。
+
 - **未发布（Unreleased）— 去掉「任务会话」面板顶部的页面标题（#298）**
 
   - **#298 面板标题与侧边栏重复**：「任务会话」面板顶部显示大标题「任务会话」，而左侧侧边栏当前导航项已经高亮显示「任务会话」，信息完全重复，且占据面板顶部一整行空间。详见 [docs/issue-298-sessions-title.md](./issue-298-sessions-title.md)。

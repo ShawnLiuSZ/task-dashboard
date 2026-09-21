@@ -35,17 +35,18 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 
 ## 1. 可用工具
 
-| 工具 | 入参 | 作用 |
-|---|---|---|
-| `list_my_tasks` | `status?` / `ownership?` | 列出看板任务（可按四态 / 归属过滤） |
-| `get_task_status` | `issue` | 查某任务当前状态 + 已记录的 session / handoff |
-| `update_task_status` | `issue`, `status` | 改本地看板状态 |
-| `record_session` | `issue`, `session_id`, `agent?`, `branch?`, `work_dir?` | 记录中断会话 id；`branch` 非空则一并记录当前工作分支（写 `work_branch`，与同步的 PR `branch` 分离）；`work_dir` 非空则一并记录工作目录（写 `work_dir`） |
-| `record_handoff` | `issue`, `text` | 记录「交接任务」详情 |
-| `clear_session` | `issue` | 任务完成后清空 session 字段（保留审计） |
-| `set_work_branch` | `issue`, `branch` | #279：创建 / 切换 issue 分支后纠正 `work_branch`（只写该列、不碰 PR `branch`；`branch` 为空报错） |
+| 工具                 | 入参                                                    | 作用                                                                                                                                                    |
+| -------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_my_tasks`      | `status?` / `ownership?`                                | 列出看板任务（可按四态 / 归属过滤）                                                                                                                     |
+| `get_task_status`    | `issue`                                                 | 查某任务当前状态 + 已记录的 session / handoff                                                                                                           |
+| `update_task_status` | `issue`, `status`                                       | 改本地看板状态                                                                                                                                          |
+| `record_session`     | `issue`, `session_id`, `agent?`, `branch?`, `work_dir?` | 记录中断会话 id；`branch` 非空则一并记录当前工作分支（写 `work_branch`，与同步的 PR `branch` 分离）；`work_dir` 非空则一并记录工作目录（写 `work_dir`） |
+| `record_handoff`     | `issue`, `text`                                         | 记录「交接任务」详情                                                                                                                                    |
+| `clear_session`      | `issue`                                                 | 任务完成后清空 session 字段（保留审计）                                                                                                                 |
+| `set_work_branch`    | `issue`, `branch`                                       | #279：创建 / 切换 issue 分支后纠正 `work_branch`（只写该列、不碰 PR `branch`；`branch` 为空报错）                                                       |
 
 ### issue 引用格式（任选其一，自动归一化）
+
 - `repo#number` — 例：`fad-backend#1247`
 - `owner/repo#number` — 例：`FoodsUp-Inc/fad-backend#1247`
 - GitHub URL — 例：`https://github.com/FoodsUp-Inc/fad-backend/issues/1247`
@@ -63,6 +64,7 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 `parent_issue` / `sub_issues` 是**字符串形式的 JSON**，需要时自行 `JSON.parse`；其中的 `url` 即为可直接打开的地址，无需自行拼接。关系由同步按仓库批量拉取，某仓库拉取失败时会保留既有值（不置空）。
 
 ### 状态枚举（`update_task_status` 的 `status`）
+
 - 英文键：`todo` / `doing` / `processed` / `done`
 - 中文等价：`待处理` / `处理中` / `已处理` / `已完成`
 
@@ -70,18 +72,20 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 
 ## 2. 触发时机 → 动作（核心规则）
 
-| 时机 | 动作 |
-|---|---|
-| **开始处理**某个 issue（用户派活 / 你认领 / 你开始改它） | **先切到该 issue 的工作分支**（`feature/issue-<N>-<scope>`，从 develop 新开），再 `update_task_status(issue, "处理中")` + `record_session(issue, <当前会话 id>, "<agent 名>", branch=<当前工作分支>)` |
-| **切到 issue 分支之后**（#279 纠正） | 若你**先**跑了「开始处理」命令（彼时还在 develop/master）、**之后**才切到 issue 分支，切完补一次 `set_work_branch(issue, branch=<当前 issue 分支>)`，纠正 `work_branch`（只写该列、不碰 PR `branch`） |
-| **中途停止 / 会话中断 / 你要切到别的任务** | `record_session(issue, <当前会话 id>, "<你的 agent 名>")` |
-| 用户说「**生成交接任务**」「交接一下」「handoff」之类 | `record_handoff(issue, "<已做/未做/卡点/如何恢复>")`；如需保留可恢复会话，同时 `record_session` |
-| **任务完成**（你确认做完、要收尾） | `update_task_status(issue, "已完成")` + `clear_session(issue)` |
-| 想了解某任务现状 / 恢复上下文 | `get_task_status(issue)` |
-| 想看任务清单（如只看「无人认领」） | `list_my_tasks(ownership="notassignee")` |
+| 时机                                                     | 动作                                                                                                                                                                                                                       |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **开始处理**某个 issue（用户派活 / 你认领 / 你开始改它） | **先切到该 issue 的工作分支**（`feature/issue-<N>-<scope>`，从 develop 新开），再 `update_task_status(issue, "处理中")` + `record_session(issue, <当前会话 id>, "<agent 名>", branch=<当前工作分支>, work_dir=<项目目录>)` |
+| **切到 issue 分支之后**（#279 纠正）                     | 若你**先**跑了「开始处理」命令（彼时还在 develop/master）、**之后**才切到 issue 分支，切完补一次 `set_work_branch(issue, branch=<当前 issue 分支>)`，纠正 `work_branch`（只写该列、不碰 PR `branch`）                      |
+| **中途停止 / 会话中断 / 你要切到别的任务**               | `record_session(issue, <当前会话 id>, "<你的 agent 名>")`                                                                                                                                                                  |
+| 用户说「**生成交接任务**」「交接一下」「handoff」之类    | `record_handoff(issue, "<已做/未做/卡点/如何恢复>")`；如需保留可恢复会话，同时 `record_session`                                                                                                                            |
+| **任务完成**（你确认做完、要收尾）                       | `update_task_status(issue, "已完成")` + `clear_session(issue)`                                                                                                                                                             |
+| 想了解某任务现状 / 恢复上下文                            | `get_task_status(issue)`                                                                                                                                                                                                   |
+| 想看任务清单（如只看「无人认领」）                       | `list_my_tasks(ownership="notassignee")`                                                                                                                                                                                   |
 
 ### 会话 id / 分支来源（重要，#177）
+
 `session_id` **由调用方提供**，优先级如下（多 agent 并行时不要混用对方的 id）：
+
 - claude-code（本仓库，已接项目级 hooks）：`SessionStart` hook 已把本次会话 id 注入上下文并持久化到 `$TASKBOARD_SESSION_ID`（`CLAUDE_ENV_FILE`），slash command 里也可用 `${CLAUDE_SESSION_ID}`。三者同值，优先用 `${CLAUDE_SESSION_ID}`，为空再用 `$TASKBOARD_SESSION_ID`。兜底才用 tmux 会话等可恢复标识。
 - opencode（本仓库，已接项目级 plugin `.opencode/plugins/taskboard.js`）：调 `record_session` 时**不用填** `session_id` / `agent` / `branch`——插件在 `tool.execute.before` 自动用真实会话 id + `opencode` + git 分支补齐，不要编造。快捷方式：`/task-start <repo#num>`。**自动开始**：用户 prompt 里含**唯一** issue 引用（`repo#num` / `owner/repo#num` / GitHub issue URL）时，插件自动置处理中 + 记 session（走同一 MCP 后端），无需手动调命令；零条或多条（无法消歧）→ 手动 `/task-start`。
 - codex / zcode / helix：各自取本会话的可恢复 id。
@@ -91,6 +95,7 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 **取不到就传空**（没在 git 仓库 / 无分支时不要硬塞脏数据）。写入独立 `work_branch` 列，与同步自动拉的 PR `branch` 分离——同步不会覆盖它。**#279 根因**：若在 develop/master 上就执行 `git branch --show-current` 并传给 `record_session`，`work_branch` 会被记成基线分支；因此分支捕获必须放在切到 issue 分支**之后**。若已经录错，切到 issue 分支后用 `set_work_branch(issue, branch=<当前 issue 分支>)` 纠正。
 
 ### 中断时状态如何保持
+
 中断后**保持「处理中」**（不要回退到「待处理」）——回退会丢失「该任务已有半成品」的信号，而这正是 session id 存在的意义；下次恢复时显式再转「处理中」即可。
 
 ---
@@ -103,13 +108,13 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 # Bash: git switch -c feature/issue-1247-xxx develop   # 已在该分支则跳过
 # Bash: git branch --show-current                       # 拿到 issue 分支名
 update_task_status(issue="fad-backend#1247", status="处理中")
-record_session(issue="fad-backend#1247", session_id="${CLAUDE_SESSION_ID}", agent="claude-code", branch="feature/issue-1247-xxx")
+record_session(issue="fad-backend#1247", session_id="${CLAUDE_SESSION_ID}", agent="claude-code", branch="feature/issue-1247-xxx", work_dir="/path/to/project")
 
 # 1b) #279 纠正：若先跑了开始命令（彼时在 develop/master）、之后才切分支，切完补一次
 set_work_branch(issue="fad-backend#1247", branch="feature/issue-1247-xxx")
 
 # 2) 中途要切去别的事，先记录会话
-record_session(issue="fad-backend#1247", session_id="tmux:work-1247", agent="claude-code")
+record_session(issue="fad-backend#1247", session_id="tmux:work-1247", agent="claude-code", work_dir="/path/to/project")
 
 # 3) 用户说「生成交接任务」
 record_handoff(issue="fad-backend#1247",
@@ -123,6 +128,7 @@ clear_session(issue="fad-backend#1247")
 ---
 
 ## 4. 注意事项
+
 - 所有工具**只对本地数据库生效**，不会向 GitHub 推送任何变更、不触发任何通知。
 - `issue` 必须是看板里已存在的任务（同步自 `org:FoodsUp-Inc` 的 open issue）；若返回「任务不存在」，先 `list_my_tasks` 确认 key 是否正确（注意是 `repo#number`，不含 owner）。
 - 数据库文件默认 `~/Library/Application Support/com.shawnliu.taskboard/taskboard.db`，可由环境变量 `TASKBOARD_DB` 覆盖。

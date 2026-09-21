@@ -37,7 +37,7 @@ ctx = (
     "1) 用 Bash 工具执行 git branch --show-current 拿到当前工作分支（先执行、再传值，"
     "禁止把 $(...) 原样塞进 MCP 参数，MCP 不执行 shell）；\n"
     "2) update_task_status(issue, \"处理中\")；\n"
-    "3) record_session(issue, session_id=\"%s\", agent=\"claude-code\", branch=\"<上一步的分支，可空>\")。\n"
+    "3) record_session(issue, session_id=\"%s\", agent=\"claude-code\", branch=\"<上一步的分支，可空>\", work_dir=\"<项目目录，如 /path/to/project>\")。\n"
     "快捷方式：直接执行 /task-start <repo#num>。完成时 /task-done，交接时 /task-handoff。"
     % (sid or "(未知)", sid or "(未知)")
 )
