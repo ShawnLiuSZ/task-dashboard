@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 主题系统：护眼/深色/跟随系统（#308）**
+
+  - **#308 应用只有浅色背景**：长时间看板浏览偏刺眼，无深色/护眼可选，无法跟随操作系统主题。详见 [docs/issue-308-theme-system.md](./issue-308-theme-system.md)。
+  - **3 套主题**：浅色（默认）、护眼（低饱和米黄/sepia）、深色（深紫蓝底 + 浅色文字）。
+  - **CSS 变量**：`：root` 定义基础变量，`[data-theme="sepia"]` 和 `[data-theme="dark"]` 覆盖，包括背景/文字/边框/强调色/语义色/代码块/阴影等 20+ 变量。
+  - **主题检测与持久化**：`localStorage['taskboard.theme']` 存储，`matchMedia` 检测系统主题，`auto` 模式下监听系统变化自动切换，模块加载时立即应用防 FOUC。
+  - **设置入口**：SettingsPanel 基础设置 tab 新增「外观主题」下拉选择器（跟随系统/浅色/护眼/深色）。
+  - **颜色转换**：将 `#a32d2d`→`var(--error)`、`#c0392b`→`var(--danger)`、`#fdecec`→`var(--error-bg)`、`#eaf6ef`→`var(--success-bg)` 等 15+ 硬编码颜色转换为 CSS 变量。
+  - **新增 5 个 i18n key**：`settings.theme` + `settings.themeAuto` + `settings.themeLight` + `settings.themeSepia` + `settings.themeDark`，中英文各 5 处。
+  - **新增文件**：`app/src/theme.ts`（主题管理模块，无 React 副作用，可被测试环境安全导入）。
+  - **验证**：`npx tsc --noEmit` 0 error ✅、`npm test` 141 例 passed ✅、`npm run build` ✅、`npm run i18n:check` 378 keys ✅、`npx prettier --check` ✅、`scripts/check-mcp-columns.py` ✅、`scripts/check-doc-links.py` ✅。
+
 - **未发布（Unreleased）— 会话卡片彩色边框区分相邻卡片（#304）**
 
   - **#304 会话卡片底色与面板背景过于接近**：整面墙缺乏区分度，扫一眼难以定位某张卡片。需要每张卡片加边框，使用几种颜色随机区分，且上下左右相邻卡片颜色必须不同。详见 [docs/issue-304-session-border.md](./issue-304-session-border.md)。
