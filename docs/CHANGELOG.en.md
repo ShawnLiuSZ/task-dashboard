@@ -2,7 +2,33 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **Unreleased — Session cards: remove meta value white background + adjust icon colors (#310)**
+- **v0.6.3 (2026-09-21) — Guide text update (#315)**
+
+  - **#315 Guide missing set_work_branch trigger**: record_session also missing work_dir parameter. See [docs/issue-315-guide-text.md](./issue-315-guide-text.md).
+  - **Add trigger**: "After switching to the issue branch" → `set_work_branch(issue, branch=<current issue branch>)`.
+  - **Add parameter**: record_session action includes `work_dir=<dir>`.
+  - **2 new i18n keys**: `agent.guide.setBranch.when` + `agent.guide.setBranch.action`, 2 each in zh-CN / en-US.
+  - **No schema / no backend change**: pure frontend UI + i18n.
+  - **Verification**: `npx tsc --noEmit` 0 errors ✅, `npm test` 141 cases passed ✅, `npm run build` ✅, `npm run i18n:check` 385 keys ✅, `npx prettier --check` ✅.
+
+- **v0.6.3 (2026-09-21) — Agent panel available tools update (#314)**
+
+  - **#314 AgentPanel tools list incomplete**: Only listed 6 board tools, but MCP server provides 12 tools (7 board + 5 notes). See [docs/issue-314-agent-tools.md](./issue-314-agent-tools.md).
+  - **Complete tools list**: TOOLS array expanded from 6 to 12 items, adding set_work_branch + 5 note tools (list_notes/add_note/update_note/update_note_label/delete_note).
+  - **6 new i18n keys**: `agent.tools.setWorkBranch` + 5 `agent.tools.notes*`, 6 each in zh-CN / en-US.
+  - **Update description**: Changed from "6 board tools" to "12 tools".
+  - **No schema / no backend change**: pure frontend UI + i18n.
+  - **Verification**: `npx tsc --noEmit` 0 errors ✅, `npm test` 141 cases passed ✅, `npm run build` ✅, `npm run i18n:check` 383 keys ✅, `npx prettier --check` ✅, `scripts/check-mcp-columns.py` ✅, `scripts/check-doc-links.py` ✅.
+
+- **v0.6.3 (2026-09-21) — Remove sepia theme, keep light and dark only (#313)**
+
+  - **#313 Sepia color too yellow**: User feedback requested removing sepia theme, keeping only light and dark. See [docs/issue-313-remove-sepia.md](./issue-313-remove-sepia.md).
+  - **Remove sepia theme**: Deleted `[data-theme='sepia']` CSS block, theme.ts type changed from `'auto'|'light'|'sepia'|'dark'` to `'auto'|'light'|'dark'`.
+  - **Remove i18n key**: Deleted `settings.themeSepia` (1 each in zh-CN / en-US).
+  - **No schema / no backend change**: pure frontend CSS + TS + i18n.
+  - **Verification**: `npx tsc --noEmit` 0 errors ✅, `npm test` 141 cases passed ✅, `npm run build` ✅, `npm run i18n:check` 377 keys ✅, `npx prettier --check` ✅, `scripts/check-mcp-columns.py` ✅, `scripts/check-doc-links.py` ✅.
+
+- **v0.6.3 (2026-09-21) — Session cards: remove meta value white background + adjust icon colors (#310)**
 
   - **#310 Session card meta values have white background + low icon visibility**: `.session-meta-value` has a white background block that doesn't match the card background; copy/delete icons are gray (`--text-2`), inconsistent with clickable action expectations. See [docs/issue-310-session-card-icon.md](./issue-310-session-card-icon.md).
   - **Remove white background**: `.session-meta-value` removes `background: var(--surface-3, var(--bg));`, text blends naturally with card background.
@@ -10,7 +36,7 @@
   - **No schema / no backend change**: pure CSS + 1 line TSX class name change.
   - **Verification**: `npx tsc --noEmit` 0 errors ✅, `npm test` 141 cases passed ✅, `npm run build` ✅, `npx prettier --check` ✅, `scripts/check-mcp-columns.py` ✅, `scripts/check-doc-links.py` ✅.
 
-- **Unreleased — Theme system: Sepia/Dark/Follow system (#308)**
+- **v0.6.3 (2026-09-21) — Theme system: Sepia/Dark/Follow system (#308)**
 
   - **#308 App only has light background**: Long dashboard browsing is eye-straining, no dark/sepia option, cannot follow OS theme. See [docs/issue-308-theme-system.md](./issue-308-theme-system.md).
   - **3 themes**: Light (default), Sepia (low-saturation cream/sepia), Dark (deep purple-blue bg + light text).
@@ -22,7 +48,7 @@
   - **New file**: `app/src/theme.ts` (theme management module, no React side effects, safe for test environment import).
   - **Verification**: `npx tsc --noEmit` 0 errors ✅, `npm test` 141 cases passed ✅, `npm run build` ✅, `npm run i18n:check` 378 keys ✅, `npx prettier --check` ✅, `scripts/check-mcp-columns.py` ✅, `scripts/check-doc-links.py` ✅.
 
-- **Unreleased — Colored borders on session cards to distinguish adjacent cards (#304)**
+- **v0.6.3 (2026-09-21) — Colored borders on session cards to distinguish adjacent cards (#304)**
 
   - **#304 Session card background too close to panel background**: The entire wall lacked visual distinction, making it hard to locate a specific card at a glance. Each card needed a border with random colors from a palette, and adjacent cards (up/down/left/right) must have different colors. See [docs/issue-304-session-border.md](./issue-304-session-border.md).
   - **4-color palette**: Defined 4 border color CSS variables (blue/green/orange/purple, `--session-card-border-1` ~ `-4`), low saturation, medium brightness, readable on light backgrounds.
@@ -31,7 +57,7 @@
   - **Static assertion regression**: `styles.test.ts` adds 5 assertions covering palette, border declaration, coloring formula, column measurement, and ref mount.
   - **Verification**: `npx tsc --noEmit` 0 errors ✅, `npm test` 141 cases passed ✅, `npm run build` ✅, `npx prettier --check` ✅, `scripts/check-mcp-columns.py` ✅, `scripts/check-doc-links.py` ✅.
 
-- **Unreleased — Add "Clear Session" to session cards + change copy buttons to icons (#301)**
+- **v0.6.3 (2026-09-21) — Add "Clear Session" to session cards + change copy buttons to icons (#301)**
 
   - **#301 Session cards missing clear button + copy buttons visually noisy**: Each card only had one action — "Open in browser". Users wanting to clear ended/mistaken sessions had no UI path, only manual SQLite UPDATE. Backend `clear_session` command was already in place, frontend `api.clearSession(key)` was already wrapped, only the frontend button was missing. Comment also noted: copy buttons were vertical text, visually noisy. See [docs/issue-301-session-clear.md](./issue-301-session-clear.md).
   - **Clear session**: Added a trash icon button to the card action area. Click opens a `ConfirmDialog` for confirmation. On confirm, calls `api.clearSession` + `loadSessions()` to refresh, card removed immediately. Errors go through the existing error channel.
@@ -40,7 +66,7 @@
   - **No schema / no backend change**: pure frontend UI + i18n, reusing existing `clear_session` command.
   - **Verification**: `npm run i18n:check` 373 keys / locale ✅, `npx tsc --noEmit` 0 errors, `npm test` 136 cases passed, `npm run build` ✅, `npx prettier --check` ✅, `cargo test` 24 cases passed, `scripts/check-mcp-columns.py` ✅, `scripts/check-doc-links.py` ✅.
 
-- **Unreleased — Add Session ID to session cards + fix work_dir write path (#300)**
+- **v0.6.3 (2026-09-21) — Add Session ID to session cards + fix work_dir write path (#300)**
 
   - **#300 Session cards missing Session ID + work_dir always empty**: `list_tasks` already returns `sessionId`, but the card didn't display it; `record_session`'s `work_dir` parameter was added in #287, but the write entry points were incomplete (hooks.rs prompt, session-start.sh, AGENT_INSTRUCTIONS.md, task-handoff.md all missed `work_dir`), resulting in all 17 active sessions having empty `work_dir`. See [docs/issue-300-session-card.md](./issue-300-session-card.md).
   - **Session ID display**: Added a "Session" row to the card, showing `task.sessionId` in full (no truncation), monospace font + one-click copy button. Positioned after "Dir" row, before "Agent" row.
@@ -49,14 +75,14 @@
   - **No schema / no Rust change**: pure frontend UI + i18n + hooks scripts + docs.
   - **Verification**: `npm run i18n:check` 371 keys / locale ✅, `npx tsc --noEmit` 0 errors, `npm test` 136 cases passed, `npm run build` ✅, `npx prettier --check` ✅, `cargo test` 24 cases passed, `scripts/check-mcp-columns.py` ✅, `scripts/check-doc-links.py` ✅.
 
-- **Unreleased — Remove page title from Task Sessions panel (#298)**
+- **v0.6.3 (2026-09-21) — Remove page title from Task Sessions panel (#298)**
 
   - **#298 Panel title duplicated with sidebar**: The "Task Sessions" panel displayed a large page title "Task Sessions" at the top, while the sidebar's active nav item already highlighted "Task Sessions" — completely redundant, and taking up an entire row at the top of the panel. See [docs/issue-298-sessions-title.md](./issue-298-sessions-title.md).
   - **How**: Removed the `<header>` and `<h2>` elements from the top of `SessionsPanel.tsx`, so the panel content area starts at the top. Reference: Agent panel retains its title because it has action buttons in the toolbar; Sessions panel has no top-level actions, so the title row is pure redundancy. Cleaned up `sessions.title` i18n key (1 each in zh-CN / en-US), retained `sessions.title_format` (card title format, unrelated).
   - **No schema / no Rust change**: pure frontend UI + i18n change.
   - **Verification**: `npm run i18n:check` 369 keys / locale ✅, `npx tsc --noEmit` 0 errors, `npm test` 136 cases passed, `npm run build` ✅, `npx prettier --check` ✅, `scripts/check-doc-links.py` ✅.
 
-- **Unreleased — PR body bare #N references incorrectly associated (#299)**
+- **v0.6.3 (2026-09-21) — PR body bare #N references incorrectly associated (#299)**
 
   - **#299 PR body bare #N references incorrectly associated**: `parse_issue_refs` in `sync.rs` treated every bare `#N` in PR bodies as a linked issue, so a passing mention of an issue number (e.g. PR #1342 mentioning `#1340`) caused a false association even when the two were unrelated. See [docs/issue-299-pr-linkage.md](./issue-299-pr-linkage.md).
   - **How**: `parse_issue_refs` now only matches references preceded by closing keywords (Closes/Fixes/Resolves/Refs/References/关闭/解决/修复), consistent with `scripts/merge-cleanup.py`'s `CLOSE_RE`. Word-boundary check before keywords prevents substring false-matches (e.g. `prefixfixed`), but allows preceding Chinese characters (e.g. `已关闭 #284`). After keywords: whitespace, optional colon, repo prefix, and consecutive references (`Closes #1 #2 #3` matches all three in one pass).
