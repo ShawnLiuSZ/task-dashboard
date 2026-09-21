@@ -1,12 +1,12 @@
 // #308: 主题检测与持久化
 // 独立文件，无 React 渲染副作用，可被测试环境安全导入。
 
-export type ThemeMode = 'auto' | 'light' | 'sepia' | 'dark';
+export type ThemeMode = 'auto' | 'light' | 'dark';
 
 const THEME_KEY = 'taskboard.theme';
 
-export function resolveTheme(mode: ThemeMode): 'light' | 'sepia' | 'dark' {
-  if (mode === 'light' || mode === 'sepia' || mode === 'dark') return mode;
+export function resolveTheme(mode: ThemeMode): 'light' | 'dark' {
+  if (mode === 'light' || mode === 'dark') return mode;
   // auto: 跟随系统
   try {
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
