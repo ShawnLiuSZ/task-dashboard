@@ -2,6 +2,15 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — Add Session ID to session cards + fix work_dir write path (#300)**
+
+  - **#300 Session cards missing Session ID + work_dir always empty**: `list_tasks` already returns `sessionId`, but the card didn't display it; `record_session`'s `work_dir` parameter was added in #287, but the write entry points were incomplete (hooks.rs prompt, session-start.sh, AGENT_INSTRUCTIONS.md, task-handoff.md all missed `work_dir`), resulting in all 17 active sessions having empty `work_dir`. See [docs/issue-300-session-card.md](./issue-300-session-card.md).
+  - **Session ID display**: Added a "Session" row to the card, showing `task.sessionId` in full (no truncation), monospace font + one-click copy button. Positioned after "Dir" row, before "Agent" row.
+  - **work_dir write path fix**: hooks.rs `script_variant` prompt adds `(branch, work_dir)`; taskboard-session-start.sh example adds `work_dir` parameter; AGENT_INSTRUCTIONS.md trigger table + 2 examples add `work_dir`; task-handoff.md (claude) adds `work_dir=$(pwd)`; task-handoff.md (opencode) adds `work_dir` auto-fill note. opencode plugin already has `work_dir` auto-fill logic, no change needed.
+  - **2 new i18n keys**: `sessions.sessionId` (Session) + `sessions.copySession` (Copy session ID), 1 each in zh-CN / en-US.
+  - **No schema / no Rust change**: pure frontend UI + i18n + hooks scripts + docs.
+  - **Verification**: `npm run i18n:check` 371 keys / locale ✅, `npx tsc --noEmit` 0 errors, `npm test` 136 cases passed, `npm run build` ✅, `npx prettier --check` ✅, `cargo test` 24 cases passed, `scripts/check-mcp-columns.py` ✅, `scripts/check-doc-links.py` ✅.
+
 - **Unreleased — Remove page title from Task Sessions panel (#298)**
 
   - **#298 Panel title duplicated with sidebar**: The "Task Sessions" panel displayed a large page title "Task Sessions" at the top, while the sidebar's active nav item already highlighted "Task Sessions" — completely redundant, and taking up an entire row at the top of the panel. See [docs/issue-298-sessions-title.md](./issue-298-sessions-title.md).

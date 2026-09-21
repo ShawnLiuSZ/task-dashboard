@@ -159,6 +159,22 @@ export default function SessionsPanel() {
                       </button>
                     </div>
                   )}
+                  {task.sessionId && (
+                    <div className="session-meta-row">
+                      <span className="session-meta-label">{t('sessions.sessionId')}</span>
+                      <code className="session-meta-value">{task.sessionId}</code>
+                      <button
+                        type="button"
+                        className="note-tool"
+                        title={t('sessions.copySession')}
+                        onClick={() => handleCopy(task.sessionId!, `session-${task.issueKey}`)}
+                      >
+                        {copiedKey === `session-${task.issueKey}`
+                          ? t('sessions.copyDone')
+                          : t('btn.copy')}
+                      </button>
+                    </div>
+                  )}
                   {task.sessionAgent && (
                     <div className="session-meta-row">
                       <span className="session-meta-label">{t('sessions.agent')}</span>

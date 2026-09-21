@@ -587,11 +587,11 @@ fn script_variant(content: &str) -> String {
         .replace("（或 /task-start）", "")
         .replace(
             "快捷方式：直接执行 /task-start <repo#num>。完成时 /task-done，交接时 /task-handoff。",
-            "直接调 MCP 看板工具：先 get_task_status 查现状，再 update_task_status（处理中）+ record_session；完工更新已完成、中途交接记 handoff。",
+            "直接调 MCP 看板工具：先 get_task_status 查现状，再 update_task_status（处理中）+ record_session（含 branch、work_dir）；完工更新已完成、中途交接记 handoff。",
         )
         .replace(
             "然后 /task-start <repo#num> （自动完成 update_task_status→处理中 + record_session 含分支）；完工 /task-done，中途交接 /task-handoff。",
-            "然后调 update_task_status（处理中）+ record_session；完工更新已完成、中途交接记 handoff。",
+            "然后调 update_task_status（处理中）+ record_session（含 branch、work_dir）；完工更新已完成、中途交接记 handoff。",
         )
 }
 
