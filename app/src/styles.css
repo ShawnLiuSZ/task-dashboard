@@ -6,15 +6,28 @@
   --border-strong: rgba(0, 0, 0, 0.2);
   --text: #1d1d1f;
   --text-2: #6e6e73;
-  /* v0.3.49 (#150)：加深弱文本，对比度从 ~2.8:1 提到 AA 级（浅底上 ≥ 4.5:1）。 */
   --text-3: #6b6b70;
   --accent: #0a6cff;
+  --accent-hover: #0858d6;
   --amber-bg: #fdf0d5;
   --amber-text: #8a5a00;
   --teal-bg: #dcf3ec;
   --teal-text: #0b6b4f;
+  --error: #a32d2d;
+  --error-bg: #fdecec;
+  --success: #157a58;
+  --success-bg: #eaf6ef;
+  --warning: #8a5a00;
+  --warning-bg: #fff7e6;
+  --danger: #c0392b;
+  --danger-hover: #a32d2d;
+  --code-bg: #f5f5f5;
+  --code-text: #333333;
+  --shadow: rgba(0, 0, 0, 0.06);
+  --shadow-strong: rgba(0, 0, 0, 0.12);
+  --overlay: rgba(0, 0, 0, 0.2);
 
-  /* 20 status colors — 高对比度排列，相邻色相差距≥30° */
+  /* 20 status colors */
   --status-0: #e11d48;
   --status-1: #0891b2;
   --status-2: #65a30d;
@@ -36,11 +49,73 @@
   --status-18: #d946ef;
   --status-19: #eab308;
 
-  /* #304: 会话卡片边框色（4 色调色板，相邻卡片颜色必不同） */
+  /* #304: 会话卡片边框色 */
   --session-card-border-1: #3b82f6;
   --session-card-border-2: #10b981;
   --session-card-border-3: #f59e0b;
   --session-card-border-4: #8b5cf6;
+}
+
+/* #308: 护眼模式（sepia） */
+[data-theme='sepia'] {
+  --bg: #f4ecd8;
+  --surface: #faf4e6;
+  --surface-2: #ede4cc;
+  --border: rgba(80, 60, 20, 0.15);
+  --border-strong: rgba(80, 60, 20, 0.25);
+  --text: #3d2e14;
+  --text-2: #7a6440;
+  --text-3: #6b5a3a;
+  --accent: #8b6914;
+  --accent-hover: #6f540f;
+  --amber-bg: #f5e6c8;
+  --amber-text: #7a5a00;
+  --teal-bg: #e0e8d8;
+  --teal-text: #4a6b3f;
+  --error: #8b2020;
+  --error-bg: #f5e0dc;
+  --success: #4a6b3f;
+  --success-bg: #e8f0d8;
+  --warning: #7a5a00;
+  --warning-bg: #f5ecd0;
+  --danger: #a03030;
+  --danger-hover: #8b2020;
+  --code-bg: #ede4cc;
+  --code-text: #3d2e14;
+  --shadow: rgba(80, 60, 20, 0.08);
+  --shadow-strong: rgba(80, 60, 20, 0.15);
+  --overlay: rgba(60, 40, 10, 0.3);
+}
+
+/* #308: 深色模式 */
+[data-theme='dark'] {
+  --bg: #1a1a2e;
+  --surface: #25253d;
+  --surface-2: #2d2d4a;
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.2);
+  --text: #e8e8f0;
+  --text-2: #a0a0b8;
+  --text-3: #8888a0;
+  --accent: #4a9eff;
+  --accent-hover: #6bb0ff;
+  --amber-bg: #3d3520;
+  --amber-text: #f5d78e;
+  --teal-bg: #1e3d35;
+  --teal-text: #6ee7b7;
+  --error: #f87171;
+  --error-bg: #3d1a1a;
+  --success: #4ade80;
+  --success-bg: #1a3d2a;
+  --warning: #fbbf24;
+  --warning-bg: #3d3520;
+  --danger: #f87171;
+  --danger-hover: #fca5a5;
+  --code-bg: #1e1e32;
+  --code-text: #e8e8f0;
+  --shadow: rgba(0, 0, 0, 0.3);
+  --shadow-strong: rgba(0, 0, 0, 0.5);
+  --overlay: rgba(0, 0, 0, 0.5);
 }
 
 * {
@@ -173,8 +248,8 @@ body {
 }
 
 .banner.error {
-  background: #fdecec;
-  color: #a32d2d;
+  background: var(--error-bg);
+  color: var(--error);
 }
 
 /* #178：同步后新任务被筛选隐藏的提示（琥珀色，与 ok/error 区分）。 */
@@ -238,13 +313,13 @@ body {
 }
 .agent-device-cli,
 .agent-device-app {
-  border-color: #bfe3d7;
+  border-color: var(--teal-bg);
   background: var(--teal-bg);
   color: var(--teal-text);
 }
 .agent-device-config-only,
 .agent-device-suspected-removed {
-  border-color: #f0dcae;
+  border-color: var(--amber-bg);
   background: var(--amber-bg);
   color: var(--amber-text);
 }
@@ -263,8 +338,8 @@ body {
   word-break: break-all;
 }
 .banner.warn {
-  background: #fff7e6;
-  color: #8a5a00;
+  background: var(--warning-bg);
+  color: var(--warning);
 }
 
 /* v0.3.22+：Project Status 诊断结果（多行文本）。 */
@@ -300,7 +375,7 @@ body {
 }
 
 .pat-status .warn {
-  color: #a32d2d;
+  color: var(--error);
   font-weight: 500;
 }
 
@@ -343,7 +418,7 @@ body {
   border-radius: 7px;
 }
 .column-todo .column-head {
-  background: #e6e7ea;
+  background: var(--surface-2);
 }
 .column-doing .column-head {
   background: #dbe9fc;
@@ -361,7 +436,7 @@ body {
   color: #0a5bd0;
 }
 .column-processed .column-title {
-  color: #157a58;
+  color: var(--success);
 }
 .column-done .column-title {
   color: #0b6b4f;
@@ -576,7 +651,7 @@ body {
 }
 
 .card.unassigned {
-  border-left: 3px solid #e0a800;
+  border-left: 3px solid var(--amber-text);
 }
 
 /* v0.3.15：「我的」仅保留左侧红边框，去掉粉色背景，避免和「@我」「新评论」等暖色信息混淆。 */
@@ -1120,7 +1195,7 @@ button.unassigned-tag:disabled {
 .detail-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.12);
+  background: var(--shadow-strong);
   z-index: 10;
 }
 
@@ -1234,14 +1309,14 @@ button.unassigned-tag:disabled {
 .btn.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--surface);
 }
 
 /* 修复 hover 白底白字：保持 accent 底色 + 白字，仅略微加深。 */
 .btn.primary:hover:not(:disabled) {
   background: #0858d6;
   border-color: #0858d6;
-  color: #fff;
+  color: var(--surface);
 }
 
 .btn.ghost {
@@ -1283,7 +1358,7 @@ button.unassigned-tag:disabled {
 .modal-mask {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1343,7 +1418,7 @@ button.unassigned-tag:disabled {
 .chip.on {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--surface);
 }
 
 .modal-actions {
@@ -1367,15 +1442,15 @@ button.unassigned-tag:disabled {
 }
 
 .btn.primary.danger {
-  background: #c0392b;
-  border-color: #c0392b;
-  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--surface);
 }
 
 .btn.primary.danger:hover:not(:disabled) {
-  background: #a32d2d;
-  border-color: #a32d2d;
-  color: #fff;
+  background: var(--error);
+  border-color: var(--error);
+  color: var(--surface);
 }
 
 /* ===== v0.3.19+ 关于页 ============================================ */
@@ -1535,7 +1610,7 @@ button.unassigned-tag:disabled {
   margin-top: 6px;
   border-radius: 8px;
   background: var(--accent);
-  color: #fff;
+  color: var(--surface);
   user-select: all;
   cursor: copy;
 }
@@ -1664,7 +1739,7 @@ button.unassigned-tag:disabled {
 /* v0.3.51 (#161)：错误信息默认单行截断，点击展开全文（hover 有系统 tooltip 显示原文）。 */
 .sync-logs-table .error-cell {
   max-width: 220px;
-  color: #a32d2d;
+  color: var(--error);
 }
 
 .sync-logs-table .error-cell .error-toggle {
@@ -1707,8 +1782,8 @@ button.unassigned-tag:disabled {
 }
 
 .badge.error {
-  background: #fdecec;
-  color: #a32d2d;
+  background: var(--error-bg);
+  color: var(--error);
 }
 
 .badge.muted {
@@ -1752,7 +1827,7 @@ button.unassigned-tag:disabled {
 .sync-logs-tabs .chip.on .chip-count,
 .sync-logs-filter .chip.on .chip-count {
   background: rgba(255, 255, 255, 0.3);
-  color: #fff;
+  color: var(--surface);
 }
 
 /* 目标列（REST 路径 / GraphQL 操作名）等宽展示，长 URL 单行省略 + tooltip。 */
@@ -1873,7 +1948,7 @@ button.unassigned-tag:disabled {
 
 .sidebar-item.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--surface);
 }
 
 .sidebar-icon {
@@ -2413,7 +2488,7 @@ button.unassigned-tag:disabled {
 
 .label-chip.active {
   background: var(--chip);
-  color: #fff;
+  color: var(--surface);
   font-weight: 500;
 }
 
@@ -2450,7 +2525,7 @@ button.unassigned-tag:disabled {
 
 .note-card:hover {
   border-color: var(--border-strong);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 2px 8px var(--shadow);
 }
 
 .note-content {
@@ -2538,8 +2613,8 @@ button.unassigned-tag:disabled {
 }
 
 .note-tool.danger:hover {
-  background: #fdecec;
-  color: #c0392b;
+  background: var(--error-bg);
+  color: var(--danger);
 }
 
 /* 旧页头工具组（.notes-tools）随页头移除而删除；导入/导出现在在 .notes-add-col-tools。 */
@@ -2597,25 +2672,25 @@ button.unassigned-tag:disabled {
 .btn.small.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--surface);
 }
 
 .btn.small.primary:hover:not(:disabled) {
   background: #0858d6;
   border-color: #0858d6;
-  color: #fff;
+  color: var(--surface);
 }
 
 .btn.small.danger {
-  background: #c0392b;
-  border-color: #c0392b;
-  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--surface);
 }
 
 .btn.small.danger:hover:not(:disabled) {
-  background: #a32d2d;
-  border-color: #a32d2d;
-  color: #fff;
+  background: var(--error);
+  border-color: var(--error);
+  color: var(--surface);
 }
 
 .btn.small.ghost:hover {
@@ -2631,8 +2706,8 @@ button.unassigned-tag:disabled {
   flex: 0 0 auto;
   padding: 6px 8px;
   border-radius: 6px;
-  background: #eaf6ef;
-  color: #1c7c3d;
+  background: var(--success-bg);
+  color: var(--success);
   font-size: 11px;
   line-height: 1.5;
   word-break: break-word;
@@ -2640,14 +2715,14 @@ button.unassigned-tag:disabled {
 
 .note-notice .note-tool {
   opacity: 1;
-  color: #1c7c3d;
+  color: var(--success);
   width: 18px;
   height: 18px;
 }
 
 .note-notice .note-tool:hover {
   background: rgba(28, 124, 61, 0.12);
-  color: #1c7c3d;
+  color: var(--success);
 }
 
 /* ---------- 记事本错误提示 ---------- */
@@ -2658,8 +2733,8 @@ button.unassigned-tag:disabled {
   flex: 0 0 auto;
   padding: 6px 8px;
   border-radius: 6px;
-  background: #fdecec;
-  color: #a32d2d;
+  background: var(--error-bg);
+  color: var(--error);
   font-size: 11px;
   line-height: 1.5;
 }
@@ -2671,14 +2746,14 @@ button.unassigned-tag:disabled {
 
 .note-error .note-tool {
   opacity: 1;
-  color: #a32d2d;
+  color: var(--error);
   width: 18px;
   height: 18px;
 }
 
 .note-error .note-tool:hover {
   background: rgba(163, 45, 45, 0.12);
-  color: #a32d2d;
+  color: var(--error);
 }
 
 /* v0.3.49 (#150)：减弱动效偏好下关闭所有过渡。 */
@@ -2719,7 +2794,7 @@ button.unassigned-tag:disabled {
   width: 14px;
   left: 3px;
   bottom: 3px;
-  background: #fff;
+  background: var(--surface);
   border-radius: 50%;
   transition: transform 0.2s;
 }

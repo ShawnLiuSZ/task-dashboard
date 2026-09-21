@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import { useI18n, type LangMode } from '../i18n';
 import type { Account, AccountColumn, BoardMode, Project, Settings } from '../types';
+import { themeManager, type ThemeMode } from '../theme';
 
 interface Props {
   settings: Settings;
@@ -67,6 +68,7 @@ interface AccountEditState {
 
 export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
   const { t, mode, setMode } = useI18n();
+  const [themeMode, setThemeMode] = useState<ThemeMode>(themeManager.getMode());
   const [minutes, setMinutes] = useState(settings.scheduleMinutes);
   const [ghPath, setGhPath] = useState(settings.ghPath);
   const [autoCheckUpdates, setAutoCheckUpdates] = useState(settings.autoCheckUpdates);
@@ -85,6 +87,12 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
 
   // v0.3.41+：设置面板 tab 切换
   const [tab, setTab] = useState<SettingsTab>('base');
+
+  // #308: 主题切换
+  const handleThemeChange = (mode: ThemeMode) => {
+    setThemeMode(mode);
+    themeManager.setMode(mode);
+  };
 
   // 初始化：加载所有账号的列配置
   // v0.3.49 (#145)：按账号并行（每账号内两路再并行），N 账号由 2N RTT 降为 ~2 RTT。
@@ -372,6 +380,22 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
               <option value="auto">{t('settings.langAuto')}</option>
               <option value="zh-CN">{t('settings.langZh')}</option>
               <option value="en-US">{t('settings.langEn')}</option>
+            </select>
+          </div>
+
+          <div className="field">
+            <label>{t('settings.theme')}</label>
+            <select
+              className="select"
+              value={themeMode}
+              onChange={(e) =>
+                handleThemeChange(e.target.value as 'auto' | 'light' | 'sepia' | 'dark')
+              }
+            >
+              <option value="auto">{t('settings.themeAuto')}</option>
+              <option value="light">{t('settings.themeLight')}</option>
+              <option value="sepia">{t('settings.themeSepia')}</option>
+              <option value="dark">{t('settings.themeDark')}</option>
             </select>
           </div>
 

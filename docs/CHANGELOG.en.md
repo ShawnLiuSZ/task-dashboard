@@ -2,6 +2,18 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — Theme system: Sepia/Dark/Follow system (#308)**
+
+  - **#308 App only has light background**: Long dashboard browsing is eye-straining, no dark/sepia option, cannot follow OS theme. See [docs/issue-308-theme-system.md](./issue-308-theme-system.md).
+  - **3 themes**: Light (default), Sepia (low-saturation cream/sepia), Dark (deep purple-blue bg + light text).
+  - **CSS variables**: `:root` defines base variables, `[data-theme="sepia"]` and `[data-theme="dark"]` override, including 20+ variables for background/text/border/accent/semantic/code/shadow.
+  - **Theme detection & persistence**: `localStorage['taskboard.theme']` storage, `matchMedia` system theme detection, `auto` mode listens for system changes, immediate apply on module load to prevent FOUC.
+  - **Settings UI**: SettingsPanel base tab adds "Appearance" dropdown selector (Follow system/Light/Sepia/Dark).
+  - **Color conversion**: Converted 15+ hardcoded colors to CSS variables (`#a32d2d`→`var(--error)`, `#c0392b`→`var(--danger)`, `#fdecec`→`var(--error-bg)`, `#eaf6ef`→`var(--success-bg)`, etc.).
+  - **5 new i18n keys**: `settings.theme` + `settings.themeAuto` + `settings.themeLight` + `settings.themeSepia` + `settings.themeDark`, 5 each in zh-CN / en-US.
+  - **New file**: `app/src/theme.ts` (theme management module, no React side effects, safe for test environment import).
+  - **Verification**: `npx tsc --noEmit` 0 errors ✅, `npm test` 141 cases passed ✅, `npm run build` ✅, `npm run i18n:check` 378 keys ✅, `npx prettier --check` ✅, `scripts/check-mcp-columns.py` ✅, `scripts/check-doc-links.py` ✅.
+
 - **Unreleased — Colored borders on session cards to distinguish adjacent cards (#304)**
 
   - **#304 Session card background too close to panel background**: The entire wall lacked visual distinction, making it hard to locate a specific card at a glance. Each card needed a border with random colors from a palette, and adjacent cards (up/down/left/right) must have different colors. See [docs/issue-304-session-border.md](./issue-304-session-border.md).
