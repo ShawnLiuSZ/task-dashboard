@@ -6,6 +6,13 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— PR 正文裸提 #N 被误关联（#299）**
+
+  - **#299 PR 正文裸提 #N 被误关联**：`sync.rs` 的 `parse_issue_refs` 把所有裸 `#N` 都当作关联目标，导致 PR 正文里顺带提一下某个 issue 编号就被错误关联。例如 PR #1342 正文里提了 `#1340` 就被关联上去，即使这两个根本不是同一个任务。详见 [docs/issue-299-pr-linkage.md](./issue-299-pr-linkage.md)。
+  - **做法**：`parse_issue_refs` 改为只匹配有关闭关键词的引用（Closes/Fixes/Resolves/Refs/References/关闭/解决/修复），与 `scripts/merge-cleanup.py` 的 `CLOSE_RE` 保持一致。关键词前检查词边界（避免 `prefixfixed` 误匹配），但允许前面是中文（`已关闭 #284` 应匹配）；关键词后允许空白、可选冒号、repo 前缀；连续引用 `Closes #1 #2 #3` 一次匹配三个。
+  - **影响**：PR 正文裸提 `#N` 不再关联，只有带关闭关键词的才关联。已关联的错误 PR 在下次同步时会被清除。不影响 MCP 的 `record_session` / `set_work_branch`（它们按 `issue_key` 查，不走 PR 关联）。
+  - **验证**：新增 9 个测试用例覆盖关键词匹配、裸引用忽略、中文关键词、URL 锚、前缀子串等场景；`cargo test --lib parse_issue_refs` 9/9 通过、`cargo test --lib` 116/116 通过、`cargo clippy -- -D warnings` 0 warning、`scripts/check-doc-links.py` ✅、`scripts/check-mcp-columns.py` ✅。
+
 - **未发布（Unreleased）— 立即同步后看板空白、重启才恢复（#285）**
 
   - **#285 点「立即同步」后当前账号看板整体变空，必须重启 App 才恢复**：根因在产品层而非同步本身——同步完成后前端必跑一次 `listTasks`，而该查询在某些筛选下会直接报错或恒返回空集，于是「无数据」被写进 state 清空看板；`ownership` 是前端本地状态、重启即复位为「全部归属」，所以重启自然恢复。两处缺陷都在 `commands.rs::rows_to_tasks`（详见 [docs/issue-285-sync-empty-board.md](./issue-285-sync-empty-board.md)）。

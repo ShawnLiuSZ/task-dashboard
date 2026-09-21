@@ -2,6 +2,13 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — PR body bare #N references incorrectly associated (#299)**
+
+  - **#299 PR body bare #N references incorrectly associated**: `parse_issue_refs` in `sync.rs` treated every bare `#N` in PR bodies as a linked issue, so a passing mention of an issue number (e.g. PR #1342 mentioning `#1340`) caused a false association even when the two were unrelated. See [docs/issue-299-pr-linkage.md](./issue-299-pr-linkage.md).
+  - **How**: `parse_issue_refs` now only matches references preceded by closing keywords (Closes/Fixes/Resolves/Refs/References/关闭/解决/修复), consistent with `scripts/merge-cleanup.py`'s `CLOSE_RE`. Word-boundary check before keywords prevents substring false-matches (e.g. `prefixfixed`), but allows preceding Chinese characters (e.g. `已关闭 #284`). After keywords: whitespace, optional colon, repo prefix, and consecutive references (`Closes #1 #2 #3` matches all three in one pass).
+  - **Impact**: PR body bare `#N` no longer associates; only keyword-prefixed references do. Previously mis-associated PRs will be cleared on next sync. MCP `record_session` / `set_work_branch` unaffected (they query by `issue_key`, not PR association).
+  - **Verification**: 9 new test cases covering keyword matching, bare-reference rejection, Chinese keywords, URL anchors, prefix substrings; `cargo test --lib parse_issue_refs` 9/9 pass, `cargo test --lib` 116/116 pass, `cargo clippy -- -D warnings` 0 warnings, `scripts/check-doc-links.py` ✅, `scripts/check-mcp-columns.py` ✅.
+
 - **Unreleased — Board goes blank after "Sync now" until app restart (#285)**
 
   - **#285 After clicking "Sync now", the current account's board went completely blank and only recovered after restarting the app**: the root cause was in the product layer, not the sync itself — once a sync finishes, the frontend always runs one `listTasks`, and under some filters that query either errored out or returned an empty set unconditionally, so "no data" was written into state and the board cleared; `ownership` is local frontend state that resets to "all" on restart, which is why a restart recovered it. Both defects live in `commands.rs::rows_to_tasks` (see [docs/issue-285-sync-empty-board.md](./issue-285-sync-empty-board.md)).
