@@ -149,7 +149,7 @@ export default function SessionsPanel() {
                     </span>
                     <button
                       type="button"
-                      className="note-tool"
+                      className="note-tool danger"
                       title={t('sessions.clear')}
                       onClick={() => setClearKey(task.issueKey)}
                     >

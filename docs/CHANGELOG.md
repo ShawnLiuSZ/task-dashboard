@@ -6,6 +6,14 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布（Unreleased）— 会话卡片：移除元数据白底 + 图标颜色调整（#310）**
+
+  - **#310 会话卡片元数据白底突兀 + 图标辨识度低**：`.session-meta-value` 带白色背景块与卡片底色不统一；复制/删除图标颜色偏灰（`--text-2`），与可点击操作预期不一致。详见 [docs/issue-310-session-card-icon.md](./issue-310-session-card-icon.md)。
+  - **移除白底**：`.session-meta-value` 删除 `background: var(--surface-3, var(--bg));`，文字与卡片底色自然融合。
+  - **图标颜色**：`.session-card .note-tool` 使用 `var(--accent)` 强调色（复制/打开）；`.note-tool.danger` 静止态 `var(--danger)` 红色（删除）。
+  - **无 schema / 无后端变更**：纯 CSS + 1 行 TSX 类名改动。
+  - **验证**：`npx tsc --noEmit` 0 error ✅、`npm test` 141 例 passed ✅、`npm run build` ✅、`npx prettier --check` ✅、`scripts/check-mcp-columns.py` ✅、`scripts/check-doc-links.py` ✅。
+
 - **未发布（Unreleased）— 主题系统：护眼/深色/跟随系统（#308）**
 
   - **#308 应用只有浅色背景**：长时间看板浏览偏刺眼，无深色/护眼可选，无法跟随操作系统主题。详见 [docs/issue-308-theme-system.md](./issue-308-theme-system.md)。
