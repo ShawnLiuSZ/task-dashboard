@@ -2,6 +2,13 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — Remove page title from Task Sessions panel (#298)**
+
+  - **#298 Panel title duplicated with sidebar**: The "Task Sessions" panel displayed a large page title "Task Sessions" at the top, while the sidebar's active nav item already highlighted "Task Sessions" — completely redundant, and taking up an entire row at the top of the panel. See [docs/issue-298-sessions-title.md](./issue-298-sessions-title.md).
+  - **How**: Removed the `<header>` and `<h2>` elements from the top of `SessionsPanel.tsx`, so the panel content area starts at the top. Reference: Agent panel retains its title because it has action buttons in the toolbar; Sessions panel has no top-level actions, so the title row is pure redundancy. Cleaned up `sessions.title` i18n key (1 each in zh-CN / en-US), retained `sessions.title_format` (card title format, unrelated).
+  - **No schema / no Rust change**: pure frontend UI + i18n change.
+  - **Verification**: `npm run i18n:check` 369 keys / locale ✅, `npx tsc --noEmit` 0 errors, `npm test` 136 cases passed, `npm run build` ✅, `npx prettier --check` ✅, `scripts/check-doc-links.py` ✅.
+
 - **Unreleased — PR body bare #N references incorrectly associated (#299)**
 
   - **#299 PR body bare #N references incorrectly associated**: `parse_issue_refs` in `sync.rs` treated every bare `#N` in PR bodies as a linked issue, so a passing mention of an issue number (e.g. PR #1342 mentioning `#1340`) caused a false association even when the two were unrelated. See [docs/issue-299-pr-linkage.md](./issue-299-pr-linkage.md).

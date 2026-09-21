@@ -82,9 +82,6 @@ export default function SessionsPanel() {
 
   return (
     <div className="panel-page">
-      <header className="panel-page-head">
-        <h2 className="panel-page-title">{t('sessions.title')}</h2>
-      </header>
       <div className="panel-content sessions-content">
         {loading ? (
           <div className="notes-placeholder">{t('notes.loading')}</div>
@@ -115,6 +112,21 @@ export default function SessionsPanel() {
                   </button>
                 </div>
                 <div className="session-card-meta">
+                  {task.createdAt > 0 && (
+                    <div className="session-meta-row">
+                      <span className="session-meta-label">{t('sessions.createdAt')}</span>
+                      <span className="session-meta-value">
+                        {new Date(task.createdAt * 1000).toLocaleString(undefined, {
+                          year: 'numeric',
+                          month: '2-digit',
+                          day: '2-digit',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          hour12: false,
+                        })}
+                      </span>
+                    </div>
+                  )}
                   {task.workBranch && (
                     <div className="session-meta-row">
                       <span className="session-meta-label">{t('sessions.branch')}</span>
