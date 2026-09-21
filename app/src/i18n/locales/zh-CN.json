@@ -342,6 +342,8 @@
   "sessions.copySession": "复制 Session ID",
   "sessions.openTask": "打开任务",
   "sessions.copyDone": "已复制",
+  "sessions.clear": "清除会话",
+  "sessions.clearConfirm": "确认清除该会话记录？清除后卡片将立即移除，可重新 record_session 恢复。",
   "agent.title": "Agent 接入",
   "agent.tab.hooks": "Agent 接入",
   "agent.tab.mcp": "MCP 接入",

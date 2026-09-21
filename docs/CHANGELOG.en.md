@@ -2,6 +2,15 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — Add "Clear Session" to session cards + change copy buttons to icons (#301)**
+
+  - **#301 Session cards missing clear button + copy buttons visually noisy**: Each card only had one action — "Open in browser". Users wanting to clear ended/mistaken sessions had no UI path, only manual SQLite UPDATE. Backend `clear_session` command was already in place, frontend `api.clearSession(key)` was already wrapped, only the frontend button was missing. Comment also noted: copy buttons were vertical text, visually noisy. See [docs/issue-301-session-clear.md](./issue-301-session-clear.md).
+  - **Clear session**: Added a trash icon button to the card action area. Click opens a `ConfirmDialog` for confirmation. On confirm, calls `api.clearSession` + `loadSessions()` to refresh, card removed immediately. Errors go through the existing error channel.
+  - **Copy buttons to icons**: All three copyable rows (branch/dir/session) changed to icon buttons — default copy icon, briefly switches to check icon on success (1.5s), tooltips preserved.
+  - **2 new i18n keys**: `sessions.clear` + `sessions.clearConfirm`, 1 each in zh-CN / en-US.
+  - **No schema / no backend change**: pure frontend UI + i18n, reusing existing `clear_session` command.
+  - **Verification**: `npm run i18n:check` 373 keys / locale ✅, `npx tsc --noEmit` 0 errors, `npm test` 136 cases passed, `npm run build` ✅, `npx prettier --check` ✅, `cargo test` 24 cases passed, `scripts/check-mcp-columns.py` ✅, `scripts/check-doc-links.py` ✅.
+
 - **Unreleased — Add Session ID to session cards + fix work_dir write path (#300)**
 
   - **#300 Session cards missing Session ID + work_dir always empty**: `list_tasks` already returns `sessionId`, but the card didn't display it; `record_session`'s `work_dir` parameter was added in #287, but the write entry points were incomplete (hooks.rs prompt, session-start.sh, AGENT_INSTRUCTIONS.md, task-handoff.md all missed `work_dir`), resulting in all 17 active sessions having empty `work_dir`. See [docs/issue-300-session-card.md](./issue-300-session-card.md).
