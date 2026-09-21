@@ -2,6 +2,14 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — Session cards: remove meta value white background + adjust icon colors (#310)**
+
+  - **#310 Session card meta values have white background + low icon visibility**: `.session-meta-value` has a white background block that doesn't match the card background; copy/delete icons are gray (`--text-2`), inconsistent with clickable action expectations. See [docs/issue-310-session-card-icon.md](./issue-310-session-card-icon.md).
+  - **Remove white background**: `.session-meta-value` removes `background: var(--surface-3, var(--bg));`, text blends naturally with card background.
+  - **Icon colors**: `.session-card .note-tool` uses `var(--accent)` (copy/open); `.note-tool.danger` static state `var(--danger)` red (delete).
+  - **No schema / no backend change**: pure CSS + 1 line TSX class name change.
+  - **Verification**: `npx tsc --noEmit` 0 errors ✅, `npm test` 141 cases passed ✅, `npm run build` ✅, `npx prettier --check` ✅, `scripts/check-mcp-columns.py` ✅, `scripts/check-doc-links.py` ✅.
+
 - **Unreleased — Theme system: Sepia/Dark/Follow system (#308)**
 
   - **#308 App only has light background**: Long dashboard browsing is eye-straining, no dark/sepia option, cannot follow OS theme. See [docs/issue-308-theme-system.md](./issue-308-theme-system.md).

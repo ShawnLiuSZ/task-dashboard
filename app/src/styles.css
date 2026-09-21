@@ -2230,9 +2230,18 @@ button.unassigned-tag:disabled {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text);
-  background: var(--surface-3, var(--bg));
   padding: 2px 6px;
   border-radius: 4px;
+}
+
+/* #310: 会话卡片复制/打开图标用强调色，区别于灰色展示文本 */
+.session-card .note-tool {
+  color: var(--accent);
+}
+
+.session-card .note-tool:hover {
+  background: var(--surface-2);
+  color: var(--accent-hover);
 }
 
 /* 整行页头（记事本 + 导入/导出 + 收起）已移除：标题与侧边栏重复、白占一行纵向空间；
@@ -2610,6 +2619,10 @@ button.unassigned-tag:disabled {
 .note-tool:hover {
   background: var(--surface-2);
   color: var(--text);
+}
+
+.note-tool.danger {
+  color: var(--danger);
 }
 
 .note-tool.danger:hover {
