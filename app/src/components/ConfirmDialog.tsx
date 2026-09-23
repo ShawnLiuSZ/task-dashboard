@@ -35,7 +35,7 @@ export default function ConfirmDialog({
   }, [onCancel]);
 
   return (
-    <div className="modal-mask" onClick={onCancel}>
+    <div className="modal-mask confirm-mask" onClick={onCancel}>
       <div
         className="modal confirm-modal"
         onClick={(e) => e.stopPropagation()}
