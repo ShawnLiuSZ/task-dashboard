@@ -2027,7 +2027,10 @@ button.unassigned-tag:disabled {
   padding: 16px;
 }
 
-.panel-page .modal-mask {
+/* 仅作用于「内嵌面板自身」的 modal 根结构（Settings/Accounts/SyncLogs/About），
+   让其铺满主区。必须排除 ConfirmDialog 二次确认框（.confirm-mask / .confirm-modal），
+   否则它会继承此规则变成全屏「页面」而非居中弹框（#312 修复）。 */
+.panel-page .modal-mask:not(.confirm-mask) {
   position: absolute;
   inset: 0;
   background: transparent;
@@ -2036,7 +2039,7 @@ button.unassigned-tag:disabled {
   padding: 0;
 }
 
-.panel-page .modal {
+.panel-page .modal:not(.confirm-modal) {
   width: 100%;
   max-height: none;
   height: 100%;

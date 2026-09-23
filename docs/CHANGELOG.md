@@ -6,6 +6,15 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.6.4（2026-09-23）— 删除会话二次确认恢复为居中弹框（#317）**
+
+  - **#317 删除任务会话的二次确认弹框被铺满成全屏页面**：`.panel-page .modal` / `.panel-page .modal-mask` 覆盖规则本意是让内嵌面板（Settings / Accounts / SyncLogs / About）铺满主区，但 `ConfirmDialog` 也使用 `.modal` + `.modal-mask` 类名且渲染在 `.panel-page` 内部，于是被误伤成 `width:100%; height:100%` 的全屏「页面」。详见 [docs/issue-317-session-clear-confirm-modal.md](./issue-317-session-clear-confirm-modal.md)。
+  - **收窄覆盖规则**：`.panel-page .modal` → `.panel-page .modal:not(.confirm-modal)`；`.panel-page .modal-mask` → `.panel-page .modal-mask:not(.confirm-mask)`。
+  - **ConfirmDialog 加标记类**：遮罩加 `confirm-mask` 类，使 `:not()` 能精确命中、排除铺满规则。
+  - **行为变化**：任务会话面板 / 账号面板（删除账号）/ 同步日志面板（清空日志）等所有面板内的二次确认框，现在均为居中弹框，不再全屏铺满。
+  - **无 schema / 无后端变更**：纯 CSS + 1 行 TSX 类名改动。
+  - **验证**：`npx tsc --noEmit` 0 error ✅、`npm run i18n:check` 385 keys ✅、`npm run lint` 18 warnings（无新增）✅、`npx prettier --check` ✅、`confirm-dialog.test.tsx` + `board.test.tsx` 22/22 passed ✅。
+
 - **v0.6.4（2026-09-23）— 补全 #313/#314/#315 缺失的 KB 文档，修复 CHANGELOG 6 处断链（#319）**
 
   - **#319 CHANGELOG 6 处断链**：#313/#314/#315 的 CHANGELOG 条目引用了 `docs/issue-313-remove-sepia.md` / `docs/issue-314-agent-tools.md` / `docs/issue-315-guide-text.md`，但三篇 KB 文档此前从未创建，导致 `scripts/check-doc-links.py` 在 main 上持续失败。详见 [docs/issue-319-kb-doc-links.md](./issue-319-kb-doc-links.md)。
