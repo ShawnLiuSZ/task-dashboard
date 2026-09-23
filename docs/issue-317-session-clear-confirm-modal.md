@@ -62,5 +62,5 @@
 ## 关联
 
 - Issue: #317
-- PR: 待合入
+- PR: #318
 - 相关代码：`app/src/styles.css`、`.panel-page .modal` 覆盖规则；`app/src/components/ConfirmDialog.tsx`
