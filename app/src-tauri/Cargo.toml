@@ -1,6 +1,6 @@
 [package]
 name = "taskboard"
-version = "0.6.3"
+version = "0.6.4"
 description = "GitHub 个人任务看板"
 license = "MIT"
 authors = ["liushizhao"]
