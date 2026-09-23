@@ -6,6 +6,13 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.6.4（2026-09-23）— 补全 #313/#314/#315 缺失的 KB 文档，修复 CHANGELOG 6 处断链（#319）**
+
+  - **#319 CHANGELOG 6 处断链**：#313/#314/#315 的 CHANGELOG 条目引用了 `docs/issue-313-remove-sepia.md` / `docs/issue-314-agent-tools.md` / `docs/issue-315-guide-text.md`，但三篇 KB 文档此前从未创建，导致 `scripts/check-doc-links.py` 在 main 上持续失败。详见 [docs/issue-319-kb-doc-links.md](./issue-319-kb-doc-links.md)。
+  - **补全三篇 KB 文档**：从 #313/#314/#315 的已合并改动补齐 `docs/issue-313-remove-sepia.md`、`docs/issue-314-agent-tools.md`、`docs/issue-315-guide-text.md`（背景 / 设计 / 接口变化 / 验证），使 CHANGELOG 链接指向真实存在的文件。
+  - **无 schema / 无后端 / 无前端逻辑变更**：纯文档补全。
+  - **验证**：`python3 scripts/check-doc-links.py` 通过（153 个 markdown 文件，0 断链）✅。
+
 - **v0.6.3（2026-09-21）— 接入指引文案更新（#315）**
 
   - **#315 接入指引缺少 set_work_branch 触发时机**：record_session 也缺少 work_dir 参数说明。详见 [docs/issue-315-guide-text.md](./issue-315-guide-text.md)。
