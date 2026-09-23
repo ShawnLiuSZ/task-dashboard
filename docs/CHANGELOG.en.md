@@ -11,6 +11,13 @@
   - **No schema / no backend change**: pure CSS + 1-line TSX class name change.
   - **Verification**: `npx tsc --noEmit` 0 errors ✅, `npm run i18n:check` 385 keys ✅, `npm run lint` 18 warnings (no new) ✅, `npx prettier --check` ✅, `confirm-dialog.test.tsx` + `board.test.tsx` 22/22 passed ✅.
 
+- **v0.6.4 (2026-09-23) — Backfill missing #313/#314/#315 KB docs, fix 6 CHANGELOG broken links (#319)**
+
+  - **#319 6 broken CHANGELOG links**: The #313/#314/#315 CHANGELOG entries reference `docs/issue-313-remove-sepia.md` / `docs/issue-314-agent-tools.md` / `docs/issue-315-guide-text.md`, but those three KB docs were never created, so `scripts/check-doc-links.py` kept failing on main. See [docs/issue-319-kb-doc-links.md](./issue-319-kb-doc-links.md).
+  - **Backfill three KB docs**: Reconstructed `docs/issue-313-remove-sepia.md`, `docs/issue-314-agent-tools.md`, `docs/issue-315-guide-text.md` from the merged changes of #313/#314/#315 (background / design / interface changes / verification), so the CHANGELOG links point to real files.
+  - **No schema / no backend / no frontend logic change**: pure documentation backfill.
+  - **Verification**: `python3 scripts/check-doc-links.py` passes (153 markdown files, 0 broken links) ✅.
+
 - **v0.6.3 (2026-09-21) — Guide text update (#315)**
 
   - **#315 Guide missing set_work_branch trigger**: record_session also missing work_dir parameter. See [docs/issue-315-guide-text.md](./issue-315-guide-text.md).
