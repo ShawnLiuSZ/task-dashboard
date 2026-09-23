@@ -2,6 +2,15 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.6.4 (2026-09-23) — Session clear confirm modal fix (#317)**
+
+  - **#317 Delete-session confirm dialog stretched to full-screen "page"**: The `.panel-page .modal` / `.panel-page .modal-mask` overrides (meant for embedded panels: Settings / Accounts / SyncLogs / About) also caught `ConfirmDialog` (which shares `.modal` + `.modal-mask` classes and renders inside `.panel-page`), stretching it to `width:100%; height:100%`. See [docs/issue-317-session-clear-confirm-modal.md](./issue-317-session-clear-confirm-modal.md).
+  - **Narrow the overrides**: `.panel-page .modal` → `.panel-page .modal:not(.confirm-modal)`; `.panel-page .modal-mask` → `.panel-page .modal-mask:not(.confirm-mask)`.
+  - **ConfirmDialog marker class**: Added `confirm-mask` to the mask so `:not()` matches precisely.
+  - **Behavior**: All in-panel confirm dialogs (session clear, account delete, sync-logs clear) are now centered popups instead of full-screen pages.
+  - **No schema / no backend change**: pure CSS + 1-line TSX class name change.
+  - **Verification**: `npx tsc --noEmit` 0 errors ✅, `npm run i18n:check` 385 keys ✅, `npm run lint` 18 warnings (no new) ✅, `npx prettier --check` ✅, `confirm-dialog.test.tsx` + `board.test.tsx` 22/22 passed ✅.
+
 - **v0.6.3 (2026-09-21) — Guide text update (#315)**
 
   - **#315 Guide missing set_work_branch trigger**: record_session also missing work_dir parameter. See [docs/issue-315-guide-text.md](./issue-315-guide-text.md).
