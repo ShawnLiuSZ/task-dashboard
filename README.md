@@ -220,6 +220,8 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/issue-119-expand-release-matrix.md`](./docs/issue-119-expand-release-matrix.md) — **扩展 Release 打包矩阵**：Linux arm64、rpm、Windows msi；并记录 `zip` 作为 Tauri 2 bundle 类型**被当日回滚**的教训
 
+- [`docs/issue-319-kb-doc-links.md`](./docs/issue-319-kb-doc-links.md) — **补全 #313/#314/#315 缺失的 KB 文档**：CHANGELOG 引用的三篇文档此前从未创建导致 6 处断链，依据已合并改动补齐，恢复 `check-doc-links.py` 通过
+
 ## 协议（License）
 
 本项目采用 **MIT License**，完整文本见 [LICENSE](./LICENSE)。可自由使用、复制、修改、合并、发布、分发、再授权乃至出售本软件的副本，前提是**在本软件或其大部分副本中保留上述版权声明与许可声明**（即根目录 `LICENSE` 文件的内容）。
