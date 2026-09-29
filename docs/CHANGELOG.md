@@ -6,6 +6,13 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.6.5（2026-09-29）— 编辑记事文本框不随内容长度自适应高度（#322）**
+
+  - **#322 编辑记事文本框不随内容长度自适应高度**：进入编辑态时 `<textarea>` 与 `editDraft` 同帧挂载且带 `autoFocus`，原 `useAutoSize` 用被动 `useEffect(..., [value])` 测高，初始 `scrollHeight` 被 `overflow-y:auto` 列容器的滚动 / 绘制时序干扰，框体停在 `min-height:42px`，长内容需框内滚动；只有继续输入才撑开。详见 [docs/issue-322-note-edit-autosize.md](./issue-322-note-edit-autosize.md)。
+  - **修复**：`useEffect` → `useLayoutEffect`（DOM 变更后、绘制前同步测量）；`useAutoSize` 新增 `active` 参数（调用处传 `editingId !== null`），进入编辑态那一帧主动重测；抽 `resize` 并返回 `{ ref, resize }`，编辑 textarea 改用 `ref={editRef.ref}`。
+  - **约束不变**：上限 260px、`min-height:42px` 维持不变；纯前端行为，无 schema / 无后端 / 无 MCP 变更。
+  - **验证**：`npm test` 143 例 passed ✅、`npx tsc --noEmit` 0 error ✅、`npm run i18n:check` 385 keys ✅、`npm run lint` 18 warnings（无新增）✅、`npx prettier --check` ✅、`python3 scripts/check-doc-links.py` 157 文件无断链 ✅。
+
 - **v0.6.4（2026-09-23）— 删除会话二次确认恢复为居中弹框（#317）**
 
   - **#317 删除任务会话的二次确认弹框被铺满成全屏页面**：`.panel-page .modal` / `.panel-page .modal-mask` 覆盖规则本意是让内嵌面板（Settings / Accounts / SyncLogs / About）铺满主区，但 `ConfirmDialog` 也使用 `.modal` + `.modal-mask` 类名且渲染在 `.panel-page` 内部，于是被误伤成 `width:100%; height:100%` 的全屏「页面」。详见 [docs/issue-317-session-clear-confirm-modal.md](./issue-317-session-clear-confirm-modal.md)。

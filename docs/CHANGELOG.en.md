@@ -2,6 +2,13 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.6.5 (2026-09-29) — Note edit textarea auto-grows to content height (#322)**
+
+  - **#322 Note edit textarea does not auto-grow to content length**: When entering edit mode, the `<textarea>` mounts in the same commit as `editDraft` (with `autoFocus`). The original `useAutoSize` measured height in a passive `useEffect(..., [value])`, and the initial `scrollHeight` was taken against an unstable layout (the `overflow-y:auto` column container scrolls the card into view), so the box stayed at `min-height:42px` and long content needed in-box scrolling; only typing grew it. See [docs/issue-322-note-edit-autosize.md](./issue-322-note-edit-autosize.md).
+  - **Fix**: `useEffect` → `useLayoutEffect` (synchronous measure after DOM mutation, before paint); `useAutoSize` takes a new `active` arg (call site passes `editingId !== null`) to re-measure on entering edit mode; extracted `resize` and return `{ ref, resize }`, edit textarea uses `ref={editRef.ref}`.
+  - **Constraints unchanged**: 260px cap and `min-height:42px` preserved; frontend-only behavior, no schema / backend / MCP change.
+  - **Verification**: `npm test` 143 cases passed ✅, `npx tsc --noEmit` 0 errors ✅, `npm run i18n:check` 385 keys ✅, `npm run lint` 18 warnings (no new) ✅, `npx prettier --check` ✅, `python3 scripts/check-doc-links.py` 157 files no broken links ✅.
+
 - **v0.6.4 (2026-09-23) — Session clear confirm modal fix (#317)**
 
   - **#317 Delete-session confirm dialog stretched to full-screen "page"**: The `.panel-page .modal` / `.panel-page .modal-mask` overrides (meant for embedded panels: Settings / Accounts / SyncLogs / About) also caught `ConfirmDialog` (which shares `.modal` + `.modal-mask` classes and renders inside `.panel-page`), stretching it to `width:100%; height:100%`. See [docs/issue-317-session-clear-confirm-modal.md](./issue-317-session-clear-confirm-modal.md).
