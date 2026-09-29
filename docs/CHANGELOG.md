@@ -6,7 +6,14 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **Unreleased — 菜单栏 About 改为自定义独立小窗（#325）**
+- **v0.6.5（2026-09-29）— 编辑记事文本框不随内容长度自适应高度（#322）**
+
+  - **#322 编辑记事文本框不随内容长度自适应高度**：进入编辑态时 `<textarea>` 与 `editDraft` 同帧挂载且带 `autoFocus`，原 `useAutoSize` 用被动 `useEffect(..., [value])` 测高，初始 `scrollHeight` 被 `overflow-y:auto` 列容器的滚动 / 绘制时序干扰，框体停在 `min-height:42px`，长内容需框内滚动；只有继续输入才撑开。详见 [docs/issue-322-note-edit-autosize.md](./issue-322-note-edit-autosize.md)。
+  - **修复**：`useEffect` → `useLayoutEffect`（DOM 变更后、绘制前同步测量）；`useAutoSize` 新增 `active` 参数（调用处传 `editingId !== null`），进入编辑态那一帧主动重测；抽 `resize` 并返回 `{ ref, resize }`，编辑 textarea 改用 `ref={editRef.ref}`。
+  - **约束不变**：上限 260px、`min-height:42px` 维持不变；纯前端行为，无 schema / 无后端 / 无 MCP 变更。
+  - **验证**：`npm test` 143 例 passed ✅、`npx tsc --noEmit` 0 error ✅、`npm run i18n:check` 385 keys ✅、`npm run lint` 18 warnings（无新增）✅、`npx prettier --check` ✅、`python3 scripts/check-doc-links.py` 157 文件无断链 ✅。
+
+- **v0.6.5（2026-09-29）— 菜单栏 About 改为自定义独立小窗（#325）**
 
   - **#325 原生 About 面板无法定制**：macOS 菜单栏「About TaskBoard」是 Tauri 默认应用菜单触发的系统原生面板，只有图标 / 名称 / 版本，无运行时信息与「确定」按钮。改为自定义独立小窗（label `about`，固定 380×320、不可缩放），菜单栏「About TaskBoard」打开该小窗。详见 [docs/issue-325-about-window.md](./issue-325-about-window.md)。
   - **自定义 macOS 应用菜单**：用 `tauri::menu` 构建应用菜单，把默认 About 替换为打开小窗的自定义项（id `about`），保留 App / Edit / Window 标准项（隐藏 / 退出 / 服务 / 复制粘贴 / 最小化 / 关闭用 `PredefinedMenuItem` 复用系统行为）。非 macOS 保留默认菜单（原生 About 面板），无回归。

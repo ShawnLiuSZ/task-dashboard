@@ -2,7 +2,14 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **Unreleased — Menu bar About becomes custom standalone window (#325)**
+- **v0.6.5 (2026-09-29) — Note edit textarea auto-grows to content height (#322)**
+
+  - **#322 Note edit textarea does not auto-grow to content length**: When entering edit mode, the `<textarea>` mounts in the same commit as `editDraft` (with `autoFocus`). The original `useAutoSize` measured height in a passive `useEffect(..., [value])`, and the initial `scrollHeight` was taken against an unstable layout (the `overflow-y:auto` column container scrolls the card into view), so the box stayed at `min-height:42px` and long content needed in-box scrolling; only typing grew it. See [docs/issue-322-note-edit-autosize.md](./issue-322-note-edit-autosize.md).
+  - **Fix**: `useEffect` → `useLayoutEffect` (synchronous measure after DOM mutation, before paint); `useAutoSize` takes a new `active` arg (call site passes `editingId !== null`) to re-measure on entering edit mode; extracted `resize` and return `{ ref, resize }`, edit textarea uses `ref={editRef.ref}`.
+  - **Constraints unchanged**: 260px cap and `min-height:42px` preserved; frontend-only behavior, no schema / backend / MCP change.
+  - **Verification**: `npm test` 143 cases passed ✅, `npx tsc --noEmit` 0 errors ✅, `npm run i18n:check` 385 keys ✅, `npm run lint` 18 warnings (no new) ✅, `npx prettier --check` ✅, `python3 scripts/check-doc-links.py` 157 files no broken links ✅.
+
+- **v0.6.5 (2026-09-29) — Menu bar About becomes custom standalone window (#325)**
 
   - **#325 Native About panel not customizable**: The macOS menu bar "About TaskBoard" was the system-native panel from Tauri's default app menu (icon / name / version only, no runtime info or OK button). Replaced with a custom standalone window (label `about`, fixed 380×320, non-resizable); the menu item opens it. See [docs/issue-325-about-window.md](./issue-325-about-window.md).
   - **Custom macOS app menu**: Built the app menu with `tauri::menu`, replacing the default About with a custom item (id `about`) that opens the window; kept App / Edit / Window standard submenus (hide / quit / services / copy-paste / minimize / close via `PredefinedMenuItem`). Non-macOS keeps the default menu (native About panel), no regression.
