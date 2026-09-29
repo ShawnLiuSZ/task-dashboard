@@ -2,6 +2,16 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — Menu bar About becomes custom standalone window (#325)**
+
+  - **#325 Native About panel not customizable**: The macOS menu bar "About TaskBoard" was the system-native panel from Tauri's default app menu (icon / name / version only, no runtime info or OK button). Replaced with a custom standalone window (label `about`, fixed 380×320, non-resizable); the menu item opens it. See [docs/issue-325-about-window.md](./issue-325-about-window.md).
+  - **Custom macOS app menu**: Built the app menu with `tauri::menu`, replacing the default About with a custom item (id `about`) that opens the window; kept App / Edit / Window standard submenus (hide / quit / services / copy-paste / minimize / close via `PredefinedMenuItem`). Non-macOS keeps the default menu (native About panel), no regression.
+  - **New command `get_runtime_info`**: Returns `{ appVersion, tauriVersion }` (app + Tauri version); WebView version is derived on the frontend from `navigator.userAgent` (Tauri 2 core exposes no such API, and no new dependency is introduced).
+  - **Frontend routing**: `main.tsx` branches on `getCurrentWindow().label`; the `about` window renders only `AboutWindow` (no full App mount), the main window renders `App` as usual.
+  - **New i18n keys**: 4 each in zh-CN / en-US (`aboutWindow.version` / `aboutWindow.tauri` / `aboutWindow.webview` / `aboutWindow.ok`).
+  - **No schema / no DB change**: pure menu + window + command + frontend UI.
+  - **Verification**: `npx tsc --noEmit` 0 errors ✅, `npm run i18n:check` 389 keys ✅, `npm run lint` 18 warnings (no new) ✅, `npx prettier --check` ✅, `npm test` 151 cases passed ✅, `cargo check --lib` ✅, `cargo clippy --lib -- -D warnings` ✅, `cargo test --lib` 116 passed ✅, `scripts/check-doc-links.py` ✅.
+
 - **v0.6.4 (2026-09-23) — Session clear confirm modal fix (#317)**
 
   - **#317 Delete-session confirm dialog stretched to full-screen "page"**: The `.panel-page .modal` / `.panel-page .modal-mask` overrides (meant for embedded panels: Settings / Accounts / SyncLogs / About) also caught `ConfirmDialog` (which shares `.modal` + `.modal-mask` classes and renders inside `.panel-page`), stretching it to `width:100%; height:100%`. See [docs/issue-317-session-clear-confirm-modal.md](./issue-317-session-clear-confirm-modal.md).

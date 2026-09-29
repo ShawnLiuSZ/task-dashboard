@@ -1239,6 +1239,28 @@ pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// #325：运行时信息（应用版本 + Tauri 版本）。
+///
+/// 设计取舍：WebView 引擎版本（macOS 的 WKWebView / Windows 的 WebView2 / Linux 的
+/// WebKitGTK）Tauri 2 核心**不暴露**版本 API，且项目约定（AGENTS.md §2.5）不引入新依赖
+/// （官方 `tauri-plugin-webview-version` 插件即为此而生）。系统 WebView 即 Tauri 实际
+/// 使用的渲染引擎，故 WebView 版本由前端从 `navigator.userAgent` 推导，见
+/// `AboutWindow.tsx::getWebviewVersion`。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeInfo {
+    pub app_version: String,
+    pub tauri_version: String,
+}
+
+#[tauri::command]
+pub fn get_runtime_info() -> RuntimeInfo {
+    RuntimeInfo {
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        tauri_version: tauri::VERSION.to_string(),
+    }
+}
+
 /// #101：前端轮询读取 quarantine 清除消息（一次性，读取后清空）。
 #[tauri::command]
 pub fn get_quarantine_notice(state: tauri::State<'_, crate::AppState>) -> Option<String> {

@@ -95,6 +95,8 @@ export const api = {
     invoke<DeviceLoginPoll>('device_login_poll', { clientId, deviceCode, org, label }),
   // v0.3.19+：关于页面 —— 当前版本 + 检查更新。
   getAppVersion: () => invoke<string>('get_app_version'),
+  // #325：运行时信息（应用版本 + Tauri 版本）；WebView 版本前端从 userAgent 推导。
+  getRuntimeInfo: () => invoke<{ appVersion: string; tauriVersion: string }>('get_runtime_info'),
   // #101：一次性读取 quarantine 清除消息（读取后后端自动清空）。
   getQuarantineNotice: () => invoke<string | null>('get_quarantine_notice'),
   checkLatestRelease: () => invoke<CheckUpdate>('check_latest_release'),
