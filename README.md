@@ -224,6 +224,8 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 - [`docs/issue-319-kb-doc-links.md`](./docs/issue-319-kb-doc-links.md) — **补全 #313/#314/#315 缺失的 KB 文档**：CHANGELOG 引用的三篇文档此前从未创建导致 6 处断链，依据已合并改动补齐，恢复 `check-doc-links.py` 通过
 - [`docs/issue-322-note-edit-autosize.md`](./docs/issue-322-note-edit-autosize.md) — **编辑记事文本框不随内容长度自适应高度**：`useAutoSize` 由被动 `useEffect` 改为 `useLayoutEffect` + 进入编辑态主动测量，修复进入编辑态长内容停在 1 行的缺陷
 
+- [`docs/issue-325-about-window.md`](./docs/issue-325-about-window.md) — **菜单栏 About TaskBoard 改为自定义独立小窗（对齐 WorkBuddy）**：macOS 自定义应用菜单接管默认 About + 新增 `about` 固定小窗（图标 / 粗体名 / 版本·Tauri·WebView 三行 / 全宽确定）；WebView 版本前端从 `navigator.userAgent` 推导（Tauri 2 核心不暴露、不引新依赖）
+
 ## 协议（License）
 
 本项目采用 **MIT License**，完整文本见 [LICENSE](./LICENSE)。可自由使用、复制、修改、合并、发布、分发、再授权乃至出售本软件的副本，前提是**在本软件或其大部分副本中保留上述版权声明与许可声明**（即根目录 `LICENSE` 文件的内容）。
