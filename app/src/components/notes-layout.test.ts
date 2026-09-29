@@ -258,3 +258,30 @@ describe('创建列收起只影响创建列（#259）', () => {
     expect(panel).toContain('className="notes-body"');
   });
 });
+
+describe('记事本编辑文本框自适应高度（#322）', () => {
+  // vitest 无布局引擎，scrollHeight 恒为 0，无法用渲染断言覆盖；沿用「源码静态断言」。
+  it('useAutoSize 用 useLayoutEffect 做高度测量（绘制前同步，修复进入编辑态不撑高）', () => {
+    const m = panel.match(/function useAutoSize[\s\S]*?\n\}/);
+    expect(m, 'NotesPanel.tsx 中找不到 useAutoSize 定义').toBeTruthy();
+    // 进入编辑态时 textarea 与 editDraft 同帧挂载，被动 useEffect 的初始测量会被
+    // overflow-y:auto 列容器的滚动/绘制时序干扰，框体停在 min-height(42px)。
+    // 必须在 DOM 变更后、绘制前用 useLayoutEffect 同步量高。
+    expect(m![0]).toContain('useLayoutEffect');
+    // 不得再用被动 useEffect 测高——否则回归 #322（useLayoutEffect 不含子串 useEffect）。
+    expect(m![0], 'useAutoSize 不得再用被动 useEffect 测高（防回归 #322）').not.toContain(
+      'useEffect',
+    );
+  });
+
+  it('进入编辑态主动测量：useAutoSize 接收 active 参数且依赖 editingId', () => {
+    const m = panel.match(/function useAutoSize[\s\S]*?\n\}/);
+    // active 标志让 hook 在进入编辑态那一帧（而非仅 value 变化时）重测，
+    // 确保「挂载即预填长内容」也能被量到。
+    expect(m![0]).toContain('active: boolean');
+    expect(m![0]).toContain('active');
+    // 编辑 textarea 把 editingId !== null 作为 active 传入，并把返回的 ref 挂上
+    expect(panel).toContain('useAutoSize(editDraft, editingId !== null)');
+    expect(panel).toContain('ref={editRef.ref}');
+  });
+});

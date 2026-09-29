@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { api } from '../api';
 import { useT } from '../i18n';
@@ -94,16 +94,25 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** 自适应高度的文本域：默认一行，随内容增长，上限 260px。 */
-function useAutoSize(value: string) {
+/**
+ * 自适应高度的文本域：默认一行，随内容增长，上限 260px。
+ * #322：改用 useLayoutEffect（DOM 变更后、绘制前同步测量），并在进入编辑态
+ * （active=true）那一帧主动重测——否则挂载即预填长内容时，被动 useEffect 的
+ * 初始测量会被 overflow-y:auto 列容器的滚动/绘制时序干扰，框体停在 min-height(42px)，
+ * 只有继续输入（下一帧 value 变化）才撑开。
+ */
+function useAutoSize(value: string, active: boolean) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
-  useEffect(() => {
+  const resize = useCallback(() => {
     const el = ref.current;
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
-  }, [value]);
-  return ref;
+  }, []);
+  useLayoutEffect(() => {
+    resize();
+  }, [value, active, resize]);
+  return { ref, resize };
 }
 
 /* ---------- 子组件 ---------- */
@@ -170,7 +179,7 @@ export default function NotesPanel() {
     localStorage.setItem(ADD_COL_COLLAPSED_KEY, addColCollapsed ? '1' : '0');
   }, [addColCollapsed]);
 
-  const editRef = useAutoSize(editDraft);
+  const editRef = useAutoSize(editDraft, editingId !== null);
 
   const loadNotes = useCallback(async () => {
     setLoading(true);
@@ -239,7 +248,7 @@ export default function NotesPanel() {
       return (
         <article key={note.id} className="note-card editing" style={accent}>
           <textarea
-            ref={editRef}
+            ref={editRef.ref}
             className="note-textarea"
             value={editDraft}
             rows={1}

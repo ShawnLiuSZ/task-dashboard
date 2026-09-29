@@ -222,6 +222,7 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/issue-317-session-clear-confirm-modal.md`](./docs/issue-317-session-clear-confirm-modal.md) — **删除会话二次确认弹框被铺满成全屏页面**：`.panel-page .modal` 覆盖规则误伤 `ConfirmDialog`，收窄为 `:not(.confirm-modal)` + 加 `confirm-mask` 类恢复居中弹框
 - [`docs/issue-319-kb-doc-links.md`](./docs/issue-319-kb-doc-links.md) — **补全 #313/#314/#315 缺失的 KB 文档**：CHANGELOG 引用的三篇文档此前从未创建导致 6 处断链，依据已合并改动补齐，恢复 `check-doc-links.py` 通过
+- [`docs/issue-322-note-edit-autosize.md`](./docs/issue-322-note-edit-autosize.md) — **编辑记事文本框不随内容长度自适应高度**：`useAutoSize` 由被动 `useEffect` 改为 `useLayoutEffect` + 进入编辑态主动测量，修复进入编辑态长内容停在 1 行的缺陷
 
 ## 协议（License）
 
