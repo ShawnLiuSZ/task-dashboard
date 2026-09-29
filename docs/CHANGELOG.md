@@ -13,6 +13,16 @@
   - **约束不变**：上限 260px、`min-height:42px` 维持不变；纯前端行为，无 schema / 无后端 / 无 MCP 变更。
   - **验证**：`npm test` 143 例 passed ✅、`npx tsc --noEmit` 0 error ✅、`npm run i18n:check` 385 keys ✅、`npm run lint` 18 warnings（无新增）✅、`npx prettier --check` ✅、`python3 scripts/check-doc-links.py` 157 文件无断链 ✅。
 
+- **v0.6.5（2026-09-29）— 菜单栏 About 改为自定义独立小窗（#325）**
+
+  - **#325 原生 About 面板无法定制**：macOS 菜单栏「About TaskBoard」是 Tauri 默认应用菜单触发的系统原生面板，只有图标 / 名称 / 版本，无运行时信息与「确定」按钮。改为自定义独立小窗（label `about`，固定 380×320、不可缩放），菜单栏「About TaskBoard」打开该小窗。详见 [docs/issue-325-about-window.md](./issue-325-about-window.md)。
+  - **自定义 macOS 应用菜单**：用 `tauri::menu` 构建应用菜单，把默认 About 替换为打开小窗的自定义项（id `about`），保留 App / Edit / Window 标准项（隐藏 / 退出 / 服务 / 复制粘贴 / 最小化 / 关闭用 `PredefinedMenuItem` 复用系统行为）。非 macOS 保留默认菜单（原生 About 面板），无回归。
+  - **新命令 `get_runtime_info`**：返回 `{ appVersion, tauriVersion }`（应用版本 + Tauri 版本）；WebView 版本由前端从 `navigator.userAgent` 推导（Tauri 2 核心不暴露该 API，且不引入新依赖）。
+  - **前端路由**：`main.tsx` 按 `getCurrentWindow().label` 区分，`about` 窗口只渲染 `AboutWindow`（不挂载完整 App），主窗口照常渲染 App。
+  - **新增 i18n key**：中英文各 4 个（`aboutWindow.version` / `aboutWindow.tauri` / `aboutWindow.webview` / `aboutWindow.ok`）。
+  - **无 schema / 无 DB 变更**：纯菜单 + 窗口 + 命令 + 前端 UI 改动。
+  - **验证**：`npx tsc --noEmit` 0 error ✅、`npm run i18n:check` 389 keys ✅、`npm run lint` 18 warnings（无新增）✅、`npx prettier --check` ✅、`npm test` 151 例 passed ✅、`cargo check --lib` ✅、`cargo clippy --lib -- -D warnings` ✅、`cargo test --lib` 116 passed ✅、`scripts/check-doc-links.py` ✅。
+
 - **v0.6.4（2026-09-23）— 删除会话二次确认恢复为居中弹框（#317）**
 
   - **#317 删除任务会话的二次确认弹框被铺满成全屏页面**：`.panel-page .modal` / `.panel-page .modal-mask` 覆盖规则本意是让内嵌面板（Settings / Accounts / SyncLogs / About）铺满主区，但 `ConfirmDialog` 也使用 `.modal` + `.modal-mask` 类名且渲染在 `.panel-page` 内部，于是被误伤成 `width:100%; height:100%` 的全屏「页面」。详见 [docs/issue-317-session-clear-confirm-modal.md](./issue-317-session-clear-confirm-modal.md)。

@@ -9,20 +9,29 @@
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
-  "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "TaskBoard",
-        "width": 1180,
-        "height": 760,
-        "minWidth": 900,
-        "minHeight": 560,
-        "resizable": true,
-        "center": true,
-        "visible": true
-      }
-    ],
+    "app": {
+      "windows": [
+        {
+          "label": "main",
+          "title": "TaskBoard",
+          "width": 1180,
+          "height": 760,
+          "minWidth": 900,
+          "minHeight": 560,
+          "resizable": true,
+          "center": true,
+          "visible": true
+        },
+        {
+          "label": "about",
+          "title": "About TaskBoard",
+          "width": 380,
+          "height": 320,
+          "resizable": false,
+          "center": true,
+          "visible": false
+        }
+      ],
     "security": {
       "csp": "default-src 'self'; connect-src 'self' https://api.github.com https://*.github.com ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.githubusercontent.com"
     }

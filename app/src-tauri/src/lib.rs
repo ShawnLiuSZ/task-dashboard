@@ -9,6 +9,9 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager,
 };
+// #325：以下两项仅用于 macOS 自定义应用菜单，避免非 macOS 平台的 unused_imports 警告。
+#[cfg(target_os = "macos")]
+use tauri::menu::{PredefinedMenuItem, Submenu};
 
 mod commands;
 mod common;
@@ -170,6 +173,69 @@ fn refresh_tray(app: &AppHandle) {
     }
 }
 
+/// #325：构建自定义 macOS 应用菜单，把默认「About TaskBoard」替换为打开自定义小窗。
+///
+/// 标准项（服务 / 隐藏 / 退出 / 编辑 / 窗口）复用系统行为（`PredefinedMenuItem`），
+/// 仅 About 用自定义 `MenuItem`（id = "about"），点击在 `on_menu_event` 中打开 about 窗口。
+/// 仅在 macOS 生效；其他平台保留 Tauri 默认菜单（含原生 About 面板），保持无回归。
+#[cfg(target_os = "macos")]
+fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let about = MenuItem::with_id(app, "about", "About TaskBoard", true, None::<&str>)?;
+
+    let app_submenu = Submenu::with_items(
+        app,
+        "TaskBoard",
+        true,
+        &[
+            &about,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::show_all(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::quit(app, Some("Quit TaskBoard"))?,
+        ],
+    )?;
+
+    let edit_submenu = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+
+    let window_submenu = Submenu::with_items(
+        app,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, None)?,
+            &PredefinedMenuItem::close_window(app, None)?,
+        ],
+    )?;
+
+    Menu::with_items(app, &[&app_submenu, &edit_submenu, &window_submenu])
+}
+
+/// #325：打开 / 聚焦自定义 About 小窗（label = "about"，启动即创建但隐藏）。
+#[cfg(target_os = "macos")]
+fn open_about_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("about") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
 /// 同步进行中 RAII 标记：函数返回（含提前 return）时自动复位 `syncing`。
 /// `acquire` 返回 `None` 表示已有同步在跑（去重），调用方应直接跳过本次触发。
 pub(crate) struct SyncGuard<'a>(pub(crate) &'a AtomicBool);
@@ -328,9 +394,18 @@ pub fn run() {
             // 消息存入 AppState（前端轮询读取），不再用 emit（前端可能还没加载）。
             autoclear_self_quarantine_and_notify(&app.state::<AppState>());
 
+            // #325：macOS 自定义应用菜单，把默认「About TaskBoard」替换为打开自定义小窗。
+            // 其他平台保留 Tauri 默认菜单（原生 About 面板），不执行此分支。
+            #[cfg(target_os = "macos")]
+            {
+                let menu = build_app_menu(app.handle())?;
+                app.handle().set_menu(menu)?;
+            }
+
             let show_item = MenuItem::with_id(app, "show", "显示看板", true, None::<&str>)?;
             let sync_item = MenuItem::with_id(app, "sync", "立即同步", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            // 用 tray_quit 区分应用菜单里的预定义 quit，避免跨菜单 id 重复。
+            let quit_item = MenuItem::with_id(app, "tray_quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &sync_item, &quit_item])?;
 
             let mut builder = TrayIconBuilder::with_id(TRAY_ID)
@@ -344,7 +419,7 @@ pub fn run() {
                             run_sync(&h, "manual");
                         });
                     }
-                    "quit" => app.exit(0),
+                    "tray_quit" => app.exit(0),
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -422,6 +497,8 @@ pub fn run() {
             commands::device_login_poll,
             // v0.3.19+：关于页面 —— 当前版本号 + 检查更新。
             commands::get_app_version,
+            // #325：运行时信息（应用版本 + Tauri 版本；WebView 版本前端从 userAgent 推导）。
+            commands::get_runtime_info,
             commands::get_quarantine_notice,
             commands::check_latest_release,
             // #231：应用内自动更新（检查 / 下载安装 / 重启生效）。
@@ -467,6 +544,17 @@ pub fn run() {
             hooks::uninstall_agent_hooks,
             hooks::get_agent_hooks_status,
         ])
+        // #325：菜单栏「About TaskBoard」打开自定义小窗（仅 macOS 有自定义菜单接管）。
+        // 只匹配 "about" 这一自定义项；托盘菜单的 show/sync/quit 由托盘 builder 自行处理，
+        // 不在此重复处理（避免双触发）。非 macOS 无此菜单，事件永不命中。
+        .on_menu_event(|_app, _event| {
+            // 仅 macOS 命中：自定义菜单的 "about" 项打开小窗。非 macOS 此分支被编译掉，
+            // _ 前缀避免 unused_variables 警告（CI 开 -D warnings）。
+            #[cfg(target_os = "macos")]
+            if _event.id().as_ref() == "about" {
+                open_about_window(_app);
+            }
+        })
         .run(tauri::generate_context!())
         .expect("TaskBoard 启动失败");
 }

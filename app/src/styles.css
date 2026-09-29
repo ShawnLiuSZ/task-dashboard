@@ -2791,3 +2791,72 @@ button.unassigned-tag:disabled {
 .toggle input:checked + .slider::before {
   transform: translateX(16px);
 }
+
+/* #325：菜单栏 About 自定义独立小窗（label = "about" 的隐藏窗口） */
+.about-window {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  height: 100vh;
+  padding: 24px;
+  box-sizing: border-box;
+  text-align: center;
+}
+
+.about-window-icon {
+  width: 64px;
+  height: 64px;
+}
+
+/* 应用图标占位：圆角方块 + 白色「T」字，对齐 WorkBuddy 的图标 + 粗体名排版 */
+.about-window-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #4f8cff, #2b6fe0);
+  color: #fff;
+  font-size: 34px;
+  font-weight: 700;
+  user-select: none;
+}
+
+.about-window-name {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.about-window-rows {
+  width: 100%;
+  max-width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0;
+}
+
+.about-window-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.about-window-key {
+  color: var(--text-3);
+}
+
+.about-window-val {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 全宽主色「确定」按钮（对齐 WorkBuddy 的确定按钮） */
+.about-window-ok {
+  width: 100%;
+  max-width: 280px;
+  margin-top: 4px;
+  justify-content: center;
+}
