@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"TaskBoard 默认权限","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-show","core:window:allow-hide"]}}
+{"about":{"identifier":"about","description":"About 小窗权限（#327）：只需关闭自身窗口","local":true,"windows":["about"],"permissions":["core:default","core:window:allow-close"]},"default":{"identifier":"default","description":"TaskBoard 默认权限","local":true,"windows":["main"],"permissions":["core:default"]}}

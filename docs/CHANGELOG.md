@@ -6,6 +6,19 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — code review P0 批次：About 按钮失效 / 语言切换器丢失 / 记事重复报错 / 项目条目数取错（#327）**
+
+  - **#327 About 小窗「确定」按钮失效**：capability 只声明了 `windows:["main"]`，而 `about` 是独立 webview，不匹配任何 capability ⇒ 零 IPC 权限；且 `core:window:default`（实测 28 项）不含 `allow-close`，`getCurrentWindow().close()` 被 ACL 拒绝、按钮静默失效（#325 功能实际未生效）。详见 [docs/issue-327-p0-functional-defects.md](./issue-327-p0-functional-defects.md)。
+  - **修复**：新增 `capabilities/about.json`（`windows:["about"]` + `core:window:allow-close`）；移除 `main` 上从未被前端调用的 `allow-show` / `allow-hide`。
+  - **#327 设置面板「界面语言」切换器丢失**：基础设置里连续渲染了两个完全相同的「外观主题」下拉框，语言切换入口整块消失（i18n 的 `mode` / `setMode` 与 4 个语言 key 全零引用，成死代码）。
+  - **修复**：第二块改回语言选择器（跟随系统 / 简体中文 / English）。
+  - **#327 记事内容重复时报原始 SQLite 错误**：`notes.content` 上有唯一索引 `idx_notes_content`，`add_note` / `update_note` 未捕获约束冲突，重复内容直接在 UI 与 MCP 返回体暴露 `UNIQUE constraint failed: notes.content`。
+  - **修复**：新增 `is_unique_violation()`（`SQLITE_CONSTRAINT_UNIQUE` = 2067），冲突时返回「已存在相同内容的记事」。
+  - **#327 `projects.number_of_items` 取错字段**：`fetch_all_projects` 把 GraphQL 的 `number`（项目编号）当条目数存库（实测 OMS Kanban 存 `20` / 真实 `items.totalCount` = 273），使 `resolve_project_write_target` 的 `ORDER BY number_of_items DESC` 退化成「按编号排序」→ 多 Project 时写错写回目标（表现为「API 日志成功但目标项目状态不变」）。
+  - **修复**：两处查询补 `items { totalCount }`；抽出 `org_projects_query` / `user_projects_query` / `parse_projects_nodes` 三个纯函数锁住回归。
+  - **无 schema / 无 MCP 工具 / 无 i18n key 变更**：历史 `number_of_items` 旧值会在下次成功同步时被 `upsert_projects` 覆盖，无需迁移脚本。
+  - **验证**：`npm test` 155 passed（+4）✅、`npx tsc --noEmit` ✅、`npm run i18n:check` 389 keys ✅、`npm run lint` 18 warnings（无新增）✅、`npx prettier --check` ✅、`cargo clippy --lib -- -D warnings` ✅、`cargo test --lib` 119 passed（+3）✅、`scripts/check-doc-links.py` ✅、`scripts/check-mcp-columns.py` 28 列 ✅；4 项静态/单测断言均通过反向验证（改回缺陷写法必失败）。
+
 - **v0.6.5（2026-09-29）— 编辑记事文本框不随内容长度自适应高度（#322）**
 
   - **#322 编辑记事文本框不随内容长度自适应高度**：进入编辑态时 `<textarea>` 与 `editDraft` 同帧挂载且带 `autoFocus`，原 `useAutoSize` 用被动 `useEffect(..., [value])` 测高，初始 `scrollHeight` 被 `overflow-y:auto` 列容器的滚动 / 绘制时序干扰，框体停在 `min-height:42px`，长内容需框内滚动；只有继续输入才撑开。详见 [docs/issue-322-note-edit-autosize.md](./issue-322-note-edit-autosize.md)。

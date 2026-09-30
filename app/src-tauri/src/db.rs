@@ -2106,13 +2106,32 @@ pub fn list_notes(conn: &Connection) -> Result<Vec<Note>, String> {
     Ok(out)
 }
 
+/// #327：判断是否为 UNIQUE 约束冲突（`SQLITE_CONSTRAINT_UNIQUE` = 2067）。
+///
+/// `notes.content` 上有唯一索引 `idx_notes_content`，重复内容会让 `INSERT`/`UPDATE`
+/// 抛出原始的 `UNIQUE constraint failed: notes.content`。用它把原始 SQLite 文案
+/// 换成用户可读的提示，避免直接暴露到 UI / MCP 返回体。
+fn is_unique_violation(e: &rusqlite::Error) -> bool {
+    const SQLITE_CONSTRAINT_UNIQUE: i32 = 2067;
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(err, _) if err.extended_code == SQLITE_CONSTRAINT_UNIQUE
+    )
+}
+
 /// 新增记事，返回新记录。
 pub fn add_note(conn: &Connection, content: &str, label: &str, now: i64) -> Result<Note, String> {
     conn.execute(
         "INSERT INTO notes (content, label, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
         rusqlite::params![content, label, now],
     )
-    .map_err(|e| format!("插入记事失败: {e}"))?;
+    .map_err(|e| {
+        if is_unique_violation(&e) {
+            "已存在相同内容的记事，未重复添加".to_string()
+        } else {
+            format!("插入记事失败: {e}")
+        }
+    })?;
     let id: i64 = conn
         .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
         .unwrap_or(0);
@@ -2132,7 +2151,13 @@ pub fn update_note(conn: &Connection, id: i64, content: &str, now: i64) -> Resul
             "UPDATE notes SET content = ?1, updated_at = ?2 WHERE id = ?3",
             rusqlite::params![content, now, id],
         )
-        .map_err(|e| format!("更新记事失败: {e}"))?;
+        .map_err(|e| {
+            if is_unique_violation(&e) {
+                "已存在相同内容的记事，未保存".to_string()
+            } else {
+                format!("更新记事失败: {e}")
+            }
+        })?;
     if n == 0 {
         return Err(format!("记事 #{id} 不存在"));
     }
@@ -2326,6 +2351,31 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("taskboard.db")
+    }
+
+    /// #327：重复内容的记事应返回可读提示，而不是原始的 UNIQUE 约束报错。
+    #[test]
+    fn note_unique_content_conflict_is_readable() {
+        let path = tmp_db("note-unique");
+        let conn = open_db(&path).unwrap();
+        let now = 1_700_000_000;
+
+        add_note(&conn, "同一条内容", "", now).unwrap();
+        let dup = add_note(&conn, "同一条内容", "另一个标签", now).unwrap_err();
+        assert!(
+            !dup.contains("UNIQUE constraint failed"),
+            "不应暴露原始 SQLite 文案: {dup}"
+        );
+        assert!(dup.contains("已存在相同内容"), "应给出可读提示: {dup}");
+
+        // 编辑成与另一条内容相同，同样给可读提示
+        let second = add_note(&conn, "第二条", "", now).unwrap();
+        let upd = update_note(&conn, second.id, "同一条内容", now).unwrap_err();
+        assert!(
+            !upd.contains("UNIQUE constraint failed"),
+            "不应暴露原始 SQLite 文案: {upd}"
+        );
+        assert!(upd.contains("已存在相同内容"), "应给出可读提示: {upd}");
     }
 
     /// #215：写回三件套落库与解析（主项目优先、缺 ID 报错、选项名查 id）。

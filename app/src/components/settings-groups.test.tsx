@@ -94,3 +94,20 @@ describe('设备扫描入口（#263）', () => {
     expect(html).not.toContain('扫描于');
   });
 });
+
+describe('基础设置：界面语言选择器（#327）', () => {
+  it('提供语言切换，且「外观主题」只渲染一次（此前被误复制成两份）', () => {
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <SettingsPanel settings={mkSettings()} onSaved={noop} onClose={noop} />
+      </I18nProvider>,
+    );
+    // 语言选择器此前整块丢失（i18n 的 setMode 成了死代码）
+    expect(html).toContain('界面语言');
+    expect(html).toContain('跟随系统');
+    expect(html).toContain('简体中文');
+    expect(html).toContain('English');
+    // 主题选择器只应出现一次；出现两次即为回归
+    expect((html.match(/外观主题/g) ?? []).length).toBe(1);
+  });
+});

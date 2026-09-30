@@ -4,6 +4,10 @@ import { getWebviewVersion } from '../utils/webviewVersion';
 import aboutRaw from './AboutWindow.tsx?raw';
 import mainRaw from '../main.tsx?raw';
 import stylesRaw from '../styles.css?raw';
+// #327：capability 声明与实际 IPC 调用必须一致（此前 about 窗口未覆盖任何
+// capability，且 core:window:default 不含 allow-close，导致「确定」按钮静默失败）。
+import aboutCapRaw from '../../src-tauri/capabilities/about.json?raw';
+import defaultCapRaw from '../../src-tauri/capabilities/default.json?raw';
 
 const styles = stylesRaw.replace(/\/\*[\s\S]*?\*\//g, '');
 
@@ -67,5 +71,26 @@ describe('About 小窗结构与路由（#325）', () => {
     expect(styles).toContain('.about-window-row');
     // 复用主色按钮样式（.btn.primary）而非裸 button
     expect(aboutRaw).toContain('className="btn primary about-window-ok"');
+  });
+});
+
+describe('About 小窗能力权限（#327）', () => {
+  it('about 窗口被 capability 覆盖，且拥有 allow-close（否则「确定」静默失败）', () => {
+    const cap = JSON.parse(aboutCapRaw) as { windows: string[]; permissions: string[] };
+    expect(cap.windows).toContain('about');
+    expect(cap.permissions).toContain('core:window:allow-close');
+  });
+
+  it('main 不再声明无用的 allow-show / allow-hide（前端从未调用）', () => {
+    const cap = JSON.parse(defaultCapRaw) as { windows: string[]; permissions: string[] };
+    expect(cap.permissions).not.toContain('core:window:allow-show');
+    expect(cap.permissions).not.toContain('core:window:allow-hide');
+  });
+
+  it('前端只用 close()，不用 show()/hide()（与权限声明保持一致）', () => {
+    expect(aboutRaw).toContain('.close()');
+    expect(aboutRaw).not.toContain('.hide()');
+    expect(mainRaw).not.toContain('.hide()');
+    expect(mainRaw).not.toContain('.show()');
   });
 });
