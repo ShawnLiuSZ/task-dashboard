@@ -168,7 +168,7 @@ The MCP Server only provides tools (the **capability layer**). To make agents ca
 
 - [`PRD.md`](./PRD.md) — requirements and decision evolution (including the dropped Projects v2 approach, ownership design, API pitfalls)
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — design notes (multi-source fetch, three-way ownership, four-state maintenance, PR linking) and GitHub Actions CI packaging
-- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — per-version update & fix log (v0.3.1 → latest v0.6.0)
+- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — per-version update & fix log (v0.3.1 → latest v0.6.5)
 
 - [`docs/issue-327-p0-functional-defects.md`](./docs/issue-327-p0-functional-defects.md) — **code review P0 batch**: the About window's "OK" button failed silently (no capability covered the `about` window, and `core:window:default` lacks `allow-close`); the settings panel's language switcher had been duplicated into a second theme selector; duplicate note content leaked a raw `UNIQUE constraint` error; `projects.number_of_items` read the project number instead of `items.totalCount`, so the wrong project was written when an issue belonged to several
 
@@ -187,4 +187,4 @@ This project is released under the **MIT License** — full text in [LICENSE](./
 
 The software is provided "AS IS", without warranty of any kind, and the authors and copyright holders accept no liability for any claims, damages or liability arising from its use. See the `LICENSE` file for the full disclaimer.
 
-> Version v0.6.0 · Local cross-platform app (Windows / macOS / Linux), 2026-09-17
+> Version v0.6.5 · Local cross-platform app (Windows / macOS / Linux), 2026-09-29
