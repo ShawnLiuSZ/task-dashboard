@@ -274,8 +274,14 @@ fn build_task_row(
     );
     // Project Status 只能走 GraphQL，单 issue REST 响应没有 → 传空串 / None，
     // 于是 `resolve_final_status` 走到「兜底」分支：新建行按 §2.2 口径取 todo。
-    let status =
-        crate::sync::resolve_final_status(raw.state == "closed", None, explicit_label, "", "todo");
+    // #335：closed 判据用大小写不敏感版本（REST 此处虽为小写，仍与其余调用点统一口径）。
+    let status = crate::sync::resolve_final_status(
+        crate::common::is_closed_state(&raw.state),
+        None,
+        explicit_label,
+        "",
+        "todo",
+    );
     let done_at = if status == "done" { now } else { 0 };
     Ok(TaskUpsert {
         issue_key: r.key.clone(),
@@ -286,7 +292,8 @@ fn build_task_row(
         number: r.number,
         title: raw.title.clone(),
         url: raw.url.clone(),
-        issue_state: raw.state.clone(),
+        // #335：与同步路径同一口径落库（归一化为小写），避免同一列出现两套大小写。
+        issue_state: crate::common::normalize_issue_state(&raw.state),
         ownership: crate::sync::classify(&raw.assignees, &account.login).to_string(),
         status,
         project_status: String::new(),

@@ -315,6 +315,24 @@ TASK_INSERT_COLS = (
 TASK_CONFLICT_COLS = ("repo", "number", "account_id")
 
 
+def normalize_issue_state(raw):
+    """issue state 落库前的归一化（#335）。
+
+    `tasks.issue_state` 有两个来源、两套大小写：REST 给小写 `open`/`closed`，
+    GraphQL（ProjectV2 条目）给大写 `OPEN`/`CLOSED`。统一折成小写后再落库，
+    保证该列口径单一。与 Rust `common::normalize_issue_state` 同语义。
+    """
+    return (raw or "").strip().lower()
+
+
+def is_closed_state(raw):
+    """该 state 是否表示「已关闭」（#335）。大小写不敏感，**不得**写死 `== "closed"`。
+
+    与 Rust `common::is_closed_state` 同语义（AGENTS.md §8.6 要求两侧一致）。
+    """
+    return (raw or "").strip().lower() == "closed"
+
+
 def _table_columns(table):
     return {r[1] for r in conn().execute(f"PRAGMA table_info({table})").fetchall()}
 
@@ -471,7 +489,8 @@ def _row_from_issue(payload, repo, key, account, now):
     labels = [l.get("name") for l in (payload.get("labels") or []) if l.get("name")]
     labels_csv = ",".join(labels)
     state = payload.get("state") or ""
-    if state == "closed":
+    # #335：判据大小写不敏感（原实现 `== "closed"` 认不出 GraphQL 的大写 `CLOSED`）。
+    if is_closed_state(state):
         status = "done"
     else:
         status = _resolve_label_status(account["org"], repo, labels_csv) or "todo"
@@ -483,7 +502,8 @@ def _row_from_issue(payload, repo, key, account, now):
         "number": int(payload.get("number") or 0),
         "title": payload.get("title") or "",
         "url": payload.get("html_url") or "",
-        "issue_state": state,
+        # #335：与同步路径同一口径落库（归一化为小写）。
+        "issue_state": normalize_issue_state(state),
         "ownership": _classify(assignees, account["login"]),
         "status": status,
         # Project Status 需 GraphQL；mentioned / PR 关联 / 分支来自多源聚合 —— 都留待下次全量同步补。

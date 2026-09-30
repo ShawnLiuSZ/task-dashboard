@@ -45,6 +45,27 @@ pub fn validate_browser_url(url: &str) -> Result<String, String> {
     }
 }
 
+/// issue 的 GitHub state 归一化（#335）。
+///
+/// **为什么需要**：`tasks.issue_state` 有两个数据源，大小写口径不同——
+/// - REST（Search API / `GET /repos/{o}/{r}/issues/{n}`）返回小写 `open` / `closed`；
+/// - GraphQL（ProjectV2 条目查询的 `IssueState` 枚举）返回**大写** `OPEN` / `CLOSED`。
+///
+/// 历史实现把原值直接落库、并用 `== "closed"` 判定，于是 Project 来源的已关闭 issue
+/// 永远不命中「closed → done」这条最高优先级分支，长期滞留看板（实测 29 行）。
+/// 本函数是落库前的**唯一**归一化入口：统一转小写并去空白，使该列口径单一。
+pub fn normalize_issue_state(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase()
+}
+
+/// 该 state 是否表示「已关闭」（#335）。**大小写不敏感**——判据不得写死小写。
+///
+/// 与 [`normalize_issue_state`] 配套：落库统一小写，读判定仍不敏感，
+/// 这样即便库里有历史遗留的大写值（或在归一化迁移执行前读取）也不会误判。
+pub fn is_closed_state(raw: &str) -> bool {
+    raw.trim().eq_ignore_ascii_case("closed")
+}
+
 /// #278：关联 issue（parent / sub-issue）的最小描述。
 ///
 /// 只缓存详情页展示必需的三件套（编号 / 标题 / 网页链接）——不含 `state` / 标签 /
@@ -446,5 +467,41 @@ mod tests {
         assert_eq!(err, "任务不存在: o/r#9");
         assert_eq!(require_affected(1, "o/r#9").unwrap(), 1);
         assert_eq!(require_affected(7, "o/r#9").unwrap(), 7);
+    }
+
+    /// #335：state 归一化必须把 GraphQL 的大写枚举折成小写（REST 口径）。
+    #[test]
+    fn normalize_issue_state_folds_graphql_uppercase() {
+        assert_eq!(normalize_issue_state("CLOSED"), "closed");
+        assert_eq!(normalize_issue_state("OPEN"), "open");
+        // REST 口径原样通过
+        assert_eq!(normalize_issue_state("closed"), "closed");
+        assert_eq!(normalize_issue_state("open"), "open");
+        // 空白容忍
+        assert_eq!(normalize_issue_state("  CLOSED  "), "closed");
+        // 未知值不臆造
+        assert_eq!(normalize_issue_state("Draft"), "draft");
+        assert_eq!(normalize_issue_state(""), "");
+    }
+
+    /// #335 核心判据：`closed` 判定必须大小写不敏感。
+    ///
+    /// 反向验证：把实现改回 `raw == "closed"` 时，前半段（大写输入）必然失败。
+    #[test]
+    fn is_closed_state_is_case_insensitive() {
+        // GraphQL 口径（缺陷根源）：大写必须也判为已关闭
+        assert!(is_closed_state("CLOSED"));
+        assert!(is_closed_state("Closed"));
+        // REST 口径
+        assert!(is_closed_state("closed"));
+        // 空白容忍
+        assert!(is_closed_state(" CLOSED "));
+        // 非关闭态不得误判
+        assert!(!is_closed_state("OPEN"));
+        assert!(!is_closed_state("open"));
+        assert!(!is_closed_state(""));
+        // 不能是前缀/子串匹配
+        assert!(!is_closed_state("closed_by_bot"));
+        assert!(!is_closed_state("unclosed"));
     }
 }

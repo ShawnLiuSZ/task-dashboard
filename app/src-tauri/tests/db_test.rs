@@ -828,3 +828,91 @@ fn base_task_upsert(parent_issue: String, sub_issues: String, exists: bool) -> d
         exists,
     }
 }
+
+// ===== #335：存量数据修复（issue_state 大小写归一 + 滞留状态修正）=====
+
+/// #335：数据修复迁移必须同时做到「归一化大小写」与「修正已关闭却未 done 的滞留状态」。
+///
+/// GraphQL（ProjectV2 条目查询）给大写 `CLOSED`、REST 给小写 `closed`，而旧判据写死小写，
+/// 于是 Project 来源的已关闭 issue 长期滞留在 `todo`/`processed` 列。本用例构造这种库
+/// （把 `user_version` 退回 3 模拟旧库），再交给 `open_db` 的迁移去修。
+///
+/// **反向验证**：删掉 `db.rs::MIGRATE_DATA_FIXES` 的两条语句（或把第 1 条移到第 2 条之后）
+/// 时，断言必然失败。
+#[test]
+fn migration_v4_normalizes_issue_state_and_repairs_closed_status() {
+    let dir = tempdir();
+    let path = dir.join("taskboard.db");
+    {
+        let conn = db::open_db(&path).expect("首次 open_db 必须成功");
+        // (issue_key, issue_state 原值, status 原值)
+        let seed = [
+            ("o/r#1", "CLOSED", "todo"),      // 大写 + 滞留 → 应修成 closed + done
+            ("o/r#2", "CLOSED", "processed"), // 大写 + 滞留（非 todo）同样要修
+            ("o/r#3", "OPEN", "doing"),       // 大写 open：只归一化，状态不得动
+            ("o/r#4", "closed", "done"),      // 小写已正确：保持不变
+            ("o/r#5", "open", "todo"),        // 小写 open：保持不变
+        ];
+        for (i, (key, state, status)) in seed.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
+                                    ownership, status, synced_at, account_id)
+                 VALUES (?1,'o','r',?2,'t','u',?3,'assigned',?4,1,1)",
+                rusqlite::params![key, (i as i64) + 1, state, status],
+            )
+            .expect("INSERT 种子任务必须成功");
+        }
+        // 退回旧版本号：模拟「上一次运行的是 v3 二进制」的既有库。
+        conn.pragma_update(None, "user_version", 3).unwrap();
+    }
+
+    let conn = db::open_db(&path).expect("二次 open_db 应触发迁移并成功");
+    let one = |sql: &str| -> String {
+        conn.query_row(sql, [], |r| r.get::<_, String>(0))
+            .unwrap_or_else(|e| panic!("查询失败 {sql}: {e}"))
+    };
+    let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+
+    // ① 不再存在任何大写 state
+    assert_eq!(
+        count("SELECT COUNT(*) FROM tasks WHERE issue_state <> lower(issue_state)"),
+        0,
+        "迁移后不应残留大写 issue_state"
+    );
+    // ② 已关闭却未 done 的行归零
+    assert_eq!(
+        count("SELECT COUNT(*) FROM tasks WHERE issue_state = 'closed' AND status <> 'done'"),
+        0,
+        "已关闭的 issue 必须落到 done"
+    );
+    // ③ 大写 OPEN 只归一化大小写，状态不得被误改
+    assert_eq!(
+        one("SELECT issue_state FROM tasks WHERE issue_key='o/r#3'"),
+        "open"
+    );
+    assert_eq!(
+        one("SELECT status FROM tasks WHERE issue_key='o/r#3'"),
+        "doing"
+    );
+    // ④ 本来就正确的行保持原状
+    assert_eq!(
+        one("SELECT status FROM tasks WHERE issue_key='o/r#4'"),
+        "done"
+    );
+    assert_eq!(
+        one("SELECT status FROM tasks WHERE issue_key='o/r#5'"),
+        "todo"
+    );
+    // ⑤ done_at 刻意不臆造（留 0 ⇒ 不进 1 个月淘汰窗口）
+    assert_eq!(
+        count("SELECT COUNT(*) FROM tasks WHERE issue_key='o/r#1' AND done_at = 0"),
+        1,
+        "数据修复不得臆造 done_at"
+    );
+    // ⑥ 版本号推进到 4
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        db::SCHEMA_VERSION
+    );
+}

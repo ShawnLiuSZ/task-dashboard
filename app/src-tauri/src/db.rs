@@ -257,10 +257,14 @@ pub fn db_path_default() -> Result<PathBuf, String> {
 /// **硬约束**：`SCHEMA` 或 `MIGRATION_DDL` 每次做结构性变更（新增列 / 表 / 索引）都必须 +1，
 /// 否则已升到旧版本号的库会走热路径、永久跳过新迁移。
 ///
+/// 版本 4（#335）：无结构变更，但带一次性**数据修复**（`MIGRATE_DATA_FIXES`）——
+/// 归一化 `tasks.issue_state` 大小写并修正其连带的滞留状态。数据修复同样必须靠版本号
+/// 门控（只跑一次），所以照例 +1。
+///
 /// `open_db` 以「版本号落后 **或** 只读自愈探测发现缺口」为迁移门控：版本号是快路径，
 /// 探测是兜底——历史教训（#175 / #237 / #278：版本号丢值、被物理重建覆盖、新列没进
 /// 重建的写死白名单）表明仅靠版本号会漏列，故两者缺一不可。
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// 必须存在的列（表 → 列）。热路径**只读**探测，缺任何一列都触发迁移。
 /// 新增必填列时必须同步追加 `MIGRATION_DDL` 里的补齐语句（有单测守卫）。
@@ -319,6 +323,27 @@ const MIGRATION_DDL: &[&str] = &[
     // v0.3.50 (#155)：新库由 SCHEMA 建、重建后由重建函数建；此处兜底。
     "CREATE INDEX IF NOT EXISTS idx_tasks_issue_key ON tasks(issue_key)",
     "CREATE INDEX IF NOT EXISTS idx_project_items_issue ON project_items(account_id, issue_key)",
+];
+
+/// 一次性**数据修复**语句（#335，`SCHEMA_VERSION = 4` 起门控）。顺序敏感：先归一化再判定。
+///
+/// 背景：`tasks.issue_state` 被两个来源写入了两套大小写 —— REST 给小写 `open`/`closed`，
+/// GraphQL（ProjectV2 条目查询）给大写 `OPEN`/`CLOSED`；而当时三处 closed 判据都写死小写，
+/// 于是 Project 来源的已关闭 issue 既不命中「closed → done」，也过不了 Project Status 兜底
+/// （那两个 Project 的 Status 选项是英文，`map_project_status` 只认中文）⇒ 长期滞留在
+/// `todo`/`processed` 列。代码层面已在 `common::is_closed_state` 修掉，这里补存量数据。
+///
+/// 全部幂等，可安全重跑。**不写 `done_at`**：一次修复拿不到真实关闭时间，而 `done_at`
+/// 唯一用途是 `sync.rs` 里「已完成任务保留 1 个月」的淘汰窗口（`WHERE done_at > 0`）——
+/// 臆造一个时间戳会凭空启动淘汰倒计时，留 0 反而保证这些行不被误删。
+const MIGRATE_DATA_FIXES: &[&str] = &[
+    // 1) 归一化大小写，使该列口径单一（`CLOSED`→`closed`、`OPEN`→`open`）。
+    "UPDATE tasks SET issue_state = lower(trim(issue_state))
+       WHERE issue_state <> lower(trim(issue_state))",
+    // 2) 已关闭却未落到 done 的行，按 AGENTS.md §2.2 第 1 条「closed 远程权威覆盖」修正。
+    //    必须在上一条之后执行（此处依赖归一化后的 `closed`）。
+    "UPDATE tasks SET status = 'done'
+       WHERE issue_state = 'closed' AND status <> 'done'",
 ];
 
 /// #215：Project 写回所需的条目表（新库由 `SCHEMA` 建，旧库在此补建）。
@@ -466,6 +491,15 @@ fn run_migrations(conn: &Connection, fresh: bool) -> Result<bool, String> {
     if let Err(e) = migrate_v0315_to_accounts(conn) {
         if crate::common::verbose_enabled() {
             crate::tlog!("[db] v0.3.15 → v0.3.16 迁移失败（已保留兜底字段）: {}", e);
+        }
+    }
+    // #335：存量数据修复。best-effort——失败只记日志，**不影响**版本号推进。
+    // 理由：① 结构达标才是 `user_version` 的门槛；② 若因失败而卡住版本号，`needs_migration`
+    // 会恒为真，稳态将每次建连都跑一遍迁移，回归 #329 修掉的「每次 open_db 写库」缺陷。
+    // 即便这里整段失败，代码层面的修复也会让下一次全量同步逐行修正。
+    for sql in MIGRATE_DATA_FIXES {
+        if let Err(e) = conn.execute(sql, []) {
+            crate::tlog!("[db] #335 数据修复语句失败（忽略）: {} | sql={}", e, sql);
         }
     }
     // 迁移后复检：仍有缺列 / 缺索引 / 仍是 legacy 布局 ⇒ 不推进版本号，下次启动重试。
@@ -1566,8 +1600,11 @@ pub fn get_label_columns_for_account(
 }
 
 /// GitHub state (open/closed) -> 看板四态兜底。
+///
+/// #335：判据走 `common::is_closed_state`（大小写不敏感）。REST 给小写 `closed`，
+/// GraphQL 给大写 `CLOSED`，写死小写会漏判后者。
 fn fallback_state_from_gh_state(gh_state: &str) -> String {
-    if gh_state == "closed" {
+    if crate::common::is_closed_state(gh_state) {
         "done".to_string()
     } else {
         "todo".to_string() // open 默认待处理，实际同步时会被 Project Status 覆盖
