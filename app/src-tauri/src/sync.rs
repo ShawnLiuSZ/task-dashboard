@@ -40,6 +40,10 @@ pub fn classify(assignees: &[String], login: &str) -> &'static str {
 /// ✨开发中 → 处理中
 /// 🔎开发完成/测试中 / ✅测试通过/待上线 → 已处理
 /// 🎉完成/上线 / ↩️取消 → 已完成
+///
+/// #335 追加：部分 Project 的 Status 选项是**英文**（`Done` / `Released` / `In progress` …），
+/// 原实现只认中文 ⇒ 一律返回 `None`；一旦 closed 判据同时失效，已关闭 issue 就没有任何
+/// 兜底路径可走（实测 29 行滞留）。中文分支保持原样，仅在其后追加英文分支。
 fn map_project_status(raw: &str) -> Option<&'static str> {
     if raw.contains("测试") {
         Some("processed")
@@ -50,7 +54,41 @@ fn map_project_status(raw: &str) -> Option<&'static str> {
     } else if raw.contains("取消") || raw.contains("完成") || raw.contains("上线") {
         Some("done")
     } else {
-        None
+        map_project_status_en(raw)
+    }
+}
+
+/// 英文 Project Status 选项映射（#335）。
+///
+/// **按整值精确匹配，不做子串匹配**——`Ready for release` 含 `release` 却并非已完成，
+/// 子串匹配会把它误判成 `done`。因此先把原文归一化（折空白 / 去标点 emoji / 转小写）后
+/// 与已知选项名全等比较；不认识的选项仍返回 `None`（保持本地手动态，绝不臆造）。
+fn map_project_status_en(raw: &str) -> Option<&'static str> {
+    // 只保留字母数字与空白：`✅ Done` → `done`，`in-progress` → `in progress`。
+    // `is_alphanumeric()` 对汉字为真，但中文已在上面按 `contains` 处理，不会落到这里。
+    let cleaned: String = raw
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect();
+    let key = cleaned
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    match key.as_str() {
+        "done" | "completed" | "complete" | "released" | "release" | "shipped" | "closed"
+        | "cancelled" | "canceled"
+        // `won't do` 归一化后撇号变空格，故按 `won t do` 匹配（勿写成带撇号的原形）。
+        | "won t do" => Some("done"),
+        "in review" | "review" | "reviewing" | "testing" | "test" | "qa" | "verify"
+        | "verifying" | "staging" | "verified" | "ready for release" | "in testing" => {
+            Some("processed")
+        }
+        "in progress" | "doing" | "in development" | "developing" | "active" | "wip"
+        | "in dev" => Some("doing"),
+        "todo" | "to do" | "backlog" | "planned" | "planning" | "triage" | "new"
+        | "not started" | "icebox" | "no status" => Some("todo"),
+        _ => None,
     }
 }
 
@@ -680,7 +718,10 @@ fn sync_account_inner(
             None
         };
         let final_status = resolve_final_status(
-            t.state == "closed",
+            // #335：**不得**写成 `t.state == "closed"`。Search（REST）给小写 `closed`，
+            // 而 Project 条目查询（GraphQL）给大写 `CLOSED` —— 原实现大小写敏感，
+            // 导致 Project 来源的已关闭 issue 永远漏判、滞留看板。
+            crate::common::is_closed_state(&t.state),
             column_status,
             explicit_label,
             &gh_status_raw,
@@ -757,7 +798,8 @@ fn sync_account_inner(
             number: t.number,
             title: t.title.clone(),
             url: t.url.clone(),
-            issue_state: t.state.clone(),
+            // #335：统一归一化为小写（REST 口径），避免同一列出现 4 种大小写。
+            issue_state: crate::common::normalize_issue_state(&t.state),
             ownership: ownership.to_string(),
             status: final_status,
             project_status: gh_status_raw,
@@ -831,6 +873,8 @@ fn sync_account_inner(
         // 搜索源完整：stale 任务 = 已关闭或 assignee 变更，直接标记 candidate_done
         let n = conn
             .execute(
+                // #335：此处字面量必须保持小写——与 `normalize_issue_state` 的落库口径一致，
+                // 否则每列又会长出第二套大小写（本次修复的原始成因）。
                 "UPDATE tasks SET candidate_done = 1, issue_state = 'closed', status = 'done', stale = 0,
                  done_at = CASE WHEN done_at = 0 THEN ?2 ELSE done_at END
                  WHERE account_id = ?1 AND stale = 1",
@@ -1299,9 +1343,15 @@ mod tests {
             "doing"
         );
         // gh_status 映射不到 → 保持本地（不回落原文）。
+        // ⚠️ #335 起 `Backlog` / `Done` / `Released` 这类**英文**选项已被识别，
+        // 不能再用它们当「映射不到」的样例（旧版本这么写过，会被新行为打红）。
         assert_eq!(
-            resolve_final_status(false, None, None, "Backlog", "doing"),
+            resolve_final_status(false, None, None, "自定义看板列", "doing"),
             "doing"
+        );
+        assert_eq!(
+            resolve_final_status(false, None, None, "??", "processed"),
+            "processed"
         );
         // 无 gh_status → 保持本地。
         assert_eq!(
@@ -1440,5 +1490,91 @@ mod tests {
     #[allow(dead_code)]
     fn _unused_conn_smoke() -> Connection {
         Connection::open_in_memory().unwrap()
+    }
+
+    // ===== #335：issue_state 大小写口径 =====
+
+    /// #335：GraphQL 的大写 `CLOSED` 必须与 REST 的小写 `closed` 走完全相同的路径。
+    ///
+    /// **反向验证**：把 `is_closed_state` 换回 `t.state == "closed"`（大小写敏感）时，
+    /// 前两条断言立即失败——这正是 29 行滞留数据的成因。
+    #[test]
+    fn uppercase_graphql_closed_resolves_to_done_like_rest() {
+        // GraphQL 口径（缺陷现场）：即便本地是 todo、Project Status 是英文 Done，
+        // 「closed 远程权威覆盖」也必须最高优先命中。
+        assert_eq!(
+            resolve_final_status(
+                crate::common::is_closed_state("CLOSED"),
+                None,
+                Some("todo".into()),
+                "Done",
+                "todo"
+            ),
+            "done"
+        );
+        // REST 口径（原有行为，不得回归）
+        assert_eq!(
+            resolve_final_status(
+                crate::common::is_closed_state("closed"),
+                None,
+                Some("todo".into()),
+                "Done",
+                "todo"
+            ),
+            "done"
+        );
+        // 非关闭态不得被误判为 done
+        assert_ne!(
+            resolve_final_status(
+                crate::common::is_closed_state("OPEN"),
+                None,
+                None,
+                "In progress",
+                "todo"
+            ),
+            "done"
+        );
+    }
+
+    /// #335：Project Status 的**英文**选项必须能映射（原实现只认中文，一律回落 None）。
+    #[test]
+    fn map_project_status_recognizes_english_options() {
+        // 已完成类：用户这两个 Project 实际用的就是 `Released` / `Done`
+        assert_eq!(map_project_status("Done"), Some("done"));
+        assert_eq!(map_project_status("Released"), Some("done"));
+        assert_eq!(map_project_status("Completed"), Some("done"));
+        assert_eq!(map_project_status("Closed"), Some("done"));
+        // emoji / 标点前缀不得破坏识别（先归一化再全等比较）
+        assert_eq!(map_project_status("✅ Done"), Some("done"));
+        assert_eq!(map_project_status("🎉 Released"), Some("done"));
+        // 连字符写法折成空格
+        assert_eq!(map_project_status("in-progress"), Some("doing"));
+        assert_eq!(map_project_status("In Progress"), Some("doing"));
+        assert_eq!(map_project_status("In Review"), Some("processed"));
+        assert_eq!(map_project_status("Testing"), Some("processed"));
+        assert_eq!(map_project_status("Backlog"), Some("todo"));
+        assert_eq!(map_project_status("To Do"), Some("todo"));
+        // 未识别项仍返回 None（保持本地手动态，绝不臆造）
+        assert_eq!(map_project_status("Random new tag"), None);
+        assert_eq!(map_project_status(""), None);
+        // `Ready for release` 含 `release` 但**不是**已完成 —— 全等匹配把它归到 processed，
+        // 若改成子串匹配会误判为 done，这条断言就是防线。
+        assert_eq!(map_project_status("Ready for release"), Some("processed"));
+        assert_ne!(map_project_status("Ready for release"), Some("done"));
+    }
+
+    /// #335 回归防线：中文 OMS 口径不得因追加英文分支而改变（原有语义逐条比对）。
+    #[test]
+    fn chinese_oms_status_mapping_is_unchanged_after_english_fallback() {
+        assert_eq!(map_project_status("🧠需求池"), Some("todo"));
+        assert_eq!(map_project_status("🤔产品规划"), Some("todo"));
+        assert_eq!(map_project_status("🚧待开发处理"), Some("todo"));
+        assert_eq!(map_project_status("✨开发中"), Some("doing"));
+        assert_eq!(map_project_status("🔎开发完成/测试中"), Some("processed"));
+        assert_eq!(map_project_status("✅测试通过/待上线"), Some("processed"));
+        assert_eq!(map_project_status("🎉完成/上线"), Some("done"));
+        assert_eq!(map_project_status("↩️取消"), Some("done"));
+        // 中文分支必须优先于英文解析（「测试」不因归一化丢字）
+        assert_eq!(map_project_status("测试"), Some("processed"));
     }
 }

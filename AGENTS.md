@@ -60,12 +60,14 @@ Agent 协作默认：
 **同步优先级**（`app/src-tauri/src/sync.rs`，仅同步路径适用）：
 
 ```
-1. gh_state == "closed"      → done     # 远程权威覆盖
+1. gh_state == "closed"      → done     # 远程权威覆盖（大小写不敏感，见下）
 2. Label → Status 映射命中   → 映射结果
 3. gh_status (Project Status) → 映射到四态
 4. 保持既有本地状态           → 不变     # 手动态不被覆盖
 5. 默认                       → todo
 ```
+
+⚠️ 第 1 条的判据**必须大小写不敏感**（实现：`common::is_closed_state`）。`issue_state` 有两个来源、两套大小写 —— REST（Search / 单 issue 接口）给小写 `open`/`closed`，GraphQL（Project 条目查询的 `IssueState` 枚举）给**大写** `OPEN`/`CLOSED`。落库前统一经 `common::normalize_issue_state` 折成小写，但读判定仍不得写死小写。历史上 `== "closed"` 让该分支对 Project 来源的 issue 完全失效（#335，实测 29 行已关闭 issue 滞留未完成列）。同理，第 3 条的映射表需同时覆盖**中文 OMS 文案与英文选项**（`Done` / `Released` / `In progress` …），且按整值全等匹配。
 
 ### 2.3 不在 `main` 上直接开发
 

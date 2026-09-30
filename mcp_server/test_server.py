@@ -496,5 +496,76 @@ class EnsureSchemaTest(unittest.TestCase):
         c.close()
 
 
+class IssueStateCaseTest(unittest.TestCase):
+    """#335：`issue_state` 大小写归一化与 `closed` 判定口径。
+
+    背景：`tasks.issue_state` 由两个来源写入 —— REST 给小写 `open`/`closed`，
+    GraphQL（ProjectV2 条目查询）给大写 `OPEN`/`CLOSED`；而早期判据写死小写，
+    导致 Project 来源的已关闭 issue 滞留看板。Rust 与 Python 两侧必须同语义
+    （AGENTS.md §8.6），故两侧各有对应用例。
+    """
+
+    def test_normalize_folds_graphql_uppercase(self):
+        self.assertEqual(S.normalize_issue_state("CLOSED"), "closed")
+        self.assertEqual(S.normalize_issue_state("OPEN"), "open")
+        # REST 口径原样通过
+        self.assertEqual(S.normalize_issue_state("closed"), "closed")
+        # 空白容忍
+        self.assertEqual(S.normalize_issue_state("  CLOSED  "), "closed")
+        # 空 / None 不得抛异常
+        self.assertEqual(S.normalize_issue_state(""), "")
+        self.assertEqual(S.normalize_issue_state(None), "")
+
+    def test_is_closed_state_is_case_insensitive(self):
+        """反向验证：把实现改回 `raw == "closed"` 时前三条必然失败。"""
+        self.assertTrue(S.is_closed_state("CLOSED"))
+        self.assertTrue(S.is_closed_state("Closed"))
+        self.assertTrue(S.is_closed_state("  closed  "))
+        # 非关闭态不得误判
+        self.assertFalse(S.is_closed_state("OPEN"))
+        self.assertFalse(S.is_closed_state("open"))
+        self.assertFalse(S.is_closed_state(""))
+        self.assertFalse(S.is_closed_state(None))
+        # 不得退化成前缀 / 子串匹配
+        self.assertFalse(S.is_closed_state("closed_by_bot"))
+        self.assertFalse(S.is_closed_state("unclosed"))
+
+    def test_row_from_issue_maps_uppercase_closed_to_done(self):
+        """GraphQL 大写 `CLOSED` 的行必须落成 done，且 issue_state 折成小写。
+
+        构造的 payload **不带 labels** ⇒ 不触发 `_resolve_label_status`，
+        因而本用例无需数据库、也不发网络请求。
+        """
+        account = {"id": 1, "login": "alice", "org": "Acme"}
+        payload = {
+            "number": 7,
+            "title": "t",
+            "html_url": "https://github.com/Acme/r/issues/7",
+            "state": "CLOSED",
+            "assignees": [],
+            "labels": [],
+            "comments": 0,
+            "updated_at": "2026-09-01T00:00:00Z",
+            "created_at": "2026-08-01T00:00:00Z",
+        }
+        row = S._row_from_issue(payload, "r", "r#7", account, 1000)
+        self.assertEqual(row["status"], "done")
+        self.assertEqual(row["issue_state"], "closed")
+        self.assertEqual(row["done_at"], 1000)
+
+        # 对照：小写 closed 行为逐字一致（原实现只认这一种）
+        payload_open_lower = dict(payload, state="closed")
+        row2 = S._row_from_issue(payload_open_lower, "r", "r#7", account, 1000)
+        self.assertEqual(row2["status"], row["status"])
+        self.assertEqual(row2["issue_state"], row["issue_state"])
+
+        # 非关闭态：无 label 命中 ⇒ todo，且状态不折进 done
+        payload_open = dict(payload, state="OPEN")
+        row3 = S._row_from_issue(payload_open, "r", "r#7", account, 1000)
+        self.assertEqual(row3["status"], "todo")
+        self.assertEqual(row3["issue_state"], "open")
+        self.assertEqual(row3["done_at"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
