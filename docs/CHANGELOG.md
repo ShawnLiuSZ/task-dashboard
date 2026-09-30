@@ -6,6 +6,15 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 深度 code review 批次 #3：仓库级 GraphQL 失败被降级成 `Ok(空)`，父子关联被静默清空（#342）**
+
+  - **#342 仓库改名 / 转移 / 删除 / token 失权时，issue 的父子关联被静默清空且无任何报错**：#328 为避免「单个编号 NOT_FOUND 导致 25 个 issue 关联一起丢」而把 `fetch_issue_links` 改为宽松模式，放行判据是 `v["data"].is_null()` —— 但 **`data` 是仓库包装层**。仓库级失败时 GitHub 返回 `{"data":{"r":null},"errors":[…]}`，`data` 是**非 null 对象** ⇒ 守卫不触发 ⇒ 解析器命中 `data.r` 为 null 返回**空 map 而非 `Err`**。
+  - **安全网恰好在最需要它时失效**：`Ok(空)` ⇒ `sync.rs` 视作成功 ⇒ `links_failed_repos` 收不到该仓库 ⇒ 落入 `unwrap_or((String::new(), String::new()))` 写空 ⇒ `TASK_CONFLICT_UPDATE` 无条件覆盖 `parent_issue` / `sub_issues` ⇒ 关联清空。`sync.rs` 那道「失败则保留既有值，避免一次网络抖动把已有关联清空」的保险**正是为此场景设计**，却被绕过。
+  - **修复**：新增纯函数 `repo_level_failure`，把判据精确落在 **`data.r`** 这一层（仓库级失败 ⇒ `Err`），并在解析前调用。**不能把宽松整体关掉**——那会让 #328 想修的「25 个关联一起丢」重新出现；两类失败的区分点是 `data.r` 是否为对象（仓库有效 + 个别别名取不到 ⇒ 仍按宽松采信其余编号）。
+  - **仍为只读**：不新增任何对 GitHub 的写操作，`AGENTS.md §2.1` 数据单向流动约束不变。
+  - **无 schema / MCP 工具签名 / i18n key 变更**；改动限 `app/src-tauri/src/github.rs` 一个源文件 + 文档。
+  - **验证**：`cargo test --lib` 148 passed（146 → +2）✅、`db_test` 25 passed ✅、`cargo fmt --check` ✅、`cargo clippy --lib -- -D warnings` ✅、`check-mcp-columns.py` / `check-doc-links.py` / `check-versions.py` ✅；**反向验证**：判据改回「只看顶层 `data`」则 1 例失败（`1 passed / 1 failed`）。新增的第 2 例是**反向对照**（仓库有效 + 个个别名失败 ⇒ 不得判失败），防修复过度连带关掉 #328 的宽松收益。
+
 - **Unreleased — CI 门禁盲区 / 操作类文档 `develop` 漂移 / 旧仓库名拼写残留（#336）**
 
   - **#336 `quality-check.yml` 的 `push` 只挂 `develop`，而该分支已不存在** ⇒ **直接 push 到 `main` 完全跳过重型门禁**（clippy / `cargo fmt --check` / `vite build` / `check-versions.py` / `scripts` 单测），只有 base = `main` 的 PR 才跑。这是 #330 刚加固完门禁后留下的缺口。**修复**：`push.branches` 补 `main`。详见 [docs/issue-336-docs-ci-reality-alignment.md](./issue-336-docs-ci-reality-alignment.md)。
