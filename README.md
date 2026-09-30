@@ -176,6 +176,8 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.6.0）
 
+- [`docs/issue-327-p0-functional-defects.md`](./docs/issue-327-p0-functional-defects.md) — **code review P0 批次**：About 小窗「确定」按钮因 capability 未覆盖 `about` 窗口 + `core:window:default` 不含 `allow-close` 而静默失效；设置面板「界面语言」切换器被误复制成重复的主题选择器；记事重复内容暴露原始 `UNIQUE constraint` 报错；`projects.number_of_items` 误取项目编号（而非 `items.totalCount`），使多 Project 时写错写回目标
+
 - [`docs/issue-285-sync-empty-board.md`](./docs/issue-285-sync-empty-board.md) — **立即同步后看板空白、重启才恢复**：`rows_to_tasks` 两处缺陷——归属筛选分支漏 2 列（`Row::get(25)` 越界报错）+ `my-created` 误读恒空的 `meta.login` 恒返回空集；统一 SELECT 列清单 + 从 `accounts` 表取 login；`doSync` 走合并器并同步后重拉项目状态列
 
 - [`docs/v0.3.15-pat-auth.md`](./docs/v0.3.15-pat-auth.md) — v0.3.15 PAT 认证与 visual polish 设计文档（gh 替换、卡片配色、多账号规划）

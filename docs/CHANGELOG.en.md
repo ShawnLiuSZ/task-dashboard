@@ -2,6 +2,19 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — code review P0 batch: About button dead / language switcher lost / duplicate note error / wrong project item count (#327)**
+
+  - **#327 About window "OK" button does nothing**: the capability only declared `windows:["main"]`, but `about` is a separate webview and matched no capability ⇒ zero IPC permissions; `core:window:default` (28 entries, verified) does not include `allow-close`, so `getCurrentWindow().close()` was rejected by the ACL and the button failed silently (#325 never actually worked). See [docs/issue-327-p0-functional-defects.md](./issue-327-p0-functional-defects.md).
+  - **Fix**: added `capabilities/about.json` (`windows:["about"]` + `core:window:allow-close`); removed the never-called `allow-show` / `allow-hide` from `main`.
+  - **#327 Settings panel "interface language" switcher missing**: the base tab rendered two identical "theme" dropdowns, and the language switcher had vanished (i18n's `mode` / `setMode` and 4 language keys were entirely unreferenced dead code).
+  - **Fix**: second block restored to a language selector (Follow system / 简体中文 / English).
+  - **#327 Duplicate note content leaked a raw SQLite error**: `notes.content` has a unique index `idx_notes_content`, but `add_note` / `update_note` did not catch the constraint violation, so duplicates surfaced `UNIQUE constraint failed: notes.content` in the UI and MCP response bodies.
+  - **Fix**: added `is_unique_violation()` (`SQLITE_CONSTRAINT_UNIQUE` = 2067); conflicts now return "a note with the same content already exists".
+  - **#327 `projects.number_of_items` read the wrong field**: `fetch_all_projects` stored GraphQL's `number` (the project number) as the item count (OMS Kanban stored `20` vs a real `items.totalCount` of 273), degrading `resolve_project_write_target`'s `ORDER BY number_of_items DESC` into "order by project number" → the wrong project was written when an issue belonged to several (symptom: "API log says success, but the target project's status never changes").
+  - **Fix**: both queries now request `items { totalCount }`; extracted `org_projects_query` / `user_projects_query` / `parse_projects_nodes` as pure functions to lock the regression down.
+  - **No schema / no MCP tool / no i18n key change**: legacy `number_of_items` values are overwritten by `upsert_projects` on the next successful sync, so no migration script is needed.
+  - **Verification**: `npm test` 155 passed (+4) ✅, `npx tsc --noEmit` ✅, `npm run i18n:check` 389 keys ✅, `npm run lint` 18 warnings (no new) ✅, `npx prettier --check` ✅, `cargo clippy --lib -- -D warnings` ✅, `cargo test --lib` 119 passed (+3) ✅, `scripts/check-doc-links.py` ✅, `scripts/check-mcp-columns.py` 28 columns ✅; all 4 static/unit assertions were reverse-verified (reverting to the buggy form fails).
+
 - **v0.6.5 (2026-09-29) — Note edit textarea auto-grows to content height (#322)**
 
   - **#322 Note edit textarea does not auto-grow to content length**: When entering edit mode, the `<textarea>` mounts in the same commit as `editDraft` (with `autoFocus`). The original `useAutoSize` measured height in a passive `useEffect(..., [value])`, and the initial `scrollHeight` was taken against an unstable layout (the `overflow-y:auto` column container scrolls the card into view), so the box stayed at `min-height:42px` and long content needed in-box scrolling; only typing grew it. See [docs/issue-322-note-edit-autosize.md](./issue-322-note-edit-autosize.md).
