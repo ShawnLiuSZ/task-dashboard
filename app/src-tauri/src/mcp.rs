@@ -243,10 +243,9 @@ fn write_with_on_demand(
     mut write: impl FnMut() -> Result<usize, String>,
 ) -> Result<(usize, bool), String> {
     let pulled = ensure_local_task(conn, key, ref_)?;
-    let n = write()?;
-    if n == 0 {
-        return Err(format!("任务不存在: {key}"));
-    }
+    // #328：与 GUI 侧共用同一「0 行受影响 ⇒ 任务不存在」实现（common::require_affected），
+    // 文案保持不变（Python `server.py` 镜像了该契约）。
+    let n = crate::common::require_affected(write()?, key)?;
     Ok((n, pulled))
 }
 
@@ -725,21 +724,52 @@ enum Framing {
     ContentLength,
 }
 
+/// #328：单帧 body 上限 8 MiB。MCP 消息远小于此值，该上限只用于挡住畸形声明——
+/// 原实现直接 `let mut body = vec![0u8; len]`，`Content-Length: 99999999999` 会让
+/// Rust 分配失败后 **abort（不可捕获）**，整个 MCP 进程直接死掉。
+const MAX_FRAME_BODY: usize = 8 * 1024 * 1024;
+
+/// #328：头部字节数上限。客户端若只发头、始终不给出 `\r\n\r\n`，原实现会让
+/// `header_bytes` 无界增长。
+const MAX_FRAME_HEADER: usize = 8 * 1024;
+
+/// [`read_message`] 的结果。
+///
+/// 区分「输入流结束」与「这一帧畸形」是关键：原实现用 `None` 同时表示两者，
+/// 于是**一行坏 JSON 就让主循环跳出、`run()` 返回、stdio 断开**，而日志文案却写着
+/// 「跳过该行」——注释与行为不符。客户端发 UTF-8 BOM、写入被截断、多发一个畸形行，
+/// agent 侧就会随机看到 `connection closed`。
+enum ReadOutcome {
+    /// 读到一条有效消息
+    Msg(Value, Framing),
+    /// 输入流正常结束（EOF）或底层读错误，等同于断开
+    Eof,
+    /// 本帧畸形但**已完整消费**，调用方丢弃后应继续读下一条
+    Malformed(String),
+    /// 帧边界已无法确定（长度非法 / 头部不终止）——body 尚未消费，继续读只会把
+    /// body 字节当头部解析出更多垃圾，只能终止。
+    Fatal(String),
+}
+
 /// 从二进制流（如 stdin）读取一条 JSON-RPC 消息，并返回它使用的分帧格式。
-/// 逐字节读取以避免 BufRead 缓冲与 `read_exact` 混用导致的数据错位。EOF 返回 None。
+/// 逐字节读取以避免 BufRead 缓冲与 `read_exact` 混用导致的数据错位。
 ///
 /// 首个有效字节判定分帧格式：
 /// - `{` → NDJSON（MCP 规范，Claude Code / Cursor 等标准客户端）
 /// - 否则 → Content-Length 头（LSP 风格，WorkBuddy / Codex 等历史兼容）
-fn read_message(r: &mut impl Read) -> Option<(Value, Framing)> {
+///
+/// 返回 [`ReadOutcome`] 以区分 EOF 与畸形帧（#328）。
+fn read_message(r: &mut impl Read) -> ReadOutcome {
     // 跳过消息之间的空白（换行 / 空行），首个有效字节用于判定分帧格式
     let mut first = [0u8; 1];
     loop {
-        if r.read(&mut first).ok()? == 0 {
-            return None; // EOF
-        }
-        if !first[0].is_ascii_whitespace() {
-            break;
+        match r.read(&mut first) {
+            Ok(0) | Err(_) => return ReadOutcome::Eof,
+            Ok(_) => {
+                if !first[0].is_ascii_whitespace() {
+                    break;
+                }
+            }
         }
     }
 
@@ -748,20 +778,20 @@ fn read_message(r: &mut impl Read) -> Option<(Value, Framing)> {
         let mut line = vec![first[0]];
         let mut byte = [0u8; 1];
         loop {
-            if r.read(&mut byte).ok()? == 0 {
-                break; // 末行可能无换行结尾
+            match r.read(&mut byte) {
+                Ok(0) | Err(_) => break, // 末行可能无换行结尾
+                Ok(_) => {
+                    if byte[0] == b'\n' {
+                        break;
+                    }
+                    line.push(byte[0]);
+                }
             }
-            if byte[0] == b'\n' {
-                break;
-            }
-            line.push(byte[0]);
         }
         return match serde_json::from_slice(&line) {
-            Ok(v) => Some((v, Framing::Ndjson)),
-            Err(e) => {
-                crate::tlog!("[taskboard-mcp] NDJSON 解析失败，跳过该行: {e}");
-                None
-            }
+            Ok(v) => ReadOutcome::Msg(v, Framing::Ndjson),
+            // 该行已完整消费（读到换行或 EOF）⇒ 丢弃后能安全地继续读下一条。
+            Err(e) => ReadOutcome::Malformed(format!("NDJSON 解析失败: {e}")),
         };
     }
 
@@ -769,9 +799,15 @@ fn read_message(r: &mut impl Read) -> Option<(Value, Framing)> {
     let mut header_bytes: Vec<u8> = vec![first[0]];
     let mut content_length: Option<usize> = None;
     loop {
+        if header_bytes.len() > MAX_FRAME_HEADER {
+            return ReadOutcome::Fatal(format!(
+                "头部超过 {MAX_FRAME_HEADER} 字节仍未终止，无法定位帧边界"
+            ));
+        }
         let mut byte = [0u8; 1];
-        if r.read(&mut byte).ok()? == 0 {
-            return None; // EOF
+        match r.read(&mut byte) {
+            Ok(0) | Err(_) => return ReadOutcome::Eof,
+            Ok(_) => {}
         }
         header_bytes.push(byte[0]);
         if header_bytes.ends_with(b"\r\n\r\n") || header_bytes.ends_with(b"\n\n") {
@@ -786,15 +822,25 @@ fn read_message(r: &mut impl Read) -> Option<(Value, Framing)> {
             break;
         }
     }
-    let len = content_length?;
-    if len == 0 {
-        return None;
+    // 头部正常收尾但缺 Content-Length：帧边界（头部结束处）已确定，可继续读下一条。
+    let Some(len) = content_length else {
+        return ReadOutcome::Malformed("Content-Length 头缺失或不可解析".to_string());
+    };
+    // #328：越界长度**必须**判 Fatal——body 尚未消费，继续读会立刻错位。
+    if len == 0 || len > MAX_FRAME_BODY {
+        return ReadOutcome::Fatal(format!(
+            "Content-Length={len} 超出允许范围（1..={MAX_FRAME_BODY}）"
+        ));
     }
     let mut body = vec![0u8; len];
-    r.read_exact(&mut body).ok()?;
-    serde_json::from_slice(&body)
-        .ok()
-        .map(|v| (v, Framing::ContentLength))
+    match r.read_exact(&mut body) {
+        Ok(()) => {}
+        Err(_) => return ReadOutcome::Eof, // body 被截断 ⇒ 视为流结束
+    }
+    match serde_json::from_slice(&body) {
+        Ok(v) => ReadOutcome::Msg(v, Framing::ContentLength),
+        Err(e) => ReadOutcome::Malformed(format!("Content-Length 帧 JSON 解析失败: {e}")),
+    }
 }
 
 fn write_message(w: &mut impl Write, msg: &Value, framing: Framing) {
@@ -838,11 +884,28 @@ pub fn run() {
     let mut stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     let mut handled = 0u32;
-    while let Some((msg, framing)) = read_message(&mut stdin) {
-        if let Some(resp) = handle(&conn, &msg) {
-            write_message(&mut stdout, &resp, framing);
+    loop {
+        match read_message(&mut stdin) {
+            ReadOutcome::Msg(msg, framing) => {
+                if let Some(resp) = handle(&conn, &msg) {
+                    write_message(&mut stdout, &resp, framing);
+                }
+                handled += 1;
+            }
+            // #328：只有真正的流结束才退出。
+            ReadOutcome::Eof => break,
+            // #328：一条畸形消息不再拖垮整个进程——丢弃该帧继续服务。原实现把
+            // 「畸形」与「EOF」都折叠成 None，主循环直接跳出、stdio 断开，agent 侧
+            // 表现为随机 `connection closed`。
+            ReadOutcome::Malformed(why) => {
+                crate::tlog!("[taskboard-mcp] 跳过一条无法解析的消息: {why}");
+            }
+            // 帧边界已丢失（长度非法 / 头部不终止），继续读只会产出垃圾，必须终止。
+            ReadOutcome::Fatal(why) => {
+                crate::tlog!("[taskboard-mcp] 帧长度非法，无法继续读取: {why}");
+                break;
+            }
         }
-        handled += 1;
     }
     if handled == 0 {
         crate::tlog!(
@@ -1078,5 +1141,67 @@ mod tests {
         insert_sample(&c);
         let err = tool_set_work_branch(&c, "fad-backend#1247", "   ").unwrap_err();
         assert!(err.contains("branch 不能为空"), "{err}");
+    }
+
+    // ========================================================================
+    // #328：stdio 分帧健壮性
+    // ========================================================================
+
+    /// 一行坏 JSON 不再终止读取循环：丢弃该行后，紧随其后的正常消息必须仍能读到。
+    /// 反向验证：把 `read_message` 的畸形分支改回 `ReadOutcome::Eof` 时本用例失败。
+    #[test]
+    fn read_message_skips_malformed_ndjson_and_continues() {
+        let input = b"{not json}\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n".to_vec();
+        let mut cur = std::io::Cursor::new(input);
+        match read_message(&mut cur) {
+            ReadOutcome::Malformed(_) => {}
+            _ => panic!("畸形 NDJSON 行必须返回 Malformed（旧实现直接结束进程）"),
+        }
+        match read_message(&mut cur) {
+            ReadOutcome::Msg(v, Framing::Ndjson) => assert_eq!(v["method"], "ping"),
+            _ => panic!("畸形行之后的正常消息必须仍能读到"),
+        }
+        assert!(matches!(read_message(&mut cur), ReadOutcome::Eof));
+    }
+
+    /// Content-Length 越界（超大 / 为 0）判 Fatal 且**不分配** body 缓冲。
+    /// 反向验证：去掉 `len > MAX_FRAME_BODY` 判断时，超大长度会真的走
+    /// `vec![0u8; 99999999999]`（本机测试进程亦可能 abort），或落到别的分支导致断言失败。
+    #[test]
+    fn read_message_rejects_out_of_range_content_length() {
+        for raw in [
+            b"Content-Length: 99999999999\r\n\r\n".as_slice(),
+            b"Content-Length: 0\r\n\r\n".as_slice(),
+        ] {
+            let mut cur = std::io::Cursor::new(raw.to_vec());
+            match read_message(&mut cur) {
+                ReadOutcome::Fatal(msg) => {
+                    assert!(msg.contains("Content-Length="), "应报告非法长度: {msg}")
+                }
+                _ => panic!("越界 Content-Length 必须判为 Fatal"),
+            }
+        }
+    }
+
+    /// 头部迟迟不终止时按上限截断，避免 `header_bytes` 无界增长。
+    #[test]
+    fn read_message_caps_header_size() {
+        let mut cur = std::io::Cursor::new(vec![b'X'; MAX_FRAME_HEADER + 16]);
+        match read_message(&mut cur) {
+            ReadOutcome::Fatal(msg) => assert!(msg.contains("头部超过"), "{msg}"),
+            _ => panic!("头部不终止必须判为 Fatal 而不是无界读取"),
+        }
+    }
+
+    /// 合法 Content-Length 帧仍按老契约解析（分帧格式回传正确）。
+    #[test]
+    fn read_message_parses_valid_content_length_frame() {
+        let body = r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#;
+        let input = format!("Content-Length: {}\r\n\r\n{}", body.len(), body).into_bytes();
+        let mut cur = std::io::Cursor::new(input);
+        match read_message(&mut cur) {
+            ReadOutcome::Msg(v, Framing::ContentLength) => assert_eq!(v["method"], "ping"),
+            _ => panic!("合法的 Content-Length 帧必须解析成功"),
+        }
     }
 }

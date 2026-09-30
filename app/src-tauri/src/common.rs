@@ -190,6 +190,21 @@ pub fn validate_task_status(conn: &Connection, key: &str, status: &str) -> Resul
     ))
 }
 
+/// #328：把「0 行受影响」统一翻译成「任务不存在」错误。
+///
+/// `set_task_status` / `touch_session` / `set_work_branch` 等都返回受影响行数，
+/// `0` 表示 `issue_key` 不存在。各调用点的策略本应一致，实际却不一致：
+/// MCP 侧（`mcp.rs::write_with_on_demand`）与 GUI 侧 `set_work_branch` 报错，
+/// 而 GUI 的 `update_task_status` / `record_session` 直接丢弃返回值 ⇒ 前端传一个
+/// 已不存在的 key 会收到 `Ok`，UI 显示成功但什么都没改。这里收敛为单一实现。
+pub fn require_affected(n: usize, key: &str) -> Result<usize, String> {
+    if n == 0 {
+        Err(format!("任务不存在: {key}"))
+    } else {
+        Ok(n)
+    }
+}
+
 /// 校验并写入任务状态。返回实际更新行数（0 表示 key 不存在，调用方自定报错策略）。
 pub fn set_task_status(conn: &Connection, key: &str, status: &str) -> Result<usize, String> {
     validate_task_status(conn, key, status)?;
@@ -405,5 +420,15 @@ mod tests {
         // 企业版放行
         assert!(validate_browser_url("https://acme.ghe.com/o/r").is_ok());
         assert!(validate_browser_url("").is_err());
+    }
+
+    /// #328：`require_affected` 是 GUI / MCP 写路径共用的「0 行 ⇒ 任务不存在」守卫。
+    /// 反向验证：把 `n == 0` 判断删掉（恒 `Ok`）时本用例失败。
+    #[test]
+    fn require_affected_rejects_zero_rows() {
+        let err = require_affected(0, "o/r#9").unwrap_err();
+        assert_eq!(err, "任务不存在: o/r#9");
+        assert_eq!(require_affected(1, "o/r#9").unwrap(), 1);
+        assert_eq!(require_affected(7, "o/r#9").unwrap(), 7);
     }
 }
