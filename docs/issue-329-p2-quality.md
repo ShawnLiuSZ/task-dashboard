@@ -324,9 +324,9 @@ python3 -m unittest discover -s scripts -p 'test_*.py'   86 tests OK ✅
 ## 相关链接
 
 - 来源审计：[`CODE-REVIEW-2026-09-30.md`](../CODE-REVIEW-2026-09-30.md)
-- 上游批次：[`docs/issue-327-p0-functional-defects.md`](./issue-327-p0-functional-defects.md)（#327）、
-  [`docs/issue-328-p1-data-safety.md`](./issue-328-p1-data-safety.md)（#328）
-- GitHub issue：[#329](https://github.com/ShawnLiuSZ/task-dashboard/issues/329)
+- 上游批次：[`docs/issue-327-p0-functional-defects.md`](./issue-327-p0-functional-defects.md)（#327 / PR #331）、
+  [`docs/issue-328-p1-data-safety.md`](./issue-328-p1-data-safety.md)（#328 / PR #332）
+- GitHub issue：[#329](https://github.com/ShawnLiuSZ/task-dashboard/issues/329)（本批 PR [#333](https://github.com/ShawnLiuSZ/task-dashboard/pull/333)）
 - 关联历史教训：
   [#155 表重建](https://github.com/ShawnLiuSZ/task-dashboard/issues/155)、
   [#169 MCP 列同步](./issue-169-mcp-server-schema-sync.md)、
