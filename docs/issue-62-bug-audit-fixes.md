@@ -1,6 +1,6 @@
 # Bug 审计遗留问题修复（issue #62）
 
-> 关联：[GitHub Issue #62](https://github.com/ShawnLiuSZ/task-dashborad/issues/62)、[docs/CHANGELOG.md](./CHANGELOG.md)、PR → develop
+> 关联：[GitHub Issue #62](https://github.com/ShawnLiuSZ/task-dashboard/issues/62)、[docs/CHANGELOG.md](./CHANGELOG.md)、PR → develop
 
 ## 背景 / 动机
 
@@ -44,6 +44,6 @@
 
 ## 相关链接
 
-- [GitHub Issue #62](https://github.com/ShawnLiuSZ/task-dashborad/issues/62)（完整 13 条报告见其 body）
+- [GitHub Issue #62](https://github.com/ShawnLiuSZ/task-dashboard/issues/62)（完整 13 条报告见其 body）
 - 提交：`a30f576`（P1 + 大部分 P2）、`a259048`（#11 补全 + TaskCard 命名冲突 + README 更新提醒）
 - [docs/CHANGELOG.md](./CHANGELOG.md)

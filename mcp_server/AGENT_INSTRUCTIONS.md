@@ -72,10 +72,13 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 
 ## 2. 触发时机 → 动作（核心规则）
 
+> ⚠️ **分支基线是 `main`**：issue 工作分支一律从 `main` 新开。本仓历史上的 `develop` 集成分支**已废弃并从远端删除**（详见 [`AGENTS.md`](../AGENTS.md) §2.3）。
+> 下文的「基线分支」即 `main`；若在其它历史文档里看到 `develop` 字样的分支操作示例，按 `main` 理解。
+
 | 时机                                                     | 动作                                                                                                                                                                                                                       |
 | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **开始处理**某个 issue（用户派活 / 你认领 / 你开始改它） | **先切到该 issue 的工作分支**（`feature/issue-<N>-<scope>`，从 develop 新开），再 `update_task_status(issue, "处理中")` + `record_session(issue, <当前会话 id>, "<agent 名>", branch=<当前工作分支>, work_dir=<项目目录>)` |
-| **切到 issue 分支之后**（#279 纠正）                     | 若你**先**跑了「开始处理」命令（彼时还在 develop/master）、**之后**才切到 issue 分支，切完补一次 `set_work_branch(issue, branch=<当前 issue 分支>)`，纠正 `work_branch`（只写该列、不碰 PR `branch`）                      |
+| **开始处理**某个 issue（用户派活 / 你认领 / 你开始改它） | **先切到该 issue 的工作分支**（`feature/issue-<N>-<scope>`，从 main 新开），再 `update_task_status(issue, "处理中")` + `record_session(issue, <当前会话 id>, "<agent 名>", branch=<当前工作分支>, work_dir=<项目目录>)` |
+| **切到 issue 分支之后**（#279 纠正）                     | 若你**先**跑了「开始处理」命令（彼时还在 main）、**之后**才切到 issue 分支，切完补一次 `set_work_branch(issue, branch=<当前 issue 分支>)`，纠正 `work_branch`（只写该列、不碰 PR `branch`）                      |
 | **中途停止 / 会话中断 / 你要切到别的任务**               | `record_session(issue, <当前会话 id>, "<你的 agent 名>")`                                                                                                                                                                  |
 | 用户说「**生成交接任务**」「交接一下」「handoff」之类    | `record_handoff(issue, "<已做/未做/卡点/如何恢复>")`；如需保留可恢复会话，同时 `record_session`                                                                                                                            |
 | **任务完成**（你确认做完、要收尾）                       | `update_task_status(issue, "已完成")` + `clear_session(issue)`                                                                                                                                                             |
@@ -92,7 +95,7 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 - **务必带 `agent` 参数**（`claude-code` / `codex` / `opencode` / `zcode` / `helix` …），便于多进程区分谁记的
 
 `branch` **也由调用方提供，但必须分两步**：**先切换到该 issue 的工作分支**（见上方「开始处理」行），再用 Bash 工具执行 `git branch --show-current`（或 `git -C <该 issue 对应项目目录> branch --show-current`）拿到纯分支名，把结果作为字符串传给 `record_session` 的 `branch` 参数。**禁止把 `$(...)` / 反引号原样塞进 MCP 参数**（MCP 不执行 shell，只会写入字面量脏数据）。
-**取不到就传空**（没在 git 仓库 / 无分支时不要硬塞脏数据）。写入独立 `work_branch` 列，与同步自动拉的 PR `branch` 分离——同步不会覆盖它。**#279 根因**：若在 develop/master 上就执行 `git branch --show-current` 并传给 `record_session`，`work_branch` 会被记成基线分支；因此分支捕获必须放在切到 issue 分支**之后**。若已经录错，切到 issue 分支后用 `set_work_branch(issue, branch=<当前 issue 分支>)` 纠正。
+**取不到就传空**（没在 git 仓库 / 无分支时不要硬塞脏数据）。写入独立 `work_branch` 列，与同步自动拉的 PR `branch` 分离——同步不会覆盖它。**#279 根因**：若在 main 上就执行 `git branch --show-current` 并传给 `record_session`，`work_branch` 会被记成基线分支；因此分支捕获必须放在切到 issue 分支**之后**。若已经录错，切到 issue 分支后用 `set_work_branch(issue, branch=<当前 issue 分支>)` 纠正。
 
 ### 中断时状态如何保持
 
@@ -104,13 +107,13 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 
 ```
 # 1) 接到任务，开始处理（快捷方式：/task-start fad-backend#1247）
-# 先切到该 issue 的工作分支（feature/issue-1247-xxx，从 develop 新开），再取分支
-# Bash: git switch -c feature/issue-1247-xxx develop   # 已在该分支则跳过
+# 先切到该 issue 的工作分支（feature/issue-1247-xxx，从 main 新开），再取分支
+# Bash: git switch -c feature/issue-1247-xxx main   # 已在该分支则跳过
 # Bash: git branch --show-current                       # 拿到 issue 分支名
 update_task_status(issue="fad-backend#1247", status="处理中")
 record_session(issue="fad-backend#1247", session_id="${CLAUDE_SESSION_ID}", agent="claude-code", branch="feature/issue-1247-xxx", work_dir="/path/to/project")
 
-# 1b) #279 纠正：若先跑了开始命令（彼时在 develop/master）、之后才切分支，切完补一次
+# 1b) #279 纠正：若先跑了开始命令（彼时在 main）、之后才切分支，切完补一次
 set_work_branch(issue="fad-backend#1247", branch="feature/issue-1247-xxx")
 
 # 2) 中途要切去别的事，先记录会话

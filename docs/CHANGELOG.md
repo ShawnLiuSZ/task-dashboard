@@ -6,6 +6,16 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — CI 门禁盲区 / 操作类文档 `develop` 漂移 / 旧仓库名拼写残留（#336）**
+
+  - **#336 `quality-check.yml` 的 `push` 只挂 `develop`，而该分支已不存在** ⇒ **直接 push 到 `main` 完全跳过重型门禁**（clippy / `cargo fmt --check` / `vite build` / `check-versions.py` / `scripts` 单测），只有 base = `main` 的 PR 才跑。这是 #330 刚加固完门禁后留下的缺口。**修复**：`push.branches` 补 `main`。详见 [docs/issue-336-docs-ci-reality-alignment.md](./issue-336-docs-ci-reality-alignment.md)。
+  - **#336 操作类文档仍按「集成分支 = `develop`」描述**：`AGENTS.md`（8 处）、`CONTRIBUTING.md`（2 处）、`mcp_server/AGENT_INSTRUCTIONS{,.en}.md`（各 5 处）、`.claude` / `.opencode` 的 `task-start.md`（4 + 2 处）、`README.md`（1 处），以及 `mcp.rs` / `commands.rs` / `common.rs` / `server.py` 里 `set_work_branch` 的文档注释与**工具 description**（6 处，对 agent 可见）。这些不是历史叙述，而是**指导下一步动作的指令** —— 照错做会从已不存在的 `develop` 开分支，且 tool description 会把错误基线喂给每个调用 MCP 的 agent。**修复**：统一改为 `main`；`AGENTS.md §6.1` 删除「集成分支」行、`§6.3` 删除 `develop → main` 发版行，常规流程改为单主干。
+  - **#336 `docs/release-backmerge-policy.md` 全文建立在失效前提上**：原文要求「release 合入 `main` 后把 `main` 回合 `develop`」。按 `AGENTS.md §5.5` 在顶部加**失效横幅**（指向现行约定），正文保留作历史记录，并声明保留 1 个版本周期后再评估删除。**不做内容重写**。
+  - **#336 旧仓库名 `task-dashborad` 残留 4 处**：`docs/issue-52-custom-column-mapping.md`（2 处）、`docs/issue-62-bug-audit-fixes.md`（2 处）指向 2026-09-06 改名前的旧名。GitHub 保留重定向、链接可用，属**陈旧**而非断链。**顺带修真断链**：`docs/issue-279-work-branch-not-updated.md` 两条 `blob/develop/…` 绝对外链随 `develop` 删除已成 404，改为 `blob/main`（`check-doc-links.py` 只校验相对链接，覆盖不到此类）。
+  - **边界口径（刻意不改的部分）**：历史知识库文档（`docs/issue-*.md` / `docs/bug-audit-*.md`）中的 `develop` 描述的是**当时的实况**，属正确的历史记录；`scripts/merge-cleanup.py` 的 `base ∈ {develop, main}` 与 `check-workflow-yaml.py` 的浮动分支名单是**工具应具备的能力**，一并保留。
+  - **无运行时行为变更**（改动为文档 / CI 配置 / 注释）；**无 schema / MCP 工具签名 / i18n key 变更**（`SELECT_COLS` 未动）。
+  - **验证**：`check-workflow-yaml.py` 6 文件 ✅、`check-doc-links.py` 无断链无孤岛 ✅、`check-mcp-columns.py` 28 列 ✅、`check-versions.py` 0.6.5 ✅、`scripts` 单测 ✅、`cargo fmt --check` ✅、`cargo clippy -- -D warnings` ✅、`cargo test --lib` / `--test db_test` ✅、Python MCP 单测 ✅；全仓库检索 `develop` 后，剩余位置**只**落在「历史知识库文档 / CHANGELOG 历史条目 / 工具能力描述与 fixtures / `quality-check.yml` 的兼容项」四类之内。
+
 - **Unreleased — code review P3 批次：版本号零校验且已漂移 / 15 篇孤岛文档 / ESLint 门禁形同虚设 / CI 缺构建与格式检查 7 项（#330）**
 
   - **#330 版本号「多处同步」零自动化校验，且已实际漂移**：版本号分散在 5 个文件（`package.json` / `package-lock.json` / `Cargo.toml` / `tauri.conf.json` / `Cargo.lock`），发版靠手抄，而**全仓库没有任何一步校验过**；实测前 4 处是 `0.6.5` 而 **`package-lock.json` 停在 `0.4.0`**（落后两个大版本）。`AGENTS.md §4.3/§6.4` 与 `release.yml` 注释还都只写「对齐**三处** version」，清单本身就不完整。详见 [docs/issue-330-p3-quality-gates.md](./issue-330-p3-quality-gates.md)。

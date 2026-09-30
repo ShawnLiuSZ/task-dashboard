@@ -67,9 +67,12 @@ Agent 协作默认：
 5. 默认                       → todo
 ```
 
-### 2.3 不在 `main` / `develop` 直接开发
+### 2.3 不在 `main` 上直接开发
 
-所有改动必须从 `develop`（或 `main`，仅 hotfix）新开分支，通过 PR 合入。
+所有改动必须从 `main` 新开分支，通过 PR 合回 `main`。
+
+> ⚠️ 本仓历史上有过 `develop` 集成分支（`feature/*` → `develop` → `main`），**该分支已废弃并从远端删除**。
+> 现存长驻分支只有 `main`（另有若干历史 `release/*`）。旧文档 / 旧分支名里出现的 `develop` 一律按 `main` 理解。
 
 ### 2.4 每功能 / 每修复必建知识库文档
 
@@ -215,18 +218,20 @@ CI：`/.github/workflows/i18n-check.yml` 在 PR 时自动校验 i18n 一致性�
 
 | 类型 | 命名格式 | 示例 |
 |---|---|---|
-| 主分支（**受保护**） | `main` | — |
-| 集成分支（**受保护**） | `develop` | — |
+| 主分支（**受保护**，唯一长驻分支） | `main` | — |
 | 功能分支（有 issue） | `feature/issue-<num>-<scope>` | `feature/issue-27-sync-logs` |
 | 修复分支（有 issue） | `fix/issue-<num>-<scope>` | `fix/issue-26-modal-overlap` |
 | 功能分支（无 issue，需 owner） | `feature/<owner>/<scope>` | `feature/lsz/refactor-db-migrations` |
-| 工作树分支（多 agent 并行） | `<type>/<owner>/<issue-num>-<scope>@<target><YYMMDD>` | `feature/lsz/25-fix-second-account-422@develop260905` |
+| 工作树分支（多 agent 并行） | `<type>/<owner>/<issue-num>-<scope>@<target><YYMMDD>` | `feature/lsz/25-fix-second-account-422@main260905` |
 
 `<scope>` kebab-case 简述改动主题；`<num>` 是 GitHub issue 编号（去 `#`）；`<owner>` 是当前负责人 / agent 代号。
 
+> ⚠️ **`develop` 已废弃**（2026-09-30 核实：远端只剩 `main` + 若干历史 `release/*`）。
+> 所有 PR 一律指向 `main`；存量文档里「PR 到 `develop`」「`main` → `develop` 回合」的写法属历史遗留。
+
 ### 6.2 硬规则
 
-1. **禁止在 `main` / `develop` 上直接开发**。所有改动走新分支 + PR。
+1. **禁止在 `main` 上直接开发**。所有改动走新分支 + PR。
 2. **有 issue → 分支名必须包含 issue 号**。
 3. **没有 issue → 必须先询问用户是否创建 issue**。用户明确不开 issue 时才允许 `feature/<owner>/<scope>`，且 PR 描述里必须写明「无 issue 的原因」。
 4. **owner 前缀**用于多 agent / 多人协作时区分（参考工作树 `lsz/<scope>`）；单人维护可省，但工作树分支必须带 owner。
@@ -236,12 +241,14 @@ CI：`/.github/workflows/i18n-check.yml` 在 PR 时自动校验 i18n 一致性�
 
 | 分支来源 | PR 目标 | 触发时机 |
 |---|---|---|
-| `feature/*` / `fix/*` | → `develop` | 功能 / 修复完成 |
-| `develop` | → `main` | 发版（必须通过 Release PR，需版本号 bump） |
-| 紧急 hotfix | → `main`（同时 cherry-pick 回 `develop`） | 生产事故 |
+| `feature/*` / `fix/*` / `chore/*` | → `main` | 功能 / 修复完成 |
+| 紧急 hotfix | → `main`（短分支，同样走 PR） | 生产事故 |
 | `main` 的 tag | （触发 GitHub Actions 自动打包） | Release Publish |
 
-常规流程：`feature/issue-N-xxx` → PR 到 `develop` → CI 通过 → merge；积攒一批 → `develop` → PR 到 `main` → tag → Release。
+常规流程：`feature/issue-N-xxx` → PR 到 `main` → CI 通过 → merge；需要发布时打 `vX.Y.Z` tag → GitHub Release → 自动三端打包。
+
+> ⚠️ 曾用 `develop` 作集成分支（功能批次先积攒到 `develop`，再 `develop` → `main` 发版）。该分支已废弃，
+> 现为「所有 PR 直接进 `main`」的单主干流程；`docs/release-backmerge-policy.md` 描述的「回合 `main` 到 `develop`」随之失效。
 
 ### 6.4 Commit 与发版
 
@@ -271,7 +278,7 @@ CI：`/.github/workflows/i18n-check.yml` 在 PR 时自动校验 i18n 一致性�
 
 ## 8. 跨 agent 通用注意事项（所有 agent 都得读）
 
-1. **不直接 push 到 `main` / `develop`**。
+1. **不直接 push 到 `main`**。
 2. **不擅自修改 issue / label / PR / project 状态**——看板权威在本地 SQLite（产品约束见 §2.1）。维护者明确要求编辑 issue 正文、PR 描述等协作文字时允许；未经明确要求，不得创建 / 关闭 / 改状态 / 改 label。**用户在 UI 确认框后显式触发的写回（#214 起）除外**。
 3. **不擅自创建新分支**——按第 6 节规则；无 issue 时**必须先询问**。
 4. **完成的代码改动必须同步产出 `docs/` 知识库文档**（PR 时至少 stub）。
