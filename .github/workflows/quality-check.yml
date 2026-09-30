@@ -4,7 +4,10 @@ on:
   pull_request:
     branches: [develop, main]
   push:
-    branches: [develop]
+    # #336：`develop` 已不存在（远端只剩 `main` + 旧 `release/*`），原配置使
+    # **直接 push 到 `main` 完全跳过重型门禁**（clippy / fmt / build / 各校验脚本）。
+    # 保留 develop 仅为兼容可能存在的历史分支，真正生效的是 main。
+    branches: [develop, main]
 
 # 最小权限：本 workflow 只读仓库（跑测试 / lint / 校验脚本），不写任何东西。
 # 不声明时会沿用仓库默认权限（可能含 write），违反最小权限原则。
