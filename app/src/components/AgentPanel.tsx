@@ -129,31 +129,52 @@ export default function AgentPanel({ onClose }: Props) {
   }, [collapsedGroups]);
 
   const allAgentIds = useMemo(() => AGENTS.map((a) => a.value), []);
-  const hooksTarget = () => (hooksScope === 'global' ? null : targetDir.trim() || null);
+  // #329：项目目录分「实时值」与「已提交值」两份：
+  // - 实时值 `targetDir`：供显式动作（安装 / 卸载 / 手动刷新）使用，敲完直接点按钮即可；
+  // - 已提交值 `committedTargetDir`（失焦 / 回车 / 手动刷新时写入）：只它参与**自动查询**。
+  // 原实现把 `targetDir` 放进 effect 依赖，每敲一个字符就触发 2 次 IPC，其中
+  // `get_agent_hooks_status` 还要扫文件系统 → 输入框明显卡顿。
+  const [committedTargetDir, setCommittedTargetDir] = useState('');
+  const commitTargetDir = useCallback(() => {
+    const v = targetDir.trim();
+    setCommittedTargetDir((prev) => (prev === v ? prev : v));
+  }, [targetDir]);
+  const hooksTarget = useCallback(
+    () => (hooksScope === 'global' ? null : targetDir.trim() || null),
+    [hooksScope, targetDir],
+  );
 
-  const refreshHooksStatus = useCallback(async () => {
-    const s = await api.getAgentHooksStatus(hooksScope, hooksTarget(), allAgentIds);
-    setHooksStatus(s.agents);
-    setHooksNotices(s.notices);
-  }, [hooksScope, allAgentIds, targetDir]);
+  const refreshHooksStatus = useCallback(
+    async (target: string | null) => {
+      const s = await api.getAgentHooksStatus(hooksScope, target, allAgentIds);
+      setHooksStatus(s.agents);
+      setHooksNotices(s.notices);
+    },
+    [hooksScope, allAgentIds],
+  );
 
   // #263：设备扫描。与 hooks 状态一起刷新，保证「设备安装/卸载」与「接入状态」同源同刻。
   const runScan = useCallback(async () => {
     setScan(await api.scanAgentHosts());
   }, []);
 
-  const refreshAll = useCallback(
-    () => Promise.all([refreshHooksStatus(), runScan()]),
-    [refreshHooksStatus, runScan],
-  );
+  /** 显式刷新（手动按钮）：用实时目录，并把它提交为自动查询的新基准。 */
+  const refreshAll = useCallback(async () => {
+    commitTargetDir();
+    await Promise.all([refreshHooksStatus(hooksTarget()), runScan()]);
+  }, [commitTargetDir, refreshHooksStatus, runScan, hooksTarget]);
 
-  // 打开 Hooks tab / 切换作用域时自动查询
+  // 打开 Hooks tab / 切换作用域 / 提交目录时自动查询。
+  // #329：依赖用 `committedTargetDir` 而非 `targetDir`，不再逐键触发。
   useEffect(() => {
     if (tab !== 'hooks' || hooksBusy) return;
-    if (hooksScope === 'project' && !targetDir.trim()) return;
+    if (hooksScope === 'project' && !committedTargetDir) return;
     setHooksMsg(null);
-    refreshAll().catch((e) => setHooksMsg({ ok: false, text: String(e) }));
-  }, [tab, hooksScope, hooksBusy, targetDir, refreshAll]);
+    const target = hooksScope === 'global' ? null : committedTargetDir;
+    void Promise.all([refreshHooksStatus(target), runScan()]).catch((e) =>
+      setHooksMsg({ ok: false, text: String(e) }),
+    );
+  }, [tab, hooksScope, hooksBusy, committedTargetDir, refreshHooksStatus, runScan]);
 
   const runHooksOp = async (
     op: (scope: HooksScope, target: string | null, agents: string[]) => Promise<unknown>,
@@ -164,8 +185,10 @@ export default function AgentPanel({ onClose }: Props) {
     setHooksBusy(true);
     setHooksMsg(null);
     try {
+      // 显式动作：用实时目录，并同步提交为自动查询基准（#329）。
+      commitTargetDir();
       await op(hooksScope, hooksTarget(), agents);
-      await refreshHooksStatus();
+      await refreshHooksStatus(hooksTarget());
     } catch (e) {
       setHooksMsg({ ok: false, text: String(e) });
     } finally {
@@ -306,6 +329,11 @@ export default function AgentPanel({ onClose }: Props) {
                   placeholder={t('settings.hooks.targetPlaceholder')}
                   value={targetDir}
                   onChange={(e) => setTargetDir(e.target.value)}
+                  onBlur={commitTargetDir}
+                  onKeyDown={(e) => {
+                    // #329：失焦或回车才提交（提交后触发自动查询），避免逐键 IPC。
+                    if (e.key === 'Enter') commitTargetDir();
+                  }}
                 />
               </div>
             )}

@@ -1,8 +1,17 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { api, onSynced, onTasksChanged, onUpdateAvailable, TASKBOARD_ERROR_EVENT } from './api';
+import {
+  api,
+  onSynced,
+  onTasksChanged,
+  onUpdateAvailable,
+  reportError,
+  TASKBOARD_ERROR_EVENT,
+} from './api';
 import { taskListSignature } from './utils/taskSig';
 import { coalescedLoad, createLoadCoalescer } from './utils/coalescedLoad';
 import { countHiddenChanged, snapshotTasks } from './utils/syncHint';
+import { taskIdentity } from './utils/taskIdentity';
+import { useEscLayer } from './utils/useEscLayer';
 import { fmtTime, I18nProvider, useI18n } from './i18n';
 import Board from './components/Board';
 import DetailPanel from './components/DetailPanel';
@@ -70,9 +79,14 @@ function BoardApp() {
 
   // #101：启动时轮询读取 quarantine 清除消息（一次性，后端读取后自动清空）。
   useEffect(() => {
-    void api.getQuarantineNotice().then((msg) => {
-      if (msg) setQuarantineNotice(msg);
-    });
+    void api
+      .getQuarantineNotice()
+      .then((msg) => {
+        if (msg) setQuarantineNotice(msg);
+      })
+      // #329：原实现无 .catch —— 后端不可用/命令未注册时产生未处理拒绝，
+      // 提示静默丢失且用户看不到任何线索。走统一错误上报（顶部 banner）。
+      .catch(reportError);
   }, []);
 
   // #276：监听每日自动检查发现新版本的提醒。
@@ -421,13 +435,11 @@ function BoardApp() {
     setRepo('');
     setOwnership('');
     setHiddenAfterSync(0);
-    try {
-      applyTasks(await api.listTasks(undefined, accountFilter));
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    }
-  }, [accountFilter]);
+    // #329：改走合并器。原实现直连 `api.listTasks` + `applyTasks`，会与在途的
+    // coalesced 查询竞态——在途请求后返回就把清空后的结果覆盖回旧筛选
+    // （最长要等下一轮轮询/聚焦才自愈）。`loadWith` 内部已统一处理错误上报。
+    await loadWith('', accountFilter);
+  }, [accountFilter, loadWith]);
 
   // 筛选被手动改动后，同步提示即过期（用户正在自行处理）。
   useEffect(() => {
@@ -470,7 +482,9 @@ function BoardApp() {
   };
 
   const selectedTask = useMemo(
-    () => tasks.find((t) => t.issueKey === selected) ?? null,
+    // #329：用 `issueKey@accountId` 定位——聚合视图下同一 issue 会来自两个账号，
+    // 只比 issueKey 会「点 A 打开 B」。
+    () => tasks.find((t) => taskIdentity(t) === selected) ?? null,
     [tasks, selected],
   );
 
@@ -675,7 +689,7 @@ function BoardApp() {
             title={t('detail.clickBackdropClose')}
           />
           <DetailPanel
-            key={selectedTask.issueKey}
+            key={taskIdentity(selectedTask)}
             task={selectedTask}
             projectStatuses={projectStatuses}
             onClose={() => setSelected(null)}
@@ -688,43 +702,68 @@ function BoardApp() {
 
       {showAbout && <AboutPanel onClose={() => setShowAbout(false)} />}
 
-      {/* #276：每日自动检查发现新版本的弹框提醒 */}
+      {/* #276：每日自动检查发现新版本的弹框提醒。
+          #329：抽成独立组件——只有弹框自身挂载时才注册 Esc 分层，否则在
+          BoardApp 顶层注册会常驻为「最底层」，任何后挂载的面板都会压住它。 */}
       {updateAvailable && (
-        <div className="modal-mask" onClick={() => setUpdateAvailable(null)}>
-          <div
-            className="modal"
-            style={{ maxWidth: 420 }}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') setUpdateAvailable(null);
+        <UpdatePrompt
+          version={updateAvailable}
+          onClose={() => setUpdateAvailable(null)}
+          onError={(msg) => setError(msg)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** #276：新版本提示弹框。 */
+function UpdatePrompt({
+  version,
+  onClose,
+  onError,
+}: {
+  version: string;
+  onClose: () => void;
+  onError: (msg: string) => void;
+}) {
+  const { t } = useI18n();
+  // #329：Esc 分层——只有最上层响应 Esc（见 utils/escLayer.ts）。
+  const isEscTop = useEscLayer();
+  return (
+    <div className="modal-mask" onClick={onClose}>
+      <div
+        className="modal"
+        style={{ maxWidth: 420 }}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          // #329：确认框叠上来时不响应 Esc。
+          if (e.key === 'Escape' && isEscTop()) onClose();
+        }}
+      >
+        <h3 className="modal-title">{t('about.updateAvailableTitle')}</h3>
+        <p className="muted" style={{ margin: '12px 0' }}>
+          {t('about.updateAvailableMsg', { version })}
+        </p>
+        <div className="modal-actions">
+          <button className="btn" onClick={onClose}>
+            {t('about.updateLater')}
+          </button>
+          <button
+            className="btn primary"
+            onClick={async () => {
+              onClose();
+              try {
+                await api.installAppUpdate();
+                await api.restartApp();
+              } catch (e) {
+                onError(String(e));
+              }
             }}
           >
-            <h3 className="modal-title">{t('about.updateAvailableTitle')}</h3>
-            <p className="muted" style={{ margin: '12px 0' }}>
-              {t('about.updateAvailableMsg', { version: updateAvailable })}
-            </p>
-            <div className="modal-actions">
-              <button className="btn" onClick={() => setUpdateAvailable(null)}>
-                {t('about.updateLater')}
-              </button>
-              <button
-                className="btn primary"
-                onClick={async () => {
-                  setUpdateAvailable(null);
-                  try {
-                    await api.installAppUpdate();
-                    await api.restartApp();
-                  } catch (e) {
-                    setError(String(e));
-                  }
-                }}
-              >
-                {t('about.updateNow')}
-              </button>
-            </div>
-          </div>
+            {t('about.updateNow')}
+          </button>
         </div>
-      )}
+      </div>
     </div>
   );
 }

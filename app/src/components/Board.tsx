@@ -8,6 +8,7 @@ import {
   type BoardMode,
 } from '../types';
 import { useT } from '../i18n';
+import { taskIdentity } from '../utils/taskIdentity';
 import TaskCard from './TaskCard';
 
 interface Props {
@@ -207,10 +208,10 @@ function Board({
                 {items.length === 0 && <div className="empty">{title}</div>}
                 {items.map((task) => (
                   <TaskCard
-                    key={task.issueKey}
+                    key={taskIdentity(task)}
                     task={task}
                     {...cardProps(task)}
-                    active={task.issueKey === selected}
+                    active={taskIdentity(task) === selected}
                     onSelectKey={onSelect}
                   />
                 ))}
@@ -245,10 +246,10 @@ function Board({
                 {items.length === 0 && <div className="empty">{col.colName}</div>}
                 {items.map((task) => (
                   <TaskCard
-                    key={task.issueKey}
+                    key={taskIdentity(task)}
                     task={task}
                     {...cardProps(task)}
-                    active={task.issueKey === selected}
+                    active={taskIdentity(task) === selected}
                     onSelectKey={onSelect}
                     showGhStatus
                   />
@@ -284,10 +285,10 @@ function Board({
             <div className="column-body" role="list">
               {unmatched.map((task) => (
                 <TaskCard
-                  key={task.issueKey}
+                  key={taskIdentity(task)}
                   task={task}
                   {...cardProps(task)}
-                  active={task.issueKey === selected}
+                  active={taskIdentity(task) === selected}
                   onSelectKey={onSelect}
                   showGhStatus
                 />
@@ -319,10 +320,10 @@ function Board({
               {items.length === 0 && <div className="empty">{t(`hint.${col.key}`)}</div>}
               {items.map((task) => (
                 <TaskCard
-                  key={task.issueKey}
+                  key={taskIdentity(task)}
                   task={task}
                   {...cardProps(task)}
-                  active={task.issueKey === selected}
+                  active={taskIdentity(task) === selected}
                   onSelectKey={onSelect}
                   showGhStatus={boardMode === 'custom'}
                 />

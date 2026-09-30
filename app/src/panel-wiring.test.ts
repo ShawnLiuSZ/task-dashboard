@@ -1,0 +1,143 @@
+import { describe, expect, it } from 'vitest';
+// 仓库约定（见 styles.test.ts）：vitest 跑在 node 环境，无 DOM / 无布局引擎，
+// 组件接线类回归用 `?raw` 读源码做静态断言，而不是引入 jsdom / testing-library
+// （§2.5 不引入新依赖）。
+import aboutRaw from './components/AboutPanel.tsx?raw';
+import accountsRaw from './components/AccountsPanel.tsx?raw';
+import agentRaw from './components/AgentPanel.tsx?raw';
+import appRaw from './App.tsx?raw';
+import boardRaw from './components/Board.tsx?raw';
+import confirmRaw from './components/ConfirmDialog.tsx?raw';
+import detailRaw from './components/DetailPanel.tsx?raw';
+import notesRaw from './components/NotesPanel.tsx?raw';
+import sessionsRaw from './components/SessionsPanel.tsx?raw';
+import settingsRaw from './components/SettingsPanel.tsx?raw';
+import logsRaw from './components/SyncLogsPanel.tsx?raw';
+
+/**
+ * #329 前端一致性批次的接线守卫。
+ *
+ * 这些缺陷的共同点是「接线错了但类型/单测都过得去」，纯逻辑已抽成
+ * `utils/escLayer.ts` / `utils/taskIdentity.ts` 单测（见各自 .test.ts），
+ * 此处只锁住「组件有没有正确接上」。
+ */
+
+describe('Esc 分层接线（#329）', () => {
+  it('ConfirmDialog 注册为 Esc 层，且只在最上层响应', () => {
+    expect(confirmRaw).toMatch(/registerEscLayer\(\)/);
+    expect(confirmRaw).toMatch(/isTop\(\)/);
+  });
+
+  const escHolders: [string, string][] = [
+    ['DetailPanel', detailRaw],
+    ['SyncLogsPanel', logsRaw],
+    ['SettingsPanel', settingsRaw],
+    ['AccountsPanel', accountsRaw],
+    ['AboutPanel', aboutRaw],
+    ['App 的更新提示弹框', appRaw],
+  ];
+
+  for (const [name, raw] of escHolders) {
+    it(`${name} 的 Esc 处理前先问层级（否则会与确认框一起关闭）`, () => {
+      expect(raw).toMatch(/(isEscTop|isTop)\(\)/);
+    });
+  }
+
+  it('NotesPanel 的 Esc 是「取消行内编辑」的局部语义，不参与分层', () => {
+    expect(notesRaw).toMatch(/note-textarea/);
+    expect(notesRaw).not.toMatch(/isTop\(\)/);
+  });
+});
+
+describe('任务身份跨账号唯一（#329）', () => {
+  it('Board 卡片 key 与选中态判定都用 taskIdentity（4 卡片 × 2 处）', () => {
+    expect(boardRaw).not.toMatch(/key=\{task\.issueKey\}/);
+    expect(boardRaw).not.toMatch(/task\.issueKey === selected/);
+    expect(boardRaw.match(/taskIdentity\(task\)/g) ?? []).toHaveLength(8);
+  });
+
+  it('App 用身份查找选中任务，详情面板 key 也按身份（跨账号切换需重挂载）', () => {
+    expect(appRaw).toMatch(/tasks\.find\(\(t\) => taskIdentity\(t\) === selected\)/);
+    expect(appRaw).toMatch(/key=\{taskIdentity\(selectedTask\)\}/);
+  });
+
+  it('SessionsPanel 会话卡片 key 用身份（聚合视图下同一 issue 有两个 session）', () => {
+    expect(sessionsRaw).toMatch(/key=\{taskIdentity\(task\)\}/);
+  });
+
+  it('指纹纳入 accountId（否则换账号不刷新）', () => {
+    expect(appRaw).toMatch(/taskListSignature/);
+  });
+});
+
+describe('AgentPanel 项目目录提交（#329）', () => {
+  it('输入框失焦 / 回车才提交', () => {
+    expect(agentRaw).toMatch(/onBlur=\{commitTargetDir\}/);
+    expect(agentRaw).toMatch(/if \(e\.key === 'Enter'\) commitTargetDir\(\)/);
+  });
+
+  it('自动查询依赖已提交值，不再依赖实时输入（旧实现逐键 2 次 IPC）', () => {
+    expect(agentRaw).toMatch(/committedTargetDir, refreshHooksStatus, runScan\]\)/);
+    expect(agentRaw).not.toMatch(/\}, \[tab, hooksScope, hooksBusy, targetDir, refreshAll\]\)/);
+  });
+
+  it('显式动作（安装 / 卸载 / 手动刷新）仍用实时值', () => {
+    expect(agentRaw).toMatch(/await op\(hooksScope, hooksTarget\(\), agents\)/);
+    expect(agentRaw).toMatch(/await refreshHooksStatus\(hooksTarget\(\)\)/);
+  });
+});
+
+describe('NotesPanel 首屏 / 后台刷新分离（#329）', () => {
+  it('首屏才用 loading 占位，后续重查只置 refreshing', () => {
+    expect(notesRaw).toMatch(/if \(loadedOnce\.current\) setRefreshing\(true\)/);
+    expect(notesRaw).toMatch(/else setLoading\(true\)/);
+  });
+
+  it('后台刷新用 aria-busy 做轻量反馈而非整块替换', () => {
+    expect(notesRaw).toMatch(/aria-busy=\{refreshing \|\| undefined\}/);
+  });
+});
+
+describe('SettingsPanel 列编辑草稿不被重置（#329）', () => {
+  it('账号列配置 effect 依赖账号 id 指纹，而非每次都是新引用的 accounts 数组', () => {
+    expect(settingsRaw).toMatch(
+      /const accountIdsKey = settings\.accounts\.map\(\(a\) => a\.id\)\.join\(','\)/,
+    );
+    expect(settingsRaw).toMatch(/\}, \[accountIdsKey\]\)/);
+    expect(settingsRaw).not.toMatch(/\}, \[settings\.accounts\]\)/);
+  });
+});
+
+describe('App 列表查询统一走合并器（#329）', () => {
+  // 注释里会提到被禁止的写法（如「原实现直连 api.listTasks」），负向断言前先剥离注释。
+  const stripComments = (s: string) =>
+    s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+  it('clearAllFilters 不得绕过合并器直连 listTasks（会与在途查询竞态）', () => {
+    const fn =
+      appRaw.match(
+        /const clearAllFilters = useCallback\(async \(\) => \{[\s\S]*?\n {2}\}, \[[^\]]*\]\);/,
+      )?.[0] ?? '';
+    expect(fn, '应从 App.tsx 中取到 clearAllFilters 函数体').not.toBe('');
+    expect(fn).toMatch(/await loadWith\('', accountFilter\)/);
+    expect(stripComments(fn)).not.toMatch(/api\.listTasks/);
+  });
+
+  it('quarantine 提示拉取有 .catch，不再静默产生未处理拒绝', () => {
+    const block = appRaw.match(/getQuarantineNotice\(\)[\s\S]*?\.catch\([^)]*\)/)?.[0] ?? '';
+    expect(block, '应能取到 getQuarantineNotice 的调用链').not.toBe('');
+    expect(block).toMatch(/\.catch\(reportError\)/);
+  });
+});
+
+describe('SessionsPanel 复制按钮（#329）', () => {
+  it('handleCopy 有 try/catch，且定时器在卸载时清理', () => {
+    const fn =
+      sessionsRaw.match(/const handleCopy = useCallback\(async[\s\S]*?\n {2}\}, \[\]\);/)?.[0] ??
+      '';
+    expect(fn).not.toBe('');
+    expect(fn).toMatch(/try \{[\s\S]*await navigator\.clipboard\.writeText/);
+    expect(fn).toMatch(/catch \(e\)/);
+    expect(sessionsRaw).toMatch(/copiedTimer\.current !== null\) window\.clearTimeout/);
+  });
+});

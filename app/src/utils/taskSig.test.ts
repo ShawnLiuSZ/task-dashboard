@@ -70,4 +70,17 @@ describe('taskListSignature (#181)', () => {
     expect(taskListSignature(two)).not.toBe(taskListSignature(one));
     expect(taskListSignature([])).not.toBe(taskListSignature(one));
   });
+
+  it('#329：聚合视图下同一 issue 来自两个账号时指纹必须不同', () => {
+    const acct1 = [mkTask({ issueKey: 'a#1', accountId: 1 })];
+    const acct2 = [mkTask({ issueKey: 'a#1', accountId: 2 })];
+    expect(taskListSignature(acct1)).not.toBe(taskListSignature(acct2));
+    // 两条记录互换账号归属也要能识别（否则「换账号」不会刷新看板）
+    const both = [
+      mkTask({ issueKey: 'a#1', accountId: 1 }),
+      mkTask({ issueKey: 'a#1', accountId: 2 }),
+    ];
+    const swapped = [both[1], both[0]];
+    expect(taskListSignature(both)).not.toBe(taskListSignature(swapped));
+  });
 });

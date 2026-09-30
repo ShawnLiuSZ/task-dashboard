@@ -148,6 +148,42 @@ Refs #284 — PR 合并后自动收尾
         # 标题含这些标记时跳过删分支 —— 改这里意味着改 workflow 的验证方式，必须显式。
         self.assertEqual(merge_cleanup.SKIP_DELETE_MARKERS, ("test", "draft"))
 
+    def test_three_refs_after_one_keyword_keeps_the_middle_one(self):
+        # #329 回归：`CLOSE_RE` 原先用可重复捕获组 `(?:...(\d+))*`，内层捕获每轮迭代
+        # 覆盖前一轮，`m.groups()` 只剩「第一个 + 最后一个」⇒ `Closes #1 #2 #3` 提取成
+        # `[1, 3]`，**中间编号被静默丢弃、issue 不会被关闭**。
+        # 原单测只测 2 个编号，恰好落在「第一个 + 最后一个 = 全部」的巧合区间。
+        # 反向验证：把 CLOSE_RE 改回可重复捕获组写法，本用例失败。
+        self.assertEqual(extract_issue_refs("t", "Closes #1 #2 #3"), [1, 2, 3])
+        self.assertEqual(extract_issue_refs("t", "fixes #10 #20 #30"), [10, 20, 30])
+        self.assertEqual(extract_issue_refs("t", "关闭 #7 #8 #9 #10"), [7, 8, 9, 10])
+        # 与标题合并时仍保持「首次出现顺序 + 去重」。
+        self.assertEqual(extract_issue_refs("x (#1)", "Closes #1 #2 #3"), [1, 2, 3])
+
+    def test_skip_delete_markers_use_word_boundary(self):
+        # #329 回归：跳过删分支的标记原先用 `m in title.lower()` 子串判断，于是
+        # `chore: bump to latest deps` 里的 `latest` 命中 `test` ⇒ 该类 PR 被判成
+        # 「验证用 PR」而**静默不删分支**，分支越堆越多。
+        # 反向验证：把匹配改回子串判断，`latest` / `contest` / `protest` 三条断言失败。
+        def markers(title):
+            return sorted(
+                {m.group(0).lower() for m in merge_cleanup.SKIP_DELETE_RE.finditer(title)}
+            )
+
+        # 误伤案例必须为空
+        self.assertEqual(markers("chore: bump to latest deps"), [])
+        self.assertEqual(markers("fix: win the contest"), [])
+        self.assertEqual(markers("feat: protest handling"), [])
+        self.assertEqual(markers("docs: attest signing"), [])
+        self.assertEqual(markers("feat: 最新的 latest 组件"), [])
+        # 真标记仍要命中
+        self.assertEqual(markers("test: 验证 merge-cleanup workflow"), ["test"])
+        self.assertEqual(markers("test_workflow 验证"), ["test"])
+        self.assertEqual(markers("test-PR 验证"), ["test"])
+        self.assertEqual(markers("[Draft] wip (#1)"), ["draft"])
+        self.assertEqual(markers("test draft"), ["draft", "test"])
+        self.assertEqual(markers(""), [])
+
 
 class DryRunFlowTest(unittest.TestCase):
     """dry-run 走完整 `main()`：覆盖 argparse 属性名、事件负载读取、分支 / issue 判定。

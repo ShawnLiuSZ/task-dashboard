@@ -20,6 +20,15 @@ workflow 的缩进、`on:` 触发条件、权限块写错了，只有在有人�
   8. 声明了 `permissions:` 却没有任何 scope（等于没配，退回仓库默认权限）
   9. workflow 直接执行仓库内脚本（`run:` 引用 `scripts/`）却没有 `actions/checkout` ——
      runner 的 workspace 默认是空的，不 checkout 会以「file not found」在静默状态失败
+ 10. 官方 action 用 `@main` / `@master` 这类**浮动分支**引用（上游一次 push 就换掉你 CI 里
+     执行的全部代码；供应链风险）
+ 11. job 有 `runs-on:` 却没有 `steps:`（GitHub 直接解析失败，且只有推送后才暴露）
+ 12. 顶层 key 重复声明（后者静默覆盖前者）
+ 13. `needs:` 指向不存在的 job（该 job 永远停在 pending，workflow 卡死）
+
+> #329 补丁：第 8、10~13 项与「`permissions: read-all` 简写」「`on: [a, b]` 内联数组」
+> 的**误报修复**同批落地。检查器的误报比漏报更致命（见下方「双向要求」段），
+> 因此每一类新增判定都必须同时给出「正向不报」与「反向必报」两组用例。
 
 本脚本自身的正确性由 `scripts/test_workflow_yaml.py` 兜住：它用合成用例验证「坏的
 workflow 一定会被标记」，并用仓库里现存的 workflow 做正向回归验证 —— 一个误报就会让
@@ -49,6 +58,18 @@ BAD_EXPR_QUOTE_RE = re.compile(r"\$\{\{\s*[\"']")
 BLOCK_INDICATORS = ("|", ">", "|-", ">-", "|+", ">+")
 # 第三方 action 需要固定版本；本地 action 与 Docker action 不适用。
 LOCAL_USE_PREFIXES = ("./", "../", "docker://")
+# #329：`@main` / `@master` 这类**浮动分支**引用属于供应链风险——上游一次 push 就换掉
+# 你 CI 里执行的全部代码，且不会在本仓库留下任何 diff 痕迹。
+#
+# 注意**不能**一刀切禁止「所有非版本号的引用」：`dtolnay/rust-toolchain@stable` 是该
+# action 的官方推荐写法（`@stable` / `@beta` / `@nightly` 是它受支持的「工具链通道」），
+# 本仓库多个 workflow 正用着它。因此这里用**明确的浮动分支名denylist**，
+# 而不是「不是 vN 就报错」的宽松规则。
+FLOATING_REF_RE = re.compile(
+    r"^(?:main|master|head|latest|develop|trunk|default)$", re.IGNORECASE
+)
+# 顶层 `permissions:` 的官方简写（GitHub 文档：可用 `read-all` / `write-all` 一次设全部 scope）。
+PERMISSION_SHORTHANDS = ("read-all", "write-all")
 # 结构缩进：workflow 的层级是固定的（顶层 0 / job 名 2 / job 键 4 / step 项 6 / step 键 8）
 JOB_KEY_INDENT = 4
 STEP_KEY_INDENT = 8
@@ -76,6 +97,29 @@ class Job:
     has_runs_on: bool = False
     has_uses: bool = False
     steps: list[Step] = field(default_factory=list)
+    # #329：`needs:` 的 (job 名, 行号)。只收集内联写法（`needs: x` / `needs: [a, b]`），
+    # 块列表写法（`needs:` 换行 + `- x`）在本逐行解析器里不易区分，故不参与校验（宁漏不误报）。
+    needs: list[tuple[str, int]] = field(default_factory=list)
+
+
+def parse_needs(rest: str) -> list[str]:
+    """解析 `needs:` 的内联取值：`needs: build` / `needs: [a, b]` / `needs: "a"`。
+
+    空值（块列表写法）与含 `${{ }}` 表达式的取值都返回空列表 —— 不校验比误报好。
+    """
+    v = rest.strip()
+    if not v or "${{" in v:
+        return []
+    if v.startswith("[") and v.endswith("]"):
+        items = v[1:-1].split(",")
+    else:
+        items = [v]
+    out: list[str] = []
+    for it in items:
+        name = it.strip().strip("'\"")
+        if name:
+            out.append(name)
+    return out
 
 
 def strip_comment(line: str) -> str:
@@ -180,9 +224,16 @@ def scan(lines: list[str]) -> list[str]:
         m = USE_RE.match(body)
         if m:
             val = m.group("val").strip()
-            if not val.startswith(LOCAL_USE_PREFIXES):
+            if not val.startswith(LOCAL_USE_PREFIXES) and "${{" not in val:
                 if "@" not in val:
                     errors.append(f"L{ln}: 第三方 action `{val}` 未固定版本（应写 @v5 之类）")
+                else:
+                    ref = val.rsplit("@", 1)[1]
+                    if FLOATING_REF_RE.match(ref):
+                        errors.append(
+                            f"L{ln}: 第三方 action `{val}` 用了浮动分支 `@{ref}`"
+                            f"（上游一次 push 就会替换你 CI 里执行的代码，应固定到 tag 或完整 commit sha）"
+                        )
 
         # 列表项
         if s.startswith("- "):
@@ -226,6 +277,25 @@ def scan(lines: list[str]) -> list[str]:
             section = key
             flush_step()
             job = None
+            # #329：顶层 `key: value`（非块形式）也必须在这里判定，否则合法的**简写**
+            # 会被后续「块内没有内容」的检查误报。
+            if key == "permissions":
+                if rest.lower().strip() in PERMISSION_SHORTHANDS:
+                    # GitHub 官方简写：`permissions: read-all` / `write-all`
+                    perm_scopes.append(ln)
+                elif rest.startswith("{"):
+                    # 内联映射：`permissions: {contents: read}`
+                    perm_scopes.append(ln)
+                elif rest:
+                    errors.append(
+                        f"L{ln}: `permissions: {rest}` 不是合法写法"
+                        f"（块映射 / 内联映射 / 简写 {' 或 '.join(PERMISSION_SHORTHANDS)}）"
+                    )
+                # rest 为空 → 下面是块映射，由 ind==2 分支收集
+            elif key == "on" and rest:
+                # #329：`on` 支持三种写法，原来只认块映射，另两种会被误报「没有任何触发事件」：
+                # 内联数组 `on: [push, pull_request]`，以及单事件 `on: push`。
+                on_triggers.append(ln)
             continue
 
         if section == "on":
@@ -264,6 +334,10 @@ def scan(lines: list[str]) -> list[str]:
                         errors.append(f"L{ln}: `steps:` 必须在单独一行声明")
                         continue
                     flush_step()
+                elif key == "needs":
+                    # #329：`needs` 指向不存在的 job 会让该 job 永远 pending。
+                    for dep in parse_needs(rest):
+                        job.needs.append((dep, ln))
             elif ind == STEP_KEY_INDENT and step is not None:
                 # step 的子键（`uses:` / `run:` / `with:` / `env:` 等）
                 if key == "uses":
@@ -280,8 +354,11 @@ def scan(lines: list[str]) -> list[str]:
     for name in ("name", "on", "jobs"):
         if name not in top_keys:
             errors.append(f"缺少顶层 `{name}:`")
-    if top_keys.count("jobs") > 1:
-        errors.append("`jobs:` 重复声明")
+    # #329：原来只查 `jobs` 重复。任一顶层 key 重复都会被 YAML 静默后者覆盖，
+    # 例如两个 `on:` 会让第一个的触发条件整段失效。
+    for k in dict.fromkeys(top_keys):
+        if top_keys.count(k) > 1:
+            errors.append(f"顶层 `{k}:` 重复声明（后者会静默覆盖前者）")
     if "on" in top_keys and not on_triggers:
         errors.append("`on:` 下没有任何触发事件（workflow 永远不会被触发）")
     if "permissions" in top_keys and not perm_scopes:
@@ -289,11 +366,26 @@ def scan(lines: list[str]) -> list[str]:
     if not jobs:
         errors.append("`jobs:` 下没有任何 job")
     else:
+        job_names = {j.name for j in jobs}
         for j in jobs:
             if not j.has_runs_on and not j.has_uses:
                 errors.append(
                     f"L{j.line}: job `{j.name}` 缺少 `runs-on:`（也没有可复用的 `uses:`），不会执行"
                 )
+            # #329：有 `runs-on` 却没有 `steps` —— GitHub 直接解析失败（schema 要求二者并存），
+            # 而且只有真的推送后才暴露，属于「本地看不出来」的一类。
+            elif j.has_runs_on and "steps" not in j.keys:
+                errors.append(
+                    f"L{j.line}: job `{j.name}` 有 `runs-on:` 但没有 `steps:`"
+                    f"（GitHub 会直接解析失败，该 job 不会跑）"
+                )
+            # #329：`needs:` 指向不存在的 job
+            for dep, dep_ln in j.needs:
+                if dep not in job_names:
+                    errors.append(
+                        f"L{dep_ln}: job `{j.name}` 的 `needs: {dep}` 指向不存在的 job"
+                        f"（该 job 会永远停在 pending）"
+                    )
 
     # workflow 直接跑仓库内脚本却没有 checkout：runner 的 workspace 默认是空的，
     # 不 checkout 会以「file not found」在静默状态失败。

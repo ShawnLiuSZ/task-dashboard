@@ -112,3 +112,42 @@ describe('会话卡片彩色边框 #304', () => {
     expect(sessionsPanelRaw).toMatch(/ref=\{listRef\}/);
   });
 });
+
+/**
+ * CSS 变量引用完整性（#329）回归测试。
+ *
+ * 背景：`.session-meta-label` 引用了从未定义的 `--text-secondary`、
+ * `.session-meta-value` 引用了从未定义的 `--font-mono`。CSS 对未定义变量
+ * **不报错**，整条声明被丢弃 ⇒ 颜色退回继承值、分支名不再等宽，样式静默失效，
+ * 肉眼极难发现（`${'var(--x)'}` 无兜底值时求值为无效）。
+ * vitest 无布局引擎，故沿用 `?raw` 静态断言：遍历样式表里所有 `var(--x)`，
+ * 要求「在样式表内定义过」或「带兜底值」。
+ */
+describe('CSS 变量引用完整性（#329）', () => {
+  it('每个 var(--x) 都已在样式表内定义，或带兜底值', () => {
+    const defined = new Set([...styles.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
+    const missing: string[] = [];
+    // 第三捕获组区分 `var(--x)` 与 `var(--x, fallback)`：后者即使未定义也有兜底。
+    for (const m of styles.matchAll(/var\(\s*(--[\w-]+)\s*([,)])/g)) {
+      const [, name, sep] = m;
+      const hasFallback = sep === ',';
+      if (!defined.has(name) && !hasFallback && !missing.includes(name)) missing.push(name);
+    }
+    expect(missing, `未定义且无兜底值的 CSS 变量：${missing.join(', ')}`).toEqual([]);
+  });
+
+  it('会话卡片等宽字段引用的 --font-mono 已在 :root 定义', () => {
+    expect(decls('.session-meta-value')).toMatch(/font-family\s*:\s*var\(--font-mono\)/);
+    expect(styles).toMatch(/--font-mono\s*:/);
+  });
+
+  it('会话卡片标签用的 --text-2 是真实存在的变量（不是 --text-secondary）', () => {
+    expect(decls('.session-meta-label')).toMatch(/color\s*:\s*var\(--text-2\)/);
+    expect(styles).not.toMatch(/--text-secondary/);
+  });
+
+  it('笔记面板后台刷新用 aria-busy 降透明，不再整块替换占位（#329）', () => {
+    const d = decls('.notes-card-cols[aria-busy]');
+    expect(d).toMatch(/opacity/);
+  });
+});

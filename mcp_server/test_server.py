@@ -432,5 +432,69 @@ class OnDemandTest(unittest.TestCase):
         self.assertIn("branch 不能为空", str(ctx.exception))
 
 
+class EnsureSchemaTest(unittest.TestCase):
+    """#329：`ensure_schema` 必须补齐 `SELECT_COLS` 的每一列，并对旧布局明确报错。
+
+    这条路径只在「Python MCP 首次打开一个尚未被 App 迁移过的库」时才走到，App 自身
+    与既有 fixture 都覆盖不到 —— 所以用临时库单独构造。
+    """
+
+    @staticmethod
+    def _select_cols():
+        return [c.strip() for c in S.SELECT_COLS.replace(" ", "").split(",") if c.strip()]
+
+    @staticmethod
+    def _tmp_conn():
+        path = os.path.join(tempfile.mkdtemp(prefix="tb-mcp-es-"), "t.db")
+        return sqlite3.connect(path)
+
+    def test_completes_every_select_col(self):
+        # 模拟「App 只迁移到 v0.3.16」的库：已有 issue_key，但缺 assignees /
+        # mentioned / latest_comment_url / pr_number / pr_url / work_dir / created_at
+        # 这些后加的列。原实现只 ALTER 10 列，这些列会以 no such column 炸掉读路径。
+        c = self._tmp_conn()
+        c.execute(
+            "CREATE TABLE tasks ("
+            "issue_key TEXT, owner TEXT, repo TEXT, number INTEGER,"
+            "title TEXT, url TEXT, issue_state TEXT, ownership TEXT, status TEXT,"
+            "project_status TEXT, branch TEXT, session_id TEXT, session_agent TEXT,"
+            "session_at INTEGER, handoff TEXT, candidate_done INTEGER,"
+            "account_id INTEGER, updated_at INTEGER, synced_at INTEGER)"
+        )
+        before = S.table_columns(c, "tasks")
+        missing_before = [x for x in self._select_cols() if x not in before]
+        self.assertTrue(missing_before, "用例前提：起始库应确实缺列")
+        S.ensure_schema(c)
+        after = S.table_columns(c, "tasks")
+        missing = [x for x in self._select_cols() if x not in after]
+        self.assertEqual(missing, [], f"ensure_schema 后仍缺 SELECT_COLS 的列: {missing}")
+        # 幂等：再跑一次不应报错、也不改变列集合。
+        S.ensure_schema(c)
+        self.assertEqual(S.table_columns(c, "tasks"), after)
+        c.close()
+
+    def test_ensure_columns_covers_enough_for_ci_check(self):
+        # 与 scripts/check-mcp-columns.py 的第 5 条断言同源：清单必须 ⊇ SELECT_COLS。
+        ensured = {name for name, _ in S.ENSURE_COLUMNS}
+        self.assertEqual([x for x in self._select_cols() if x not in ensured], [])
+
+    def test_legacy_layout_is_rejected_with_actionable_message(self):
+        c = self._tmp_conn()
+        c.execute("CREATE TABLE tasks (key TEXT PRIMARY KEY, gh_state TEXT, issue_key TEXT)")
+        with self.assertRaises(RuntimeError) as ctx:
+            S.ensure_schema(c)
+        msg = str(ctx.exception)
+        self.assertIn("v0.3.50", msg)
+        self.assertIn("请先启动一次 TaskBoard App", msg)
+        c.close()
+
+    def test_missing_tasks_table_is_rejected(self):
+        c = sqlite3.connect(":memory:")
+        with self.assertRaises(RuntimeError) as ctx:
+            S.ensure_schema(c)
+        self.assertIn("`tasks` 表", str(ctx.exception))
+        c.close()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,7 @@ import {
   viewFallback,
   viewUpdater,
 } from '../utils/updateCheck';
+import { useEscLayer } from '../utils/useEscLayer';
 
 interface Props {
   onClose: () => void;
@@ -64,6 +65,8 @@ export function buildMcpSnippet(): string {
 
 /** v0.3.19+「关于」弹窗：展示当前版本号 + 检查更新入口。 */
 export default function AboutPanel({ onClose }: Props) {
+  // #329：Esc 分层——只有最上层响应 Esc（见 utils/escLayer.ts）。
+  const isEscTop = useEscLayer();
   const { t } = useI18n();
   const [version, setVersion] = useState<string>('');
   const [state, setState] = useState<State>({ phase: 'idle' });
@@ -197,7 +200,8 @@ export default function AboutPanel({ onClose }: Props) {
         aria-modal="true"
         aria-label={t('about.title')}
         onKeyDown={(e) => {
-          if (e.key === 'Escape') onClose();
+          // #329：确认框叠上来时不响应 Esc。
+          if (e.key === 'Escape' && isEscTop()) onClose();
         }}
       >
         <h3 className="modal-title">{t('about.title')}</h3>

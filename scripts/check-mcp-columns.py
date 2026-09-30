@@ -18,6 +18,12 @@ TaskBoard 有两套 MCP 实现，必须统一读写同一张 SQLite 表：
 2. 校验 Python 与 Rust 两侧 `SELECT_COLS` 的每一列都真实存在；
 3. 校验两侧列集合**逐列相同**（含顺序），否则同一工具在两个实现里返回不同字段；
 4. 兜底扫描 Python 侧残留的旧列名写法（`WHERE key=?` / `FROM tasks WHERE key`）。
+5. (#329) 校验 Python 侧 `ensure_schema::ENSURE_COLUMNS` 覆盖 `SELECT_COLS` 的**每一列**。
+
+第 5 条补的是一个反复踩的坑（#169 / #262 / #278 同源）：给 `SELECT_COLS` 加了列却忘了
+在 `ensure_schema` 里补 ALTER，症状只在「Python MCP 首次打开尚未被 App 迁移过的旧库」
+这一条路径上出现（`no such column: xxx`），App 自身完全正常、两侧测试也都测不到。
+原检查只比对 `SELECT_COLS` 字符串，管不到 ALTER 清单。
 
 用法：`python3 scripts/check-mcp-columns.py`（CI 里同一条命令）
 """
@@ -91,6 +97,17 @@ def rust_select_cols(rs_src: str) -> list[str]:
     return split_cols(m.group(1))
 
 
+def py_ensure_columns(py_src: str) -> list[str]:
+    """从 `ENSURE_COLUMNS = (("name", "DDL"), ...)` 里取列名 (#329)。"""
+    m = re.search(r"ENSURE_COLUMNS\s*=\s*\((.*?)\n\)", py_src, re.DOTALL)
+    if not m:
+        die("server.py 里找不到 ENSURE_COLUMNS 定义")
+    names = re.findall(r'\(\s*"([A-Za-z_][A-Za-z0-9_]*)"\s*,\s*"', m.group(1))
+    if not names:
+        die("ENSURE_COLUMNS 解析出 0 列，检查 server.py 里的格式是否改动过")
+    return names
+
+
 def split_cols(blob: str) -> list[str]:
     # Python 侧是多行字符串隐式拼接（每段都带引号），Rust 侧是单个裸字符串。
     # 必须先全局剥掉引号再按逗号切：否则跨行片段会同时含有上一行的收尾引号和
@@ -105,8 +122,10 @@ def split_cols(blob: str) -> list[str]:
 
 def main() -> int:
     db_cols = tasks_columns(read(DB_RS))
-    py_cols = py_select_cols(read(SERVER_PY))
+    server_src = read(SERVER_PY)
+    py_cols = py_select_cols(server_src)
     rs_cols = rust_select_cols(read(MCP_RS))
+    ensure_cols = py_ensure_columns(server_src)
 
     db_set = set(db_cols)
     problems: list[str] = []
@@ -126,11 +145,21 @@ def main() -> int:
             f"{only_py or '无'}；仅 mcp.rs: {only_rs or '无'}）"
         )
 
+    # (#329) `ensure_schema` 必须能补齐 SELECT_COLS 的每一列，否则「Python MCP 打开
+    # 尚未被 App 迁移过的旧库」会 `no such column`（#169/#262/#278 同源缺陷）。
+    ensure_set = set(ensure_cols)
+    not_ensured = [c for c in py_cols if c not in ensure_set]
+    if not_ensured:
+        problems.append(
+            "server.py::ENSURE_COLUMNS 未覆盖 SELECT_COLS 的列: "
+            f"{', '.join(not_ensured)}（往 SELECT_COLS 加列时必须同步补 ALTER）"
+        )
+
     # 兜底：旧列名写法（tasks.key 已于 #155 改名 issue_key）。
     # 跳过注释行——说明性注释里会故意写出 `WHERE key=?` 这个反例。
     legacy = [
         line.strip()
-        for line in read(SERVER_PY).splitlines()
+        for line in server_src.splitlines()
         if not line.strip().startswith("#")
         and re.search(r"\bwhere\s+key\s*=", line, re.IGNORECASE)
     ]
@@ -144,7 +173,10 @@ def main() -> int:
         print(f"\n  tasks 表实际列（db.rs）: {', '.join(db_cols)}")
         return 1
 
-    print(f"✓ MCP 列名校验通过：{len(py_cols)} 列，server.py 与 mcp.rs 一致，且均存在于 tasks 表")
+    print(
+        f"✓ MCP 列名校验通过：{len(py_cols)} 列，server.py 与 mcp.rs 一致，"
+        f"均存在于 tasks 表，且 ensure_schema 覆盖全部 {len(ensure_cols)} 列清单"
+    )
     return 0
 
 

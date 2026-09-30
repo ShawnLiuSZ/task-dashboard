@@ -3,6 +3,7 @@ import { api } from '../api';
 import { useI18n, type LangMode } from '../i18n';
 import type { Account, AccountColumn, BoardMode, Project, Settings } from '../types';
 import { themeManager, type ThemeMode } from '../theme';
+import { useEscLayer } from '../utils/useEscLayer';
 
 interface Props {
   settings: Settings;
@@ -67,6 +68,8 @@ interface AccountEditState {
 }
 
 export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
+  // #329：Esc 分层——只有最上层响应 Esc（见 utils/escLayer.ts）。
+  const isEscTop = useEscLayer();
   const { t, mode: langMode, setMode: setLangMode } = useI18n();
   const [themeMode, setThemeMode] = useState<ThemeMode>(themeManager.getMode());
   const [minutes, setMinutes] = useState(settings.scheduleMinutes);
@@ -96,18 +99,24 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
 
   // 初始化：加载所有账号的列配置
   // v0.3.49 (#145)：按账号并行（每账号内两路再并行），N 账号由 2N RTT 降为 ~2 RTT。
+  //
+  // #329：依赖改为「账号 id 指纹」。`settings.accounts` 每次 `getSettings` 都是新数组
+  // 引用，用它做依赖会让本 effect 在每次设置刷新后重跑，把账号列编辑区里**未保存的草稿**
+  // （editingCol / ruleChips / ruleInput）整体重置掉。只有账号集合真的变化才该重新初始化。
+  const accountIdsKey = settings.accounts.map((a) => a.id).join(',');
   useEffect(() => {
     let cancelled = false;
+    const ids = accountIdsKey ? accountIdsKey.split(',').map(Number) : [];
     const init = async () => {
       const entries = await Promise.all(
-        settings.accounts.map(async (acct) => {
+        ids.map(async (id) => {
           try {
             const [cols, statuses] = await Promise.all([
-              api.listAccountColumns(acct.id),
-              api.listProjectStatuses(acct.id),
+              api.listAccountColumns(id),
+              api.listProjectStatuses(id),
             ]);
             return [
-              acct.id,
+              id,
               {
                 columns: cols.sort((a, b) => a.orderIndex - b.orderIndex),
                 editingCol: null,
@@ -120,7 +129,7 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
             ] as const;
           } catch {
             return [
-              acct.id,
+              id,
               {
                 columns: [],
                 editingCol: null,
@@ -140,7 +149,7 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [settings.accounts]);
+  }, [accountIdsKey]);
 
   const updateAccountState = useCallback((accountId: number, patch: Partial<AccountEditState>) => {
     setAccountStates((prev) => ({
@@ -339,7 +348,8 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
         aria-modal="true"
         aria-label={t('settings.title')}
         onKeyDown={(e) => {
-          if (e.key === 'Escape') onClose();
+          // #329：确认框（本面板的子级弹窗）叠上来时不响应 Esc，避免连带关闭面板。
+          if (e.key === 'Escape' && isEscTop()) onClose();
         }}
       >
         <h3
