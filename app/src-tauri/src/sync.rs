@@ -870,32 +870,51 @@ pub fn run(conn: &Connection, trigger_type: &str) -> Result<SyncResult, String> 
     let mut total_candidate_done = 0usize;
     let mut total_removed = 0usize;
     let mut total_failed: Vec<String> = Vec::new();
+    // #328：真正跑完的账号数（`sync_account` 返回 Ok）。全 0 时整轮同步视为失败，
+    // 不能返回 Ok——否则 lib.rs 会清空 last_sync_error、推进 last_sync_at、广播
+    // SYNCED_EVENT，用户看到「同步成功」但一条数据都没拉到。
+    let mut ok_accounts = 0usize;
 
     // 账号间间隔：避免同时发起多账号搜索触发突发限流（即便每账号 1s 间隔，多账号叠加仍可能撞 Search API 上限）。
     for (idx, account) in target.iter().enumerate() {
         if idx > 0 {
             std::thread::sleep(Duration::from_millis(800));
         }
+        // 查当前账号对应的日志 id（#328：提到读 PAT 之前，下面的 continue 分支也要用它收尾）。
+        let log_id = log_ids.iter().find(|(aid, _)| *aid == account.id).map(|(_, lid)| *lid);
+        // #328：跳过的账号必须把 sync_logs 行收尾。原先 `continue` 前不回写，
+        // 该行永久停留在 `status='running'`，前端「同步日志」永远显示「进行中」。
+        let fail_log = |msg: &str| {
+            if let Some(lid) = log_id {
+                let _ = crate::db::update_sync_log(
+                    conn, lid, now_secs(), "failed",
+                    0, 0, 0, 0, 0, "", msg,
+                );
+            }
+        };
         // #262：读 PAT 失败不应中止整轮同步（与紧随其后的 `pat.is_empty() → continue`
         // 策略一致）。旧写法用 `?` 直接冒泡，任一账号读 PAT 失败会让后续账号全不动。
         let (login, _org, pat) = match crate::db::get_account_pat(conn, account.id) {
             Ok(t) => t,
             Err(e) => {
-                total_failed.push(format!("{}: 读取 PAT 失败: {}", account.login, e));
+                let msg = format!("{}: 读取 PAT 失败: {}", account.login, e);
+                fail_log(&msg);
+                total_failed.push(msg);
                 continue;
             }
         };
         if pat.is_empty() {
-            total_failed.push(format!("{}: 未配置 PAT", login));
+            let msg = format!("{}: 未配置 PAT", login);
+            fail_log(&msg);
+            total_failed.push(msg);
             continue;
         }
-        // 查当前账号对应的日志 id
-        let log_id = log_ids.iter().find(|(aid, _)| *aid == account.id).map(|(_, lid)| *lid);
         // v0.3.43+：看板列模式改为「每账号」配置（meta 里 board_mode:<id>），决定是否启用
         // 自定义列映射（仅 custom 时写入 col_key）。未配置默认 project。
         let board_mode = crate::db::get_account_board_mode(conn, account.id);
         match sync_account(conn, account, &pat, now, &board_mode, log_id) {
             Ok(r) => {
+                ok_accounts += 1;
                 total_added += r.added;
                 total_updated += r.updated;
                 total_candidate_done += r.candidate_done;
@@ -939,6 +958,17 @@ pub fn run(conn: &Connection, trigger_type: &str) -> Result<SyncResult, String> 
     // #235：清理 API 调用明细（7 天 + 条数上限，避免高频同步写爆库）。
     let _ = crate::db::prune_api_logs(conn, now, crate::db::API_LOG_MAX_ROWS);
 
+    // #328：全部目标账号都失败 → 返回 Err。清理与 last_sync_at 已在上面执行完，
+    // 所以失败路径同样留下可观测痕迹（用户能看出「上次尝试是什么时候、失败原因是什么」），
+    // 只是不再谎报成功、也不再清空 last_sync_error 横幅。
+    if ok_accounts == 0 {
+        return Err(format!(
+            "全部 {} 个账号同步失败：{}",
+            target.len(),
+            total_failed.join("; ")
+        ));
+    }
+
     let total: usize = conn
         .query_row("SELECT COUNT(*) FROM tasks", [], |r| r.get(0))
         .unwrap_or(0);
@@ -956,6 +986,9 @@ pub fn run(conn: &Connection, trigger_type: &str) -> Result<SyncResult, String> 
             format!("部分账号/数据源拉取失败: {}", total_failed.join("; "))
         },
         synced_at: now,
+        // 保持 #262 的既有语义「本次**覆盖**（尝试）的账号数」不变——成败明细由上面的
+        // `warning` 承载；#328 只让「全败」时整轮报错，不动该字段含义（避免连带改
+        // types.ts 注释 / i18n 文案 / issue-262 KB 文档）。
         accounts_synced: target.len(),
     })
 }
@@ -1011,6 +1044,51 @@ mod tests {
             2,
             "view_mode=single 时仍应同步全部账号（#262 核心修复点）"
         );
+    }
+
+    /// #328：全部目标账号都失败时 `run` 必须返回 `Err`，且失败路径同样要留下痕迹
+    /// （`last_sync_at` 有推进、跳过的账号把 `sync_logs` 行收尾为 `failed`）。
+    ///
+    /// 反向验证（旧行为）：
+    /// ① `run` 返回 `Ok` → 第 1 个断言失败（lib.rs 会因此清空 last_sync_error 并广播
+    ///    SYNCED_EVENT，UI 谎报「同步成功」）；
+    /// ② 跳过的账号不回写日志 → 该行永远是 `status='running'`，第 3 个断言失败。
+    ///
+    /// 不触网：# 账号 PAT 为空即走 `continue` 分支，不发任何请求。
+    #[test]
+    fn run_reports_error_when_every_account_fails() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SEQ: AtomicUsize = AtomicUsize::new(0);
+        let n = SEQ.fetch_add(1, Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!(
+            "taskboard_sync_all_failed_test_{}_{}.db",
+            std::process::id(),
+            n
+        ));
+        let conn = db::open_db(&path).expect("open_db 测试库");
+        // 唯一账号 PAT 为空 ⇒ 循环里直接 continue，不会发起网络请求。
+        // `insert_account` 本身拒绝空 PAT，故先插入再置空（模拟「加了账号但没填 token」）。
+        let _ = db::insert_account(&conn, "A", "a", "", "placeholder").unwrap();
+        conn.execute("UPDATE accounts SET pat_token = ''", [])
+            .unwrap();
+
+        let err = run(&conn, "manual").expect_err("全部账号失败时应返回 Err");
+        assert!(err.contains("全部 1 个账号同步失败"), "{err}");
+        assert!(err.contains("未配置 PAT"), "{err}");
+
+        // 失败路径也要留下可观测痕迹：last_sync_at 仍被推进。
+        assert!(
+            !db::get_setting(&conn, "last_sync_at").is_empty(),
+            "失败也要推进 last_sync_at，否则用户无法判断「上次尝试是何时」"
+        );
+
+        // 被跳过的账号必须把 sync_logs 行收尾，不能停在 running。
+        let status: String = conn
+            .query_row("SELECT status FROM sync_logs ORDER BY id DESC LIMIT 1", [], |r| {
+                r.get(0)
+            })
+            .expect("应有一条同步日志");
+        assert_eq!(status, "failed", "跳过（未配置 PAT）的账号也要收尾日志");
     }
 
     /// 头less 全量同步验证：直接打开生产库（与应用共用同一 SQLite 文件），

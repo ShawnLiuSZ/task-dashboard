@@ -19,6 +19,29 @@
   - **无 schema / 无 MCP 工具 / 无 i18n key 变更**：历史 `number_of_items` 旧值会在下次成功同步时被 `upsert_projects` 覆盖，无需迁移脚本。
   - **验证**：`npm test` 155 passed（+4）✅、`npx tsc --noEmit` ✅、`npm run i18n:check` 389 keys ✅、`npm run lint` 18 warnings（无新增）✅、`npx prettier --check` ✅、`cargo clippy --lib -- -D warnings` ✅、`cargo test --lib` 119 passed（+3）✅、`scripts/check-doc-links.py` ✅、`scripts/check-mcp-columns.py` 28 列 ✅；4 项静态/单测断言均通过反向验证（改回缺陷写法必失败）。
 
+- **Unreleased — code review P1 批次：迁移无事务 / MCP 分帧退出 / 同步静默失败 / 403 误判限流等 9 项（#328）**
+
+  - **#328 `migrate_tasks_v2_rebuild` 自称「单事务」实则无事务**：`rusqlite::execute_batch` **不会隐式开启事务**（只是逐条 `prepare` + `step`），`DROP TABLE tasks` 与 `ALTER … RENAME` 是两次独立提交。① 两步之间进程被杀 → `tasks` 丢失、数据滞留 `tasks_new`，下次启动 `CREATE TABLE IF NOT EXISTS tasks` 重建**空表**，本地权威态（`status` / `session_*` / `handoff` / `work_branch` / `work_dir`）永久丢失；② 中途失败残留 `tasks_new`（`CREATE TABLE` 无 `IF NOT EXISTS`）后，此后每次 `open_db` 都报 already exists ⇒ `needs_v2` 恒 `false` ⇒ `user_version` 永不推进，而查询报 `no such column: issue_key`，日志只有默认静默的 `tlog!`，**无自愈路径**。详见 [docs/issue-328-p1-data-safety.md](./issue-328-p1-data-safety.md)。
+  - **修复**：`DROP TABLE IF EXISTS tasks_new` 自愈残留 + `BEGIN IMMEDIATE … COMMIT` 包住整段（`PRAGMA user_version = 2` 也进事务），失败显式 `ROLLBACK`。
+  - **#328 MCP 一行坏 JSON 就退出整个进程**：`read_message` 用 `None` 同时表示 EOF 与「这一行畸形」，主循环 `while let Some(..)` 因此直接跳出、stdio 断开，而日志文案却写「跳过该行」（注释与行为不符）。客户端发 UTF-8 BOM / 写入被截断都会触发 agent 侧随机 `connection closed`。
+  - **修复**：改为四态 `ReadOutcome`（`Msg` / `Eof` / `Malformed` / `Fatal`）——畸形帧丢弃后继续读，仅在帧边界无法定位（长度非法、头部不终止）时才终止。
+  - **#328 MCP `Content-Length` 无上界 → 分配失败 abort**：`vec![0u8; len]` 直接吃客户端声明，`Content-Length: 99999999999` 会让 Rust **abort（不可捕获）**；头部逐字节读取同样无界。
+  - **修复**：body 上限 8 MiB、头部上限 8 KiB，越界判 `Fatal`。
+  - **#328 同步全败仍返回 `Ok`**：全部账号因 PAT 失效 / 空 PAT / 网络失败而跳过时，`run` 仍返回 `Ok` ⇒ `lib.rs` 清空 `last_sync_error`、推进 `last_sync_at`、广播 `SYNCED_EVENT`，用户看到「同步成功」但一条都没拉到；且被 `continue` 跳过的账号其 `sync_logs` 行**永久停在 `status='running'`**。
+  - **修复**：新增 `ok_accounts` 计数，全 0 时返回 `Err`；把清理与 `last_sync_at` 写入移到早返回之前（失败也留痕）；跳过分支补日志收尾。`accounts_synced` 语义保持不变。
+  - **#328 `graphql()` 无限流处理 → 项目状态 / 父子关系静默降级**：GraphQL 有独立配额，超限返回 403 + `Retry-After`，而原实现只判 `!is_success()` 即 `Err`；四个调用方全是 best-effort，于是限流窗口内 Project Status 全空、父子关系不更新。另 `fetch_issue_links` 里单个编号 `NOT_FOUND` 会让整块 25 个 issue 的关系全丢。
+  - **修复**：抽出 `graphql_impl`，403/429 走与 `get_impl` 同一套 `rate_limit_wait` + 退避重试；新增宽松模式 `graphql_partial`（`data` 有值即采信），`fetch_issue_links` 改走该模式，写路径仍严格。
+  - **#328 GUI 写命令吞掉「0 行受影响」**：`set_task_status` / `touch_session` 的返回值被直接丢弃，前端传已不存在的 `issueKey` 会收到 `Ok`、UI 显示成功但什么都没改（同文件 `set_work_branch` 却做了判断，内部不一致）。
+  - **修复**：抽出 `common::require_affected`，GUI 三处与 MCP 侧共用同一实现（MCP 文案不变）。
+  - **#328 查询错误被折叠成「不在任何 Project 中」**：`.map(Some).unwrap_or(None)` 把 `no such table` / 类型不符 / IO 等真实故障一并折叠成业务结论，把排障引向「再同步一次」的无效操作。
+  - **修复**：只把 `QueryReturnedNoRows` 映射为 `None`，其余错误带原文上抛。
+  - **#328 全部 403 都当限流 → 权限问题白等最多 30s**：403 也代表 token 无权限 / SSO 未授权 / 组织策略，原实现一律当成限流，缺权限时每次请求白睡默认 10s、重试 3 次。另 `search()` 限流重试分支漏掉 `items.len() < 100` 的分页终止条件。
+  - **修复**：抽出纯函数 `rate_limit_wait_from_headers`（**仅** `X-RateLimit-Remaining == 0` 或存在 `Retry-After` 才按限流），非限流 403 立即返回并附权限指引；`get_impl` / `search` / `graphql` 三处共用；补上缺失的分页终止条件。
+  - **#328 `search()` 单条坏 item 拖垮整个数据源**：`all.push(RawTask::from_item(item)?)` 让一条缺字段的坏 item 使整个 `search()` 失败，同源其它几百条正常数据一起进 `failed`（而 `fetch_prs_for_repo` 早已是逐条跳过，两处不一致）。
+  - **修复**：抽出 `push_parsed_items` 统一为「跳过坏项」。
+  - **无 schema 变更 / 无 MCP 工具变更 / 无 Tauri command 签名变更 / 无 i18n key 变更**：与 schema 相关的只有「迁移执行方式」（DDL 进事务、`user_version` 写入时机），列仍是 28 列受 `check-mcp-columns.py` 校验。
+  - **验证**：`cargo test --lib` 129 passed（+12）✅、`cargo clippy --lib -- -D warnings` ✅、`npm test` 155 passed ✅、`npx tsc --noEmit` ✅、`npm run i18n:check` 389 keys ✅、`npm run lint` 18 warnings（无新增）✅、`npx prettier --check` ✅、`scripts/check-doc-links.py` 159 文件 ✅、`scripts/check-mcp-columns.py` 28 列 ✅、`scripts/check-workflow-yaml.py` ✅、`scripts` 单测 OK ✅；**12 个新增断言逐项通过反向验证**（改回缺陷写法必失败）。仓库整体尚未 `cargo fmt` 化，故本批不做全量格式化（P3 / #330 独立处理）。
+
 - **v0.6.5（2026-09-29）— 编辑记事文本框不随内容长度自适应高度（#322）**
 
   - **#322 编辑记事文本框不随内容长度自适应高度**：进入编辑态时 `<textarea>` 与 `editDraft` 同帧挂载且带 `autoFocus`，原 `useAutoSize` 用被动 `useEffect(..., [value])` 测高，初始 `scrollHeight` 被 `overflow-y:auto` 列容器的滚动 / 绘制时序干扰，框体停在 `min-height:42px`，长内容需框内滚动；只有继续输入才撑开。详见 [docs/issue-322-note-edit-autosize.md](./issue-322-note-edit-autosize.md)。

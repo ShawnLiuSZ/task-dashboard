@@ -294,7 +294,12 @@ pub fn update_task_status(
     // v0.3.49 (#147)：归一化 + 校验 + 写入走公共模块（与 mcp.rs 同一实现）。
     let normalized = crate::common::normalize_status(t).unwrap_or_else(|| t.to_string());
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    crate::common::set_task_status(&conn, &key, &normalized)?;
+    // #328：`set_task_status` 返回受影响行数，0 表示 key 不存在。此处原实现直接丢弃返回值，
+    // 前端传一个已不存在的 issueKey 会收到 Ok、UI 显示成功但什么都没改；同文件
+    // `set_work_branch` 早已做该判断，内部不一致。现统一走 `common::require_affected`
+    // （与 MCP 侧同一实现、同一文案）。
+    let n = crate::common::set_task_status(&conn, &key, &normalized)?;
+    crate::common::require_affected(n, &key)?;
     // #287：任务完成自动清理 session。
     if normalized == "done" {
         let _ = crate::common::clear_task_session(&conn, &key);
@@ -315,7 +320,8 @@ pub fn record_session(
 ) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let now = crate::sync::now_secs();
-    crate::common::touch_session(
+    // #328：同 `update_task_status`——0 行受影响即任务不存在，不能静默 Ok。
+    let n = crate::common::touch_session(
         &conn,
         &key,
         &session_id,
@@ -324,6 +330,7 @@ pub fn record_session(
         None,
         work_dir.as_deref(),
     )?;
+    crate::common::require_affected(n, &key)?;
     let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
 }
@@ -352,9 +359,7 @@ pub fn set_work_branch(
 ) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let n = crate::common::set_work_branch(&conn, &key, &branch)?;
-    if n == 0 {
-        return Err(format!("任务不存在: {key}"));
-    }
+    crate::common::require_affected(n, &key)?;
     let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
 }
@@ -2325,6 +2330,25 @@ mod tests {
         assert!(
             super::rows_to_tasks(&conn, None, None).unwrap().is_empty(),
             "激活账号指向无任务账号时应返回空集"
+        );
+    }
+
+    /// #328 防回归：GUI 写命令必须校验「0 行受影响」。
+    ///
+    /// 这几处此前直接丢弃 `common::set_task_status` / `touch_session` / `set_work_branch`
+    /// 的返回值 ⇒ 前端传一个已不存在的 `issueKey` 会收到 `Ok`，UI 显示成功但什么都没改。
+    /// 三个命令都带 Tauri `AppHandle`，单测无法直接调用，故用**源码静态断言**守住调用点
+    /// （与前端用 `?raw` 做样式静态断言同一手法）。反向验证：把任一处的
+    /// `require_affected` 调用删掉，计数降到 2，用例失败。
+    #[test]
+    fn write_commands_check_affected_rows() {
+        let src = include_str!("commands.rs");
+        // 拼接 needle，避免静态断言把「断言自身」也数进去。
+        let needle = ["crate::common::", "require_affected("].concat();
+        let guarded = src.matches(&needle).count();
+        assert!(
+            guarded >= 3,
+            "update_task_status / record_session / set_work_branch 都应走 require_affected，实测仅 {guarded} 处"
         );
     }
 }

@@ -307,11 +307,15 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
     // 顺序依赖：migrate_legacy_alters 必须先跑，保证老表已补齐 gh_status/assignees
     // 等列，重建的 INSERT..SELECT 才能读到。
     let needs_v2 = if tasks_uses_legacy_key(&conn) {
+        // 物理重建自带事务，成功时已在事务内把 user_version 置 2；失败则保持原值，
+        // 下次启动重试（残留的 tasks_new 由函数开头的 DROP IF EXISTS 自愈）。
         migrate_tasks_v2_rebuild(&conn).is_ok()
     } else {
         schema_ver < 1
     };
     if needs_v2 {
+        // 幂等兜底：非 legacy-key 的旧库（仅 user_version<1）也需要推进到 2。
+        // legacy-key 路径已在事务内写过一次，重复写无害。
         let _ = conn.pragma_update(None, "user_version", 2);
     }
     // 以下默认设置与各版本表级迁移（每次建连都跑，全部幂等；列补齐已由上面的版本门控处理）。
@@ -512,10 +516,24 @@ fn tasks_uses_legacy_key(conn: &Connection) -> bool {
 /// 老表 key 为全局主键，因此 (repo, number) 全局唯一，INSERT..SELECT 不会撞
 /// UNIQUE(repo, number, account_id)。DROP 连同老表上的索引一起删除，
 /// 故 RENAME 后需重建 tasks 的全部索引（含 SCHEMA 末尾的 board/status_done_at 复合索引）。
+///
+/// #328：**整段必须在一个事务里**。`execute_batch` 不做隐式事务（rusqlite 只是逐条
+/// `prepare` + `step`），故原写法里 `DROP TABLE tasks` 与 `ALTER … RENAME` 是两次独立
+/// 提交，有两类后果：
+/// ① 两步之间进程被杀 / 断电 → `tasks` 丢失、数据滞留 `tasks_new`；下次启动
+///    `CREATE TABLE IF NOT EXISTS tasks` 重建**空表**，本地态（status / session_* /
+///    handoff / work_branch / work_dir）永久丢失；
+/// ② 中途失败残留 `tasks_new` 后，本次及此后每次 `CREATE TABLE tasks_new` 都报
+///    「table tasks_new already exists」→ `tasks` 又始终带旧 `key` 列 ⇒ 后续查询报
+///    `no such column: issue_key`，而日志只有默认静默的 `tlog!`，无自愈路径。
+///
+/// 现在：开头 `DROP TABLE IF EXISTS tasks_new` 自愈上次的残留，`BEGIN IMMEDIATE … COMMIT`
+/// 保证原子，`user_version` 也在同一事务内推进（不再出现「已重建但版本未记」）。
 fn migrate_tasks_v2_rebuild(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(
-        r#"
-        CREATE TABLE tasks_new (
+    const REBUILD_SQL: &str = r#"
+        DROP TABLE IF EXISTS tasks_new;
+        BEGIN IMMEDIATE;
+        CREATE TABLE IF NOT EXISTS tasks_new (
           id             INTEGER PRIMARY KEY,
           issue_key      TEXT NOT NULL,
           owner          TEXT NOT NULL,
@@ -570,9 +588,15 @@ fn migrate_tasks_v2_rebuild(conn: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_tasks_account ON tasks(account_id);
         CREATE INDEX IF NOT EXISTS idx_tasks_board ON tasks(account_id, candidate_done, status, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_tasks_status_done_at ON tasks(status, done_at);
-        "#,
-    )
-    .map_err(|e| format!("tasks 表重建失败: {}", e))?;
+        PRAGMA user_version = 2;
+        COMMIT;
+        "#;
+    if let Err(e) = conn.execute_batch(REBUILD_SQL) {
+        // 显式回滚：execute_batch 不替调用方收尾，失败时连接会一直挂在未提交事务里，
+        // 后续 open_db 的写入会被卷进同一事务、或拖到进程退出时才被动回滚。
+        let _ = conn.execute_batch("ROLLBACK;");
+        return Err(format!("tasks 表重建失败: {}", e));
+    }
     if crate::common::verbose_enabled() {
         crate::tlog!("[db] tasks 表 v0.3.50 物理重建完成（id + issue_key + 复合唯一键 + updated_at INTEGER）");
     }
@@ -1152,18 +1176,22 @@ pub fn resolve_project_write_target(
     account_id: i64,
     issue_key: &str,
 ) -> Result<ProjectWriteTarget, String> {
-    let row: Option<(String, String, String, String)> = conn
-        .query_row(
-            "SELECT pi.project_github_id, p.name, pi.item_id, p.status_field_id
+    let row: Option<(String, String, String, String)> = match conn.query_row(
+        "SELECT pi.project_github_id, p.name, pi.item_id, p.status_field_id
              FROM project_items pi
              JOIN projects p ON p.account_id = pi.account_id AND p.github_id = pi.project_github_id
              WHERE pi.account_id = ?1 AND pi.issue_key = ?2
              ORDER BY p.number_of_items DESC LIMIT 1",
-            rusqlite::params![account_id, issue_key],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )
-        .map(Some)
-        .unwrap_or(None);
+        rusqlite::params![account_id, issue_key],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    ) {
+        Ok(v) => Some(v),
+        // #328：只把「查不到行」映射为 None。其余错误（no such table / 类型不符 / IO）
+        // 必须带原文上抛——原来的 `.map(Some).unwrap_or(None)` 会把真实 schema 故障
+        // 折叠成「不在任何 Project 中（或同步尚未拉取条目 id）」，把排障引向无效的「再同步一次」。
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(format!("查询任务 {issue_key} 的写回目标失败: {e}")),
+    };
     match row {
         None => Err(format!(
             "任务 {issue_key} 不在任何 Project 中（或同步尚未拉取条目 id），无法写回状态"
@@ -1187,15 +1215,22 @@ pub fn project_option_id(
     project_github_id: &str,
     name: &str,
 ) -> Result<String, String> {
-    let id: Option<String> = conn
-        .query_row(
-            "SELECT option_id FROM project_statuses
+    // #328：同 `resolve_project_write_target`——只把「查不到行」当「没有该选项」，
+    // 其余 DB 错误上抛，避免把 `no such table` 之类报成「选项名不存在」。
+    let id: Option<String> = match conn.query_row(
+        "SELECT option_id FROM project_statuses
              WHERE account_id = ?1 AND project_github_id = ?2 AND name = ?3",
-            rusqlite::params![account_id, project_github_id, name],
-            |r| r.get(0),
-        )
-        .map(Some)
-        .unwrap_or(None);
+        rusqlite::params![account_id, project_github_id, name],
+        |r| r.get(0),
+    ) {
+        Ok(v) => Some(v),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => {
+            return Err(format!(
+                "查询项目 {project_github_id} 的状态选项「{name}」失败: {e}"
+            ))
+        }
+    };
     match id {
         Some(s) if !s.is_empty() => Ok(s),
         _ => {
@@ -2750,5 +2785,116 @@ mod tests {
         assert_eq!(clear_api_logs(&conn).unwrap(), 0);
         drop(conn);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    // ========================================================================
+    // #328：tasks v2 物理重建的原子性 / 自愈，以及写回查询错误不被吞
+    // ========================================================================
+
+    /// 老布局（含 `key` 列）旧库上跑 v2 重建：残留的 `tasks_new` 必须被自愈清掉，
+    /// 数据与本地态完整搬迁，且 `user_version` 在同一事务内推进到 2。
+    ///
+    /// 反向验证：去掉 SQL 开头的 `DROP TABLE IF EXISTS tasks_new` 后，重建会因
+    /// 「table tasks_new already exists」失败（本用例 `unwrap()` 即 panic）；
+    /// 去掉 `PRAGMA user_version = 2` 后最后一个断言失败。
+    #[test]
+    fn tasks_v2_rebuild_heals_leftover_tasks_new() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE tasks (
+                key TEXT PRIMARY KEY, owner TEXT NOT NULL, repo TEXT NOT NULL, number INTEGER NOT NULL,
+                title TEXT NOT NULL, url TEXT NOT NULL, gh_state TEXT NOT NULL, ownership TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'todo', session_id TEXT, session_agent TEXT, session_at INTEGER,
+                candidate_done INTEGER NOT NULL DEFAULT 0, stale INTEGER NOT NULL DEFAULT 0,
+                gh_status TEXT NOT NULL DEFAULT '', assignees TEXT NOT NULL DEFAULT '',
+                labels TEXT NOT NULL DEFAULT '', done_at INTEGER NOT NULL DEFAULT 0,
+                mentioned INTEGER NOT NULL DEFAULT 0, comments_count INTEGER NOT NULL DEFAULT 0,
+                latest_comment_url TEXT NOT NULL DEFAULT '', pr_number INTEGER NOT NULL DEFAULT 0,
+                pr_url TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL DEFAULT '',
+                work_branch TEXT NOT NULL DEFAULT '', handoff TEXT NOT NULL DEFAULT '',
+                updated_at TEXT, synced_at INTEGER NOT NULL, account_id INTEGER NOT NULL DEFAULT 1
+            );
+            -- 模拟「上次重建中途失败」留下的残骸
+            CREATE TABLE tasks_new (bogus TEXT);
+            INSERT INTO tasks (key, owner, repo, number, title, url, gh_state, ownership, status,
+                               work_branch, handoff, updated_at, synced_at)
+            VALUES ('o/r#1', 'o', 'r', 1, 't', 'u', 'open', 'notassignee', 'doing',
+                    'feature/x', '交接内容', '2026-01-01T00:00:00Z', 100);
+            "#,
+        )
+        .unwrap();
+
+        migrate_tasks_v2_rebuild(&conn).expect("带残留的库必须能自愈并完成重建");
+
+        let leftover: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'tasks_new'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(leftover, 0, "残留的 tasks_new 必须被清掉");
+
+        let (k, status, wb, handoff, updated_at): (String, String, String, String, i64) = conn
+            .query_row(
+                "SELECT issue_key, status, work_branch, handoff, updated_at FROM tasks",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .expect("数据必须完整搬迁");
+        assert_eq!(k, "o/r#1");
+        assert_eq!(status, "doing", "本地手动态不能被重建丢掉");
+        assert_eq!(wb, "feature/x", "agent 工作分支不能被重建丢掉");
+        assert_eq!(handoff, "交接内容", "handoff 不能被重建丢掉");
+        assert_eq!(updated_at, 1_767_225_600, "RFC3339 应转成 Unix 秒");
+
+        let legacy_key: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'key'")
+            .unwrap()
+            .exists([])
+            .unwrap();
+        assert!(!legacy_key, "重建后不应再有 key 列");
+
+        let ver: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(ver, 2, "user_version 应在重建事务内推进");
+    }
+
+    /// 写回目标查询只把「没有行」当「不在任何 Project 中」；真实 DB 故障必须带原文上抛。
+    /// 反向验证：把 `.map(Some).unwrap_or(None)` 换回来后，前两个断言失败。
+    #[test]
+    fn resolve_write_target_surfaces_db_errors_instead_of_hiding_them() {
+        let conn = Connection::open_in_memory().unwrap();
+        // 一张表都没建：真实故障是「表不存在」，不能被折叠成「不在任何 Project 中」。
+        let err = resolve_project_write_target(&conn, 1, "o/r#1").unwrap_err();
+        assert!(err.contains("no such table"), "{err}");
+        assert!(
+            !err.contains("不在任何 Project 中"),
+            "DB 故障不能被伪装成业务结论: {err}"
+        );
+
+        let err = project_option_id(&conn, 1, "PVT_x", "Done").unwrap_err();
+        assert!(err.contains("no such table"), "{err}");
+    }
+
+    /// 对照组：表在、只是查不到该 issue 时，仍按原语义报「不在任何 Project 中」。
+    #[test]
+    fn resolve_write_target_keeps_missing_row_semantics() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE project_items (account_id INTEGER, project_github_id TEXT, issue_key TEXT, item_id TEXT);
+            CREATE TABLE projects (account_id INTEGER, github_id TEXT, name TEXT, status_field_id TEXT, number_of_items INTEGER);
+            CREATE TABLE project_statuses (account_id INTEGER, project_github_id TEXT, option_id TEXT, name TEXT, order_index INTEGER);
+            "#,
+        )
+        .unwrap();
+        let err = resolve_project_write_target(&conn, 1, "o/r#1").unwrap_err();
+        assert!(err.contains("不在任何 Project 中"), "{err}");
+
+        let err = project_option_id(&conn, 1, "PVT_x", "Done").unwrap_err();
+        assert!(err.contains("Done"), "找不到选项名时应列出可用选项: {err}");
     }
 }
