@@ -864,40 +864,57 @@ impl GitHubClient {
         Ok(out)
     }
 
+    /// #327：组织级 projectsV2 查询串（抽成纯函数以便单测查询形状）。
+    fn org_projects_query(org: &str) -> String {
+        format!(
+            r#"query {{ organization(login:"{org}") {{ projectsV2(first:100, orderBy:{{field:UPDATED_AT,direction:DESC}}) {{ nodes {{ id title number closed items {{ totalCount }} }} }} }} }}"#
+        )
+    }
+
+    /// #327：用户级 projectsV2 查询串。
+    fn user_projects_query(login: &str) -> String {
+        format!(
+            r#"query {{ user(login:"{login}") {{ projectsV2(first:100, orderBy:{{field:UPDATED_AT,direction:DESC}}) {{ nodes {{ id title number closed items {{ totalCount }} }} }} }} }}"#
+        )
+    }
+
+    /// #327：解析 projectsV2 `nodes` → `(github_id, title, 条目数, owner_type)`。
+    ///
+    /// 条目数取 `items.totalCount`。**不能**取 `number` —— 那是项目编号（如 #20），
+    /// 曾因此把 `projects.number_of_items` 存成编号，使
+    /// `resolve_project_write_target` 的 `ORDER BY number_of_items DESC`
+    /// 退化成「按项目编号选」，多 Project 时写错写回目标。
+    fn parse_projects_nodes(
+        nodes: &[serde_json::Value],
+        owner_type: &str,
+    ) -> Vec<(String, String, i64, String)> {
+        let mut out: Vec<(String, String, i64, String)> = Vec::new();
+        for n in nodes {
+            if n["closed"].as_bool() == Some(true) {
+                continue;
+            }
+            if let (Some(id), Some(title)) = (n["id"].as_str(), n["title"].as_str()) {
+                let num = n["items"]["totalCount"].as_i64().unwrap_or(0);
+                out.push((id.to_string(), title.to_string(), num, owner_type.to_string()));
+            }
+        }
+        out
+    }
+
     pub fn fetch_all_projects(&self) -> Result<Vec<(String, String, i64, String)>, String> {
         let mut out: Vec<(String, String, i64, String)> = Vec::new();
 
         // 1) 组织级 projectsV2
-        let org_q = format!(
-            r#"query {{ organization(login:"{org}") {{ projectsV2(first:100, orderBy:{{field:UPDATED_AT,direction:DESC}}) {{ nodes {{ id title number closed }} }} }} }}"#,
-            org = self.org
-        );
-        if let Ok(v) = self.graphql(&org_q) {
+        if let Ok(v) = self.graphql(&Self::org_projects_query(&self.org)) {
             if let Some(nodes) = v["data"]["organization"]["projectsV2"]["nodes"].as_array() {
-                for n in nodes {
-                    if n["closed"].as_bool() == Some(true) { continue; }
-                    if let (Some(id), Some(title)) = (n["id"].as_str(), n["title"].as_str()) {
-                        let num = n["number"].as_i64().unwrap_or(0);
-                        out.push((id.to_string(), title.to_string(), num, "org".to_string()));
-                    }
-                }
+                out.extend(Self::parse_projects_nodes(nodes, "org"));
             }
         }
 
         // 2) 用户级 projectsV2
-        let user_q = format!(
-            r#"query {{ user(login:"{login}") {{ projectsV2(first:100, orderBy:{{field:UPDATED_AT,direction:DESC}}) {{ nodes {{ id title number closed }} }} }} }}"#,
-            login = self.login
-        );
-        if let Ok(v) = self.graphql(&user_q) {
+        if let Ok(v) = self.graphql(&Self::user_projects_query(&self.login)) {
             if let Some(nodes) = v["data"]["user"]["projectsV2"]["nodes"].as_array() {
-                for n in nodes {
-                    if n["closed"].as_bool() == Some(true) { continue; }
-                    if let (Some(id), Some(title)) = (n["id"].as_str(), n["title"].as_str()) {
-                        let num = n["number"].as_i64().unwrap_or(0);
-                        out.push((id.to_string(), title.to_string(), num, "user".to_string()));
-                    }
-                }
+                out.extend(Self::parse_projects_nodes(nodes, "user"));
             }
         }
 
@@ -1759,6 +1776,50 @@ fn urlencode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #327：项目条目数必须取 `items.totalCount`，不能取 `number`（那是项目编号）。
+    ///
+    /// 回归：此前误把 `number` 存进 `projects.number_of_items`，使
+    /// `resolve_project_write_target` 的 `ORDER BY number_of_items DESC`
+    /// 退化成「按项目编号排序」→ 多 Project 时写错写回目标。
+    #[test]
+    fn parse_projects_nodes_uses_total_count_not_number() {
+        let nodes = vec![
+            serde_json::json!({
+                "id": "PVT_a", "title": "OMS Kanban", "number": 20,
+                "closed": false, "items": { "totalCount": 273 }
+            }),
+            serde_json::json!({
+                "id": "PVT_b", "title": "untitled", "number": 21,
+                "closed": false, "items": { "totalCount": 0 }
+            }),
+            serde_json::json!({
+                "id": "PVT_c", "title": "closed", "number": 99,
+                "closed": true, "items": { "totalCount": 5 }
+            }),
+        ];
+        let out = GitHubClient::parse_projects_nodes(&nodes, "org");
+        assert_eq!(out.len(), 2, "closed 项目应被跳过");
+        assert_eq!(out[0].0, "PVT_a");
+        assert_eq!(out[0].2, 273, "应取 items.totalCount，而非 number(20)");
+        assert_eq!(out[1].2, 0, "空项目应为 0，而非编号 21");
+        assert_eq!(out[0].3, "org");
+
+        // 缺 items 字段时回落 0，不 panic
+        let empty = GitHubClient::parse_projects_nodes(
+            &[serde_json::json!({ "id": "PVT_d", "title": "no items", "closed": false })],
+            "user",
+        );
+        assert_eq!(empty[0].2, 0);
+        assert_eq!(empty[0].3, "user");
+    }
+
+    /// #327：两处查询串都必须请求 `items { totalCount }`，否则解析不到真实条目数。
+    #[test]
+    fn projects_queries_request_total_count() {
+        assert!(GitHubClient::org_projects_query("acme").contains("items { totalCount }"));
+        assert!(GitHubClient::user_projects_query("me").contains("items { totalCount }"));
+    }
 
     /// #214：认领 URL 与写错误映射（纯函数，不碰网络）。
     #[test]

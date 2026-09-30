@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
-import { useI18n } from '../i18n';
+import { useI18n, type LangMode } from '../i18n';
 import type { Account, AccountColumn, BoardMode, Project, Settings } from '../types';
 import { themeManager, type ThemeMode } from '../theme';
 
@@ -67,7 +67,7 @@ interface AccountEditState {
 }
 
 export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
-  const { t } = useI18n();
+  const { t, mode: langMode, setMode: setLangMode } = useI18n();
   const [themeMode, setThemeMode] = useState<ThemeMode>(themeManager.getMode());
   const [minutes, setMinutes] = useState(settings.scheduleMinutes);
   const [ghPath, setGhPath] = useState(settings.ghPath);
@@ -384,15 +384,15 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
           </div>
 
           <div className="field">
-            <label>{t('settings.theme')}</label>
+            <label>{t('settings.language')}</label>
             <select
               className="select"
-              value={themeMode}
-              onChange={(e) => handleThemeChange(e.target.value as 'auto' | 'light' | 'dark')}
+              value={langMode}
+              onChange={(e) => setLangMode(e.target.value as LangMode)}
             >
-              <option value="auto">{t('settings.themeAuto')}</option>
-              <option value="light">{t('settings.themeLight')}</option>
-              <option value="dark">{t('settings.themeDark')}</option>
+              <option value="auto">{t('settings.langAuto')}</option>
+              <option value="zh-CN">{t('settings.langZh')}</option>
+              <option value="en-US">{t('settings.langEn')}</option>
             </select>
           </div>
 
