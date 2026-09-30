@@ -916,3 +916,113 @@ fn migration_v4_normalizes_issue_state_and_repairs_closed_status() {
         db::SCHEMA_VERSION
     );
 }
+
+/// #340：崩溃残留的 `tasks_new` 必须被回收，用户数据不丢。
+///
+/// 缺陷现场：`migrate_tasks_v2_rebuild` 的事务在 `DROP TABLE tasks` 与
+/// `ALTER TABLE tasks_new RENAME TO tasks` 之间被杀/断电 ⇒ 库里留下
+/// **`tasks` 缺失、`tasks_new` 保有全量数据**。
+///
+/// 此前该状态无法自愈：`fresh = !table_exists(tasks)` 为真 ⇒ 跳过重建分支 ⇒
+/// #328 加在重建函数开头的 `DROP TABLE IF EXISTS tasks_new` 永不可达 ⇒
+/// 随后 `SCHEMA` 建出空 `tasks`、结构检查通过、`user_version` 盖到最新 ⇒
+/// 迁移此后再不重跑 ⇒ status / session_* / handoff / work_branch 永久丢失。
+///
+/// 修复前实测（探针）：
+/// ```text
+/// after-open:     tasks_visible=0  orphan_tasks_new=1  user_version=4
+/// after-2nd-open: tasks_visible=0  orphan_tasks_new=1  user_version=4   ← 不自愈
+/// ```
+///
+/// **反向验证**：删掉 `open_db` 里的探测块后本例必然失败。
+#[test]
+fn open_db_recovers_orphaned_tasks_new_after_crash() {
+    let dir = tempdir();
+    let path = dir.join("taskboard.db");
+
+    // ── 构造崩溃窗口①：DROP 已提交、RENAME 未执行。
+    // user_version 置为最新 ⇒ 模拟「重建已完成、只是版本号已落」，
+    // 逼真地复现「结构检查通过 ⇒ 迁移此后再不重跑」。
+    {
+        // 用**真实** tasks 布局造残留表：从一个正常库建出 tasks，塞数据后改名。
+        // （手写精简列名不真实 —— 那样 SCHEMA 的 CREATE INDEX 会先失败，
+        //   测到的就不是「数据丢失」而是另一个问题了。）
+        let conn = db::open_db(&path).expect("构造底库必须成功");
+        conn.execute(
+            "INSERT INTO tasks (issue_key, owner, repo, number, title, url,
+                                issue_state, ownership, status, handoff, synced_at)
+             VALUES (?1, 'o', 'r', 1, '残留行', 'https://github.com/o/r/issues/1',
+                     'open', 'assigned', ?2, ?3, 1700000000)",
+            ["o/r#1", "doing", "IMPORTANT HANDOFF"],
+        )
+        .unwrap();
+        // 模拟重建事务停在 DROP TABLE tasks（已提交）与 RENAME（未执行）之间
+        conn.execute_batch("ALTER TABLE tasks RENAME TO tasks_new;")
+            .unwrap();
+        conn.pragma_update(None, "user_version", db::SCHEMA_VERSION)
+            .unwrap();
+    }
+
+    // ── 打开：模拟用户下次启动 App
+    let conn = db::open_db(&path).expect("open_db 必须成功");
+    let count = |q: &str| -> i64 { conn.query_row(q, [], |r| r.get(0)).unwrap() };
+    let one = |q: &str| -> String { conn.query_row(q, [], |r| r.get(0)).unwrap() };
+
+    // ① 数据可见并完整 —— 本例的核心断言
+    assert_eq!(
+        count("SELECT COUNT(*) FROM tasks"),
+        1,
+        "残留 tasks_new 的数据必须被恢复，不得静默丢失"
+    );
+    assert_eq!(
+        one("SELECT handoff FROM tasks WHERE issue_key='o/r#1'"),
+        "IMPORTANT HANDOFF",
+        "本地态 handoff 必须完整恢复"
+    );
+    assert_eq!(
+        one("SELECT status FROM tasks WHERE issue_key='o/r#1'"),
+        "doing",
+        "本地手动态必须恢复（不得被默认 todo 覆盖）"
+    );
+
+    // ② tasks_new 不再残留（已被 RENAME 消费掉）
+    let orphan_tables: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tasks_new'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(orphan_tables, 0, "tasks_new 应已被 RENAME 消费");
+
+    // ③ 恢复出的表被补齐到当前 schema（missing_columns / MIGRATION_DDL 收敛）
+    for col in [
+        "session_id",
+        "work_branch",
+        "work_dir",
+        "issue_state",
+        "account_id",
+    ] {
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = ?1",
+                [col],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "恢复后的 tasks 必须补齐列 {col}");
+    }
+
+    // ── 幂等：再次打开不重复恢复、不报错、数据仍在
+    drop(conn);
+    let conn2 = db::open_db(&path).expect("二次 open_db 必须成功");
+    assert_eq!(
+        conn2
+            .query_row("SELECT COUNT(*) FROM tasks", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1,
+        "二次打开后数据应保持不变"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
