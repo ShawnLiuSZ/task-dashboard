@@ -4,6 +4,7 @@ import { AGENTS, agentLabel } from '../agents';
 import { type ProjectStatus, type Task } from '../types';
 import { fmtTime, useI18n } from '../i18n';
 import ConfirmDialog from './ConfirmDialog';
+import { registerEscLayer, type EscLayer } from '../utils/escLayer';
 
 interface Props {
   task: Task;
@@ -26,8 +27,15 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
   // 「已复制」提示的复位定时器：组件的卸载（切换任务、关闭面板）时需清理，
   // 避免定时器在其后触发 setCopiedKey（在已卸载组件上 setState）。
   const copiedTimer = useRef<number | null>(null);
+  // #329：本面板注册为 Esc 层。确认框（面板的子组件）后注册即为最上层，
+  // 此时面板不再响应 Esc——否则「取消确认」会连带把整个详情面板关掉。
+  const escLayer = useRef<EscLayer | null>(null);
   useEffect(() => {
+    const layer = registerEscLayer();
+    escLayer.current = layer;
     return () => {
+      layer.release();
+      escLayer.current = null;
       if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
     };
   }, []);
@@ -91,7 +99,8 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
       aria-modal="true"
       aria-label={`${task.repo}#${task.number}`}
       onKeyDown={(e) => {
-        if (e.key === 'Escape') onClose();
+        // #329：确认框叠在面板之上时不响应 Esc（见 escLayer 注册处说明）。
+        if (e.key === 'Escape' && escLayer.current?.isTop()) onClose();
       }}
     >
       <div className="detail-head">

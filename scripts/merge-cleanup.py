@@ -48,12 +48,30 @@ CLOSE_RE = re.compile(
     # 改用「前面不是 `\w` **或** 前面是汉字」，两种情况都放行。
     r"(?i)(?:(?<!\w)|(?<=[\u4e00-\u9fff]))"
     r"(?:closes?|closed|fixes?|fixed|resolves?|resolved|refs?|references?|关闭|解决|修复)"
-    r"\s*[:：]?\s*#\s*([1-9]\d{0,5})(?!\d)"
-    r"(?:\s*#\s*([1-9]\d{0,5})(?!\d))*"
+    r"\s*[:：]?\s*"
+    # #329：编号串整体捕获，**不再**用可重复捕获组。
+    # 原写法 `...(#?(\d+)(?!\d))*` 里 `(?:...)*` 是「重复的**非**捕获组」，内层
+    # `(\d+)` 每轮迭代都会覆盖前一轮的值，`m.groups()` 只剩「第一个 + 最后一个」
+    # ⇒ `"Closes #1 #2 #3"` 提取成 `[1, 3]`，**中间编号静默丢失**（不关 issue）。
+    # 现有单测只测了 2 个编号，恰好落在「第一个 + 最后一个 = 全部」的巧合区间里。
+    r"(#\s*[1-9]\d{0,5}(?!\d)(?:\s*#\s*[1-9]\d{0,5}(?!\d))*)"
 )
+
+# 从上面捕获到的编号串里逐个取出编号。
+ISSUE_NUM_RE = re.compile(r"#\s*([1-9]\d{0,5})")
 
 # 跳过删分支的标题标记：验证本 workflow 时会开一个标题带 test 的 PR，合并后不该真删分支。
 SKIP_DELETE_MARKERS = ("test", "draft")
+
+# #329：**必须按词/短语边界匹配**。原实现用的是 `m in title.lower()` 子串判断，
+# 于是 `chore: bump to latest deps` 里的 `latest` 命中 `test`，`contest` / `protest` /
+# `attest` 同理 —— 这类 PR 全部被判成「验证用 PR」而**静默跳过删分支**，分支越堆越多。
+# 边界定义为「前后不得是字母或数字」：`lat`+`est` 前面是字母 → 不匹配；
+# `test_workflow` / `test-PR` 前面是行首或非字母数字 → 仍匹配（保留原意）。
+SKIP_DELETE_RE = re.compile(
+    r"(?<![a-z0-9])(" + "|".join(SKIP_DELETE_MARKERS) + r")(?![a-z0-9])",
+    re.IGNORECASE,
+)
 
 
 def extract_issue_refs(title: str, body: str) -> list[int]:
@@ -72,8 +90,8 @@ def extract_issue_refs(title: str, body: str) -> list[int]:
             refs.append(v)
 
     for m in CLOSE_RE.finditer(body or ""):
-        vals = [g for g in m.groups() if g is not None]
-        for n in vals:
+        # #329：逐个扫描编号串（而非依赖 `m.groups()`），保证中间编号也不丢。
+        for n in ISSUE_NUM_RE.findall(m.group(1)):
             v = int(n)
             if v not in seen:
                 seen.add(v)
@@ -258,7 +276,10 @@ def main(argv: list[str] | None = None) -> int:
     if head_repo != args.repo:
         print(f"跳过删分支：源分支属于 fork（{head_repo}），不是 {args.repo} 的分支")
     else:
-        markers = [m for m in SKIP_DELETE_MARKERS if m in (pr_title or "").lower()]
+        # #329：按词/短语边界匹配，避免 `latest` 里的子串 `test` 误判。
+        markers = sorted(
+            {m.group(0).lower() for m in SKIP_DELETE_RE.finditer(pr_title or "")}
+        )
         if markers:
             print(f"跳过删分支：PR 标题含标记 {markers}，保留分支便于验证 workflow 本身")
         elif args.dry_run:

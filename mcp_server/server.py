@@ -140,24 +140,107 @@ def parse_issue_ref(ref):
 _conn = None
 
 
+def table_columns(c, name):
+    """返回 `name` 表的列名集合；表不存在（或 PRAGMA 不可用）返回 `None`。"""
+    try:
+        rows = c.execute(f"PRAGMA table_info({name})").fetchall()
+    except sqlite3.OperationalError:
+        return None
+    if not rows:
+        return None
+    # row_factory 可能是 sqlite3.Row，索引访问仍可用。
+    return {r[1] for r in rows}
+
+
+# #329：`ensure_schema` 必须能补齐**每一个**被读写的列。
+#
+# 历史教训（#169 -> #262 -> #278）：给 `SELECT_COLS` 加了列却忘了在这里补 ALTER，
+# 症状只出现在「Python MCP 首次打开一个尚未被 App 迁移过的旧库」这一条路径上
+# （`no such column: xxx`），App 本身完全正常、`pytest`/`cargo test` 也测不到。
+# 本清单现在由 `scripts/check-mcp-columns.py` 断言「⊇ SELECT_COLS 的全部列」，
+# 以后再往 SELECT_COLS 加列而漏改这里，PR 阶段就会红。
+#
+# 包含 SELECT_COLS 生成前就存在的核心列（issue_key/owner/repo/...）并无实际作用
+# ——它们在任何真实库里都存在，ALTER 会以「duplicate column」被忽略。列在这里是为了
+# 让「清单完备性」变成一条可机械校验的约束，而不是靠人记。
+#
+# 注意：**不能**靠这里完成 v0.3.50 的物理重建（key→issue_key、gh_state→issue_state）。
+# 那种历史布局由 `ensure_schema` 开头的探测直接拒绝，要求先启动一次 App。
+ENSURE_COLUMNS = (
+    ("issue_key", "TEXT NOT NULL DEFAULT ''"),
+    ("owner", "TEXT NOT NULL DEFAULT ''"),
+    ("repo", "TEXT NOT NULL DEFAULT ''"),
+    ("number", "INTEGER NOT NULL DEFAULT 0"),
+    ("title", "TEXT NOT NULL DEFAULT ''"),
+    ("url", "TEXT NOT NULL DEFAULT ''"),
+    ("issue_state", "TEXT NOT NULL DEFAULT ''"),
+    ("ownership", "TEXT NOT NULL DEFAULT ''"),
+    ("status", "TEXT NOT NULL DEFAULT 'todo'"),
+    ("project_status", "TEXT NOT NULL DEFAULT ''"),
+    ("assignees", "TEXT NOT NULL DEFAULT ''"),
+    ("mentioned", "INTEGER NOT NULL DEFAULT 0"),
+    ("latest_comment_url", "TEXT NOT NULL DEFAULT ''"),
+    ("pr_number", "INTEGER NOT NULL DEFAULT 0"),
+    ("pr_url", "TEXT NOT NULL DEFAULT ''"),
+    ("branch", "TEXT NOT NULL DEFAULT ''"),
+    ("work_branch", "TEXT NOT NULL DEFAULT ''"),
+    ("work_dir", "TEXT NOT NULL DEFAULT ''"),
+    ("session_id", "TEXT"),
+    ("session_agent", "TEXT"),
+    ("session_at", "INTEGER"),
+    ("handoff", "TEXT NOT NULL DEFAULT ''"),
+    ("candidate_done", "INTEGER NOT NULL DEFAULT 0"),
+    ("account_id", "INTEGER NOT NULL DEFAULT 0"),
+    ("updated_at", "INTEGER"),
+    ("parent_issue", "TEXT NOT NULL DEFAULT ''"),
+    ("sub_issues", "TEXT NOT NULL DEFAULT ''"),
+    ("created_at", "INTEGER NOT NULL DEFAULT 0"),
+    # 不在 SELECT_COLS 里、但按需拉取/写入路径会碰的列（见 TASK_INSERT_COLS 与
+    # Rust `db.rs::TASK_INSERT_HEAD`）。
+    ("author", "TEXT NOT NULL DEFAULT ''"),
+    ("labels", "TEXT NOT NULL DEFAULT ''"),
+    ("done_at", "INTEGER NOT NULL DEFAULT 0"),
+    ("comments_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("stale", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+# v0.3.50 物理重建（#155）之前的列名。Python MCP 不做表重建，遇到这些列直接拒绝服务。
+LEGACY_TASKS_COLUMNS = ("key", "gh_state", "gh_status")
+
+
 def ensure_schema(c):
-    """幂等补齐应用新增列（与 Tauri 后端 db.rs::init 的迁移一致）。
-    即使 TaskBoard App 尚未启动过，MCP Server 也能直接读写既有数据库。
+    """幂等补齐 Python MCP 读写路径需要的列（与 Tauri 后端 db.rs 的迁移对齐）。
+
+    #329 修正了两个问题：
+
+    1. **清单不全**：原实现只 ALTER 了 10 列，而 `SELECT_COLS` 要读 28 列 ——
+       `assignees` / `mentioned` / `latest_comment_url` / `pr_number` / `pr_url` /
+       `work_dir` / `created_at` 等 7 列在从未启动过 App 的旧库上直接
+       `no such column`，与下面这句「App 尚未启动过也能直接读写」的承诺不符。
+       现改为由 `ENSURE_COLUMNS` 覆盖全部列，并由 CI 断言清单完备。
+
+    2. **旧布局静默失败**：遇到 v0.3.50 之前的库（含 `key` / `gh_state`）时，
+       原来会「补一堆列再以 `no such column: issue_key` 报错」，把「schema 太旧」
+       误报成「列名不存在」。现在显式探测并给出可操作提示。
     """
-    for col_sql in (
-        "ALTER TABLE tasks ADD COLUMN branch TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN handoff TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN project_status TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN candidate_done INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE tasks ADD COLUMN account_id INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE tasks ADD COLUMN work_branch TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN author TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN comments_count INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE tasks ADD COLUMN parent_issue TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN sub_issues TEXT NOT NULL DEFAULT ''",
-    ):
+    cols = table_columns(c, "tasks")
+    if cols is None:
+        raise RuntimeError(
+            "数据库里没有 `tasks` 表 —— 请先运行一次 TaskBoard App 初始化数据库。"
+        )
+
+    legacy = sorted(cols.intersection(LEGACY_TASKS_COLUMNS))
+    if legacy:
+        raise RuntimeError(
+            "数据库仍是 v0.3.50 之前的旧布局（含 "
+            + " / ".join(legacy)
+            + " 列），Python MCP 不做表重建 —— "
+            "请先启动一次 TaskBoard App 完成迁移，再使用 MCP。"
+        )
+
+    for name, ddl in ENSURE_COLUMNS:
         try:
-            c.execute(col_sql)
+            c.execute(f"ALTER TABLE tasks ADD COLUMN {name} {ddl}")
         except sqlite3.OperationalError:
             pass  # 列已存在则忽略
 

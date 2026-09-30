@@ -21,6 +21,9 @@ export function taskListSignature(tasks: Task[]): string {
       .map((t) =>
         [
           t.issueKey,
+          // #329：聚合视图下同一 issue 可能来自两个账号（后端唯一键含 account_id），
+          // 不带 accountId 时两条记录会产出完全相同的行 → 指纹失真（换账号不刷新）。
+          t.accountId,
           t.status,
           t.ownership,
           t.title,

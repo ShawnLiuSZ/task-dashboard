@@ -355,7 +355,11 @@ fn tool_record_handoff(conn: &Connection, issue: &str, text: &str) -> Result<Val
     let (_, pulled) = write_with_on_demand(conn, &key, issue, || {
         crate::common::record_task_handoff(conn, &key, text)
     })?;
-    Ok(json!({ "ok": true, "issue_key": key, "handoff_len": text.len(), "pulled": pulled }))
+    // #329：`handoff_len` 统一为**字符数**（Unicode 码点），与 Python 侧
+    // `mcp_server/server.py::tool_record_handoff` 的 `len(text)` 一致。
+    // 原写法 `text.len()` 是 UTF-8 **字节**数 —— 同一份中文 handoff 在 Rust 侧返回 6、
+    // Python 侧返回 2，agent 按长度做校验 / 截断会得到互相矛盾的结论。
+    Ok(json!({ "ok": true, "issue_key": key, "handoff_len": text.chars().count(), "pulled": pulled }))
 }
 
 fn tool_clear_session(conn: &Connection, issue: &str) -> Result<Value, String> {
@@ -1203,5 +1207,29 @@ mod tests {
             ReadOutcome::Msg(v, Framing::ContentLength) => assert_eq!(v["method"], "ping"),
             _ => panic!("合法的 Content-Length 帧必须解析成功"),
         }
+    }
+
+    // ========================================================================
+    // #329：与 Python 侧 MCP 的字段契约
+    // ========================================================================
+
+    /// `handoff_len` 必须是**字符数**（Unicode 码点），与 Python 侧
+    /// `mcp_server/server.py::tool_record_handoff` 的 `len(text)` 一致。
+    ///
+    /// 反向验证：改回 `text.len()`（UTF-8 **字节**数）时，「交接」会报 6 而不是 2，
+    /// 第一条断言失败 —— 症状是两个 MCP 实现给 agent 返回互相矛盾的长度。
+    #[test]
+    fn handoff_len_counts_characters_not_bytes() {
+        let c = test_conn();
+        insert_sample(&c);
+        let v = tool_record_handoff(&c, "fad-backend#1247", "交接").unwrap();
+        assert_eq!(
+            v["handoff_len"].as_u64(),
+            Some(2),
+            "2 个汉字应报 2（字节数是 6）"
+        );
+        // ASCII 下字节数 == 字符数，作为对照说明原实现「碰巧对」的场景。
+        let v = tool_record_handoff(&c, "fad-backend#1247", "handoff").unwrap();
+        assert_eq!(v["handoff_len"].as_u64(), Some(7));
     }
 }

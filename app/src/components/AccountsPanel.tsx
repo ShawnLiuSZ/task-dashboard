@@ -3,6 +3,7 @@ import { api, openExternal } from '../api';
 import { useI18n } from '../i18n';
 import ConfirmDialog from './ConfirmDialog';
 import { formatCountdownSeconds } from '../utils/format';
+import { useEscLayer } from '../utils/useEscLayer';
 import type { Account, DeviceLoginStart, Settings } from '../types';
 
 interface Props {
@@ -12,6 +13,8 @@ interface Props {
 }
 
 export default function AccountsPanel({ settings, onClose, onAccountsChanged }: Props) {
+  // #329：Esc 分层——只有最上层响应 Esc（见 utils/escLayer.ts）。
+  const isEscTop = useEscLayer();
   const { t } = useI18n();
   const [accounts, setAccounts] = useState<Account[]>(settings.accounts);
   // 账号数据来自父级 settings：授权成功 / 设默认后父级会刷新 settings，
@@ -154,7 +157,8 @@ export default function AccountsPanel({ settings, onClose, onAccountsChanged }: 
         aria-modal="true"
         aria-label={t('accounts.title')}
         onKeyDown={(e) => {
-          if (e.key === 'Escape') onClose();
+          // #329：删除确认框叠上来时不响应 Esc（否则一次 Esc 同时关掉确认框与面板）。
+          if (e.key === 'Escape' && isEscTop()) onClose();
         }}
       >
         <h3 className="modal-title">{t('accounts.title')}</h3>

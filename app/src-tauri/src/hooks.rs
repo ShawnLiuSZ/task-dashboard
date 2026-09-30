@@ -1645,13 +1645,29 @@ pub fn uninstall_agent_hooks(
 }
 
 /// Tauri command：查询安装状态（供 UI 打勾）。
+///
+/// #329：本命令要遍历各 agent 的配置目录（大量 stat + 读文件），且 UI 在用户
+/// 每次输入 project targetDir 时都会调用 —— 作为同步命令会在 Tauri 主线程上跑完，
+/// 输入框明显卡顿。改 async + `spawn_blocking`：主线程仅派发即返回。
 #[tauri::command]
-pub fn get_agent_hooks_status(
+pub async fn get_agent_hooks_status(
     scope: String,
     target_dir: Option<String>,
     agents: Vec<String>,
 ) -> Result<StatusResult, String> {
-    let (global, project, list) = parse_request(&scope, target_dir, agents)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        agent_hooks_status_blocking(&scope, target_dir.as_deref(), &agents)
+    })
+    .await
+    .map_err(|e| format!("查询安装状态线程异常: {e}"))?
+}
+
+fn agent_hooks_status_blocking(
+    scope: &str,
+    target_dir: Option<&str>,
+    agents: &[String],
+) -> Result<StatusResult, String> {
+    let (global, project, list) = parse_request(scope, target_dir.map(|s| s.to_string()), agents.to_vec())?;
     let home = home_dir()?;
     let scope_s = if global { "global" } else { "project" };
     let target_s = project.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| home.display().to_string());

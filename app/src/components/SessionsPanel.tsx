@@ -3,6 +3,7 @@ import { api } from '../api';
 import ConfirmDialog from './ConfirmDialog';
 import { useT } from '../i18n';
 import type { Task } from '../types';
+import { taskIdentity } from '../utils/taskIdentity';
 
 function Icon({ d, size = 13 }: { d: string; size?: number }) {
   return (
@@ -95,11 +96,30 @@ export default function SessionsPanel() {
     void loadSessions();
   }, [loadSessions]);
 
-  const handleCopy = useCallback((text: string, key: string) => {
-    navigator.clipboard.writeText(text).then(() => {
+  // #329：与 DetailPanel 同款——`writeText` 在权限不足 / 非安全上下文会 reject，
+  // 原先既产生未处理拒绝又让「已复制」态卡住；定时器也要在卸载时清理，
+  // 否则切页后在已卸载组件上 setState。
+  const copiedTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+    },
+    [],
+  );
+
+  const handleCopy = useCallback(async (text: string, key: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
       setCopiedKey(key);
-      setTimeout(() => setCopiedKey(null), 1500);
-    });
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => {
+        setCopiedKey(null);
+        copiedTimer.current = null;
+      }, 1500);
+    } catch (e) {
+      console.error('复制失败:', e);
+      setCopiedKey(null);
+    }
   }, []);
 
   const handleOpenTask = useCallback((task: Task) => {
@@ -139,7 +159,7 @@ export default function SessionsPanel() {
               const colorIdx = (row + col) % 4;
               const borderColor = `var(--session-card-border-${colorIdx + 1})`;
               return (
-                <div key={task.issueKey} className="session-card" style={{ borderColor }}>
+                <div key={taskIdentity(task)} className="session-card" style={{ borderColor }}>
                   <div className="session-card-header">
                     <span className="session-card-title">
                       {t('sessions.title_format', {

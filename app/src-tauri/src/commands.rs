@@ -247,15 +247,21 @@ fn rows_to_tasks(conn: &Connection, ownership: Option<&str>, account_filter: Opt
 /// 取自 `accounts` 表（聚合视图取全部账号，单账号视图取过滤/激活账号）。
 /// **不读** `meta.login`——多账号模式下该遗留字段恒为空，会让此筛选恒返回空集。
 #[tauri::command]
-pub fn list_tasks(
+pub async fn list_tasks(
     app: AppHandle,
-    state: State<'_, AppState>,
     ownership: Option<String>,
     account_id: Option<i64>,
 ) -> Result<Vec<Task>, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let _ = app;
-    rows_to_tasks(&conn, ownership.as_deref(), account_id)
+    // #329：原为同步命令 → 在 Tauri 主线程上执行。本命令要读全表（行数无上限）并等
+    // `state.db` Mutex（同步 / 导入 / 扫描等长写事务持锁期间可长达秒级），主线程被堵住
+    // 就是 macOS beachball。改 async + spawn_blocking：主线程仅派发即返回。
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        rows_to_tasks(&conn, ownership.as_deref(), account_id)
+    })
+    .await
+    .map_err(|e| format!("读取任务线程异常: {e}"))?
 }
 
 #[tauri::command]
@@ -1848,41 +1854,48 @@ fn resolve_export_dir(target_dir: Option<&str>) -> Result<std::path::PathBuf, St
 }
 
 #[tauri::command]
-pub fn export_notes(
-    state: State<'_, AppState>,
+pub async fn export_notes(
+    app: AppHandle,
     target_dir: Option<String>,
 ) -> Result<ExportNotesResult, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let notes = crate::db::list_notes(&conn)?;
+    // #329：读全表 + pretty 序列化 + 落盘，同步命令会在主线程跑完，导出大库时明显卡顿。
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let notes = crate::db::list_notes(&conn)?;
 
-    let dir = resolve_export_dir(target_dir.as_deref())?;
+        let dir = resolve_export_dir(target_dir.as_deref())?;
 
-    let now = crate::sync::now_secs();
-    let ts = format!(
-        "{}{}",
-        time_str(now, "%Y%m%d"),
-        time_str(now, "%H%M%S")
-    );
-    let path = dir.join(format!("notes-backup-{ts}.json"));
+        let now = crate::sync::now_secs();
+        let ts = format!(
+            "{}{}",
+            time_str(now, "%Y%m%d"),
+            time_str(now, "%H%M%S")
+        );
+        let path = dir.join(format!("notes-backup-{ts}.json"));
 
-    #[derive(serde::Serialize)]
-    struct Payload<'a> {
-        version: u32,
-        exported_at: i64,
-        notes: &'a [crate::db::Note],
-    }
-    let payload = Payload {
-        version: 1,
-        exported_at: now,
-        notes: &notes,
-    };
-    let json = serde_json::to_string_pretty(&payload).map_err(|e| format!("序列化失败: {e}"))?;
-    std::fs::write(&path, json).map_err(|e| format!("写入导出文件失败: {e}"))?;
+        #[derive(serde::Serialize)]
+        struct Payload<'a> {
+            version: u32,
+            exported_at: i64,
+            notes: &'a [crate::db::Note],
+        }
+        let payload = Payload {
+            version: 1,
+            exported_at: now,
+            notes: &notes,
+        };
+        let json =
+            serde_json::to_string_pretty(&payload).map_err(|e| format!("序列化失败: {e}"))?;
+        std::fs::write(&path, json).map_err(|e| format!("写入导出文件失败: {e}"))?;
 
-    Ok(ExportNotesResult {
-        path: path.to_string_lossy().to_string(),
-        count: notes.len(),
+        Ok(ExportNotesResult {
+            path: path.to_string_lossy().to_string(),
+            count: notes.len(),
+        })
     })
+    .await
+    .map_err(|e| format!("导出记事线程异常: {e}"))?
 }
 
 /// 从 JSON 文本导入记事（由前端 file input 读取文件内容后传入，避免依赖文件系统权限）。
@@ -1916,39 +1929,45 @@ struct ImportFile {
 }
 
 #[tauri::command]
-pub fn import_notes(state: State<'_, AppState>, json: String) -> Result<ImportNotesResult, String> {
-    let file: ImportFile =
-        serde_json::from_str(&json).map_err(|e| format!("解析导入数据失败: {e}"))?;
+pub async fn import_notes(app: AppHandle, json: String) -> Result<ImportNotesResult, String> {
+    // #329：解析大 JSON + 事务内逐条 SELECT/INSERT，同步命令会在主线程跑完。
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let file: ImportFile =
+            serde_json::from_str(&json).map_err(|e| format!("解析导入数据失败: {e}"))?;
 
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let now = crate::sync::now_secs();
-    // v0.3.49 (#147)：整个导入包在一个事务里（原来每条 1 SELECT + 1 INSERT，
-    // 大导入慢且可部分成功）。失败整体回滚。
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(|e| format!("开启导入事务失败: {e}"))?;
-    let mut imported = 0usize;
-    let mut skipped = 0usize;
-    for n in file.notes {
-        if n.content.trim().is_empty() {
-            continue;
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let now = crate::sync::now_secs();
+        // v0.3.49 (#147)：整个导入包在一个事务里（原来每条 1 SELECT + 1 INSERT，
+        // 大导入慢且可部分成功）。失败整体回滚。
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("开启导入事务失败: {e}"))?;
+        let mut imported = 0usize;
+        let mut skipped = 0usize;
+        for n in file.notes {
+            if n.content.trim().is_empty() {
+                continue;
+            }
+            let label = if n.label.is_empty() {
+                "low".to_string()
+            } else {
+                n.label
+            };
+            let created = if n.created_at > 0 { n.created_at } else { now };
+            let updated = if n.updated_at > 0 { n.updated_at } else { created };
+            match crate::db::import_note(&tx, &n.content, &label, created, updated) {
+                Ok(true) => imported += 1,
+                Ok(false) => skipped += 1,
+                Err(e) => return Err(e),
+            }
         }
-        let label = if n.label.is_empty() {
-            "low".to_string()
-        } else {
-            n.label
-        };
-        let created = if n.created_at > 0 { n.created_at } else { now };
-        let updated = if n.updated_at > 0 { n.updated_at } else { created };
-        match crate::db::import_note(&tx, &n.content, &label, created, updated) {
-            Ok(true) => imported += 1,
-            Ok(false) => skipped += 1,
-            Err(e) => return Err(e),
-        }
-    }
-    tx.commit()
-        .map_err(|e| format!("提交导入事务失败: {e}"))?;
-    Ok(ImportNotesResult { imported, skipped })
+        tx.commit()
+            .map_err(|e| format!("提交导入事务失败: {e}"))?;
+        Ok(ImportNotesResult { imported, skipped })
+    })
+    .await
+    .map_err(|e| format!("导入记事线程异常: {e}"))?
 }
 
 // ============================================================================
@@ -2012,50 +2031,57 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 /// 与上次快照对比得出「新发现安装」与「疑似已卸载」；快照存 `meta.agent_scan_snapshot`，
 /// 是本命令**唯一**的写入目标（不碰任何 agent 配置文件，不联网）。
 #[tauri::command]
-pub fn scan_agent_hosts(state: State<'_, AppState>) -> Result<crate::hooks::AgentScanResult, String> {
-    let agents = crate::hooks::probe_agent_hosts()?;
-    let now = crate::sync::now_secs();
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+pub async fn scan_agent_hosts(app: AppHandle) -> Result<crate::hooks::AgentScanResult, String> {
+    // #329：本命令要遍历 PATH / 常见安装目录 / 应用包（大量 stat + 读目录），
+    // 同步命令会在主线程上跑完才返回，UI 卡住。改 async + spawn_blocking。
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let agents = crate::hooks::probe_agent_hosts()?;
+        let now = crate::sync::now_secs();
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
 
-    let raw = crate::db::get_setting(&conn, "agent_scan_snapshot");
-    let previous: Option<crate::hooks::ScanSnapshot> = if raw.trim().is_empty() {
-        None
-    } else {
-        // 快照损坏（手工改库 / 版本降级）不应让扫描整体失败：按首次扫描处理。
-        match serde_json::from_str(&raw) {
-            Ok(s) => Some(s),
-            Err(e) => {
-                crate::tlog!("[scan] 快照解析失败，按首次扫描处理: {}", e);
-                None
+        let raw = crate::db::get_setting(&conn, "agent_scan_snapshot");
+        let previous: Option<crate::hooks::ScanSnapshot> = if raw.trim().is_empty() {
+            None
+        } else {
+            // 快照损坏（手工改库 / 版本降级）不应让扫描整体失败：按首次扫描处理。
+            match serde_json::from_str(&raw) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    crate::tlog!("[scan] 快照解析失败，按首次扫描处理: {}", e);
+                    None
+                }
             }
-        }
-    };
+        };
 
-    let (newly_installed, newly_removed) = crate::hooks::diff_scan(previous.as_ref(), &agents);
-    let snapshot = crate::hooks::snapshot_of(now, &agents);
-    crate::db::set_setting(
-        &conn,
-        "agent_scan_snapshot",
-        &serde_json::to_string(&snapshot).map_err(|e| format!("快照序列化失败: {e}"))?,
-    )?;
+        let (newly_installed, newly_removed) = crate::hooks::diff_scan(previous.as_ref(), &agents);
+        let snapshot = crate::hooks::snapshot_of(now, &agents);
+        crate::db::set_setting(
+            &conn,
+            "agent_scan_snapshot",
+            &serde_json::to_string(&snapshot).map_err(|e| format!("快照序列化失败: {e}"))?,
+        )?;
 
-    let present = agents.iter().filter(|a| a.present).count();
-    crate::tlog!(
-        "[scan] 设备扫描完成：{} 个已安装 / {} 个候选，新发现 {}，疑似已卸载 {}",
-        present,
-        agents.len(),
-        newly_installed.len(),
-        newly_removed.len()
-    );
+        let present = agents.iter().filter(|a| a.present).count();
+        crate::tlog!(
+            "[scan] 设备扫描完成：{} 个已安装 / {} 个候选，新发现 {}，疑似已卸载 {}",
+            present,
+            agents.len(),
+            newly_installed.len(),
+            newly_removed.len()
+        );
 
-    Ok(crate::hooks::AgentScanResult {
-        scanned_at: now,
-        previous_scanned_at: previous.as_ref().map(|p| p.scanned_at),
-        has_previous: previous.is_some(),
-        agents,
-        newly_installed,
-        newly_removed,
+        Ok(crate::hooks::AgentScanResult {
+            scanned_at: now,
+            previous_scanned_at: previous.as_ref().map(|p| p.scanned_at),
+            has_previous: previous.is_some(),
+            agents,
+            newly_installed,
+            newly_removed,
+        })
     })
+    .await
+    .map_err(|e| format!("设备扫描线程异常: {e}"))?
 }
 
 #[cfg(test)]

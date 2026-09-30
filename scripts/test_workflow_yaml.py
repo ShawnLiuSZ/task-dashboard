@@ -300,5 +300,136 @@ jobs:
         self.assertEqual(errs(text), [])
 
 
+class LegalShorthandNotFlaggedTest(unittest.TestCase):
+    """#329 防误报：几种 GitHub **官方合法**写法此前被误判成缺陷。
+
+    检查器的误报比漏报更致命（每个 PR 的 CI 都会红，最后只能把它从 CI 删掉），
+    所以这几种写法必须逐一点到。反向验证：删掉结论里的
+    `PERMISSION_SHORTHANDS` / 顶层 `on` 内联分支后，前两个用例立刻失败。
+    """
+
+    def test_permissions_read_all_shorthand_is_legal(self):
+        text = VALID.replace("permissions:\n  contents: write\n", "permissions: read-all\n")
+        self.assertEqual(errs(text), [])
+
+    def test_permissions_write_all_shorthand_is_legal(self):
+        text = VALID.replace("permissions:\n  contents: write\n", "permissions: write-all\n")
+        self.assertEqual(errs(text), [])
+
+    def test_permissions_inline_map_is_legal(self):
+        text = VALID.replace(
+            "permissions:\n  contents: write\n", "permissions: {contents: read}\n"
+        )
+        self.assertEqual(errs(text), [])
+
+    def test_on_inline_array_is_legal(self):
+        text = VALID.replace("on:\n  pull_request:\n", "on: [push, pull_request]\n")
+        self.assertEqual(errs(text), [])
+
+    def test_on_single_event_scalar_is_legal(self):
+        text = VALID.replace("on:\n  pull_request:\n", "on: push\n")
+        self.assertEqual(errs(text), [])
+
+    def test_toolchain_channel_ref_is_legal(self):
+        # `dtolnay/rust-toolchain@stable` 是该 action 的官方推荐写法（通道而非分支），
+        # 本仓库多个 workflow 在用。一刀切禁止非版本引用会把它打红。
+        text = VALID.replace(
+            "- uses: actions/checkout@v5",
+            "- uses: actions/checkout@v5\n      - uses: dtolnay/rust-toolchain@stable",
+        )
+        self.assertEqual(errs(text), [])
+
+    def test_needs_existing_job_is_legal(self):
+        text = """\
+name: demo
+
+on:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo build
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - run: echo deploy
+"""
+        self.assertEqual(errs(text), [])
+
+    def test_needs_inline_array_is_legal(self):
+        text = """\
+name: demo
+
+on:
+  push:
+
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo a
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo b
+  c:
+    runs-on: ubuntu-latest
+    needs: [a, b]
+    steps:
+      - run: echo c
+"""
+        self.assertEqual(errs(text), [])
+
+
+class ExtendedDetectionTest(unittest.TestCase):
+    """#329 新增判定：四类此前漏报的缺陷必须被标记。"""
+
+    def assert_flagged(self, text: str, needle: str):
+        problems = errs(text)
+        self.assertTrue(
+            any(needle in p for p in problems),
+            f"期望出现包含 {needle!r} 的问题，实际：{problems}",
+        )
+
+    def test_floating_branch_ref_is_flagged(self):
+        for ref in ("main", "master", "HEAD", "latest"):
+            with self.subTest(ref=ref):
+                text = VALID.replace(
+                    "- uses: actions/checkout@v5", f"- uses: actions/checkout@{ref}"
+                )
+                self.assert_flagged(text, "浮动分支")
+
+    def test_pinned_ref_is_not_flagged_as_floating(self):
+        for ref in ("v5", "v4.2.2", "0", "5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66"):
+            with self.subTest(ref=ref):
+                text = VALID.replace(
+                    "- uses: actions/checkout@v5", f"- uses: actions/checkout@{ref}"
+                )
+                self.assertEqual(errs(text), [], f"{ref} 不应被判为浮动分支")
+
+    def test_runs_on_without_steps_is_flagged(self):
+        text = VALID.replace("    steps:\n", "")
+        self.assert_flagged(text, "没有 `steps:`")
+
+    def test_duplicate_top_level_key_is_flagged(self):
+        text = VALID + "\non:\n  push:\n"
+        self.assert_flagged(text, "顶层 `on:` 重复声明")
+
+    def test_duplicate_jobs_key_is_flagged(self):
+        text = VALID.replace("jobs:\n", "jobs:\n\njobs:\n", 1)
+        self.assert_flagged(text, "顶层 `jobs:` 重复声明")
+
+    def test_needs_unknown_job_is_flagged(self):
+        text = VALID.replace(
+            "    runs-on: ubuntu-latest\n",
+            "    runs-on: ubuntu-latest\n    needs: nope\n",
+            1,
+        )
+        self.assert_flagged(text, "指向不存在的 job")
+
+
 if __name__ == "__main__":
     unittest.main()

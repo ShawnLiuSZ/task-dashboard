@@ -1,5 +1,5 @@
 use rusqlite::{Connection, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
@@ -252,6 +252,85 @@ pub fn db_path_default() -> Result<PathBuf, String> {
     Ok(dir.join("taskboard.db"))
 }
 
+/// 当前 schema 版本（`PRAGMA user_version`）。
+///
+/// **硬约束**：`SCHEMA` 或 `MIGRATION_DDL` 每次做结构性变更（新增列 / 表 / 索引）都必须 +1，
+/// 否则已升到旧版本号的库会走热路径、永久跳过新迁移。
+///
+/// `open_db` 以「版本号落后 **或** 只读自愈探测发现缺口」为迁移门控：版本号是快路径，
+/// 探测是兜底——历史教训（#175 / #237 / #278：版本号丢值、被物理重建覆盖、新列没进
+/// 重建的写死白名单）表明仅靠版本号会漏列，故两者缺一不可。
+pub const SCHEMA_VERSION: i64 = 3;
+
+/// 必须存在的列（表 → 列）。热路径**只读**探测，缺任何一列都触发迁移。
+/// 新增必填列时必须同步追加 `MIGRATION_DDL` 里的补齐语句（有单测守卫）。
+const REQUIRED_COLUMNS: &[(&str, &str)] = &[
+    ("tasks", "work_branch"),
+    ("tasks", "author"),
+    ("tasks", "parent_issue"),
+    ("tasks", "sub_issues"),
+    ("tasks", "work_dir"),
+    ("tasks", "created_at"),
+    ("notes", "label"),
+    ("label_mappings", "order_index"),
+    ("projects", "status_field_id"),
+    ("project_statuses", "option_id"),
+];
+
+/// 必须存在的索引。语义同 `REQUIRED_COLUMNS`：缺失即触发迁移重建。
+const REQUIRED_INDEXES: &[&str] = &[
+    "idx_label_mappings_org",
+    "idx_label_mappings_repo",
+    "idx_label_mappings_org_repo_label",
+    "idx_tasks_board",
+    "idx_tasks_status_done_at",
+    "idx_tasks_issue_key",
+    "idx_notes_content",
+    "idx_project_items_issue",
+];
+
+/// 一次性结构迁移语句（顺序敏感，勿随意调整）。
+///
+/// ⚠️ 新增 `tasks` 列的 ALTER **必须**追加到这里——执行时机在 `migrate_tasks_v2_rebuild`
+/// **之后**；**不能**只写进 `migrate_legacy_alters`（后者仅 `user_version < 1` 触发，
+/// 且执行在重建之前，重建的写死列白名单会把新列丢掉）。详见 docs/issue-175-*.md。
+const MIGRATION_DDL: &[&str] = &[
+    // v0.3.20：label_mappings 表迁移（表由 SCHEMA 建，这里只补旧库缺的索引）。
+    "CREATE INDEX IF NOT EXISTS idx_label_mappings_org ON label_mappings(org)",
+    "CREATE INDEX IF NOT EXISTS idx_label_mappings_repo ON label_mappings(repo)",
+    // v0.3.21：Label 列视图排序用。
+    "ALTER TABLE label_mappings ADD COLUMN order_index INTEGER NOT NULL DEFAULT 0",
+    // v0.3.24：notes.label。早期无标签版本的库缺此列，list_notes / add_note 会全部失败。
+    "ALTER TABLE notes ADD COLUMN label TEXT NOT NULL DEFAULT 'low'",
+    // #215：Project 写回三件套的列补齐（表见 `PROJECT_ITEMS_DDL`）。
+    "ALTER TABLE projects ADD COLUMN status_field_id TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE project_statuses ADD COLUMN option_id TEXT NOT NULL DEFAULT ''",
+    // v0.3.53 (#171)：agent 通过 record_session 写入的工作分支（同步不碰）。
+    "ALTER TABLE tasks ADD COLUMN work_branch TEXT NOT NULL DEFAULT ''",
+    // #237：issue 创建人。
+    "ALTER TABLE tasks ADD COLUMN author TEXT NOT NULL DEFAULT ''",
+    // #278：父子关系。
+    "ALTER TABLE tasks ADD COLUMN parent_issue TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE tasks ADD COLUMN sub_issues TEXT NOT NULL DEFAULT ''",
+    // #287：工作目录（agent 通过 record_session 写入的项目路径）。
+    "ALTER TABLE tasks ADD COLUMN work_dir TEXT NOT NULL DEFAULT ''",
+    // #280：issue 创建时间。
+    "ALTER TABLE tasks ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0",
+    // v0.3.50 (#155)：新库由 SCHEMA 建、重建后由重建函数建；此处兜底。
+    "CREATE INDEX IF NOT EXISTS idx_tasks_issue_key ON tasks(issue_key)",
+    "CREATE INDEX IF NOT EXISTS idx_project_items_issue ON project_items(account_id, issue_key)",
+];
+
+/// #215：Project 写回所需的条目表（新库由 `SCHEMA` 建，旧库在此补建）。
+/// 独立于 `MIGRATION_DDL`：建表失败是**硬错误**（后续写回查询会 `no such table`）。
+const PROJECT_ITEMS_DDL: &str = "CREATE TABLE IF NOT EXISTS project_items (
+           account_id        INTEGER NOT NULL,
+           project_github_id TEXT NOT NULL,
+           issue_key         TEXT NOT NULL,
+           item_id           TEXT NOT NULL,
+           UNIQUE(account_id, project_github_id, issue_key)
+         )";
+
 /// 打开（必要时创建）数据库连接，应用 schema 与历史迁移，并写入默认设置。
 /// GUI 与 MCP 子命令共用此函数，确保表结构单一来源、无漂移。
 ///
@@ -261,6 +340,13 @@ pub fn db_path_default() -> Result<PathBuf, String> {
 /// 进入"disk I/O error"无限循环。本函数强制 `journal_mode=WAL`，配合 `synchronous=NORMAL`：
 /// WAL 文件 (`-wal`/`-shm`) 与主 DB 文件始终一致可读，崩溃不会让整个 DB 锁死。
 /// WAL 与 DELETE 共存时不冲突——已有的 `-journal` 文件如果存在，SQLite 会自动 forward-rollback。
+///
+/// **稳态零写入（#329）**：UI 每个 Tauri command 都会 `open_db` 一次，若每次建连都执行
+/// `DELETE FROM notes` + N 条 `INSERT meta` + ~12 条 ALTER，就会与同步的长写事务争抢写锁
+/// （`busy_timeout=5000`），表现为「点一下卡满 5 秒」。现改为：仅当 `user_version` 落后、
+/// 只读探测发现缺列/缺索引、或 `tasks` 仍是 legacy 布局时才执行迁移；默认设置也改为
+/// 先只读比对、只补缺失项。稳态下本函数不产生任何写语句（`SCHEMA` 全为 `IF NOT EXISTS`，
+/// 对象已存在时不写盘）。回归测试见 `open_db_steady_state_does_not_take_write_lock`。
 pub fn open_db(path: &Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| format!("打开数据库失败: {}", e))?;
     // v0.3.49 (#149)：库文件含 PAT 明文，Unix 下收紧为仅所有者可读写。
@@ -281,188 +367,182 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
     let _ = conn.pragma_update(None, "synchronous", "NORMAL");
     let _ = conn.pragma_update(None, "busy_timeout", 5000);
-    // v0.3.49 (#146)：notes.content 即将加唯一索引，老库若有重复 content 会导致
-    // 下面的 execute_batch 直接失败、整个库打不开。先去重（保留最早 id），
-    // best-effort：首建库时 notes 表尚不存在，报错忽略即可。
-    let _ = conn.execute(
-        "DELETE FROM notes WHERE id NOT IN (SELECT MIN(id) FROM notes GROUP BY content)",
-        [],
-    );
-    // v0.3.49 (#147)：schema 版本（PRAGMA user_version）。0 = 未版本化老库，
-    // 建连成功后记为 1；后续每次 schema 变更加版本号并在此分步迁移，
-    // 热路径（version ≥ 1）跳过下面的 ALTER 补齐循环。
-    let schema_ver: i64 = conn
-        .pragma_query_value(None, "user_version", |r| r.get(0))
-        .unwrap_or(0);
-    // schema 初始化（WAL 模式下多个连接可并发读，但写仍互斥）。
+    // ── 迁移门控（#329）────────────────────────────────────────────────
+    // `tasks` 不存在 ⇒ 全新库：`SCHEMA` 足以建出最新布局，迁移语句基本是幂等空转
+    // （少数 ALTER 会因列已存在而报错并被忽略），跑一轮把 `user_version` 落地更省心。
+    let fresh = !table_exists(&conn, "tasks");
+    let needs_migration = !fresh && !schema_is_current(&conn);
+    if needs_migration {
+        // v0.3.49 (#146)：notes.content 唯一索引在 `SCHEMA` 里；老库若有重复 content，
+        // `execute_batch(SCHEMA)` 会直接失败、整个库打不开。去重必须先于 SCHEMA 执行。
+        let _ = conn.execute(
+            "DELETE FROM notes WHERE id NOT IN (SELECT MIN(id) FROM notes GROUP BY content)",
+            [],
+        );
+    }
+    // schema 初始化（WAL 模式下多个连接可并发读，但写仍互斥）。语句全部 `IF NOT EXISTS`：
+    // 对象已存在时不写盘、不取写锁，故稳态下可无条件执行。
     conn.execute_batch(SCHEMA)
         .map_err(|e| format!("初始化表结构失败: {}", e))?;
-    // v0.3.49 (#147)：仅未版本化老库（version 0）跑下面的 ALTER 补齐；
-    // version ≥ 1 的热路径跳过（SCHEMA 已是 IF NOT EXISTS 幂等）。
-    if schema_ver < 1 {
-        migrate_legacy_alters(&conn);
+    if fresh || needs_migration {
+        // 迁移后结构达标才推进版本号；仍有缺口则保持原值，下次启动重试。
+        // 仅在「落后」时提升，绝不回退（防止被更新版本的二进制写高的值被本版本覆盖）。
+        if run_migrations(&conn, fresh)? && schema_version(&conn) < SCHEMA_VERSION {
+            let _ = conn.pragma_update(None, "user_version", SCHEMA_VERSION);
+        }
     }
-    // v0.3.50 (#155)：tasks 物理重建。以「tasks 是否仍含旧 key 列」为判定，
-    // 兼容 user_version 丢值/旧库直接建的场景——重建后 key 列消失，幂等不重复执行。
-    // 顺序依赖：migrate_legacy_alters 必须先跑，保证老表已补齐 gh_status/assignees
-    // 等列，重建的 INSERT..SELECT 才能读到。
-    let needs_v2 = if tasks_uses_legacy_key(&conn) {
-        // 物理重建自带事务，成功时已在事务内把 user_version 置 2；失败则保持原值，
-        // 下次启动重试（残留的 tasks_new 由函数开头的 DROP IF EXISTS 自愈）。
-        migrate_tasks_v2_rebuild(&conn).is_ok()
-    } else {
-        schema_ver < 1
-    };
-    if needs_v2 {
-        // 幂等兜底：非 legacy-key 的旧库（仅 user_version<1）也需要推进到 2。
-        // legacy-key 路径已在事务内写过一次，重复写无害。
-        let _ = conn.pragma_update(None, "user_version", 2);
+    // 默认设置：先只读比对既有 key，只补缺失项（稳态零写入，见函数头 #329 说明）。
+    ensure_default_settings(&conn)?;
+    Ok(conn)
+}
+
+/// 补齐缺失的默认设置：一次性只读读出既有 key，只对缺失项写 `INSERT`。
+/// 稳态（无缺失）不产生任何写语句，避免与同步的长写事务争抢写锁（#329）。
+fn ensure_default_settings(conn: &Connection) -> Result<(), String> {
+    let mut existing: HashSet<String> = HashSet::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT key FROM meta")
+            .map_err(|e| format!("读取默认设置失败: {}", e))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| format!("读取默认设置失败: {}", e))?;
+        for row in rows.flatten() {
+            existing.insert(row);
+        }
     }
-    // 以下默认设置与各版本表级迁移（每次建连都跑，全部幂等；列补齐已由上面的版本门控处理）。
     for (k, v) in DEFAULT_SETTINGS {
+        if existing.contains(*k) {
+            continue;
+        }
         conn.execute(
             "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO NOTHING",
             rusqlite::params![k, v],
         )
         .map_err(|e| format!("写入默认设置失败: {}", e))?;
     }
-    // v0.3.20：label_mappings 表迁移（新表，直接 CREATE IF NOT EXISTS 已在 schema 里）。
-    // 仅确保索引存在（旧库可能无索引）。
-    for idx_sql in [
-        "CREATE INDEX IF NOT EXISTS idx_label_mappings_org ON label_mappings(org)",
-        "CREATE INDEX IF NOT EXISTS idx_label_mappings_repo ON label_mappings(repo)",
-    ] {
-        if let Err(e) = conn.execute(idx_sql, []) {
-            if crate::common::verbose_enabled() {
-                crate::tlog!("[db] label_mappings 索引创建跳过: {}", e);
-            }
+    Ok(())
+}
+
+/// 一次性结构迁移。仅由 `open_db` 在「全新库 / 版本号落后 / 探测到缺口」时调用。
+///
+/// 全部语句幂等，可安全重跑。返回值：`Ok(true)` = 迁移后结构已达标（调用方可推进
+/// `user_version`）；`Ok(false)` = 仍有缺口（保持原版本号，下次启动重试）；
+/// `Err` 仅用于「建表失败」这类硬错误。
+///
+/// `fresh` 为真表示全新库：`tasks` 表刚由 `SCHEMA` 建出、布局即最新，
+/// 故跳过 `migrate_legacy_alters`（那 14 条 ALTER 必然全部因列已存在而失败）。
+fn run_migrations(conn: &Connection, fresh: bool) -> Result<bool, String> {
+    let from_ver = schema_version(conn);
+    // v0.3.49 (#147)：未版本化老库（user_version < 1）的列补齐。
+    if !fresh && from_ver < 1 {
+        migrate_legacy_alters(conn);
+    }
+    // v0.3.50 (#155)：tasks 物理重建。以「tasks 是否仍含旧 key 列」为判定，兼容
+    // user_version 丢值 / 旧库直接建的场景——重建后 key 列消失，幂等不重复执行。
+    // 顺序依赖：`migrate_legacy_alters` 必须先跑，保证老表已补齐 gh_status/assignees
+    // 等列，重建的 INSERT..SELECT 才能读到。
+    if tasks_uses_legacy_key(conn) {
+        if let Err(e) = migrate_tasks_v2_rebuild(conn) {
+            // 保持原版本号，下次启动重试（残留的 tasks_new 由重建函数开头 DROP IF EXISTS 自愈）。
+            crate::tlog!("[db] tasks v2 物理重建失败，将在下次启动重试: {}", e);
         }
     }
-    // v0.3.21：label_mappings 增加 order_index 列（用于 Label 列视图排序）。
-    if let Err(e) = conn.execute("ALTER TABLE label_mappings ADD COLUMN order_index INTEGER NOT NULL DEFAULT 0", []) {
-        if crate::common::verbose_enabled() {
-            crate::tlog!("[db] label_mappings order_index 列迁移跳过: {}", e);
-        }
-    }
-    // v0.3.24：notes 表补 label 列。早期无标签版本的库里 notes 只有 4 列，
-    // 而 `CREATE TABLE IF NOT EXISTS` 不会给已存在的表补列，导致 list_notes
-    // （SELECT ... label）与 add_note（INSERT ... label）全部失败、前端静默无反应。
-    if let Err(e) = conn.execute(
-        "ALTER TABLE notes ADD COLUMN label TEXT NOT NULL DEFAULT 'low'",
-        [],
-    ) {
-        if crate::common::verbose_enabled() {
-            crate::tlog!("[db] notes label 列迁移跳过（已存在）: {}", e);
-        }
-    }
-    // #215：Project 写回三件套。老库补列 + 建表（新库由 SCHEMA 一次建好）。
-    for col_sql in [
-        "ALTER TABLE projects ADD COLUMN status_field_id TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE project_statuses ADD COLUMN option_id TEXT NOT NULL DEFAULT ''",
-    ] {
-        if let Err(e) = conn.execute(col_sql, []) {
-            if crate::common::verbose_enabled() {
-                crate::tlog!("[db] project 写回列迁移跳过（已存在）: {}", e);
-            }
-        }
-    }
-    if let Err(e) = conn.execute(
-        "CREATE TABLE IF NOT EXISTS project_items (
-           account_id        INTEGER NOT NULL,
-           project_github_id TEXT NOT NULL,
-           issue_key         TEXT NOT NULL,
-           item_id           TEXT NOT NULL,
-           UNIQUE(account_id, project_github_id, issue_key)
-         )",
-        [],
-    ) {
+    // #215：Project 写回条目表。建表失败是硬错误（后续写回查询会 no such table）。
+    if let Err(e) = conn.execute(PROJECT_ITEMS_DDL, []) {
         return Err(format!("创建 project_items 表失败: {e}"));
     }
-    if let Err(e) = conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_project_items_issue ON project_items(account_id, issue_key)",
-        [],
-    ) {
-        if crate::common::verbose_enabled() {
-            crate::tlog!("[db] project_items 索引创建跳过: {}", e);
+    // ⚠️ 新增 tasks 列的 ALTER 必须写进 `MIGRATION_DDL`（执行时机在本函数内、重建之后）。
+    // 写到别处或漏写会永久丢列，详见常量定义处的说明。
+    for ddl in MIGRATION_DDL {
+        if let Err(e) = conn.execute(ddl, []) {
+            if crate::common::verbose_enabled() {
+                crate::tlog!("[db] 迁移语句跳过（已存在或不适用）: {} | sql={}", e, ddl);
+            }
         }
     }
     // v0.3.15 → v0.3.16 自动迁移：把 v0.3.15 写在 meta.pat_token 的单账号 PAT
     // 迁到 accounts 表（首条默认账号）。原 meta 字段保留作兼容兜底，单账号视图仍可读。
-    if let Err(e) = migrate_v0315_to_accounts(&conn) {
+    if let Err(e) = migrate_v0315_to_accounts(conn) {
         if crate::common::verbose_enabled() {
             crate::tlog!("[db] v0.3.15 → v0.3.16 迁移失败（已保留兜底字段）: {}", e);
         }
     }
-    // v0.3.53 (#171) 迁移补漏：`work_branch` 的 ALTER 原本只写在 `migrate_legacy_alters`
-    // （仅 user_version<1 的老库触发）。对 user_version=2 的库（#155 已 v2 重建、无旧 key 列）
-    // 会跳过该补齐，又不会二次重建 → `work_branch` 永不补上，SELECT_COLS 一查就报
-    // `no such column`。这里把它提升到每次建连都跑的幂等热路径（已存在则忽略，
-    // 与 notes.label 迁移同款），对所有 user_version 一致生效。详见 docs/issue-175-*.md。
-    if let Err(e) = conn.execute(
-        "ALTER TABLE tasks ADD COLUMN work_branch TEXT NOT NULL DEFAULT ''",
-        [],
-    ) {
-        if crate::common::verbose_enabled() {
-            crate::tlog!("[db] work_branch 列迁移跳过（已存在）: {}", e);
-        }
+    // 迁移后复检：仍有缺列 / 缺索引 / 仍是 legacy 布局 ⇒ 不推进版本号，下次启动重试。
+    let miss_cols = missing_columns(conn);
+    let miss_idx = missing_indexes(conn);
+    let ok = miss_cols.is_empty() && miss_idx.is_empty() && !tasks_uses_legacy_key(conn);
+    if !ok && crate::common::verbose_enabled() {
+        crate::tlog!(
+            "[db] 迁移未达标，保持 user_version={}: 缺列 {:?}，缺索引 {:?}",
+            from_ver,
+            miss_cols,
+            miss_idx
+        );
     }
-    // #237：issue 创建人。**必须放在 `migrate_tasks_v2_rebuild` 之后**——
-    // 物理重建的 `tasks_new` 定义 + INSERT..SELECT 白名单是写死的列清单，
-    // 不含后来新增的列，因此重建会把新列丢掉；只有重建之后再补才可靠。
-    // 同理不能只写在 `migrate_legacy_alters`（仅 user_version<1 触发，
-    // 且执行时机在重建之前）。详见 docs/issue-175-*.md 的同款教训。
-    if let Err(e) = conn.execute(
-        "ALTER TABLE tasks ADD COLUMN author TEXT NOT NULL DEFAULT ''",
-        [],
-    ) {
-        if crate::common::verbose_enabled() {
-            crate::tlog!("[db] author 列迁移跳过（已存在）: {}", e);
-        }
-    }
-    // #278：父子关系两列。同款教训——必须放在 `migrate_tasks_v2_rebuild` 之后
-    // （重建的 INSERT..SELECT 白名单是写死的，会把新列丢掉），且不能只写在
-    // `migrate_legacy_alters`（仅 user_version<1 触发）。
-    for col_sql in [
-        "ALTER TABLE tasks ADD COLUMN parent_issue TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE tasks ADD COLUMN sub_issues TEXT NOT NULL DEFAULT ''",
-    ] {
-        if let Err(e) = conn.execute(col_sql, []) {
-            if crate::common::verbose_enabled() {
-                crate::tlog!("[db] 父子关系列迁移跳过（已存在）: {} | sql={}", e, col_sql);
+    Ok(ok)
+}
+
+/// 读取 `PRAGMA user_version`（读失败按 0 处理，等价未版本化老库）。
+fn schema_version(conn: &Connection) -> i64 {
+    conn.pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap_or(0)
+}
+
+/// 表是否存在（只读）。
+fn table_exists(conn: &Connection, name: &str) -> bool {
+    conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")
+        .and_then(|mut s| s.exists([name]))
+        .unwrap_or(false)
+}
+
+/// 只读探测缺失的必填列（表不存在时其所有列都算缺失，交由迁移建表/补列）。
+fn missing_columns(conn: &Connection) -> Vec<(&'static str, &'static str)> {
+    let mut cache: HashMap<&str, HashSet<String>> = HashMap::new();
+    let mut missing = Vec::new();
+    for (table, col) in REQUIRED_COLUMNS {
+        let cols = cache.entry(*table).or_insert_with(|| {
+            let mut set = HashSet::new();
+            if let Ok(mut stmt) = conn.prepare("SELECT name FROM pragma_table_info(?1)") {
+                if let Ok(rows) = stmt.query_map([*table], |r| r.get::<_, String>(0)) {
+                    for name in rows.flatten() {
+                        set.insert(name);
+                    }
+                }
             }
+            set
+        });
+        if !cols.contains(*col) {
+            missing.push((*table, *col));
         }
     }
-    // #287：工作目录列（agent 通过 record_session 写入的项目路径）。
-    if let Err(e) = conn.execute(
-        "ALTER TABLE tasks ADD COLUMN work_dir TEXT NOT NULL DEFAULT ''",
-        [],
-    ) {
-        if crate::common::verbose_enabled() {
-            crate::tlog!("[db] work_dir 列迁移跳过（已存在）: {}", e);
+    missing
+}
+
+/// 只读探测缺失的必填索引。
+fn missing_indexes(conn: &Connection) -> Vec<&'static str> {
+    let mut missing = Vec::new();
+    for idx in REQUIRED_INDEXES {
+        let found = conn
+            .prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1")
+            .and_then(|mut s| s.exists([idx]))
+            .unwrap_or(false);
+        if !found {
+            missing.push(*idx);
         }
     }
-    // #280：issue 创建时间。同款教训——必须放在 migrate_tasks_v2_rebuild 之后
-    // （重建的 INSERT..SELECT 白名单是写死的，会把新列丢掉），且不能只写在
-    // migrate_legacy_alters（仅 user_version<1 触发）。
-    if let Err(e) = conn.execute(
-        "ALTER TABLE tasks ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0",
-        [],
-    ) {
-        if crate::common::verbose_enabled() {
-            crate::tlog!("[db] created_at 列迁移跳过（已存在）: {}", e);
-        }
-    }
-    // v0.3.50 (#155)：新库（SCHEMA 顶层无此索引）与重建后均由此处幂等补齐 issue_key 索引。
-    if let Err(e) = conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_issue_key ON tasks(issue_key)",
-        [],
-    ) {
-        // best-effort：tasks 表异常时忽略，下次建连重试。
-        if crate::common::verbose_enabled() {
-            crate::tlog!("[db] idx_tasks_issue_key 创建跳过: {}", e);
-        }
-    }
-    Ok(conn)
+    missing
+}
+
+/// 热路径自愈探测：schema 是否已达标（版本号 + 缺列 + 缺索引 + 旧布局）。
+///
+/// 全程**只读**，不取写锁——稳态下 `open_db` 因此完全无写入（#329）。
+/// 探测为兜底：即使版本号被人为改高或丢失，缺列/缺索引仍会触发迁移。
+fn schema_is_current(conn: &Connection) -> bool {
+    schema_version(conn) >= SCHEMA_VERSION
+        && !tasks_uses_legacy_key(conn)
+        && missing_columns(conn).is_empty()
+        && missing_indexes(conn).is_empty()
 }
 
 /// v0.3.49 (#147)：未版本化老库（user_version 0）的一次性列补齐。
@@ -2499,6 +2579,10 @@ mod tests {
             "idx_tasks_board",
             "idx_tasks_status_done_at",
             "idx_notes_content",
+            // #329：这两条不在 `SCHEMA` 顶层（老库无 issue_key / project_items 时有风险），
+            // 必须由迁移路径建出。
+            "idx_tasks_issue_key",
+            "idx_project_items_issue",
         ] {
             let n: i64 = conn
                 .query_row(
@@ -2896,5 +2980,245 @@ mod tests {
 
         let err = project_option_id(&conn, 1, "PVT_x", "Done").unwrap_err();
         assert!(err.contains("Done"), "找不到选项名时应列出可用选项: {err}");
+    }
+
+    // ========================================================================
+    // #329：open_db 稳态零写入（迁移门控 + 只读自愈探测）
+    // ========================================================================
+
+    /// 建库并跑完迁移，返回「已进入稳态」的路径。
+    fn steady_db(name: &str) -> std::path::PathBuf {
+        let path = tmp_db(name);
+        drop(open_db(&path).unwrap());
+        path
+    }
+
+    /// v2 布局（无 `key` 列）的 tasks 表 DDL，缺 #237/#278/#287/#280 之后新增的列。
+    /// 用于模拟「版本号谎报为最新但结构落后」的库。
+    const TASKS_V2_MINUS_NEWEST_DDL: &str = r#"
+        CREATE TABLE tasks (
+          id             INTEGER PRIMARY KEY,
+          issue_key      TEXT NOT NULL,
+          owner          TEXT NOT NULL,
+          repo           TEXT NOT NULL,
+          number         INTEGER NOT NULL,
+          title          TEXT NOT NULL,
+          url            TEXT NOT NULL,
+          issue_state    TEXT NOT NULL,
+          ownership      TEXT NOT NULL,
+          status         TEXT NOT NULL DEFAULT 'todo',
+          session_id     TEXT,
+          session_agent  TEXT,
+          session_at     INTEGER,
+          candidate_done INTEGER NOT NULL DEFAULT 0,
+          stale          INTEGER NOT NULL DEFAULT 0,
+          project_status TEXT NOT NULL DEFAULT '',
+          assignees      TEXT NOT NULL DEFAULT '',
+          labels         TEXT NOT NULL DEFAULT '',
+          done_at        INTEGER NOT NULL DEFAULT 0,
+          mentioned      INTEGER NOT NULL DEFAULT 0,
+          comments_count INTEGER NOT NULL DEFAULT 0,
+          latest_comment_url TEXT NOT NULL DEFAULT '',
+          pr_number      INTEGER NOT NULL DEFAULT 0,
+          pr_url         TEXT NOT NULL DEFAULT '',
+          branch         TEXT NOT NULL DEFAULT '',
+          work_branch    TEXT NOT NULL DEFAULT '',
+          handoff        TEXT NOT NULL DEFAULT '',
+          updated_at     INTEGER,
+          synced_at      INTEGER NOT NULL,
+          account_id     INTEGER NOT NULL DEFAULT 1,
+          UNIQUE(repo, number, account_id)
+        );
+    "#;
+
+    /// #329 症状回归：稳态下 `open_db` 不得取写锁。
+    ///
+    /// 同步是「一个长写事务」；UI 每个 Tauri command 都新建连接，若建连时还要写
+    /// （`DELETE notes` / `INSERT meta` / ALTER），就会阻塞到 `busy_timeout`（5s），
+    /// 表现为「点一下卡 5 秒」。本用例在另一个连接持有写锁时建连，必须立即成功。
+    ///
+    /// 反向验证：把迁移门控去掉（恢复成每次建连都跑迁移）后，本用例会阻塞约 5s
+    /// 并触发 `elapsed < 2s` 断言失败。
+    #[test]
+    fn open_db_steady_state_does_not_take_write_lock() {
+        let path = steady_db("open-no-write");
+
+        let holder = Connection::open(&path).unwrap();
+        // 模拟同步的长写事务：取写锁并保持不提交。
+        holder.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        holder
+            .execute("UPDATE meta SET value = value WHERE key = 'gh_path'", [])
+            .unwrap();
+
+        let t0 = std::time::Instant::now();
+        let conn = open_db(&path).expect("稳态建连不应被写锁阻塞");
+        let elapsed = t0.elapsed();
+        drop(conn);
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "稳态建连耗时 {elapsed:?}，疑似在等写锁（busy_timeout=5s）"
+        );
+
+        holder.execute_batch("ROLLBACK;").unwrap();
+        drop(holder);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #329：新建库与迁移完成后 `user_version` 应落在 `SCHEMA_VERSION`，且重开不漂移。
+    #[test]
+    fn open_db_records_schema_version() {
+        let path = tmp_db("schema-ver");
+        let conn = open_db(&path).unwrap();
+        assert_eq!(
+            schema_version(&conn),
+            SCHEMA_VERSION,
+            "新库应记录当前 schema 版本"
+        );
+        drop(conn);
+        let conn = open_db(&path).unwrap();
+        assert_eq!(
+            schema_version(&conn),
+            SCHEMA_VERSION,
+            "稳态重开不应改变版本号"
+        );
+        drop(conn);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #329：版本号被谎报成最新（或丢失）时，只读探测仍必须补齐缺索引。
+    ///
+    /// 用 `idx_tasks_issue_key` 而非 `idx_tasks_board`：后者在 `SCHEMA` 顶层，
+    /// 每次建连的 `execute_batch(SCHEMA)` 就会重建，盖不出探测逻辑的缺失。
+    /// 反向验证：从 `schema_is_current` 去掉 `missing_indexes` 后本用例失败。
+    #[test]
+    fn open_db_self_heals_missing_index_despite_newer_version() {
+        let path = steady_db("self-heal-idx");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute("DROP INDEX idx_tasks_issue_key", []).unwrap();
+            conn.pragma_update(None, "user_version", 99).unwrap();
+        }
+        let conn = open_db(&path).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_tasks_issue_key'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "缺索引应被热路径自愈重建");
+        assert_eq!(
+            schema_version(&conn),
+            99,
+            "已被写高的版本号不应被回退覆盖"
+        );
+        drop(conn);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #329：版本号谎报成最新时，只读探测仍必须补齐缺列。
+    /// 反向验证：从 `schema_is_current` 去掉 `missing_columns` 后本用例失败。
+    #[test]
+    fn open_db_self_heals_missing_column_despite_newer_version() {
+        let path = tmp_db("self-heal-col");
+        {
+            let conn = Connection::open(&path).unwrap();
+            // 老布局：tasks 缺 author / parent_issue / sub_issues / work_dir / created_at，
+            // 且把版本号谎报为最新（模拟版本号丢值或被写高）。
+            conn.execute_batch(TASKS_V2_MINUS_NEWEST_DDL).unwrap();
+            conn.pragma_update(None, "user_version", 99).unwrap();
+        }
+        let conn = open_db(&path).unwrap();
+        let missing = missing_columns(&conn);
+        assert!(missing.is_empty(), "缺列应被自愈补齐，仍缺: {missing:?}");
+        drop(conn);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #329 回归：`idx_tasks_issue_key` 故意不在 `SCHEMA` 顶层（老库无 `issue_key` 列，
+    /// 放顶层会让整个 SCHEMA batch 失败），必须由迁移路径建出——否则新库永远缺这个索引，
+    /// 只读探测每次判定「不达标」，稳态零写入直接失效。
+    #[test]
+    fn fresh_db_gets_post_schema_indexes() {
+        let path = tmp_db("fresh-indexes");
+        let conn = open_db(&path).unwrap();
+        let missing = missing_indexes(&conn);
+        assert!(missing.is_empty(), "新库应补齐全部必填索引，仍缺: {missing:?}");
+        assert!(
+            schema_is_current(&conn),
+            "新库建连后应处于稳态（版本号 + 索引 + 列全部达标）"
+        );
+        drop(conn);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #329：`REQUIRED_COLUMNS` / `REQUIRED_INDEXES` 是探测白名单，必须与补齐语句一一对应。
+    /// 漏写会导致「探测到缺口但永远补不上」——`user_version` 卡住不推进，每次启动重跑全部迁移。
+    #[test]
+    fn required_columns_and_indexes_are_covered_by_migration_ddl() {
+        for (table, col) in REQUIRED_COLUMNS {
+            let needle = format!("ALTER TABLE {table} ADD COLUMN {col} ");
+            assert!(
+                MIGRATION_DDL.iter().any(|s| s.contains(&needle)),
+                "`MIGRATION_DDL` 缺 {table}.{col} 的补齐语句"
+            );
+        }
+        for idx in REQUIRED_INDEXES {
+            let plain = format!("CREATE INDEX IF NOT EXISTS {idx}");
+            let unique = format!("CREATE UNIQUE INDEX IF NOT EXISTS {idx}");
+            assert!(
+                MIGRATION_DDL
+                    .iter()
+                    .any(|s| s.contains(&plain) || s.contains(&unique))
+                    || SCHEMA.contains(&plain)
+                    || SCHEMA.contains(&unique),
+                "`MIGRATION_DDL` / `SCHEMA` 缺索引 {idx} 的创建语句"
+            );
+        }
+    }
+
+    /// #329 附带修正：全新库不应再被 `migrate_legacy_alters` 塞进 legacy-only 的
+    /// `gh_status` 列（v2 布局已改名为 `project_status`）。旧实现里该函数在
+    /// `user_version=0` 时无条件执行，于是每个新库的 tasks 都会多一列垃圾列。
+    /// 反向验证：把 `run_migrations` 的 `fresh` 短路去掉后本用例失败。
+    #[test]
+    fn fresh_db_has_no_legacy_gh_status_column() {
+        let path = tmp_db("fresh-no-legacy");
+        let conn = open_db(&path).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'gh_status'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0, "新库不应含 legacy 的 gh_status 列");
+        drop(conn);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #329：默认设置只在缺失时补写——用户改过的值不被覆盖，被删掉的键会补回。
+    #[test]
+    fn defaults_preserve_user_value_and_restore_deleted_key() {
+        let path = tmp_db("defaults");
+        {
+            let conn = open_db(&path).unwrap();
+            set_setting(&conn, "view_mode", "all").unwrap();
+            conn.execute("DELETE FROM meta WHERE key = 'board_mode'", [])
+                .unwrap();
+        }
+        let conn = open_db(&path).unwrap();
+        assert_eq!(
+            get_setting(&conn, "view_mode"),
+            "all",
+            "用户改过的值不应被默认值覆盖"
+        );
+        assert_eq!(
+            get_setting(&conn, "board_mode"),
+            "project",
+            "被删掉的默认键应补回"
+        );
+        drop(conn);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }

@@ -6,6 +6,36 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — code review P2 批次：校验脚本误报漏报 / MCP 列清单缺失 / 主线程阻塞 / 前端健壮性 18 项（#329）**
+
+  - **#329 `merge-cleanup.py::CLOSE_RE` 丢中间 issue 编号**：编号用可重复捕获组 `(?:\s*#\s*(\d+)(?!\d))*` 收集，`(?:\u2026)*` 是非捕获组，内层 `(\d+)` 每轮迭代**覆盖**前一轮 ⇒ `m.groups()` 只剩「第一个 + 最后一个」。实测 `extract_issue_refs('t','Closes #1 #2 #3')` → `[1, 3]`，**#2 静默丢失**（该 issue 永不被自动关闭）；原单测只测 2 个编号，恰落在「首 + 尾 = 全部」的巧合区间。详见 [docs/issue-329-p2-quality.md](./issue-329-p2-quality.md)。
+  - **修复**：编号串**整体**捕获，再用 `ISSUE_NUM_RE.findall()` 逐个取出。
+  - **#329 `merge-cleanup.py::SKIP_DELETE_MARKERS` 子串匹配误伤**：`'test' in 'chore: bump to latest deps'` → `True`，任何标题含 `latest` / `contest` / `protest` / `attest` 的 PR 都被判为「验证用 PR」而**静默跳过删分支**，分支越堆越多。
+  - **修复**：改词 / 短语边界匹配 `(?<![a-z0-9])(test|draft)(?![a-z0-9])`，保留 `test_workflow` / `test-PR` 原意。
+  - **#329 `check-workflow-yaml.py` 误报合法写法**：顶层 `permissions: read-all`（官方简写）报「没有任何 scope 声明」；`on: [push, pull_request]`（合法内联数组）报「没有任何触发事件」。
+  - **修复**：识别 `read-all` / `write-all` 与内联映射 `{...}`；`on:` 行非空即计入触发器。
+  - **#329 `check-workflow-yaml.py` 漏报面**：新增 4 类判定——① 第三方 action 用 `@main` / `@master` 等**浮动分支**（上游一次 push 就替换你 CI 里执行的代码，本地零 diff 痕迹）；② 有 `runs-on` 但**无 `steps`** 的 job（GitHub 直接解析失败）；③ **顶层 key 重复**（原只查 `jobs`，两个 `on:` 会让第一段触发条件整段失效）；④ `needs:` 指向**不存在的 job**（该 job 永远 pending）。浮动分支用**明确 denylist**，不误伤 `dtolnay/rust-toolchain@stable` 这类受支持的通道写法；`needs` 只收集内联写法，宁漏不误报。
+  - **#329 `server.py::ensure_schema` 缺列 → 旧库 `no such column`**：`SELECT_COLS` 要读 28 列，ALTER 清单只有 10 条，缺 `assignees` / `mentioned` / `latest_comment_url` / `pr_number` / `pr_url` / `work_dir` / `created_at` 等 7 列；症状只在「Python MCP 首次打开尚未被 App 迁移过的旧库」出现（App 自身正常、两侧测试都测不到，同 #169/#262/#278 源）。
+  - **修复**：`ENSURE_COLUMNS` 覆盖全部 28 列 + 按需路径附加列；`check-mcp-columns.py` 新增「`ENSURE_COLUMNS` ⊇ `SELECT_COLS`」断言，漏改即 PR 阶段红。旧布局（含 `key`/`gh_state`/`gh_status`）改为**显式探测并拒绝**，提示「先启动一次 App 完成迁移」，不再把「schema 太旧」误报成「列名不存在」。
+  - **#329 MCP `handoff_len` 字节数 vs 字符数不一致**：Rust 侧 `text.len()`（UTF-8 字节）报 6，Python 侧 `len(text)`（码点）报 2，同一份中文 handoff 两侧结论矛盾。
+  - **修复**：Rust 改 `text.chars().count()`，两侧统一为**字符数**（本批唯一对外契约变动）。
+  - **#329 `open_db` 每次建连都写库，与同步长事务叠加卡 UI**：每次调用都执行 `DELETE FROM notes` + 6 条 `INSERT meta` + 十余条 `ALTER`，而 `open_db` 被反复调用；同步侧把 stale 标记 + 全量 upsert 包成一个持锁事务，期间跑在主线程的命令在 `busy_timeout=5000` 上等待 ⇒ **最长 5 秒 beachball**。
+  - **修复**：三层门控（`SCHEMA_VERSION=3` + `fresh`/`needs_migration` 判定）；`schema_is_current` 为**只读自愈探测**（`PRAGMA table_info` 比对 `REQUIRED_COLUMNS`/`REQUIRED_INDEXES` + legacy key 检查），只读语句永不阻塞 ⇒ **稳态零写锁**。`notes` 去重挪进一次性迁移；`ensure_default_settings` 改只读比对（只补缺失 key，不覆盖用户值）；`user_version` 快路径与只读探测并存，兼顾「版本号已推进但列/索引被删」的自愈。
+  - **#329 重活跑在 Tauri 主线程**：`list_tasks`（全表扫描 + 逐行反序列化 JSON 父子关系，无 `LIMIT`）、`scan_agent_hosts`（遍历 `/Applications` 与 PATH 全目录 `is_file()`，冷 FS 数百毫秒）、`export_notes` / `import_notes` / `get_agent_hooks_status` 都是同步 `fn`，Tauri 2 在主线程执行。
+  - **修复**：5 个命令统一改 `async fn` + `tauri::async_runtime::spawn_blocking`（与 `sync_now` 同款）；`get_agent_hooks_status` 抽出同步实现 `agent_hooks_status_blocking`。
+  - **#329 前端任务唯一键跨账号不唯一**：后端唯一键是 `UNIQUE(repo, number, account_id)`，而前端用 `issueKey` 做 React key / 选中标识 / 指纹；**聚合视图**下同一 issue 来自两账号渲染成两行 ⇒ React key 重复、详情选错第一个、diff 失真。
+  - **修复**：新增 `taskIdentity = \`${issueKey}@${accountId}\``，`Board`（4 处卡片 key/active）、`App`（选中文案 + `DetailPanel` key）、`SessionsPanel`（key）、`taskSig`（指纹补 `accountId`）全部接入。
+  - **#329 Esc 冒泡双触发**：确认框与 `DetailPanel` / `SyncLogsPanel` 各监听 Esc，一次按键**同时**关闭确认框与整块面板。
+  - **修复**：新增 `escLayer`（后注册者为栈顶，token 用 `Symbol` 精确出栈，StrictMode 双调用安全）+ `useEscLayer`；`ConfirmDialog` / `DetailPanel` / `SyncLogsPanel` / `SettingsPanel` / `AccountsPanel` / `AboutPanel` / `App`（更新提示抽成独立 `UpdatePrompt`，仅挂载时注册）的 `onKeyDown` 一律先判 `isTop()`。
+  - **#329 `SessionsPanel.handleCopy` 无 catch + 定时器泄漏**：改 `await` + `try/catch`，定时器提 `useRef` 卸载清理。**#329 启动 quarantine 拉取无 catch**：`App.tsx` 补 `.catch(reportError)`。
+  - **#329 `AgentPanel` 项目目录输入每键触发 2 次 IPC（含 FS 扫描）**：把实时 `targetDir` 与已提交 `committedTargetDir` 分离，输入框移出查询依赖，改失焦 / 回车提交。
+  - **#329 `NotesPanel` 每次增删改整块替换成「加载中」**（界面跳变）：用 `loadedOnce` ref 区分首屏 `loading` 与后台 `refreshing`，右栏四列以 `aria-busy` 降透明而非换占位。
+  - **#329 `SettingsPanel` 的 `[settings.accounts]` effect 重置未保存草稿**：依赖改稳定指纹 `accounts.map(a=>a.id).join(',')`。
+  - **#329 `clearAllFilters` 绕过查询合并器直写 state**（与并发 load 竞态，最长 20s 自愈）：改 `await loadWith('', accountFilter)`。
+  - **#329 CSS 引用未定义变量 → 样式静默失效**：`--text-secondary`（未定义）→ `--text-2`；`:root` 补 `--font-mono` 定义。**#329 主题切回「跟随系统」重复注册监听**：句柄提模块级，`setMode('auto')` 先 `unbind` 再 `bind`。
+  - **无 schema / 无 MCP 工具 / 无 Tauri command 签名 / 无 i18n key 变更**：与 schema 相关只有「何时/如何跑迁移」（`user_version` 门控 + 只读探测 + `notes` 去重进迁移 + `PROJECT_ITEMS_DDL` 拆出），列仍 28 列受 `check-mcp-columns.py` 校验。`handoff_len` 语义由字节改字符是本批唯一对外契约变动。
+  - **验证**：`npm test` 194 passed（+39）✅、`npx tsc --noEmit` ✅、`npm run build` ✅、`npm run i18n:check` 389 keys ✅、`npm run lint` 16 warnings（0 error）✅、`npx prettier --check` ✅、`cargo clippy --lib -- -D warnings` ✅、`cargo test --lib` 141 passed（+12）✅、`scripts/check-doc-links.py` 162 文件 ✅、`scripts/check-mcp-columns.py` 28 列 + ensure 覆盖 33 列 ✅、`scripts/check-workflow-yaml.py` 6 文件 ✅、`scripts` 单测 86 OK ✅；**18 项断言逐项通过反向验证**（改回缺陷写法必失败；前端 4 处同时回退令 8 例失败）。
+
 - **Unreleased — code review P0 批次：About 按钮失效 / 语言切换器丢失 / 记事重复报错 / 项目条目数取错（#327）**
 
   - **#327 About 小窗「确定」按钮失效**：capability 只声明了 `windows:["main"]`，而 `about` 是独立 webview，不匹配任何 capability ⇒ 零 IPC 权限；且 `core:window:default`（实测 28 项）不含 `allow-close`，`getCurrentWindow().close()` 被 ACL 拒绝、按钮静默失效（#325 功能实际未生效）。详见 [docs/issue-327-p0-functional-defects.md](./issue-327-p0-functional-defects.md)。

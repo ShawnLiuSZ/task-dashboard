@@ -159,6 +159,9 @@ export default function NotesPanel() {
   const labels = useLabels();
   const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
+  /** #329：后台刷新（增删改后的重查）——不替换内容，只做轻量反馈。 */
+  const [refreshing, setRefreshing] = useState(false);
+  const loadedOnce = useRef(false);
   const [draft, setDraft] = useState('');
   const [draftLabel, setDraftLabel] = useState<NoteLabel>('low');
   const [adding, setAdding] = useState(false);
@@ -182,15 +185,21 @@ export default function NotesPanel() {
   const editRef = useAutoSize(editDraft, editingId !== null);
 
   const loadNotes = useCallback(async () => {
-    setLoading(true);
+    // #329：区分「首屏加载」与「后台刷新」。原先每次重查都把 loading 置真，
+    // 于是增删改后右栏四列被整块替换成「加载中」占位 —— 界面跳变、列宽抖动。
+    // 现在首屏才用 loading 占位，后续重查只置 refreshing（容器降透明度 + aria-busy）。
+    if (loadedOnce.current) setRefreshing(true);
+    else setLoading(true);
     try {
       setNotes(await api.listNotes());
       setError(null);
+      loadedOnce.current = true;
     } catch (e) {
       console.error('加载记事失败:', e);
       setError(t('notes.loadFailed', { error: errText(e) }));
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [t]);
 
@@ -576,7 +585,7 @@ export default function NotesPanel() {
         )}
 
         {/* 右侧：固定四列（紧急 / 高 / 中 / 低），与看板列同构：等宽、全高、列内纵向滚动。 */}
-        <div className="notes-card-cols">
+        <div className="notes-card-cols" aria-busy={refreshing || undefined}>
           {loading ? (
             <div className="notes-placeholder">{t('notes.loading')}</div>
           ) : (

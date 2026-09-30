@@ -23,6 +23,9 @@
   --danger-hover: #a32d2d;
   --code-bg: #f5f5f5;
   --code-text: #333333;
+  /* #329：等宽字体族。此前 `.session-meta-value` 直接引用未定义的 `--font-mono`，
+     整条声明被浏览器丢弃（分支名/目录不再等宽，样式静默失效）。 */
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
   --shadow: rgba(0, 0, 0, 0.06);
   --shadow-strong: rgba(0, 0, 0, 0.12);
   --overlay: rgba(0, 0, 0, 0.2);
@@ -2190,7 +2193,7 @@ button.unassigned-tag:disabled {
 }
 .session-meta-label {
   flex: 0 0 auto;
-  color: var(--text-secondary);
+  color: var(--text-2);
   min-width: 40px;
 }
 .session-meta-value {
@@ -2268,6 +2271,12 @@ button.unassigned-tag:disabled {
   gap: 12px;
   overflow-x: auto;
   overflow-y: hidden;
+}
+
+/* #329：后台刷新（增删改后的重查）只做轻量降透明提示，不再整块替换成「加载中」占位，
+   避免右栏四列跳变。`aria-busy` 由 NotesPanel 在 refreshing 时设置。 */
+.notes-card-cols[aria-busy] {
+  opacity: 0.65;
 }
 
 /* 创建列收起后占位的一条窄导轨（只影响创建列本身）。 */
