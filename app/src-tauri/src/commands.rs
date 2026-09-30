@@ -362,7 +362,7 @@ pub fn clear_session(
 }
 
 /// #279：单独设置任务的工作分支（agent 在**创建 / 切换分支之后**调用，纠正「开始任务」时
-/// 录到的基线分支 develop/master）。只写本地 `tasks.work_branch` 列，不碰同步的 PR `branch` 列。
+/// 录到的基线分支 main）。只写本地 `tasks.work_branch` 列，不碰同步的 PR `branch` 列。
 #[tauri::command]
 pub fn set_work_branch(
     app: AppHandle,
