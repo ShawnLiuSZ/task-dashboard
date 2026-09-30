@@ -182,6 +182,8 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/issue-329-p2-quality.md`](./docs/issue-329-p2-quality.md) — **code review P2 批次（一致性 / 工程质量，18 项）**：`merge-cleanup.py` 多编号提取丢中间编号、`SKIP_DELETE_MARKERS` 子串误伤（`latest` 命中 `test`）；`check-workflow-yaml.py` 误报 `read-all` / `on: [a,b]` 并补 4 类漏报（浮动分支 `@main`、有 `runs-on` 无 `steps`、顶层 key 重复、`needs` 指向不存在 job）；`server.py::ensure_schema` 列清单仅有 `SELECT_COLS` 的三分之一导致旧库 `no such column`；MCP `handoff_len` 字节数 vs 字符数；`open_db` 每次建连写库致 UI 最长 5s 卡顿（改 `user_version` 门控 + 只读自愈探测、稳态零写锁）；5 个 GUI 命令移出 Tauri 主线程；前端任务唯一键跨账号不唯一、Esc 冒泡双触发、复制定时器泄漏、每键 2 次 IPC、加载中整块替换、编辑草稿被重置、清筛选绕过合并器、CSS 未定义变量、主题监听泄漏
 
+- [`docs/issue-336-docs-ci-reality-alignment.md`](./docs/issue-336-docs-ci-reality-alignment.md) — **CI 门禁盲区 + 文档与仓库现状对齐**：`quality-check.yml` 的 `push` 只挂已废弃的 `develop` ⇒ 直接 push 到 `main` 跳过全部重型门禁（#330 加固后的遗留缺口）；`AGENTS.md` / `CONTRIBUTING.md` / `AGENT_INSTRUCTIONS{,.en}.md` / `.claude`+`.opencode` 的 `task-start` 命令 / `set_work_branch` 的 MCP tool description 共 30+ 处仍指示「从 `develop` 新开分支」，照错做会产生错误分支；`docs/release-backmerge-policy.md` 前提失效加横幅；旧仓库名 `task-dashborad` 4 处陈旧链接 + `blob/develop` 2 处真断链。含「只改指导动作的文本、保留历史记录」的边界口径
+
 - [`docs/issue-335-closed-state-case.md`](./docs/issue-335-closed-state-case.md) — **已关闭 issue 滞留看板**：`tasks.issue_state` 同一列存在 4 种大小写（GraphQL 的 `IssueState` 是大写 `OPEN`/`CLOSED`，REST 是小写），而三处 closed 判据写死小写 ⇒ `AGENTS.md §2.2` 优先级第 1 条「closed → done 远程权威覆盖」对 Project 来源的 issue 完全失效；Project Status 的英文选项又因 `map_project_status()` 只认中文而兜底失败，实测 29 行滞留（`closed` 小写侧 0 行异常，反证缺陷只在大写）。修复为四层：判据归一（`common::is_closed_state`）、落库归一（`normalize_issue_state`）、英文映射补全（整值全等防 `Ready for release` 误判）、存量数据修复（随 `SCHEMA_VERSION` 3→4 门控，刻意不臆造 `done_at`）
 
 - [`docs/issue-330-p3-quality-gates.md`](./docs/issue-330-p3-quality-gates.md) — **code review P3 批次（规范 / 文档 / CI 门禁，7 项）**：版本号分散在 5 个文件却零自动化校验（实测 `package-lock.json` 落后两个大版本）；15 篇知识库文档既不在 README 也不在 CHANGELOG（孤岛）；ESLint `--max-warnings 20` 只剩 2 条余量、门禁形同「不许再写第 3 条 warning」；CI 不跑 `vite build` 与 `cargo fmt --check`、action 版本 v4/v5 混杂；release 无超时（挂死按 6 小时计费）与并发控制；4 个只读 workflow 未声明 `permissions`；`check-i18n.mjs` 硬编码两个语种致新增语言漏检。含新增 `scripts/check-versions.py`、`check-doc-links.py` 孤岛检测、全仓库 `cargo fmt` 归一化（263 hunk / 11 文件）
@@ -194,7 +196,7 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/issue-181-auto-refresh.md`](./docs/issue-181-auto-refresh.md) — 外部写入（MCP）后 App 任务界面自动刷新：聚焦/轮询/指纹跳过 + `tasks-changed` 事件
 
-- [`docs/release-backmerge-policy.md`](./docs/release-backmerge-policy.md) — **发布回合策略**：release 合入 `main` 后必须把 `main` 回合 `develop`，避免版本号与 CHANGELOG 断档
+- [`docs/release-backmerge-policy.md`](./docs/release-backmerge-policy.md) — ⚠️ **已失效（保留作历史记录）**：原「发布回合策略」要求 release 合入 `main` 后把 `main` 回合 `develop`；`develop` 分支已废弃并从远端删除（2026-09-30 核实），该策略随之作废 —— 现为「所有 PR 直接进 `main`」的单主干流程
 
 - [`docs/issue-256-update-check.md`](./docs/issue-256-update-check.md) — **检查更新双通道并发**：updater 通道无超时导致的串行慢 + 静默 fallback；并发 + 单路 30s 封顶，手动下载时展示失败原因
 

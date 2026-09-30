@@ -298,7 +298,7 @@ pub fn touch_session(
 }
 
 /// #279：单独设置任务的工作分支 `work_branch`（agent 在**创建 / 切换分支之后**调用，
-/// 纠正 `record_session` 在「开始任务」时录到的基线分支 develop/master）。
+/// 纠正 `record_session` 在「开始任务」时录到的基线分支 main）。
 /// 与同步自动拉的 PR `branch` 列分离，同步不碰 work_branch。
 ///
 /// 本函数只做 SQL 更新：`branch` 为空串会把该列清空（清空语义在本层保留，便于复用）。

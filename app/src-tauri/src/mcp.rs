@@ -334,7 +334,7 @@ fn tool_record_session(
 }
 
 /// #279：单独设置任务的工作分支（agent 在**创建 / 切换分支之后**调用，纠正
-/// `record_session` 在「开始任务」时录到的基线分支 develop/master）。只写本地
+/// `record_session` 在「开始任务」时录到的基线分支 main）。只写本地
 /// SQLite 的 `work_branch` 列，不碰 GitHub、不碰同步的 PR `branch` 列。
 fn tool_set_work_branch(conn: &Connection, issue: &str, branch: &str) -> Result<Value, String> {
     let key = parse_issue_ref(issue)?;
@@ -565,7 +565,7 @@ fn tools_list() -> Value {
         },
         {
             "name": "set_work_branch",
-            "description": "单独设置任务的工作分支（work_branch 列），用于 agent 在**创建 / 切换分支之后**纠正「开始任务」时录到的基线分支（如 develop/master）。只写本地 SQLite，不碰 GitHub、不碰同步的 PR branch 列。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。",
+            "description": "单独设置任务的工作分支（work_branch 列），用于 agent 在**创建 / 切换分支之后**纠正「开始任务」时录到的基线分支（如 main）。只写本地 SQLite，不碰 GitHub、不碰同步的 PR branch 列。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。",
             "inputSchema": {
                 "type": "object",
                 "properties": {

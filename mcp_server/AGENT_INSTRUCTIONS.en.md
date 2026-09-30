@@ -70,10 +70,13 @@ Alongside the board status and session fields, the response also carries mirror 
 
 ## 2. Trigger timing → action (core rules)
 
+> ⚠️ **The branch baseline is `main`**: issue work branches are always cut from `main`. This repo's historical `develop` integration branch has been **retired and deleted from the remote** (see [`AGENTS.md`](../AGENTS.md) §2.3).
+> "Baseline branch" below means `main`; if other historical docs show branch examples using `develop`, read them as `main`.
+
 | Timing | Action |
 |---|---|
-| **Start working** on an issue (assigned by the user / you claim it / you begin changing it) | **First switch to that issue's work branch** (`feature/issue-<N>-<scope>`, new from develop), then `update_task_status(issue, "处理中")` + `record_session(issue, <current session id>, "<agent name>", branch=<current working branch>)` |
-| **After switching to the issue branch** (#279 correction) | If you ran "start working" first (still on develop/master) and **only later** switched to the issue branch, after the switch call `set_work_branch(issue, branch=<current issue branch>)` to correct `work_branch` (writes only that column, never the synced PR `branch`) |
+| **Start working** on an issue (assigned by the user / you claim it / you begin changing it) | **First switch to that issue's work branch** (`feature/issue-<N>-<scope>`, new from main), then `update_task_status(issue, "处理中")` + `record_session(issue, <current session id>, "<agent name>", branch=<current working branch>)` |
+| **After switching to the issue branch** (#279 correction) | If you ran "start working" first (still on main) and **only later** switched to the issue branch, after the switch call `set_work_branch(issue, branch=<current issue branch>)` to correct `work_branch` (writes only that column, never the synced PR `branch`) |
 | **Pause / session interrupted / switching to another task** | `record_session(issue, <current session id>, "<your agent name>")` |
 | The user says "**generate a handoff task**", "hand off", "handoff", etc. | `record_handoff(issue, "<done / not done / blockers / how to resume>")`; to preserve a resumable session, also call `record_session` |
 | **Task complete** (you verify it's done, wrapping up) | `update_task_status(issue, "已完成")` + `clear_session(issue)` |
@@ -89,7 +92,7 @@ The `session_id` is **supplied by the caller**, with this priority (don't mix id
 
 `branch` is **also supplied by the caller, in two steps**: **first switch to that issue's work branch** (see the "Start working" row above), then run `git branch --show-current` (or `git -C <the project dir for that issue> branch --show-current`) with the Bash tool to get the plain branch name, and pass the result as the string `branch` argument to `record_session`. **Never paste `$(...)` / backticks literally into MCP arguments** (MCP never runs a shell — that would store a literal dirty string).
 **pass an empty string if it can't be resolved** (no git repo / no branch — don't stuff in dirty data). It's written to a separate `work_branch` column, kept apart
-from the synced PR `branch`, so sync never overwrites it. **#279 root cause**: if you ran `git branch --show-current` while still on develop/master and passed it to `record_session`, `work_branch` ends up pinned to the baseline branch — so branch capture must happen **after** switching to the issue branch. If it was already recorded wrong, after switching call `set_work_branch(issue, branch=<current issue branch>)` to correct it.
+from the synced PR `branch`, so sync never overwrites it. **#279 root cause**: if you ran `git branch --show-current` while still on main and passed it to `record_session`, `work_branch` ends up pinned to the baseline branch — so branch capture must happen **after** switching to the issue branch. If it was already recorded wrong, after switching call `set_work_branch(issue, branch=<current issue branch>)` to correct it.
 
 ### How state is kept when interrupting
 After an interrupt, **keep the state as "处理中"** (do not fall back to "待处理") — falling back would lose the signal that "this task already has partial work", which is exactly what a session id is for. On resume, explicitly move back to "处理中".
@@ -100,13 +103,13 @@ After an interrupt, **keep the state as "处理中"** (do not fall back to "待�
 
 ```
 # 1) Got the task; start working (shortcut: /task-start fad-backend#1247)
-# First switch to the issue's work branch (feature/issue-1247-xxx, new from develop), then read it
-# Bash: git switch -c feature/issue-1247-xxx develop   # skip if already on it
+# First switch to the issue's work branch (feature/issue-1247-xxx, new from main), then read it
+# Bash: git switch -c feature/issue-1247-xxx main   # skip if already on it
 # Bash: git branch --show-current                       # get the issue branch name
 update_task_status(issue="fad-backend#1247", status="处理中")
 record_session(issue="fad-backend#1247", session_id="${CLAUDE_SESSION_ID}", agent="claude-code", branch="feature/issue-1247-xxx")
 
-# 1b) #279 correction: if you ran start first (on develop/master) then switched, call this after
+# 1b) #279 correction: if you ran start first (on main) then switched, call this after
 set_work_branch(issue="fad-backend#1247", branch="feature/issue-1247-xxx")
 
 # 2) Switching to something else mid-way; record the session first

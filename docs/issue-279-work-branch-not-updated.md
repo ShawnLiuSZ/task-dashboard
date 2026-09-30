@@ -81,5 +81,5 @@ issue 分支），随后 `record_session(branch=...)` 就把基线分支写进�
 
 - issue：<https://github.com/ShawnLiuSZ/task-dashboard/issues/279>
 - 配套 issue（父/子 issue 关联）：<https://github.com/ShawnLiuSZ/task-dashboard/issues/278>
-- 工具契约：<https://github.com/ShawnLiuSZ/task-dashboard/blob/develop/mcp_server/AGENT_INSTRUCTIONS.md>
-- CHANGELOG：<https://github.com/ShawnLiuSZ/task-dashboard/blob/develop/docs/CHANGELOG.md>
+- 工具契约：<https://github.com/ShawnLiuSZ/task-dashboard/blob/main/mcp_server/AGENT_INSTRUCTIONS.md>
+- CHANGELOG：<https://github.com/ShawnLiuSZ/task-dashboard/blob/main/docs/CHANGELOG.md>

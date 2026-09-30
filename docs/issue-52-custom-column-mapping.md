@@ -2,7 +2,7 @@
 
 > 涉及版本：v0.3.28
 >
-> 关联：[GitHub Issue #52](https://github.com/ShawnLiuSZ/task-dashborad/issues/52)、[docs/CHANGELOG.md](./CHANGELOG.md)、PR → develop
+> 关联：[GitHub Issue #52](https://github.com/ShawnLiuSZ/task-dashboard/issues/52)、[docs/CHANGELOG.md](./CHANGELOG.md)、PR → develop
 
 ## 背景 / 动机
 
@@ -91,6 +91,6 @@ CREATE TABLE IF NOT EXISTS account_columns (
 
 ## 相关链接
 
-- [Issue #52](https://github.com/ShawnLiuSZ/task-dashborad/issues/52)
+- [Issue #52](https://github.com/ShawnLiuSZ/task-dashboard/issues/52)
 - 代码：`app/src-tauri/src/db.rs`（account_columns 表 + CRUD）、`app/src-tauri/src/commands.rs`（list/save_account_columns）、`app/src-tauri/src/sync.rs`（状态判定）、`app/src/components/SettingsPanel.tsx`（编辑 UI）、`app/src/components/Board.tsx`（custom 渲染）、`app/src/App.tsx`（接入）、`app/src/types.ts` / `app/src/api.ts`
 - [docs/CHANGELOG.md](./CHANGELOG.md)

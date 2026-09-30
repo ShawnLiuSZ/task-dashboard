@@ -744,7 +744,7 @@ def tool_set_work_branch(issue, branch):
     """#279：单独设置任务的工作分支 `work_branch`。
 
     agent 在**创建 / 切换 issue 分支之后**调用，纠正 `record_session` 在「开始任务」
-    时录到的基线分支 develop/master。与同步自动拉的 PR `branch` 列分离，同步不碰
+    时录到的基线分支 main。与同步自动拉的 PR `branch` 列分离，同步不碰
     work_branch。`branch` 为空串报错（清空该列请使用 clear_work_branch）。
     若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。
     """
@@ -944,7 +944,7 @@ TOOLS = [
     },
     {
         "name": "set_work_branch",
-        "description": "单独设置任务的工作分支 work_branch（#279）。agent 在创建 / 切换 issue 分支之后调用，纠正 record_session 在「开始任务」时录到的基线分支 develop/master。与同步自动拉的 PR branch 列分离，同步不碰 work_branch。branch 为空会报错（清空该列请使用 clear_work_branch）。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。",
+        "description": "单独设置任务的工作分支 work_branch（#279）。agent 在创建 / 切换 issue 分支之后调用，纠正 record_session 在「开始任务」时录到的基线分支 main。与同步自动拉的 PR branch 列分离，同步不碰 work_branch。branch 为空会报错（清空该列请使用 clear_work_branch）。若该 issue 尚未同步到本地，会按需从 GitHub 拉取这一个 issue 再写入。",
         "inputSchema": {
             "type": "object",
             "properties": {
