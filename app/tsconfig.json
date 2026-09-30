@@ -9,6 +9,10 @@
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
+    // #330：`scripts/i18n-lib.mjs` 是 i18n 校验的纯逻辑模块，被 Node CLI（check-i18n.mjs）
+    // 与 vitest（src/i18n-check.test.ts）同时加载。开 allowJs 让 TS 能解析该导入；
+    // checkJs 保持关闭，故不对该 .mjs 做类型检查（不改变既有严格度）。
+    "allowJs": true,
     "noEmit": true,
     "jsx": "react-jsx",
     "strict": true,

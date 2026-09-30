@@ -12,6 +12,10 @@ on:
   push:
     branches: [main, develop]
 
+# 最小权限（#330）：本 workflow 只读仓库跑校验脚本，不写任何东西。
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest

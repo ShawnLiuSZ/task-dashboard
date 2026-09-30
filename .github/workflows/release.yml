@@ -4,7 +4,9 @@ name: Release
 # 构建 macOS / Windows / Linux 三端安装包，并作为附件上传到该 Release。
 #
 # 用法：
-#   1. 本地把 tauri.conf.json / Cargo.toml / package.json 的 version 统一（如 0.1.0）
+#   1. 本地把 version 四处 + lockfile 统一（package.json / package-lock.json /
+#      src-tauri/Cargo.toml / src-tauri/Cargo.lock / src-tauri/tauri.conf.json），
+#      跑 `python3 scripts/check-versions.py` 确认（含 README 中英的当前版本引用）
 #   2. 打 tag（与 version 对齐）：git tag v0.1.0 && git push origin v0.1.0
 #   3. 在 GitHub 上基于该 tag 创建 Release 并 Publish → 触发本工作流
 #   4. 也可在 Actions 页面手动 Run workflow 兜底（此时用当前 ref 的 tag/分支名）
@@ -15,6 +17,13 @@ on:
 
 permissions:
   contents: write
+
+# #330：同一 tag 重复触发（重新 Publish / 手动 Run）时，两个 run 会并发往同一个
+# Release 上传附件、互相覆盖产物。串行化并保留进行中的 run（cancel-in-progress:
+# false —— 打包很贵，半途取消会留下不完整附件）。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -48,6 +57,9 @@ jobs:
             target: aarch64-unknown-linux-gnu
 
     runs-on: ${{ matrix.platform }}
+    # #330：此前 6 个平台 job 都没有超时，卡死时按 GitHub 默认 **6 小时**计费。
+    # 打包正常 10~20 分钟，60 分钟足够覆盖冷缓存 + 排队。
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v5

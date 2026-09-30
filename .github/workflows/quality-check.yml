@@ -6,12 +6,17 @@ on:
   push:
     branches: [develop]
 
+# 最小权限：本 workflow 只读仓库（跑测试 / lint / 校验脚本），不写任何东西。
+# 不声明时会沿用仓库默认权限（可能含 write），违反最小权限原则。
+permissions:
+  contents: read
+
 jobs:
   rust-clippy:
     name: Rust Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # #252：Tauri 在 Linux 上编译需要 GTK / WebKit / glib 等系统库（build script 阶段
       # 就要 pkg-config 找得到），漏装则连 `cargo clippy --lib` 都编不过。
@@ -22,12 +27,19 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: app/src-tauri -> target
+
+      # #330：仓库此前**完全没有** rustfmt 门禁，`cargo fmt` 与 `cargo fmt --check`
+      # 的差异只能靠 reviewer 肉眼发现。本批先把全仓库归一化，再把 `--check` 挂到 CI，
+      # 之后任何未格式化的改动都会在 PR 阶段被拦住。
+      - name: Rust fmt
+        working-directory: app/src-tauri
+        run: cargo fmt --check
 
       - name: Run Clippy
         working-directory: app/src-tauri
@@ -37,10 +49,10 @@ jobs:
     name: Frontend Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -62,7 +74,7 @@ jobs:
     name: Rust Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # #252：同 rust-clippy —— 缺系统库时 `cargo test --lib` 也会在编译阶段就失败。
       - name: Install Linux dependencies
@@ -88,10 +100,10 @@ jobs:
     name: Frontend Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -109,6 +121,13 @@ jobs:
         working-directory: app
         run: npx tsc --noEmit
 
+      # #330：CI 此前只跑 `npm test` + `tsc`，**不跑 vite build**，于是 vite 配置 /
+      # `build.target` / `frontendDist` 这类只在构建期暴露的问题要等到 release 打包
+      # 才现形（那时已经打了 tag）。这里补上真实构建。
+      - name: Build frontend
+        working-directory: app
+        run: npm run build
+
   scripts-checks:
     name: Scripts Checks
     runs-on: ubuntu-latest
@@ -122,6 +141,11 @@ jobs:
       # #284：仓库内脚本（workflow 配置校验 / PR 收尾逻辑）此前没有任何 CI 覆盖。
       - name: Workflow 配置校验
         run: python3 scripts/check-workflow-yaml.py
+
+      # #330：版本号分散在 5 个文件 + README 中英各 2 处引用，此前零自动化校验，
+      # 实测 `package-lock.json` 已落后两个大版本（0.4.0 vs 0.6.5）。
+      - name: 版本号一致性校验
+        run: python3 scripts/check-versions.py
 
       - name: scripts 单测
         run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
