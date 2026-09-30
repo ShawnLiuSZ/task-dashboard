@@ -17,7 +17,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::common::{IssueLink, IssueLinks};
 
 /// fetch_project_issues 返回类型：(status_map, issues, item_ids)
-pub type ProjectIssuesResult = (HashMap<String, String>, Vec<RawTask>, HashMap<String, String>);
+pub type ProjectIssuesResult = (
+    HashMap<String, String>,
+    Vec<RawTask>,
+    HashMap<String, String>,
+);
 
 /// Search API 全局限流门间隔（毫秒）。GitHub Search API 认证后 30 req/min，
 /// 折合 1 次/2s。同一客户端实例的多线程共享此门，任意两次 search 调用间隔
@@ -168,7 +172,11 @@ impl RawTask {
             author,
             comments: v.get("comments").and_then(|x| x.as_u64()).unwrap_or(0),
             is_pr: v.get("pull_request").is_some(),
-            created_at: v.get("created_at").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            created_at: v
+                .get("created_at")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
         })
     }
 
@@ -208,7 +216,11 @@ impl RawTask {
             comments: v.get("comments").and_then(|x| x.as_u64()).unwrap_or(0),
             // 与 from_item 一致：`pull_request` 字段存在即为 PR（REST 也返回 PR）。
             is_pr: v.get("pull_request").is_some(),
-            created_at: v.get("created_at").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            created_at: v
+                .get("created_at")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
         })
     }
 }
@@ -239,7 +251,7 @@ impl RawPr {
     /// 分支在嵌套字段 `head.ref`（直接反序列化 head_ref 会恒为空 → 分支列全丢）。
     pub fn from_item(v: &serde_json::Value) -> Result<RawPr, String> {
         Ok(RawPr {
-            repo: String::new(), // 调用方按当前仓库回填
+            repo: String::new(),       // 调用方按当前仓库回填
             repo_owner: String::new(), // 调用方回填
             number: v
                 .get("number")
@@ -407,7 +419,9 @@ fn link_from_node(n: &serde_json::Value) -> Option<IssueLink> {
 pub fn build_links_query(owner: &str, repo: &str, numbers: &[i64]) -> String {
     let mut fields = String::new();
     for (i, n) in numbers.iter().enumerate() {
-        fields.push_str(&format!("  a{i}: issue(number: {n}) {{ {LINK_FRAGMENT} }}\n"));
+        fields.push_str(&format!(
+            "  a{i}: issue(number: {n}) {{ {LINK_FRAGMENT} }}\n"
+        ));
     }
     format!(
         "query {{ r: repository(owner:\"{owner}\", name:\"{repo}\") {{ name owner {{ login }} {fields} }} }}"
@@ -434,7 +448,9 @@ pub fn parse_links_from_graphql(v: &serde_json::Value) -> HashMap<i64, IssueLink
             continue;
         }
         let Some(n) = node.as_object() else { continue };
-        let Some(number) = n.get("number").and_then(|x| x.as_i64()) else { continue };
+        let Some(number) = n.get("number").and_then(|x| x.as_i64()) else {
+            continue;
+        };
         // `parent` 为 `IssueOrPullRequest` union：不是 issue（PR 作父）时字段形状不同，
         // 直接交给 link_from_node 判空取号；此处只过滤 JSON null。
         let parent = n
@@ -521,17 +537,12 @@ impl GitHubClient {
     /// v0.3.49 (#143)：Search 限流门。跨线程共享，调用前等待到距上次 ≥ 2s。
     /// 锁中毒时取内部值继续（门控降级为尽力而为，不阻断同步）。
     fn wait_search_gate(&self) {
-        let mut guard = self
-            .search_gate
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.search_gate.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
         if let Some(last) = *guard {
             let elapsed = now.duration_since(last).as_millis();
             if elapsed < SEARCH_GATE_MS {
-                std::thread::sleep(Duration::from_millis(
-                    (SEARCH_GATE_MS - elapsed) as u64,
-                ));
+                std::thread::sleep(Duration::from_millis((SEARCH_GATE_MS - elapsed) as u64));
             }
         }
         *guard = Some(Instant::now());
@@ -606,13 +617,17 @@ impl GitHubClient {
                     Some(a) => a,
                     None => break,
                 };
-                if arr.is_empty() { break; }
+                if arr.is_empty() {
+                    break;
+                }
                 for repo in arr {
                     if let Some(name) = repo.get("name").and_then(|n| n.as_str()) {
                         repos.push(format!("{}/{}", self.org, name));
                     }
                 }
-                if arr.len() < 100 { break; }
+                if arr.len() < 100 {
+                    break;
+                }
             }
         }
 
@@ -631,7 +646,9 @@ impl GitHubClient {
                     Some(a) => a,
                     None => break,
                 };
-                if arr.is_empty() { break; }
+                if arr.is_empty() {
+                    break;
+                }
                 for repo in arr {
                     if let Some(full_name) = repo.get("full_name").and_then(|n| n.as_str()) {
                         if !repos.iter().any(|r| r == full_name) {
@@ -639,7 +656,9 @@ impl GitHubClient {
                         }
                     }
                 }
-                if arr.len() < 100 { break; }
+                if arr.len() < 100 {
+                    break;
+                }
             }
         }
 
@@ -656,11 +675,18 @@ impl GitHubClient {
     fn build_repo_qualifier(&self, base_query: &str) -> String {
         match self.get_accessible_repos() {
             Ok(repos) if !repos.is_empty() => {
-                let repo_qualifiers = repos.iter().map(|r| format!("repo:{}", r)).collect::<Vec<_>>().join(" ");
+                let repo_qualifiers = repos
+                    .iter()
+                    .map(|r| format!("repo:{}", r))
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 format!("{} {}", repo_qualifiers, base_query)
             }
             _ => {
-                crate::tlog!("[sync] 无可访问仓库或获取失败，回退到全可见范围搜索: {}", base_query);
+                crate::tlog!(
+                    "[sync] 无可访问仓库或获取失败，回退到全可见范围搜索: {}",
+                    base_query
+                );
                 base_query.to_string()
             }
         }
@@ -804,7 +830,9 @@ impl GitHubClient {
             full_repo, number
         );
         let v = self.get(&url)?;
-        let arr = v.as_array().ok_or_else(|| "comments 返回非数组".to_string())?;
+        let arr = v
+            .as_array()
+            .ok_or_else(|| "comments 返回非数组".to_string())?;
         Ok(arr
             .iter()
             .filter_map(|c| c.get("html_url").and_then(|u| u.as_str()).map(String::from))
@@ -862,9 +890,9 @@ impl GitHubClient {
             if chunk.is_empty() {
                 continue;
             }
-            out.extend(parse_links_from_graphql(&self.graphql_partial(
-                &build_links_query(owner, repo, chunk),
-            )?));
+            out.extend(parse_links_from_graphql(
+                &self.graphql_partial(&build_links_query(owner, repo, chunk))?,
+            ));
         }
         Ok(out)
     }
@@ -900,7 +928,12 @@ impl GitHubClient {
             }
             if let (Some(id), Some(title)) = (n["id"].as_str(), n["title"].as_str()) {
                 let num = n["items"]["totalCount"].as_i64().unwrap_or(0);
-                out.push((id.to_string(), title.to_string(), num, owner_type.to_string()));
+                out.push((
+                    id.to_string(),
+                    title.to_string(),
+                    num,
+                    owner_type.to_string(),
+                ));
             }
         }
         out
@@ -927,7 +960,10 @@ impl GitHubClient {
     }
 
     /// 拉取多个 Project 的 Status 条目，合并为 `repo#number -> Status` 映射。
-    pub fn fetch_project_status(&self, project_ids: &[String]) -> Result<HashMap<String, String>, String> {
+    pub fn fetch_project_status(
+        &self,
+        project_ids: &[String],
+    ) -> Result<HashMap<String, String>, String> {
         let mut map: HashMap<String, String> = HashMap::new();
         for pid in project_ids {
             match self.fetch_project_items(pid) {
@@ -962,7 +998,10 @@ impl GitHubClient {
         // 找名为 Status 的 SingleSelectField
         for n in nodes {
             let fname = n["name"].as_str().unwrap_or("");
-            if fname.eq_ignore_ascii_case("Status") || fname.contains("tatus") || fname.contains("状态") {
+            if fname.eq_ignore_ascii_case("Status")
+                || fname.contains("tatus")
+                || fname.contains("状态")
+            {
                 let field_id = n["id"].as_str().unwrap_or("").to_string();
                 let options = n["options"]
                     .as_array()
@@ -977,8 +1016,16 @@ impl GitHubClient {
                     })
                     .collect();
                 if !result.is_empty() {
-                    crate::tlog!("[gh] project {} field '{}' options={:?}", project_id, fname, result.iter().map(|o| &o.name).collect::<Vec<_>>());
-                    return Ok(StatusField { field_id, options: result });
+                    crate::tlog!(
+                        "[gh] project {} field '{}' options={:?}",
+                        project_id,
+                        fname,
+                        result.iter().map(|o| &o.name).collect::<Vec<_>>()
+                    );
+                    return Ok(StatusField {
+                        field_id,
+                        options: result,
+                    });
                 }
             }
         }
@@ -1029,9 +1076,10 @@ impl GitHubClient {
                             if (field_name.eq_ignore_ascii_case("Status")
                                 || field_name.contains("tatus")
                                 || field_name.contains("状态"))
-                                && !val_name.is_empty() {
-                                    status = val_name.to_string();
-                                }
+                                && !val_name.is_empty()
+                            {
+                                status = val_name.to_string();
+                            }
                         }
                         // 诊断：打印第一个 item 的所有 field name + value
                         if map.len() < 3 {
@@ -1149,9 +1197,7 @@ impl GitHubClient {
                             .collect()
                     })
                     .unwrap_or_default();
-                let comments = content["comments"]["totalCount"]
-                    .as_u64()
-                    .unwrap_or(0);
+                let comments = content["comments"]["totalCount"].as_u64().unwrap_or(0);
                 let key = format!("{}#{}", repo, num);
                 // 提取 Status 字段值
                 let mut status = String::new();
@@ -1162,9 +1208,10 @@ impl GitHubClient {
                         if (field_name.eq_ignore_ascii_case("Status")
                             || field_name.contains("tatus")
                             || field_name.contains("状态"))
-                            && !val_name.is_empty() {
-                                status = val_name.to_string();
-                            }
+                            && !val_name.is_empty()
+                        {
+                            status = val_name.to_string();
+                        }
                     }
                 }
                 if !status.is_empty() {
@@ -1324,10 +1371,7 @@ impl GitHubClient {
                         .seconds_until_reset(resp.headers())
                         .map(|s| (s * 1000).min(MAX_BACKOFF_MS))
                         .unwrap_or(5000);
-                    crate::tlog!(
-                        "[gh] 配额剩余 {}，等待 {}ms 回补",
-                        r, wait_ms
-                    );
+                    crate::tlog!("[gh] 配额剩余 {}，等待 {}ms 回补", r, wait_ms);
                     std::thread::sleep(Duration::from_millis(wait_ms));
                 }
             }
@@ -1375,15 +1419,23 @@ impl GitHubClient {
 
             if status.as_u16() == 422 {
                 let body = resp.text().unwrap_or_default();
-                crate::tlog!("[sync] Search API 422: {} - {}", q, body.chars().take(120).collect::<String>());
+                crate::tlog!(
+                    "[sync] Search API 422: {} - {}",
+                    q,
+                    body.chars().take(120).collect::<String>()
+                );
                 // v0.3.29：422 是对整个 query 无效（限定的 repo 引用不可访问资源），
                 // 该源应视为「失败」而非「成功但无结果」，返回 Err 交由调用方计入 failed，
                 // 否则会被误当空结果，进而把真实关联任务标记陈旧后移出看板。
-                return Err(format!("Search API 422: {}", body.chars().take(120).collect::<String>()));
+                return Err(format!(
+                    "Search API 422: {}",
+                    body.chars().take(120).collect::<String>()
+                ));
             }
             if status.as_u16() == 429 || status.as_u16() == 403 {
                 // #328：403 先区分限定流与权限/SSO——后者不能白等 30 秒。
-                let Some(retry_after) = self.rate_limit_wait(status.as_u16(), resp.headers()) else {
+                let Some(retry_after) = self.rate_limit_wait(status.as_u16(), resp.headers())
+                else {
                     let body = resp.text().unwrap_or_default();
                     return Err(format!(
                         "GitHub API 错误 ({}): {}{}",
@@ -1393,23 +1445,45 @@ impl GitHubClient {
                     ));
                 };
                 let wait_ms = (retry_after * 1000).min(MAX_BACKOFF_MS);
-                crate::tlog!("[gh] 限流（{}），等待 {}ms 后重试", status.as_u16(), wait_ms);
+                crate::tlog!(
+                    "[gh] 限流（{}），等待 {}ms 后重试",
+                    status.as_u16(),
+                    wait_ms
+                );
                 std::thread::sleep(Duration::from_millis(wait_ms));
                 let resp2 = self.http_get(&url)?;
                 let status2 = resp2.status();
                 if status2.as_u16() == 422 || !status2.is_success() {
                     let body = resp2.text().unwrap_or_default();
-                    crate::tlog!("[sync] Search API 重试失败 ({}): {}", status2.as_u16(), body.chars().take(120).collect::<String>());
+                    crate::tlog!(
+                        "[sync] Search API 重试失败 ({}): {}",
+                        status2.as_u16(),
+                        body.chars().take(120).collect::<String>()
+                    );
                     // v0.3.29：重试后仍失败（含 422/非 2xx），视为该源失败，避免被当空结果误删任务。
-                    return Err(format!("Search API 重试失败 ({}): {}", status2.as_u16(), body.chars().take(120).collect::<String>()));
+                    return Err(format!(
+                        "Search API 重试失败 ({}): {}",
+                        status2.as_u16(),
+                        body.chars().take(120).collect::<String>()
+                    ));
                 }
-                let v = resp2.json::<serde_json::Value>().map_err(|e| e.to_string())?;
-                let items = v.get("items").and_then(|i| i.as_array()).cloned().unwrap_or_default();
-                if items.is_empty() { break; }
+                let v = resp2
+                    .json::<serde_json::Value>()
+                    .map_err(|e| e.to_string())?;
+                let items = v
+                    .get("items")
+                    .and_then(|i| i.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                if items.is_empty() {
+                    break;
+                }
                 push_parsed_items(&mut all, &items);
                 // #328：补上与正常路径一致的分页终止条件。重试路径原先漏了它，
                 // 满页后还会再打一次必然为空的请求。
-                if items.len() < 100 { break; }
+                if items.len() < 100 {
+                    break;
+                }
                 continue;
             }
             if !status.is_success() {
@@ -1421,12 +1495,22 @@ impl GitHubClient {
                     non_rate_limit_hint(status.as_u16())
                 ));
             }
-            let v = resp.json::<serde_json::Value>().map_err(|e| e.to_string())?;
-            let items = v.get("items").and_then(|i| i.as_array()).cloned().unwrap_or_default();
-            if items.is_empty() { break; }
+            let v = resp
+                .json::<serde_json::Value>()
+                .map_err(|e| e.to_string())?;
+            let items = v
+                .get("items")
+                .and_then(|i| i.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if items.is_empty() {
+                break;
+            }
             push_parsed_items(&mut all, &items);
             // 如果返回的条数少于100，说明已经是最后一页
-            if items.len() < 100 { break; }
+            if items.len() < 100 {
+                break;
+            }
         }
         Ok(all)
     }
@@ -1644,16 +1728,15 @@ impl GitHubClient {
         let status = resp.status().as_u16();
         // POST assignees 成功返回 201（幂等：重复添加同一个人同样成功）。
         if status == 200 || status == 201 {
-            let v: serde_json::Value =
-                resp.json().map_err(|e| format!("解析 GitHub 返回失败: {}", e))?;
+            let v: serde_json::Value = resp
+                .json()
+                .map_err(|e| format!("解析 GitHub 返回失败: {}", e))?;
             let names = v
                 .get("assignees")
                 .and_then(|a| a.as_array())
                 .map(|arr| {
                     arr.iter()
-                        .filter_map(|u| {
-                            u.get("login").and_then(|l| l.as_str()).map(String::from)
-                        })
+                        .filter_map(|u| u.get("login").and_then(|l| l.as_str()).map(String::from))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -1750,7 +1833,9 @@ impl GitHubClient {
             .as_str()
             .unwrap_or("");
         if back.is_empty() {
-            return Err("状态回写失败：GitHub 未返回确认（mutation 无 projectV2Item.id）".to_string());
+            return Err(
+                "状态回写失败：GitHub 未返回确认（mutation 无 projectV2Item.id）".to_string(),
+            );
         }
         eprintln!(
             "[proj-write] GitHub 已确认 {}（{}ms）",
@@ -1992,7 +2077,10 @@ mod tests {
             GitHubClient::owner_from_issue_url("https://github.com/acme/web/pull/7"),
             Some("acme".to_string())
         );
-        assert_eq!(GitHubClient::owner_from_issue_url("https://github.com/acme"), None);
+        assert_eq!(
+            GitHubClient::owner_from_issue_url("https://github.com/acme"),
+            None
+        );
         assert_eq!(GitHubClient::owner_from_issue_url("not a url"), None);
         assert_eq!(GitHubClient::owner_from_issue_url(""), None);
         assert!(GitHubClient::write_error("认领", 401, "").contains("过期"));
@@ -2061,12 +2149,11 @@ mod tests {
     #[test]
     #[ignore]
     fn test_fetch_prs_isolated() {
-        let pat = std::env::var("TASKBOARD_TEST_PAT")
-            .expect("需设置 TASKBOARD_TEST_PAT=<GitHub PAT>");
+        let pat =
+            std::env::var("TASKBOARD_TEST_PAT").expect("需设置 TASKBOARD_TEST_PAT=<GitHub PAT>");
         let login = std::env::var("TASKBOARD_TEST_LOGIN")
             .expect("需设置 TASKBOARD_TEST_LOGIN=<GitHub login>");
-        let org = std::env::var("TASKBOARD_TEST_ORG")
-            .unwrap_or_else(|_| "FoodsUp-Inc".to_string());
+        let org = std::env::var("TASKBOARD_TEST_ORG").unwrap_or_else(|_| "FoodsUp-Inc".to_string());
         let client = GitHubClient::new(pat, login, org).expect("客户端构造应成功");
         let repos = vec![
             "fad-backend".to_string(),
@@ -2075,9 +2162,7 @@ mod tests {
             "foodsup-client".to_string(),
         ];
         let t0 = std::time::Instant::now();
-        let prs = client
-            .fetch_prs(&repos)
-            .expect("fetch_prs 不应报错");
+        let prs = client.fetch_prs(&repos).expect("fetch_prs 不应报错");
         crate::tlog!(
             "[test] 隔离 fetch_prs 拉到 {} 个 PR，耗时 {:.1}s",
             prs.len(),
@@ -2093,7 +2178,10 @@ mod tests {
 
     #[test]
     fn test_urlencode() {
-        assert_eq!(urlencode("org:Foo assignee:bar"), "org%3AFoo%20assignee%3Abar");
+        assert_eq!(
+            urlencode("org:Foo assignee:bar"),
+            "org%3AFoo%20assignee%3Abar"
+        );
         assert_eq!(urlencode("a-b_c.d~e"), "a-b_c.d~e");
     }
 
@@ -2124,7 +2212,10 @@ mod tests {
         assert_eq!(t.number, 1237);
         assert_eq!(t.repo, "pq-backend");
         // 网页链接，不是 API URL
-        assert_eq!(t.url, "https://github.com/FoodsUp-Inc/pq-backend/issues/1237");
+        assert_eq!(
+            t.url,
+            "https://github.com/FoodsUp-Inc/pq-backend/issues/1237"
+        );
         assert_eq!(t.assignees, vec!["liushizhao2025", "dingminggg"]);
         assert_eq!(t.comments, 3);
         // #237：创建人取自 user.login（注意 ≠ assignees[0]，两者是不同概念）。
@@ -2165,7 +2256,10 @@ mod tests {
         });
         let pr = RawPr::from_item(&item).expect("解析应成功");
         assert_eq!(pr.number, 1252);
-        assert_eq!(pr.url, "https://github.com/FoodsUp-Inc/pq-backend/pull/1252");
+        assert_eq!(
+            pr.url,
+            "https://github.com/FoodsUp-Inc/pq-backend/pull/1252"
+        );
         assert_eq!(pr.head_ref, "fix/deliver-assign-at");
         assert_eq!(pr.body, "Closes #1248");
         assert_eq!(pr.repo, "", "repo 由调用方回填");
@@ -2179,7 +2273,9 @@ mod tests {
     #[test]
     fn build_links_query_layout() {
         let q = build_links_query("ShawnLiuSZ", "task-dashboard", &[278, 279]);
-        assert!(q.starts_with("query { r: repository(owner:\"ShawnLiuSZ\", name:\"task-dashboard\") {"));
+        assert!(
+            q.starts_with("query { r: repository(owner:\"ShawnLiuSZ\", name:\"task-dashboard\") {")
+        );
         assert!(q.contains("name owner { login }"));
         // 别名按序号递增，编号原样嵌入。
         assert!(q.contains("a0: issue(number: 278)"));
@@ -2237,8 +2333,7 @@ mod tests {
         assert_eq!(l.sub_issues.len(), 2);
         assert_eq!(l.sub_issues[1].number, 280);
         assert_eq!(
-            l.sub_issues[1].url,
-            "https://github.com/other/repo/issues/7",
+            l.sub_issues[1].url, "https://github.com/other/repo/issues/7",
             "跨仓库子 issue 的 owner/repo 由 url 隐含"
         );
         // 无关联：parent 为 None、sub_issues 为空 vec（非缺键）。
@@ -2325,10 +2420,7 @@ mod tests {
         // 403 + 无任何响应头 → 权限问题
         assert_eq!(rate_limit_wait_from_headers(403, &hmap(&[]), now), None);
         // 429 天然是限流（无头时默认 10s）
-        assert_eq!(
-            rate_limit_wait_from_headers(429, &hmap(&[]), now),
-            Some(10)
-        );
+        assert_eq!(rate_limit_wait_from_headers(429, &hmap(&[]), now), Some(10));
         // 其它状态码不参与限流判定
         assert_eq!(
             rate_limit_wait_from_headers(404, &hmap(&[("Retry-After", "5")]), now),

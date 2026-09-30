@@ -1,54 +1,47 @@
 #!/usr/bin/env node
 /**
- * i18n 一致性校验（Issue #7）：
- * 1. zh-CN 与 en-US 的 key 集合必须完全一致（多出/缺失都报错）。
- * 2. 两份翻译中的 {placeholder} 占位符必须一一对应。
- * 3. 不得出现空翻译。
- * 用法：node scripts/check-i18n.mjs（在前端目录或仓库根均可）
+ * i18n 一致性校验（Issue #7；#330 起支持任意语种数量）：
+ * 1. 动态发现 `src/i18n/locales/*.json`（不再硬编码 zh-CN / en-US 两份）；
+ * 2. 其余语种的 key 集合必须与基准语种（zh-CN）完全一致（多出/缺失都报错）；
+ * 3. 每条翻译的 {placeholder} 占位符必须一一对应；
+ * 4. 不得出现空翻译。
+ *
+ * 用法：`node app/scripts/check-i18n.mjs` 或 `npm run i18n:check`（在前端目录或仓库根均可）
+ *
+ * 对比逻辑抽在 `./i18n-lib.mjs`（纯函数，有单测），本文件只负责读盘与退出码。
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { BASE_LOCALE, compareLocales, localeIds } from "./i18n-lib.mjs";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const localesDir = resolve(here, "../src/i18n/locales");
-const files = { "zh-CN": resolve(localesDir, "zh-CN.json"), "en-US": resolve(localesDir, "en-US.json") };
 
+const ids = localeIds(readdirSync(localesDir));
+if (ids.length === 0) {
+  console.error(`✗ ${localesDir} 下没有任何 locale JSON 文件`);
+  process.exit(1);
+}
+if (!ids.includes(BASE_LOCALE)) {
+  console.error(`✗ 找不到基准语种 ${BASE_LOCALE}（locales 目录下现有：${ids.join(", ")}）`);
+  process.exit(1);
+}
+
+/** @type {Record<string, Record<string, string>>} */
 const dicts = {};
-for (const [lang, path] of Object.entries(files)) {
+for (const id of ids) {
+  const path = resolve(localesDir, `${id}.json`);
   try {
-    dicts[lang] = JSON.parse(readFileSync(path, "utf8"));
+    dicts[id] = JSON.parse(readFileSync(path, "utf8"));
   } catch (e) {
-    console.error(`✗ ${lang} 解析失败: ${path}\n  ${e.message}`);
+    console.error(`✗ ${id} 解析失败: ${path}\n  ${e.message}`);
     process.exit(1);
   }
 }
 
-const [zh, en] = [dicts["zh-CN"], dicts["en-US"]];
-const zhKeys = new Set(Object.keys(zh));
-const enKeys = new Set(Object.keys(en));
-const placeholders = (s) => [...String(s).matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
-
-const errors = [];
-
-// 1. key 集合一致
-const onlyZh = [...zhKeys].filter((k) => !enKeys.has(k));
-const onlyEn = [...enKeys].filter((k) => !zhKeys.has(k));
-for (const k of onlyZh) errors.push(`en-US 缺失 key: ${k}`);
-for (const k of onlyEn) errors.push(`zh-CN 缺失 key: ${k}`);
-
-// 2. 占位符一致 + 3. 空翻译
-for (const k of zhKeys) {
-  if (!enKeys.has(k)) continue;
-  const a = placeholders(zh[k]);
-  const b = placeholders(en[k]);
-  if (JSON.stringify(a) !== JSON.stringify(b)) {
-    errors.push(`占位符不一致: ${k}  zh=[${a}] en=[${b}]`);
-  }
-  if (!String(zh[k]).trim() || !String(en[k]).trim()) {
-    errors.push(`存在空翻译: ${k}`);
-  }
-}
+const errors = compareLocales(dicts, BASE_LOCALE);
 
 if (errors.length) {
   console.error(`✗ i18n 校验失败（${errors.length} 项）：`);
@@ -56,4 +49,9 @@ if (errors.length) {
   process.exit(1);
 }
 
-console.log(`✓ i18n 校验通过：zh-CN / en-US 各 ${zhKeys.size} 个 key，占位符一致，无空翻译。`);
+const keyCount = Object.keys(dicts[BASE_LOCALE]).length;
+const compared = ids.filter((id) => id !== BASE_LOCALE);
+console.log(
+  `✓ i18n 校验通过：基准 ${BASE_LOCALE} ${keyCount} 个 key，` +
+    `${compared.join(" / ")} 与之一致（占位符一致，无空翻译）。`,
+);

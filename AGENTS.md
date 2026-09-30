@@ -147,7 +147,9 @@ CI：`/.github/workflows/i18n-check.yml` 在 PR 时自动校验 i18n 一致性�
 ### 4.3 发版流程
 
 ```
-1. 对齐三处 version（tauri.conf.json / Cargo.toml / package.json）
+1. 对齐 version（四处 + lockfile：tauri.conf.json / Cargo.toml / package.json /
+   Cargo.lock / package-lock.json），本地跑 `python3 scripts/check-versions.py` 确认
+   （同时校验 README.md / README.en.md 的「当前版本」引用）
 2. 知识库文档补齐（见第 5 节）
 3. git tag vX.Y.Z && git push origin vX.Y.Z
 4. 在 GitHub 基于该 tag 创建 Release → Publish
@@ -245,7 +247,7 @@ CI：`/.github/workflows/i18n-check.yml` 在 PR 时自动校验 i18n 一致性�
 
 - commit message 中文即可：「动词 + 范围 + 简述」三段式（例：`feat(mcp): 新增 clear_session 工具`）。
 - 单 PR 内推荐「小步 commit + 可独立 revert」的粒度。
-- 发版前必对齐三处 version，再 `git tag vX.Y.Z` → push → GitHub Release。
+- 发版前必对齐 version（四处 + lockfile，见 §4.3），跑 `python3 scripts/check-versions.py` 确认，再 `git tag vX.Y.Z` → push → GitHub Release。
 
 ---
 

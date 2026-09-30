@@ -6,6 +6,21 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — code review P3 批次：版本号零校验且已漂移 / 15 篇孤岛文档 / ESLint 门禁形同虚设 / CI 缺构建与格式检查 7 项（#330）**
+
+  - **#330 版本号「多处同步」零自动化校验，且已实际漂移**：版本号分散在 5 个文件（`package.json` / `package-lock.json` / `Cargo.toml` / `tauri.conf.json` / `Cargo.lock`），发版靠手抄，而**全仓库没有任何一步校验过**；实测前 4 处是 `0.6.5` 而 **`package-lock.json` 停在 `0.4.0`**（落后两个大版本）。`AGENTS.md §4.3/§6.4` 与 `release.yml` 注释还都只写「对齐**三处** version」，清单本身就不完整。详见 [docs/issue-330-p3-quality-gates.md](./issue-330-p3-quality-gates.md)。
+  - **修复**：新增 `scripts/check-versions.py`（5 个文件必须一致，`package-lock.json` 的两处 `version` 都要对）+ 校验 README 中英的「当前版本」字符串（模式只匹配 `最新/latest vX.Y.Z` 与尾注，**不**匹配 `v0.3.24 及以下` 这类历史叙述）+ 可在 CI 与 `GITHUB_REF_NAME` tag 比对；接入 `quality-check.yml`。修正 `package-lock.json` → 0.6.5；`AGENTS.md` 与 `release.yml` 口径统一为「四处 + lockfile」。
+  - **#330 README 版本号过期**：`README.md` 停 `最新 v0.6.0`／尾注 `v0.6.4`，`README.en.md` 停 `latest v0.6.0`／尾注 `v0.6.0`。**修复**：全部更新为 `v0.6.5`（日期 2026-09-29），并由上条脚本兜住。
+  - **#330 15 篇孤岛文档**：`AGENTS.md §5.5` 要求「新增文档必须在 README / CHANGELOG 建立反链」，但 `check-doc-links.py` **只查正向链接有效性、不查是否被引用**。实测 `docs/` 下 14 篇没有任何文档引用 + 1 篇（`v0.3.16-multi-account.md`）只被另一篇引用，合计 **15 篇**只能靠「知道文件名」才找得到。**修复**：README 新增「历史知识库文档」小节逐条登记这 15 篇；`check-doc-links.py` 新增**孤岛检测**（`docs/` 直属的每篇 `.md` 必须被 README / CHANGELOG 引用），判定抽成纯函数 `find_orphans` 并配 14 例单测。
+  - **#330 ESLint `--max-warnings 20` 只剩 2 条余量**：现存 16 条告警**全部**是 `react-refresh/only-export-components`（开发体验规则），而本仓库有 16 处**刻意**违反（纯函数与组件同文件导出，便于前端单测直接 import）⇒ 门禁实际含义变成「不许再写第 3 条 warning」，一个无关的 `any` 就能挡 CI。**修复**：改为按规则粒度**逐名登记**这 16 个导出（`allowExportNames`），并把阈值降到 **`--max-warnings 0`**（存量归零后任何新告警都挡住）；新增 `src/lint-config.test.ts` 断言名单与真实导出一致（防漏登记 / 防死配置）。
+  - **#330 CI 不跑 `vite build` 与 `cargo fmt --check`**：vite 配置 / `build.target` / `frontendDist` 这类只在构建期暴露的问题要等到 release 打包才现形（那时已打 tag）；Rust 格式此前**完全没有**门禁。**修复**：`frontend-tests` job 追加 `npm run build`；先做全仓库 `cargo fmt` 归一化（**263 hunk / 11 文件**，独立 commit），再把 `cargo fmt --check` 挂进 `rust-clippy` job（`components: clippy, rustfmt`）。
+  - **#330 action 版本 v4/v5 混杂**：`quality-check.yml` 是最后一个还用 `checkout@v4` / `setup-node@v4` 的 workflow。**修复**：全部升到 v5。
+  - **#330 release 无超时 / 无并发控制**：6 个平台 job 都没有 `timeout-minutes`（挂死按 GitHub 默认 **6 小时**计费）；同一 tag 重复触发会并发往同一个 Release 上传附件、互相覆盖产物。**修复**：加 `timeout-minutes: 60` + `concurrency: {group: release-${{ github.ref }}, cancel-in-progress: false}`。
+  - **#330 4 个只读 workflow 未声明 `permissions`**：`docs-check` / `i18n-check` / `mcp-schema-check` / `quality-check` 完全未声明，沿用仓库默认权限（可能含 write），违反最小权限。**修复**：全部补 `permissions: {contents: read}`（`release.yml` 与 `merge-cleanup.yml` 本就已声明，未动）。
+  - **#330 `check-i18n.mjs` 硬编码两个语种**：`const files = {"zh-CN":…, "en-US":…}` 写死两份，而 README 明确宣传「复制 `en-US.json` 新增 `ja-JP.json`」⇒ 新增语种**不会被校验**，脚本却照样「✓ 通过」，给出虚假安全感。**修复**：`readdirSync` 动态发现 `locales/*.json`，以 `zh-CN` 为基准逐一比对；对比逻辑抽到新模块 `app/scripts/i18n-lib.mjs`（纯函数，配 13 例单测，含「第三语种缺 key」这一原实现看不见的用例）；`tsconfig.json` 开 `allowJs` 让 TS 能解析该 `.mjs` 导入（`checkJs` 仍关闭）。
+  - **无运行时行为变更**（前端 / Rust / MCP 逻辑未动）；**无 schema / MCP 工具 / i18n key 变更**（仍 389 keys）。唯一代码层改动是 `cargo fmt` 的纯格式化。
+  - **验证**：`npm test` 212 passed（+18）✅、`npx tsc --noEmit` ✅、`npm run build` ✅、`npm run i18n:check` 389 keys ✅、`npm run lint` 0 warnings（`--max-warnings 0`）✅、`npx prettier --check` ✅、`cargo fmt --check` ✅、`cargo clippy --lib -- -D warnings` ✅、`cargo test --lib` 141 passed ✅、`cargo test --test db_test` 24 passed ✅、`scripts/check-versions.py` ✅、`scripts/check-doc-links.py` 163 文件 / 无孤岛 ✅、`scripts/check-mcp-columns.py` 28 列 ✅、`scripts/check-workflow-yaml.py` 6 文件 ✅、`scripts` 单测 114 OK ✅；**11 项反向验证逐项通过**（改回缺陷写法必失败）。
+
 - **Unreleased — code review P2 批次：校验脚本误报漏报 / MCP 列清单缺失 / 主线程阻塞 / 前端健壮性 18 项（#329）**
 
   - **#329 `merge-cleanup.py::CLOSE_RE` 丢中间 issue 编号**：编号用可重复捕获组 `(?:\s*#\s*(\d+)(?!\d))*` 收集，`(?:\u2026)*` 是非捕获组，内层 `(\d+)` 每轮迭代**覆盖**前一轮 ⇒ `m.groups()` 只剩「第一个 + 最后一个」。实测 `extract_issue_refs('t','Closes #1 #2 #3')` → `[1, 3]`，**#2 静默丢失**（该 issue 永不被自动关闭）；原单测只测 2 个编号，恰落在「首 + 尾 = 全部」的巧合区间。详见 [docs/issue-329-p2-quality.md](./issue-329-p2-quality.md)。

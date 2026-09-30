@@ -174,13 +174,15 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — 设计要点（多源拉取、归属三分、四态维护、PR 关联）与 GitHub Actions 在线打包说明
 
-- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.6.0）
+- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.6.5）
 
 - [`docs/issue-327-p0-functional-defects.md`](./docs/issue-327-p0-functional-defects.md) — **code review P0 批次**：About 小窗「确定」按钮因 capability 未覆盖 `about` 窗口 + `core:window:default` 不含 `allow-close` 而静默失效；设置面板「界面语言」切换器被误复制成重复的主题选择器；记事重复内容暴露原始 `UNIQUE constraint` 报错；`projects.number_of_items` 误取项目编号（而非 `items.totalCount`），使多 Project 时写错写回目标
 
 - [`docs/issue-328-p1-data-safety.md`](./docs/issue-328-p1-data-safety.md) — **code review P1 批次（数据安全与健壮性，9 项）**：tasks 物理重建自称「单事务」实则无事务（中断即丢本地态、失败后无自愈路径）；MCP 一行坏 JSON / 超大 `Content-Length` 直接结束或 abort 进程；同步全败仍返回 `Ok` 谎报成功且跳过的账号日志永久停在 running；`graphql()` 无限流处理致项目状态与父子关系静默降级；GUI 写命令吞掉「0 行受影响」；查询错误被折叠成「不在任何 Project 中」；403 一律当限流使权限问题白等 30s；`search()` 单条坏数据拖垮整个数据源
 
 - [`docs/issue-329-p2-quality.md`](./docs/issue-329-p2-quality.md) — **code review P2 批次（一致性 / 工程质量，18 项）**：`merge-cleanup.py` 多编号提取丢中间编号、`SKIP_DELETE_MARKERS` 子串误伤（`latest` 命中 `test`）；`check-workflow-yaml.py` 误报 `read-all` / `on: [a,b]` 并补 4 类漏报（浮动分支 `@main`、有 `runs-on` 无 `steps`、顶层 key 重复、`needs` 指向不存在 job）；`server.py::ensure_schema` 列清单仅有 `SELECT_COLS` 的三分之一导致旧库 `no such column`；MCP `handoff_len` 字节数 vs 字符数；`open_db` 每次建连写库致 UI 最长 5s 卡顿（改 `user_version` 门控 + 只读自愈探测、稳态零写锁）；5 个 GUI 命令移出 Tauri 主线程；前端任务唯一键跨账号不唯一、Esc 冒泡双触发、复制定时器泄漏、每键 2 次 IPC、加载中整块替换、编辑草稿被重置、清筛选绕过合并器、CSS 未定义变量、主题监听泄漏
+
+- [`docs/issue-330-p3-quality-gates.md`](./docs/issue-330-p3-quality-gates.md) — **code review P3 批次（规范 / 文档 / CI 门禁，7 项）**：版本号分散在 5 个文件却零自动化校验（实测 `package-lock.json` 落后两个大版本）；15 篇知识库文档既不在 README 也不在 CHANGELOG（孤岛）；ESLint `--max-warnings 20` 只剩 2 条余量、门禁形同「不许再写第 3 条 warning」；CI 不跑 `vite build` 与 `cargo fmt --check`、action 版本 v4/v5 混杂；release 无超时（挂死按 6 小时计费）与并发控制；4 个只读 workflow 未声明 `permissions`；`check-i18n.mjs` 硬编码两个语种致新增语言漏检。含新增 `scripts/check-versions.py`、`check-doc-links.py` 孤岛检测、全仓库 `cargo fmt` 归一化（263 hunk / 11 文件）
 
 - [`docs/issue-285-sync-empty-board.md`](./docs/issue-285-sync-empty-board.md) — **立即同步后看板空白、重启才恢复**：`rows_to_tasks` 两处缺陷——归属筛选分支漏 2 列（`Row::get(25)` 越界报错）+ `my-created` 误读恒空的 `meta.login` 恒返回空集；统一 SELECT 列清单 + 从 `accounts` 表取 login；`doSync` 走合并器并同步后重拉项目状态列
 
@@ -232,11 +234,32 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/issue-325-about-window.md`](./docs/issue-325-about-window.md) — **菜单栏 About TaskBoard 改为自定义独立小窗（对齐 WorkBuddy）**：macOS 自定义应用菜单接管默认 About + 新增 `about` 固定小窗（图标 / 粗体名 / 版本·Tauri·WebView 三行 / 全宽确定）；WebView 版本前端从 `navigator.userAgent` 推导（Tauri 2 核心不暴露、不引新依赖）
 
+### 历史知识库文档
+
+> #330 起 `docs/*.md` 必须被 README / CHANGELOG 索引（否则 `check-doc-links.py` 报「孤岛文档」）。
+> 以下 15 篇此前既不在 README 也不在 CHANGELOG，只能靠「知道文件名」才找得到，现补齐反链。
+
+- [`docs/issue-62-bug-audit-fixes.md`](./docs/issue-62-bug-audit-fixes.md) — **Bug 审计遗留 9 项修复**：2026-09-06 对 develop 做三路并行全量排查（前端静态审查 + 后端静态审查 + 工具链冒烟）发现的 13 条中的 9 条
+- [`docs/issue-191-auto-start.md`](./docs/issue-191-auto-start.md) — **opencode 插件自动执行可靠性**：`autoStart` 失败时报喜不报忧且永久抑制重试，还会把 `processed` 任务打回 `doing`
+- [`docs/issue-193-polish.md`](./docs/issue-193-polish.md) — **启动自动注册 dev 路径 + `workBranch` 可见性**：开发态首次启动免手填仓库路径，看板详情展示工作分支
+- [`docs/issue-197-card-session-row.md`](./docs/issue-197-card-session-row.md) — **卡片 session id 独立行展示**：原先有 session 就挤掉更新时间（三元二选一），改为分配人下一行独立展示、时间恒显示
+- [`docs/issue-204-multi-task.md`](./docs/issue-204-multi-task.md) — **单窗口多任务自动执行失活**：插件用整会话累计 buffer 判定「唯一引用」，累计 >1 后永久不再自动执行、`session_id` 存不进去
+- [`docs/issue-207-group-toggle.md`](./docs/issue-207-group-toggle.md) — **设置页 agent 分组下拉展开**：四组平铺在 agent 多时页面过长，改为每组可展开 / 收起
+- [`docs/issue-212-dead-code-warnings.md`](./docs/issue-212-dead-code-warnings.md) — **清死代码 warning**：`tauri dev` 常驻的 `fetch_state is never used` 与测试态的 `unused conn`
+- [`docs/issue-216-del-last-account.md`](./docs/issue-216-del-last-account.md) — **仅剩一个账号时允许删除**：`delete_account` 禁止删默认账号，而只剩一个时它必是默认 ⇒ 想清掉重配 token 都做不到
+- [`docs/issue-220-sig-project-status.md`](./docs/issue-220-sig-project-status.md) — **指纹缺 `projectStatus` 致写回后不刷新**：#215 写回成功但页面不动 —— `taskListSignature` 未覆盖 `projectStatus` 且 `status` 恰好无变化 ⇒ 指纹相同跳过渲染
+- [`docs/issue-221-account-switch-stale.md`](./docs/issue-221-account-switch-stale.md) — **切换账号请求被吞、看板滞留旧账号**：`App.load()` 防重入在忙时直接丢弃请求且无重试，最长延迟到下轮 20s 轮询
+- [`docs/issue-224-log-account.md`](./docs/issue-224-log-account.md) — **同步日志展示所属账号**：同步范围跟视图走（single / all），但日志面板不显示账号，多账号下分不清
+- [`docs/issue-226-close-custom-columns.md`](./docs/issue-226-close-custom-columns.md) — **自定义列映射页签暂关闭**：owner 要求先下掉该入口
+- [`docs/issue-258-sync-warn-banner.md`](./docs/issue-258-sync-warn-banner.md) — **部分失败仍显示绿色成功 banner**：`warning` 非空时改为琥珀色警告 banner，与成功 banner 互斥展示
+- [`docs/issue-276-auto-update-check.md`](./docs/issue-276-auto-update-check.md) — **每日自动检查更新 + 「仅显示我创建」筛选**：免手动点「检查更新」；并区分「自己创建的」与「分配给自己的」issue
+- [`docs/v0.3.16-multi-account.md`](./docs/v0.3.16-multi-account.md) — **v0.3.16 多 GitHub 账号支持设计文档**：在 v0.3.15 PAT 认证基础上扩展为「账号池」，任务按 `account_id` 归属，支持单账号 / 全部账号两种视图
+
 ## 协议（License）
 
 本项目采用 **MIT License**，完整文本见 [LICENSE](./LICENSE)。可自由使用、复制、修改、合并、发布、分发、再授权乃至出售本软件的副本，前提是**在本软件或其大部分副本中保留上述版权声明与许可声明**（即根目录 `LICENSE` 文件的内容）。
 
 软件按「原样」提供，不作任何明示或默示的保证；作者与版权持有者不对使用本软件所引发的任何主张、损害或责任负责。详见 `LICENSE` 中的免责条款。
 
-> 版本 v0.6.4 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-23
+> 版本 v0.6.5 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-29
 

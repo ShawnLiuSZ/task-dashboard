@@ -36,6 +36,13 @@ LINE_ANCHOR_RE = re.compile(r"#L\d+(?:-L?\d+)?")
 # 外部链接前缀，不校验其可达性（离线 CI 无法可靠判断）
 EXTERNAL_PREFIXES = ("http://", "https://", "mailto:", "tel:", "//")
 
+# 「索引文件」——`docs/*.md` 必须至少被其中一个引用（Issue #330）。
+# 理由：`AGENTS.md §5.5` 早就要求「新增文档后必须在 README / CHANGELOG 建立反向链接
+# （避免孤岛文档）」，但此前没有任何检查会碰到它。实测 `docs/` 下 **15 篇**知识库文档
+# 既不在 README 索引、也不在 CHANGELOG —— 它们只能靠「知道文件名」才找得到，
+# 等于写完就沉底（#330 一并补上反链 + 本检测防回归）。
+INDEX_FILES = ("README.md", "README.en.md", "docs/CHANGELOG.md", "docs/CHANGELOG.en.md")
+
 # 围栏代码块（``` 或 ~~~），以及行内代码 span（`...`）。
 # 这两处出现的「链接」是**被描述的语法示例**（本文档自己就会写 `](app/...)` 这类反例），
 # 不应参与校验；否则文档一描述某类缺陷就会把自己判成缺陷。
@@ -62,6 +69,34 @@ def iter_markdown() -> list[Path]:
     return out
 
 
+def is_kb_doc(rel: str) -> bool:
+    """`docs/` **直属**（不再下钻子目录）的 markdown 才算知识库文档。
+
+    `docs/` 下的 `CHANGELOG.md` / `CHANGELOG.en.md` 也算 —— 它们被 README 引用，
+    本来就是索引的一部分，纳入不会误报。
+    """
+    return rel.startswith("docs/") and rel.count("/") == 1 and rel.endswith(".md")
+
+
+def find_orphans(
+    docs_rels: list[str],
+    inbound: dict[str, set[str]],
+    index_files: tuple[str, ...] = INDEX_FILES,
+) -> list[tuple[str, list[str]]]:
+    """找出**孤岛文档**：未被任何「索引文件」引用的知识库文档。
+
+    返回 `[(文档相对路径, 引用它的其它文件列表)]`，按输入顺序排列（已排序）。
+    空列表 = 全部文档都能从 README / CHANGELOG 找到入口。
+    """
+    index_set = set(index_files)
+    out: list[tuple[str, list[str]]] = []
+    for rel in docs_rels:
+        sources = inbound.get(rel, set())
+        if not (sources & index_set):
+            out.append((rel, sorted(s for s in sources if s not in index_set)))
+    return out
+
+
 def main() -> int:
     files = iter_markdown()
     if not files:
@@ -71,6 +106,8 @@ def main() -> int:
     broken: list[str] = []
     file_urls: list[str] = []
     anchors: list[str] = []
+    # 反向引用表：目标文件（相对仓库根的 posix 路径）→ 引用它的源文件集合。
+    inbound: dict[str, set[str]] = {}
 
     for path in files:
         raw = path.read_text(encoding="utf-8", errors="replace")
@@ -92,7 +129,15 @@ def main() -> int:
                 anchors.append(f"{where} -> {target}")
 
             path_part = target.split("#", 1)[0].split("?", 1)[0]
-            if path_part and not (path.parent / path_part).resolve().exists():
+            if not path_part:
+                continue
+            resolved = (path.parent / path_part).resolve()
+            try:
+                inbound.setdefault(str(resolved.relative_to(ROOT)), set()).add(str(rel))
+            except ValueError:
+                # 指向仓库外的路径（理论上不该出现），不计入反向引用表。
+                pass
+            if not resolved.exists():
                 broken.append(f"{where} -> {target}")
 
     problems = False
@@ -115,16 +160,37 @@ def main() -> int:
         for b in anchors:
             print(f"  - {b}")
 
+    # 孤岛文档：`docs/*.md` 必须至少被一个「索引文件」引用（Issue #330）。
+    docs_rels = [str(p.relative_to(ROOT)) for p in files if is_kb_doc(str(p.relative_to(ROOT)))]
+    orphan_pairs = find_orphans(docs_rels, inbound)
+    orphans = [
+        f"{rel} {'（仅被 ' + ', '.join(others) + ' 引用）' if others else '（没有任何文档引用）'}"
+        for rel, others in orphan_pairs
+    ]
+
+    if orphans:
+        problems = True
+        print(
+            f"✗ 孤岛文档 {len(orphans)} 篇"
+            "（须被 README / CHANGELOG 索引，见 AGENTS.md §5.5）："
+        )
+        for o in orphans:
+            print(f"  - {o}")
+
     if problems:
         print(
             "\n  修复提示：\n"
             "  - 断链：补写缺失文档，或改为正确的相对路径；\n"
             "  - file:// → 用相对路径，例如 `../app/src-tauri/src/lib.rs`；\n"
-            "  - 行号锚点 → 删掉 `#Lxxx`，把符号名写进链接文本（如 `[db.rs](../app/src-tauri/src/db.rs)`）。"
+            "  - 行号锚点 → 删掉 `#Lxxx`，把符号名写进链接文本（如 `[db.rs](../app/src-tauri/src/db.rs)`）；\n"
+            "  - 孤岛文档 → 在 README.md 的「文档」清单（或 CHANGELOG 对应版本块）里补一条反链。"
         )
         return 1
 
-    print(f"✓ 文档链接校验通过：{len(files)} 个 markdown 文件，无断链 / 无 file:// / 无行号锚点")
+    print(
+        f"✓ 文档链接校验通过：{len(files)} 个 markdown 文件，"
+        "无断链 / 无 file:// / 无行号锚点 / 无孤岛文档"
+    )
     return 0
 
 

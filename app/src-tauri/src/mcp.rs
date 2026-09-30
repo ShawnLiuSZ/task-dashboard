@@ -83,14 +83,23 @@ fn row_to_value(r: &rusqlite::Row) -> rusqlite::Result<Value> {
     m.insert("issue_state".into(), Value::String(r.get::<_, String>(6)?)); // 6
     m.insert("ownership".into(), Value::String(r.get::<_, String>(7)?)); // 7
     m.insert("status".into(), Value::String(r.get::<_, String>(8)?)); // 8
-    m.insert("project_status".into(), Value::String(r.get::<_, String>(9)?)); // 9
+    m.insert(
+        "project_status".into(),
+        Value::String(r.get::<_, String>(9)?),
+    ); // 9
     m.insert("assignees".into(), Value::String(r.get::<_, String>(10)?)); // 10
-    m.insert("mentioned".into(), Value::Number(r.get::<_, i64>(11)?.into())); // 11
+    m.insert(
+        "mentioned".into(),
+        Value::Number(r.get::<_, i64>(11)?.into()),
+    ); // 11
     m.insert(
         "latest_comment_url".into(),
         Value::String(r.get::<_, String>(12)?), // 12
     );
-    m.insert("pr_number".into(), Value::Number(r.get::<_, i64>(13)?.into())); // 13
+    m.insert(
+        "pr_number".into(),
+        Value::Number(r.get::<_, i64>(13)?.into()),
+    ); // 13
     m.insert("pr_url".into(), Value::String(r.get::<_, String>(14)?)); // 14
     m.insert("branch".into(), Value::String(r.get::<_, String>(15)?)); // 15
     m.insert("work_branch".into(), Value::String(r.get::<_, String>(16)?)); // 16
@@ -165,10 +174,7 @@ fn tool_list(
     }
     sql.push_str(" ORDER BY candidate_done ASC, status ASC, updated_at DESC");
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-    let refs: Vec<&dyn rusqlite::ToSql> = owned
-        .iter()
-        .map(|s| s as &dyn rusqlite::ToSql)
-        .collect();
+    let refs: Vec<&dyn rusqlite::ToSql> = owned.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
     let rows = stmt
         .query_map(refs.as_slice(), row_to_value)
         .map_err(|e| e.to_string())?;
@@ -183,7 +189,9 @@ fn tool_list(
 /// 返回 `None` 表示本地没有这一行（区别于 DB 错误）。
 fn fetch_task_row(conn: &Connection, key: &str) -> Result<Option<Value>, String> {
     let mut stmt = conn
-        .prepare(&format!("SELECT {SELECT_COLS} FROM tasks WHERE issue_key = ?1"))
+        .prepare(&format!(
+            "SELECT {SELECT_COLS} FROM tasks WHERE issue_key = ?1"
+        ))
         .map_err(|e| e.to_string())?;
     let mut rows = stmt
         .query_map([key], row_to_value)
@@ -216,11 +224,7 @@ fn ensure_failure_message(key: &str, outcome: &crate::on_demand::EnsureOutcome) 
 /// ⚠️ 必须在写入**之前**调用：`common::set_task_status` 会先做状态校验，而自定义列（非四态）
 /// 的校验要读该行的 `account_id`——行还不存在时会误报「非法状态」。
 /// `ref_` 传**原始**引用（可能带 owner），owner 是账号归属匹配的依据。
-fn ensure_local_task(
-    conn: &Connection,
-    key: &str,
-    ref_: &str,
-) -> Result<bool, String> {
+fn ensure_local_task(conn: &Connection, key: &str, ref_: &str) -> Result<bool, String> {
     if crate::on_demand::task_exists(conn, key)? {
         return Ok(false);
     }
@@ -332,11 +336,7 @@ fn tool_record_session(
 /// #279：单独设置任务的工作分支（agent 在**创建 / 切换分支之后**调用，纠正
 /// `record_session` 在「开始任务」时录到的基线分支 develop/master）。只写本地
 /// SQLite 的 `work_branch` 列，不碰 GitHub、不碰同步的 PR `branch` 列。
-fn tool_set_work_branch(
-    conn: &Connection,
-    issue: &str,
-    branch: &str,
-) -> Result<Value, String> {
+fn tool_set_work_branch(conn: &Connection, issue: &str, branch: &str) -> Result<Value, String> {
     let key = parse_issue_ref(issue)?;
     let br = branch.trim();
     if br.is_empty() {
@@ -359,7 +359,9 @@ fn tool_record_handoff(conn: &Connection, issue: &str, text: &str) -> Result<Val
     // `mcp_server/server.py::tool_record_handoff` 的 `len(text)` 一致。
     // 原写法 `text.len()` 是 UTF-8 **字节**数 —— 同一份中文 handoff 在 Rust 侧返回 6、
     // Python 侧返回 2，agent 按长度做校验 / 截断会得到互相矛盾的结论。
-    Ok(json!({ "ok": true, "issue_key": key, "handoff_len": text.chars().count(), "pulled": pulled }))
+    Ok(
+        json!({ "ok": true, "issue_key": key, "handoff_len": text.chars().count(), "pulled": pulled }),
+    )
 }
 
 fn tool_clear_session(conn: &Connection, issue: &str) -> Result<Value, String> {
@@ -447,9 +449,8 @@ fn tool_delete_note(conn: &Connection, id: i64) -> Result<Value, String> {
 }
 
 fn call_tool(conn: &Connection, name: &str, args: &Map<String, Value>) -> Result<Value, String> {
-    let get = |k: &str| -> Option<String> {
-        args.get(k).and_then(|v| v.as_str()).map(|s| s.to_string())
-    };
+    let get =
+        |k: &str| -> Option<String> { args.get(k).and_then(|v| v.as_str()).map(|s| s.to_string()) };
     match name {
         "list_my_tasks" => tool_list(conn, get("status").as_deref(), get("ownership").as_deref()),
         "get_task_status" => {
@@ -464,7 +465,14 @@ fn call_tool(conn: &Connection, name: &str, args: &Map<String, Value>) -> Result
         "record_session" => {
             let issue = get("issue").ok_or("缺少 issue 参数")?;
             let sid = get("session_id").ok_or("缺少 session_id 参数")?;
-            tool_record_session(conn, &issue, &sid, get("agent").as_deref(), get("branch").as_deref(), get("work_dir").as_deref())
+            tool_record_session(
+                conn,
+                &issue,
+                &sid,
+                get("agent").as_deref(),
+                get("branch").as_deref(),
+                get("work_dir").as_deref(),
+            )
         }
         "set_work_branch" => {
             let issue = get("issue").ok_or("缺少 issue 参数")?;
@@ -912,9 +920,7 @@ pub fn run() {
         }
     }
     if handled == 0 {
-        crate::tlog!(
-            "[taskboard-mcp] 未收到任何有效 JSON-RPC 消息即断开——请检查客户端分帧格式"
-        );
+        crate::tlog!("[taskboard-mcp] 未收到任何有效 JSON-RPC 消息即断开——请检查客户端分帧格式");
     }
 }
 
@@ -1047,8 +1053,14 @@ mod tests {
         assert_eq!(obj["updated_at"].as_i64(), Some(1700000100));
         assert_eq!(obj["created_at"].as_i64(), Some(1690000000));
         // #278：父子关系同样透传到单 issue 查询。
-        assert!(obj["parent_issue"].as_str().unwrap().starts_with("{\"number\":900"));
-        assert!(obj["sub_issues"].as_str().unwrap().starts_with("[{\"number\":1300"));
+        assert!(obj["parent_issue"]
+            .as_str()
+            .unwrap()
+            .starts_with("{\"number\":900"));
+        assert!(obj["sub_issues"]
+            .as_str()
+            .unwrap()
+            .starts_with("[{\"number\":1300"));
         // 用一条不存在的引用验证「未找到」分支
         let missing = tool_get(&c, "nope#999").unwrap();
         assert_eq!(missing["found"].as_bool(), Some(false));
@@ -1089,8 +1101,14 @@ mod tests {
         )
         .unwrap();
         let err = ensure_local_task(&c, "task-dashboard#248", "task-dashboard#248").unwrap_err();
-        assert!(err.contains("无法从 GitHub 拉取"), "错误应说明无法拉取: {err}");
-        assert!(err.contains("没有任何 GitHub 账号"), "错误应带具体原因: {err}");
+        assert!(
+            err.contains("无法从 GitHub 拉取"),
+            "错误应说明无法拉取: {err}"
+        );
+        assert!(
+            err.contains("没有任何 GitHub 账号"),
+            "错误应带具体原因: {err}"
+        );
         // 写工具同样给出可读错误，而不是含糊的「任务不存在」
         let werr = tool_update(&c, "task-dashboard#248", "处理中").unwrap_err();
         assert!(werr.contains("没有任何 GitHub 账号"), "{werr}");

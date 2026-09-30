@@ -112,7 +112,9 @@ pub fn start(client_id: &str) -> Result<DeviceLoginStart, String> {
         .send()
         .map_err(|e| format!("请求设备码失败: {}", e))?;
     let status = resp.status();
-    let body = resp.bytes().map_err(|e| format!("读取设备码响应失败: {}", e))?;
+    let body = resp
+        .bytes()
+        .map_err(|e| format!("读取设备码响应失败: {}", e))?;
     if let Ok(err) = serde_json::from_slice::<ErrRaw>(&body) {
         return Err(format!(
             "申请设备码被拒（{}）：{}",
@@ -160,7 +162,9 @@ pub fn poll_once(client_id: &str, device_code: &str) -> Result<PollOutcome, Stri
         }))
         .send()
         .map_err(|e| format!("轮询授权状态失败: {}", e))?;
-    let body = resp.bytes().map_err(|e| format!("读取轮询响应失败: {}", e))?;
+    let body = resp
+        .bytes()
+        .map_err(|e| format!("读取轮询响应失败: {}", e))?;
     // GitHub 对 pending 也返回 200 + {error: authorization_pending}，两种结构都试着解析。
     if let Ok(err) = serde_json::from_slice::<ErrRaw>(&body) {
         match err.error.as_deref() {
@@ -184,8 +188,8 @@ pub fn poll_once(client_id: &str, device_code: &str) -> Result<PollOutcome, Stri
             None => {}
         }
     }
-    let ok: OkRaw = serde_json::from_slice(&body)
-        .map_err(|e| format!("解析轮询响应失败: {}", e))?;
+    let ok: OkRaw =
+        serde_json::from_slice(&body).map_err(|e| format!("解析轮询响应失败: {}", e))?;
     match ok.access_token {
         Some(t) if !t.is_empty() => Ok(PollOutcome::Success(t)),
         _ => Ok(PollOutcome::Pending),

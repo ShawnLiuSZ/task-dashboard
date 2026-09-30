@@ -121,24 +121,40 @@ pub fn iso8601_to_secs(s: &str) -> i64 {
     let date = parts.next().unwrap_or("");
     let time = parts.next().unwrap_or("");
     let mut date_parts = date.split('-');
-    let y = date_parts.next().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
-    let m = date_parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-    let d = date_parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+    let y = date_parts
+        .next()
+        .and_then(|s| s.parse::<i32>().ok())
+        .unwrap_or(0);
+    let m = date_parts
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    let d = date_parts
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
     let mut time_parts = time.split(':');
-    let h = time_parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-    let mi = time_parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-    let sec = time_parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-    if y < 1970 || !(1..=12).contains(&m) || !(1..=31).contains(&d) || h > 23 || mi > 59 || sec > 59 {
+    let h = time_parts
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    let mi = time_parts
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    let sec = time_parts
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    if y < 1970 || !(1..=12).contains(&m) || !(1..=31).contains(&d) || h > 23 || mi > 59 || sec > 59
+    {
         return 0;
     }
     // 1970-01-01 起算的天数（Gregorian，无历法库依赖）
-    const DAYS_BEFORE_MONTH: [i64; 12] = [
-        0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334,
-    ];
+    const DAYS_BEFORE_MONTH: [i64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
     let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
     let month_adjust = if leap && m > 2 { 1 } else { 0 };
-    let days = (y - 1970) as i64 * 365
-        + ((y - 1) / 4 - 1970 / 4) as i64
+    let days = (y - 1970) as i64 * 365 + ((y - 1) / 4 - 1970 / 4) as i64
         - ((y - 1) / 100 - 1970 / 100) as i64
         + ((y - 1) / 400 - 1970 / 400) as i64
         + DAYS_BEFORE_MONTH[(m - 1) as usize]

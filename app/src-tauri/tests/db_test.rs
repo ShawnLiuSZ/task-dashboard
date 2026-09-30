@@ -6,7 +6,7 @@
 
 use rusqlite::Connection;
 use std::sync::atomic::{AtomicU64, Ordering};
-use taskboard_lib::db as db;
+use taskboard_lib::db;
 
 /// 计数器 + pid + nanos 保证并发测试之间不会撞同一个 tempdir。
 /// 之前用纯 nanos 在多线程并行时被撞到，导致 accounts 表被前一个测试写过。
@@ -26,10 +26,7 @@ fn tempdir() -> std::path::PathBuf {
         .as_nanos();
     let pid = std::process::id();
     let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!(
-        "taskboard_test_{}_{}_{}",
-        pid, nanos, n
-    ));
+    let dir = std::env::temp_dir().join(format!("taskboard_test_{}_{}_{}", pid, nanos, n));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -432,7 +429,9 @@ fn migrate_v2_rebuilds_legacy_tasks_preserving_data() {
     let conn = legacy_tasks_db(&path);
     let ts = "2026-01-02T03:04:05Z";
     let expect_secs: i64 = conn
-        .query_row("SELECT CAST(strftime('%s', ?1) AS INTEGER)", [ts], |r| r.get(0))
+        .query_row("SELECT CAST(strftime('%s', ?1) AS INTEGER)", [ts], |r| {
+            r.get(0)
+        })
         .unwrap();
     conn.execute(
         "INSERT INTO tasks (key, owner, repo, number, title, url, gh_state, ownership,
@@ -457,7 +456,13 @@ fn migrate_v2_rebuilds_legacy_tasks_preserving_data() {
     for gone in ["key", "gh_state", "gh_status"] {
         assert!(!info(gone), "旧列 {} 应在重建后消失", gone);
     }
-    for kept in ["id", "issue_key", "issue_state", "project_status", "updated_at"] {
+    for kept in [
+        "id",
+        "issue_key",
+        "issue_state",
+        "project_status",
+        "updated_at",
+    ] {
         assert!(info(kept), "新列 {} 应存在", kept);
     }
 
@@ -479,11 +484,14 @@ fn migrate_v2_rebuilds_legacy_tasks_preserving_data() {
         .unwrap()
         .exists([])
         .unwrap_or(false);
-    assert!(uniq >= 1 && has_uniq, "应存在 UNIQUE(repo,number,account_id)");
+    assert!(
+        uniq >= 1 && has_uniq,
+        "应存在 UNIQUE(repo,number,account_id)"
+    );
 
     // 数据完整迁移 + 字段重命名 + updated_at 类型/值转换。
-    let (issue_key, issue_state, project_status, updated_at): (String, String, String, i64) =
-        conn.query_row(
+    let (issue_key, issue_state, project_status, updated_at): (String, String, String, i64) = conn
+        .query_row(
             "SELECT issue_key, issue_state, project_status, updated_at FROM tasks",
             [],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
@@ -491,8 +499,14 @@ fn migrate_v2_rebuilds_legacy_tasks_preserving_data() {
         .unwrap();
     assert_eq!(issue_key, "o/r#27");
     assert_eq!(issue_state, "open", "gh_state 应重命名为 issue_state");
-    assert_eq!(project_status, "In Progress", "gh_status 应重命名为 project_status");
-    assert_eq!(updated_at, expect_secs, "updated_at 应为 INTEGER 秒（由 RFC3339 换算）");
+    assert_eq!(
+        project_status, "In Progress",
+        "gh_status 应重命名为 project_status"
+    );
+    assert_eq!(
+        updated_at, expect_secs,
+        "updated_at 应为 INTEGER 秒（由 RFC3339 换算）"
+    );
 }
 
 #[test]
@@ -588,7 +602,11 @@ fn open_db_backfills_work_branch_on_v2_db_without_it() {
 
     // 且可正常读写（模拟 SELECT_COLS 不再报 no such column）。
     let n: i64 = conn
-        .query_row("SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name='work_branch'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name='work_branch'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(n, 1);
 }
@@ -619,7 +637,10 @@ fn open_db_backfills_author_on_v2_db_without_it() {
 
     // 再次 open_db：热路径必须幂等补回 author。
     let conn = db::open_db(&path).unwrap();
-    assert!(has_task_col(&conn, "author"), "#237 修复后：author 列应被热路径补齐");
+    assert!(
+        has_task_col(&conn, "author"),
+        "#237 修复后：author 列应被热路径补齐"
+    );
 }
 
 #[test]
@@ -647,7 +668,11 @@ fn migrate_v2_rebuild_keeps_author_column() {
     )
     .unwrap();
     let a: String = conn
-        .query_row("SELECT author FROM tasks WHERE issue_key='o/r#237'", [], |r| r.get(0))
+        .query_row(
+            "SELECT author FROM tasks WHERE issue_key='o/r#237'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(a, "alice");
 }
@@ -675,8 +700,14 @@ fn open_db_backfills_issue_links_on_v2_db_without_it() {
 
     // 再次 open_db：热路径必须幂等补回两列，且默认值为空串（NOT NULL DEFAULT ''）。
     let conn = db::open_db(&path).unwrap();
-    assert!(has_task_col(&conn, "parent_issue"), "parent_issue 列应被热路径补齐");
-    assert!(has_task_col(&conn, "sub_issues"), "sub_issues 列应被热路径补齐");
+    assert!(
+        has_task_col(&conn, "parent_issue"),
+        "parent_issue 列应被热路径补齐"
+    );
+    assert!(
+        has_task_col(&conn, "sub_issues"),
+        "sub_issues 列应被热路径补齐"
+    );
 }
 
 #[test]
@@ -724,8 +755,10 @@ fn migrate_v2_rebuild_keeps_issue_link_columns() {
 fn write_task_roundtrips_issue_links_and_preserves_them_on_conflict() {
     // 写路径回归：TaskUpsert 的两列必须真的落库（列清单与参数绑定共 25 个占位符，
     // 错位会把关系写进别的列且不报错）。两列存 JSON 串，空串表示无关联。
-    const PARENT_JSON: &str = "{\"number\":1,\"title\":\"epic\",\"url\":\"https://github.com/o/r/issues/1\"}";
-    const SUBS_JSON: &str = "[{\"number\":2,\"title\":\"a\",\"url\":\"https://github.com/o/r/issues/2\"}]";
+    const PARENT_JSON: &str =
+        "{\"number\":1,\"title\":\"epic\",\"url\":\"https://github.com/o/r/issues/1\"}";
+    const SUBS_JSON: &str =
+        "[{\"number\":2,\"title\":\"a\",\"url\":\"https://github.com/o/r/issues/2\"}]";
 
     let conn = fresh_db();
     db::insert_account(&conn, "L", "alice", "o", "p").unwrap();
@@ -738,8 +771,13 @@ fn write_task_roundtrips_issue_links_and_preserves_them_on_conflict() {
     assert_eq!(row.sub_issues, SUBS_JSON, "sub_issues 应原样落库");
 
     // 冲突覆盖（同步路径）：关系应被更新，且允许「清空」为无关联。
-    db::write_task(&conn, &base_task_upsert(String::new(), String::new(), true), 2, db::TaskWriteMode::Upsert)
-        .unwrap();
+    db::write_task(
+        &conn,
+        &base_task_upsert(String::new(), String::new(), true),
+        2,
+        db::TaskWriteMode::Upsert,
+    )
+    .unwrap();
     let existing2 = db::load_existing_tasks(&conn, 1).unwrap();
     let row2 = existing2.get("r#278").unwrap();
     assert_eq!(row2.parent_issue, "", "覆盖模式应能清空 parent_issue");

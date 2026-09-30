@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 
 /// 模板单一来源：仓库根 `.claude/` / `.opencode/`（`src/` → `src-tauri/` → `app/` → 仓库根）。
 const SESSION_START_SH: &str = include_str!("../../../.claude/hooks/taskboard-session-start.sh");
-const PROMPT_REMINDER_SH: &str = include_str!("../../../.claude/hooks/taskboard-prompt-reminder.sh");
+const PROMPT_REMINDER_SH: &str =
+    include_str!("../../../.claude/hooks/taskboard-prompt-reminder.sh");
 const TASK_START_MD: &str = include_str!("../../../.claude/commands/task-start.md");
 const TASK_DONE_MD: &str = include_str!("../../../.claude/commands/task-done.md");
 const TASK_HANDOFF_MD: &str = include_str!("../../../.claude/commands/task-handoff.md");
@@ -76,11 +77,16 @@ fn write_file(path: &Path, content: &str, executable: bool) -> Result<bool, Stri
 /// `script_cmd_prefix` 为 hook 脚本所在目录的命令前缀：项目级用
 /// `"${CLAUDE_PROJECT_DIR}/.claude"`（跟随仓库走），全局用对应配置根的绝对路径。
 /// 命令整体加双引号（路径含空格时不断裂；旧版未加引号的条目按后缀去重自动迁移）。
-fn merged_settings(existing: Option<&str>, script_cmd_prefix: &str) -> Result<(String, bool), String> {
+fn merged_settings(
+    existing: Option<&str>,
+    script_cmd_prefix: &str,
+) -> Result<(String, bool), String> {
     let mut root: serde_json::Value = match existing {
-        Some(s) if !s.trim().is_empty() => {
-            serde_json::from_str(s).map_err(|e| err(format!("已有 .claude/settings.json 解析失败（未改动）: {e}")))?
-        }
+        Some(s) if !s.trim().is_empty() => serde_json::from_str(s).map_err(|e| {
+            err(format!(
+                "已有 .claude/settings.json 解析失败（未改动）: {e}"
+            ))
+        })?,
         _ => serde_json::json!({}),
     };
     if !root.is_object() {
@@ -105,7 +111,9 @@ fn merged_settings(existing: Option<&str>, script_cmd_prefix: &str) -> Result<(S
         let arr = hooks_obj
             .entry(event)
             .or_insert_with(|| serde_json::json!([]));
-        let groups = arr.as_array_mut().ok_or_else(|| err(format!("已有 hooks.{event} 不是数组（未改动）")))?;
+        let groups = arr
+            .as_array_mut()
+            .ok_or_else(|| err(format!("已有 hooks.{event} 不是数组（未改动）")))?;
         // 去重：删掉之前版本装进去的同名 hook（幂等重装），保留用户其他的。
         for g in groups.iter_mut() {
             if let Some(handlers) = g.get_mut("hooks").and_then(|h| h.as_array_mut()) {
@@ -140,7 +148,11 @@ fn merged_settings(existing: Option<&str>, script_cmd_prefix: &str) -> Result<(S
 fn claude_files() -> [(&'static str, &'static str, bool); 5] {
     [
         ("hooks/taskboard-session-start.sh", SESSION_START_SH, true),
-        ("hooks/taskboard-prompt-reminder.sh", PROMPT_REMINDER_SH, true),
+        (
+            "hooks/taskboard-prompt-reminder.sh",
+            PROMPT_REMINDER_SH,
+            true,
+        ),
         ("commands/task-start.md", TASK_START_MD, false),
         ("commands/task-done.md", TASK_DONE_MD, false),
         ("commands/task-handoff.md", TASK_HANDOFF_MD, false),
@@ -270,56 +282,216 @@ struct HostSpec {
 const NO_SIGNAL: &[&str] = &[];
 
 const HOST_SPECS: &[HostSpec] = &[
-    HostSpec { id: "amazon-q", bins: &["q"], configs: &[".aws/amazonq"], apps: NO_SIGNAL },
-    HostSpec { id: "augment", bins: &["auggie"], configs: &[".augment"], apps: NO_SIGNAL },
-    HostSpec { id: "bolt", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
-    HostSpec { id: "chatgpt", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: &["ChatGPT"] },
-    HostSpec { id: "claude-code", bins: &["claude"], configs: &[".claude"], apps: NO_SIGNAL },
-    HostSpec { id: "cline", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
-    HostSpec { id: "codebuddy", bins: &["codebuddy"], configs: &[".codebuddy"], apps: &["CodeBuddy"] },
-    HostSpec { id: "codeium", bins: NO_SIGNAL, configs: &[".codeium"], apps: NO_SIGNAL },
-    HostSpec { id: "codex", bins: &["codex"], configs: &[".codex"], apps: &["Codex"] },
-    HostSpec { id: "codestral", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
-    HostSpec { id: "cody", bins: &["cody"], configs: &[".cody"], apps: NO_SIGNAL },
-    HostSpec { id: "continue", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
+    HostSpec {
+        id: "amazon-q",
+        bins: &["q"],
+        configs: &[".aws/amazonq"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "augment",
+        bins: &["auggie"],
+        configs: &[".augment"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "bolt",
+        bins: NO_SIGNAL,
+        configs: NO_SIGNAL,
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "chatgpt",
+        bins: NO_SIGNAL,
+        configs: NO_SIGNAL,
+        apps: &["ChatGPT"],
+    },
+    HostSpec {
+        id: "claude-code",
+        bins: &["claude"],
+        configs: &[".claude"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "cline",
+        bins: NO_SIGNAL,
+        configs: NO_SIGNAL,
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "codebuddy",
+        bins: &["codebuddy"],
+        configs: &[".codebuddy"],
+        apps: &["CodeBuddy"],
+    },
+    HostSpec {
+        id: "codeium",
+        bins: NO_SIGNAL,
+        configs: &[".codeium"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "codex",
+        bins: &["codex"],
+        configs: &[".codex"],
+        apps: &["Codex"],
+    },
+    HostSpec {
+        id: "codestral",
+        bins: NO_SIGNAL,
+        configs: NO_SIGNAL,
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "cody",
+        bins: &["cody"],
+        configs: &[".cody"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "continue",
+        bins: NO_SIGNAL,
+        configs: NO_SIGNAL,
+        apps: NO_SIGNAL,
+    },
     HostSpec {
         id: "copilot",
         bins: &["copilot", "github-copilot-cli"],
         configs: &[".copilot"],
         apps: NO_SIGNAL,
     },
-    HostSpec { id: "cursor", bins: &["cursor-agent"], configs: &[".cursor"], apps: &["Cursor"] },
-    HostSpec { id: "deepseek", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
-    HostSpec { id: "devin", bins: &["devin"], configs: &[".devin"], apps: NO_SIGNAL },
-    HostSpec { id: "doubao", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: &["Doubao"] },
-    HostSpec { id: "factory", bins: &["droid"], configs: &[".factory"], apps: NO_SIGNAL },
-    HostSpec { id: "gemini-cli", bins: &["gemini"], configs: &[".gemini"], apps: NO_SIGNAL },
-    HostSpec { id: "glm", bins: NO_SIGNAL, configs: &[".glm"], apps: NO_SIGNAL },
-    HostSpec { id: "goose", bins: &["goose"], configs: &[".config/goose"], apps: NO_SIGNAL },
-    HostSpec { id: "grok", bins: &["grok"], configs: &[".grok"], apps: NO_SIGNAL },
-    HostSpec { id: "helix", bins: &["helix"], configs: &[".helix"], apps: NO_SIGNAL },
-    HostSpec { id: "kimi", bins: &["kimi"], configs: &[".kimi"], apps: NO_SIGNAL },
-    HostSpec { id: "llama", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
+    HostSpec {
+        id: "cursor",
+        bins: &["cursor-agent"],
+        configs: &[".cursor"],
+        apps: &["Cursor"],
+    },
+    HostSpec {
+        id: "deepseek",
+        bins: NO_SIGNAL,
+        configs: NO_SIGNAL,
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "devin",
+        bins: &["devin"],
+        configs: &[".devin"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "doubao",
+        bins: NO_SIGNAL,
+        configs: NO_SIGNAL,
+        apps: &["Doubao"],
+    },
+    HostSpec {
+        id: "factory",
+        bins: &["droid"],
+        configs: &[".factory"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "gemini-cli",
+        bins: &["gemini"],
+        configs: &[".gemini"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "glm",
+        bins: NO_SIGNAL,
+        configs: &[".glm"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "goose",
+        bins: &["goose"],
+        configs: &[".config/goose"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "grok",
+        bins: &["grok"],
+        configs: &[".grok"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "helix",
+        bins: &["helix"],
+        configs: &[".helix"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "kimi",
+        bins: &["kimi"],
+        configs: &[".kimi"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "llama",
+        bins: NO_SIGNAL,
+        configs: NO_SIGNAL,
+        apps: NO_SIGNAL,
+    },
     HostSpec {
         id: "opencode",
         bins: &["opencode"],
         configs: &[".config/opencode", ".opencode"],
         apps: NO_SIGNAL,
     },
-    HostSpec { id: "openhands", bins: &["openhands"], configs: &[".openhands"], apps: NO_SIGNAL },
-    HostSpec { id: "phind", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
-    HostSpec { id: "qwen-code", bins: &["qwen"], configs: &[".qwen"], apps: NO_SIGNAL },
-    HostSpec { id: "replit", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
-    HostSpec { id: "roo-code", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
-    HostSpec { id: "tabnine", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
-    HostSpec { id: "tongyi", bins: NO_SIGNAL, configs: &[".lingma"], apps: &["Lingma"] },
+    HostSpec {
+        id: "openhands",
+        bins: &["openhands"],
+        configs: &[".openhands"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "phind",
+        bins: NO_SIGNAL,
+        configs: NO_SIGNAL,
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "qwen-code",
+        bins: &["qwen"],
+        configs: &[".qwen"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "replit",
+        bins: NO_SIGNAL,
+        configs: NO_SIGNAL,
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "roo-code",
+        bins: NO_SIGNAL,
+        configs: NO_SIGNAL,
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "tabnine",
+        bins: NO_SIGNAL,
+        configs: NO_SIGNAL,
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "tongyi",
+        bins: NO_SIGNAL,
+        configs: &[".lingma"],
+        apps: &["Lingma"],
+    },
     HostSpec {
         id: "trae",
         bins: &["trae"],
         configs: &[".trae-cn", ".trae"],
         apps: &["Trae", "Trae CN"],
     },
-    HostSpec { id: "v0", bins: NO_SIGNAL, configs: NO_SIGNAL, apps: NO_SIGNAL },
+    HostSpec {
+        id: "v0",
+        bins: NO_SIGNAL,
+        configs: NO_SIGNAL,
+        apps: NO_SIGNAL,
+    },
     HostSpec {
         id: "windsurf",
         bins: &["windsurf"],
@@ -332,8 +504,18 @@ const HOST_SPECS: &[HostSpec] = &[
         configs: &[".workbuddy-ai", ".workbuddy"],
         apps: &["WorkBuddy"],
     },
-    HostSpec { id: "zcode", bins: &["zcode"], configs: &[".zcode"], apps: NO_SIGNAL },
-    HostSpec { id: "aider", bins: &["aider"], configs: &[".aider"], apps: &["Aider"] },
+    HostSpec {
+        id: "zcode",
+        bins: &["zcode"],
+        configs: &[".zcode"],
+        apps: NO_SIGNAL,
+    },
+    HostSpec {
+        id: "aider",
+        bins: &["aider"],
+        configs: &[".aider"],
+        apps: &["Aider"],
+    },
 ];
 
 fn host_spec_of(agent: &str) -> Option<&'static HostSpec> {
@@ -419,7 +601,12 @@ fn bin_search_dirs(home: &Path) -> Vec<PathBuf> {
 fn bin_file_names(name: &str) -> Vec<String> {
     #[cfg(windows)]
     {
-        vec![format!("{name}.exe"), format!("{name}.cmd"), format!("{name}.bat"), name.to_string()]
+        vec![
+            format!("{name}.exe"),
+            format!("{name}.cmd"),
+            format!("{name}.bat"),
+            name.to_string(),
+        ]
     }
     #[cfg(not(windows))]
     {
@@ -453,7 +640,9 @@ fn mac_app_names(home: &Path) -> Vec<String> {
     }
     let mut names = Vec::new();
     for dir in [PathBuf::from("/Applications"), home.join("Applications")] {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
             if let Some(stem) = name.strip_suffix(".app") {
@@ -485,7 +674,9 @@ fn probe_one_with(home: &Path, agent_id: &str, app_names: &[String]) -> AgentHos
         config_dir: None,
         app: None,
     };
-    let Some(spec) = host_spec_of(agent_id) else { return none(agent_id) };
+    let Some(spec) = host_spec_of(agent_id) else {
+        return none(agent_id);
+    };
 
     let binary = find_binary(home, spec.bins).map(|p| display_path(home, None, &p));
     let config_dir = spec
@@ -521,7 +712,10 @@ fn probe_one_with(home: &Path, agent_id: &str, app_names: &[String]) -> AgentHos
 pub fn probe_agent_hosts() -> Result<Vec<AgentHostInfo>, String> {
     let home = home_dir()?;
     let app_names = mac_app_names(&home);
-    Ok(HOST_SPECS.iter().map(|s| probe_one_with(&home, s.id, &app_names)).collect())
+    Ok(HOST_SPECS
+        .iter()
+        .map(|s| probe_one_with(&home, s.id, &app_names))
+        .collect())
 }
 
 /// 与上次快照对比：返回 (新发现安装, 疑似已卸载)。
@@ -530,7 +724,9 @@ pub fn probe_agent_hosts() -> Result<Vec<AgentHostInfo>, String> {
 /// - 新装：上次 `none`，本次有信号（含 config-only，说明已运行过）。
 /// - 卸载：上次有 `binary` / `app`，本次退化为 `none` / `config-only`。
 pub fn diff_scan(prev: Option<&ScanSnapshot>, cur: &[AgentHostInfo]) -> (Vec<String>, Vec<String>) {
-    let Some(prev) = prev else { return (Vec::new(), Vec::new()) };
+    let Some(prev) = prev else {
+        return (Vec::new(), Vec::new());
+    };
     if prev.agents.is_empty() {
         return (Vec::new(), Vec::new());
     }
@@ -705,7 +901,8 @@ fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
     }
     let tmp = path.with_extension("taskboard-tmp");
     std::fs::write(&tmp, content).map_err(|e| err(format!("写入临时文件失败: {e}")))?;
-    std::fs::rename(&tmp, path).map_err(|e| err(format!("原子替换失败 {}: {e}", path.display())))?;
+    std::fs::rename(&tmp, path)
+        .map_err(|e| err(format!("原子替换失败 {}: {e}", path.display())))?;
     Ok(())
 }
 
@@ -728,23 +925,25 @@ fn mcp_bin() -> Result<String, String> {
 }
 
 fn exe_basename(cmd: &str) -> String {
-    cmd.replace('\\', "/").rsplit('/').next().unwrap_or("").to_string()
+    cmd.replace('\\', "/")
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .to_string()
 }
 
 /// 对已解析的 JSON Value 执行 `mcp.taskboard` 合并（与 merge_opencode_mcp 同规则）。
 /// 已有条目且命令 basename 也是 taskboard* → 原位更新（dev/正式版路径迁移）；
 /// 已有条目但指向别处 → 保留 + 返回 notice。
-fn merge_mcp_value(
-    root: &mut serde_json::Value,
-    exe: &str,
-) -> Result<Option<String>, String> {
+fn merge_mcp_value(root: &mut serde_json::Value, exe: &str) -> Result<Option<String>, String> {
     let mcp = root
         .as_object_mut()
         .ok_or_else(|| err("配置顶层不是 object（未改动）"))?
         .entry("mcp")
         .or_insert_with(|| serde_json::json!({}));
-    let mcp_obj =
-        mcp.as_object_mut().ok_or_else(|| err("配置的 mcp 不是 object（未改动）"))?;
+    let mcp_obj = mcp
+        .as_object_mut()
+        .ok_or_else(|| err("配置的 mcp 不是 object（未改动）"))?;
     let want = serde_json::json!({"type": "local", "command": [exe, "mcp"], "enabled": true});
     match mcp_obj.get("taskboard") {
         None => {
@@ -772,24 +971,28 @@ fn merge_mcp_value(
 /// 合并项目级 `opencode.json` 的 `mcp.taskboard`。
 /// 已有条目且命令 basename 也是 taskboard* → 原位更新（dev/正式版路径迁移）；
 /// 已有条目但指向别处 → 保留 + notice。返回 (changed, notice)。
-fn merge_opencode_mcp(repo: &Path, mcp_file: &str, exe: &str) -> Result<(bool, Option<String>), String> {
+fn merge_opencode_mcp(
+    repo: &Path,
+    mcp_file: &str,
+    exe: &str,
+) -> Result<(bool, Option<String>), String> {
     let path = repo.join(mcp_file);
     let mut root: serde_json::Value = match std::fs::read_to_string(&path) {
-        Ok(s) if !s.trim().is_empty() => {
-            serde_json::from_str(&s).map_err(|e| err(format!("已有 opencode.json 解析失败（未改动）: {e}")))?
-        }
+        Ok(s) if !s.trim().is_empty() => serde_json::from_str(&s)
+            .map_err(|e| err(format!("已有 opencode.json 解析失败（未改动）: {e}")))?,
         _ => serde_json::json!({}),
     };
     if !root.is_object() {
-        return Err(err("已有 opencode.json 顶层不是 object（未改动）".to_string()));
+        return Err(err(
+            "已有 opencode.json 顶层不是 object（未改动）".to_string()
+        ));
     }
     let before = root.clone();
     let notice = merge_mcp_value(&mut root, exe)?;
     if root == before {
         return Ok((false, notice));
     }
-    let text =
-        serde_json::to_string_pretty(&root).map_err(|e| err(format!("序列化失败: {e}")))?;
+    let text = serde_json::to_string_pretty(&root).map_err(|e| err(format!("序列化失败: {e}")))?;
     write_atomic(&path, &(text + "\n"))?;
     Ok((true, notice))
 }
@@ -963,7 +1166,10 @@ fn has_any_taskboard_key(text: &str) -> bool {
 /// taskboard MCP 条目片段（`serde` 转义 exe，Windows 反斜杠安全）。
 fn taskboard_mcp_kv(exe: &str) -> String {
     let v = serde_json::json!({"type": "local", "command": [exe, "mcp"], "enabled": true});
-    format!("\"taskboard\": {}", serde_json::to_string(&v).unwrap_or_default())
+    format!(
+        "\"taskboard\": {}",
+        serde_json::to_string(&v).unwrap_or_default()
+    )
 }
 
 /// 全局 opencode MCP 注册：winning-file 自动合并（原先只检测给手动步骤）。
@@ -983,7 +1189,11 @@ fn merge_global_opencode_mcp(
     const CANDIDATES: [&str; 3] = ["opencode.jsonc", "opencode.json", "config.json"];
     let dir = home.join(".config").join("opencode");
     if !dir.is_dir() {
-        return Ok((false, String::new(), Some("未检测到全局 opencode 配置（host 疑似未安装），已跳过".to_string())));
+        return Ok((
+            false,
+            String::new(),
+            Some("未检测到全局 opencode 配置（host 疑似未安装），已跳过".to_string()),
+        ));
     }
     let mut target: Option<(&str, String)> = None;
     for name in CANDIDATES {
@@ -1003,7 +1213,8 @@ fn merge_global_opencode_mcp(
     if text.trim().is_empty() {
         let mut root = serde_json::json!({});
         let notice = merge_mcp_value(&mut root, exe)?;
-        let out = serde_json::to_string_pretty(&root).map_err(|e| err(format!("序列化失败: {e}")))?;
+        let out =
+            serde_json::to_string_pretty(&root).map_err(|e| err(format!("序列化失败: {e}")))?;
         write_atomic(&path, &(out + "\n"))?;
         return Ok((true, display, notice));
     }
@@ -1016,7 +1227,8 @@ fn merge_global_opencode_mcp(
         if root == before {
             return Ok((false, display, notice));
         }
-        let out = serde_json::to_string_pretty(&root).map_err(|e| err(format!("序列化失败: {e}")))?;
+        let out =
+            serde_json::to_string_pretty(&root).map_err(|e| err(format!("序列化失败: {e}")))?;
         backup_once(&path)?;
         write_atomic(&path, &(out + "\n"))?;
         return Ok((true, display, notice));
@@ -1034,7 +1246,11 @@ fn merge_global_opencode_mcp(
             write_atomic(&path, &next)?;
             return Ok((true, display, None));
         }
-        return Ok((false, display, Some(format!("{name} 的 taskboard MCP 指向别处，已保留"))));
+        return Ok((
+            false,
+            display,
+            Some(format!("{name} 的 taskboard MCP 指向别处，已保留")),
+        ));
     }
     if has_any_taskboard_key(&text) {
         // 非对象值等异形条目：不敢动，回退手动
@@ -1129,7 +1345,13 @@ fn taskboard_entry_is_ours(span: &str, exe: &str) -> bool {
         if !seg.contains('/') && !seg.contains('\\') {
             continue;
         }
-        let base = seg.replace('\\', "/").rsplit('/').next().unwrap_or("").trim().to_string();
+        let base = seg
+            .replace('\\', "/")
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if base == "taskboard"
             || base == "taskboard.exe"
             || seg.contains("mcp_server/server.py")
@@ -1166,10 +1388,7 @@ fn remove_entry_span(text: &str, start: usize, end: usize) -> String {
 /// 全局 opencode 配置的文本级摘除：遍历 config.json/opencode.json/opencode.jsonc，
 /// 删掉指向 ours 的 taskboard MCP 条目（注释原样保留，改动前备份）。
 /// 返回 (removed_display, backups, notices)。
-fn strip_global_opencode_mcp(
-    home: &Path,
-    exe: &str,
-) -> (Vec<String>, Vec<String>, Vec<String>) {
+fn strip_global_opencode_mcp(home: &Path, exe: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
     let dir = home.join(".config").join("opencode");
     let mut removed = Vec::new();
     let mut backups = Vec::new();
@@ -1239,14 +1458,20 @@ fn install_one(
     res: &mut InstallResult,
 ) -> Result<(), String> {
     let Some(spec) = spec_of(agent_id) else {
-        res.notices.push(format!("{agent_id}：暂不支持一键安装。{hint}", hint = manual_hint(agent_id)));
+        res.notices.push(format!(
+            "{agent_id}：暂不支持一键安装。{hint}",
+            hint = manual_hint(agent_id)
+        ));
         return Ok(());
     };
     let Some(root) = config_root(home, project, spec) else {
         if project.is_some() {
-            res.notices.push(format!("{agent_id}：仅支持全局安装，项目级请手工配置"));
+            res.notices
+                .push(format!("{agent_id}：仅支持全局安装，项目级请手工配置"));
         } else {
-            res.notices.push(format!("{agent_id}：未检测到全局配置（host 疑似未安装），已跳过"));
+            res.notices.push(format!(
+                "{agent_id}：未检测到全局配置（host 疑似未安装），已跳过"
+            ));
         }
         return Ok(());
     };
@@ -1272,7 +1497,10 @@ fn install_one(
         // 命令前缀：项目级跟仓库走（Claude 变量），全局用配置根绝对路径
         // （merged_settings 统一加双引号，含空格路径不断裂）
         let prefix = match project {
-            Some(_) => format!("${{CLAUDE_PROJECT_DIR}}/{}", spec.project_dir.unwrap_or(".claude")),
+            Some(_) => format!(
+                "${{CLAUDE_PROJECT_DIR}}/{}",
+                spec.project_dir.unwrap_or(".claude")
+            ),
             None => root.display().to_string(),
         };
         let existing = std::fs::read_to_string(&sp).ok();
@@ -1309,7 +1537,8 @@ fn install_one(
                 }
             }
             Err(e) => {
-                res.notices.push(format!("全局 opencode MCP 自动合并失败（未改动）：{e}"));
+                res.notices
+                    .push(format!("全局 opencode MCP 自动合并失败（未改动）：{e}"));
                 if let Some(n) = global_opencode_mcp_notice(home, exe) {
                     res.notices.push(n);
                 }
@@ -1321,7 +1550,8 @@ fn install_one(
         && (res.settings_merged || res.mcp_configured || !res.files_written.is_empty())
     {
         res.notices.push(
-            "注意：当前运行的是开发版，该二进制路径重编即失效；正式使用请换安装版后重装".to_string(),
+            "注意：当前运行的是开发版，该二进制路径重编即失效；正式使用请换安装版后重装"
+                .to_string(),
         );
     }
     Ok(())
@@ -1359,7 +1589,9 @@ fn prune_empty_subdirs(root: &Path) {
     for d in ["hooks", "commands", "plugins"] {
         let dir = root.join(d);
         if dir.is_dir()
-            && std::fs::read_dir(&dir).map(|mut it| it.next().is_none()).unwrap_or(false)
+            && std::fs::read_dir(&dir)
+                .map(|mut it| it.next().is_none())
+                .unwrap_or(false)
         {
             let _ = std::fs::remove_dir(&dir);
         }
@@ -1369,7 +1601,11 @@ fn prune_empty_subdirs(root: &Path) {
 /// 项目级 opencode.json 摘除 mcp.taskboard（仅当命令指向 ours：相等或 basename taskboard*）。
 /// 返回 (changed, file_deleted, notice, backup)。改动前先备份（#190：此前调用方在
 /// 写后备份，`.taskboard-bak` 里是摘除后的内容、无法恢复；与全局路径对齐）。
-fn strip_opencode_mcp(repo: &Path, mcp_file: &str, exe: &str) -> Result<(bool, bool, Option<String>, Option<String>), String> {
+fn strip_opencode_mcp(
+    repo: &Path,
+    mcp_file: &str,
+    exe: &str,
+) -> Result<(bool, bool, Option<String>, Option<String>), String> {
     let path = repo.join(mcp_file);
     let existing = match std::fs::read_to_string(&path) {
         Ok(s) => s,
@@ -1378,7 +1614,9 @@ fn strip_opencode_mcp(repo: &Path, mcp_file: &str, exe: &str) -> Result<(bool, b
     let mut root: serde_json::Value = serde_json::from_str(&existing)
         .map_err(|e| err(format!("已有 opencode.json 解析失败（未改动）: {e}")))?;
     if !root.is_object() {
-        return Err(err("已有 opencode.json 顶层不是 object（未改动）".to_string()));
+        return Err(err(
+            "已有 opencode.json 顶层不是 object（未改动）".to_string()
+        ));
     }
     let before = root.clone();
     let mut notice = None;
@@ -1418,8 +1656,7 @@ fn strip_opencode_mcp(repo: &Path, mcp_file: &str, exe: &str) -> Result<(bool, b
         std::fs::remove_file(&path).map_err(|e| err(format!("删除 opencode.json 失败: {e}")))?;
         return Ok((true, true, notice, backup));
     }
-    let text =
-        serde_json::to_string_pretty(&root).map_err(|e| err(format!("序列化失败: {e}")))?;
+    let text = serde_json::to_string_pretty(&root).map_err(|e| err(format!("序列化失败: {e}")))?;
     write_atomic(&path, &(text + "\n"))?;
     Ok((true, false, notice, backup))
 }
@@ -1433,18 +1670,23 @@ fn uninstall_one(
     res: &mut UninstallResult,
 ) -> Result<(), String> {
     let Some(spec) = spec_of(agent_id) else {
-        res.notices.push(format!("{agent_id}：暂不支持一键卸载。{hint}", hint = manual_hint(agent_id)));
+        res.notices.push(format!(
+            "{agent_id}：暂不支持一键卸载。{hint}",
+            hint = manual_hint(agent_id)
+        ));
         return Ok(());
     };
     let Some(root) = config_root(home, project, spec) else {
-        res.notices.push(format!("{agent_id}：未检测到全局配置，已跳过"));
+        res.notices
+            .push(format!("{agent_id}：未检测到全局配置，已跳过"));
         return Ok(());
     };
     for (rel, content, _) in files_of(agent_id) {
         let p = root.join(rel);
         match std::fs::read_to_string(&p) {
             Ok(old) if old == content => {
-                std::fs::remove_file(&p).map_err(|e| err(format!("删除失败 {}: {e}", p.display())))?;
+                std::fs::remove_file(&p)
+                    .map_err(|e| err(format!("删除失败 {}: {e}", p.display())))?;
                 res.files_removed.push(display_path(home, project, &p));
             }
             Ok(_) => res.files_kept.push(display_path(home, project, &p)),
@@ -1532,9 +1774,13 @@ fn opencode_mcp_present_text(home: &Path, project: Option<&Path>, mcp_file: &str
             .unwrap_or(false);
     }
     let dir = home.join(".config").join("opencode");
-    ["config.json", "opencode.json", "opencode.jsonc"].iter().any(|n| {
-        std::fs::read_to_string(dir.join(n)).map(|s| s.contains("\"taskboard\"")).unwrap_or(false)
-    })
+    ["config.json", "opencode.json", "opencode.jsonc"]
+        .iter()
+        .any(|n| {
+            std::fs::read_to_string(dir.join(n))
+                .map(|s| s.contains("\"taskboard\""))
+                .unwrap_or(false)
+        })
 }
 
 /// #263：`host` 为设备扫描结果（可选）。
@@ -1558,7 +1804,9 @@ fn status_one(
         host_present,
     };
     let probed = host.map(|h| h.present).unwrap_or(false);
-    let Some(spec) = spec_of(agent_id) else { return bad(probed) };
+    let Some(spec) = spec_of(agent_id) else {
+        return bad(probed);
+    };
     // 项目级：target 目录已校验，host 恒视为 present；全局：配置根可解析或设备探测命中
     let root = match config_root(home, project, spec) {
         Some(r) => r,
@@ -1571,20 +1819,30 @@ fn status_one(
     let (hooks_ok, commands_ok) = match spec.id {
         "opencode" => (
             has("plugins/taskboard.js"),
-            ["commands/task-start.md", "commands/task-done.md", "commands/task-handoff.md"]
-                .iter()
-                .all(|r| has(r)),
+            [
+                "commands/task-start.md",
+                "commands/task-done.md",
+                "commands/task-handoff.md",
+            ]
+            .iter()
+            .all(|r| has(r)),
         ),
         _ => (
             has("hooks/taskboard-session-start.sh") && has("hooks/taskboard-prompt-reminder.sh"),
             !expects_commands
-                || ["commands/task-start.md", "commands/task-done.md", "commands/task-handoff.md"]
-                    .iter()
-                    .all(|r| has(r)),
+                || [
+                    "commands/task-start.md",
+                    "commands/task-done.md",
+                    "commands/task-handoff.md",
+                ]
+                .iter()
+                .all(|r| has(r)),
         ),
     };
     let settings_ok = match spec.id {
-        "opencode" => opencode_mcp_present_text(home, project, spec.mcp_file.unwrap_or("opencode.json")),
+        "opencode" => {
+            opencode_mcp_present_text(home, project, spec.mcp_file.unwrap_or("opencode.json"))
+        }
         _ => std::fs::read_to_string(root.join(spec.settings_name.unwrap_or("settings.json")))
             .map(|s| s.contains("taskboard-session-start.sh"))
             .unwrap_or(false),
@@ -1617,7 +1875,10 @@ pub fn install_agent_hooks(
     let home = home_dir()?;
     let exe = mcp_bin()?;
     let scope_s = if global { "global" } else { "project" };
-    let target_s = project.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| home.display().to_string());
+    let target_s = project
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| home.display().to_string());
     let mut res = InstallResult::empty(scope_s, &target_s);
     for agent_id in &list {
         install_one(&home, project.as_deref(), agent_id, &exe, &mut res)?;
@@ -1636,7 +1897,10 @@ pub fn uninstall_agent_hooks(
     let home = home_dir()?;
     let exe = mcp_bin()?;
     let scope_s = if global { "global" } else { "project" };
-    let target_s = project.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| home.display().to_string());
+    let target_s = project
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| home.display().to_string());
     let mut res = UninstallResult::empty(scope_s, &target_s);
     for agent_id in &list {
         uninstall_one(&home, project.as_deref(), agent_id, &exe, &mut res)?;
@@ -1667,13 +1931,21 @@ fn agent_hooks_status_blocking(
     target_dir: Option<&str>,
     agents: &[String],
 ) -> Result<StatusResult, String> {
-    let (global, project, list) = parse_request(scope, target_dir.map(|s| s.to_string()), agents.to_vec())?;
+    let (global, project, list) =
+        parse_request(scope, target_dir.map(|s| s.to_string()), agents.to_vec())?;
     let home = home_dir()?;
     let scope_s = if global { "global" } else { "project" };
-    let target_s = project.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| home.display().to_string());
+    let target_s = project
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| home.display().to_string());
     // #263：设备扫描结果参与 host 判定 —— CLI 已装但从未运行（无配置目录）也能识别为
     // 「可接入」，不再误判「未安装」。项目级只看目标仓库，跳过设备探测。
-    let hosts: Vec<AgentHostInfo> = if global { probe_agent_hosts()? } else { Vec::new() };
+    let hosts: Vec<AgentHostInfo> = if global {
+        probe_agent_hosts()?
+    } else {
+        Vec::new()
+    };
     let mut out = StatusResult {
         scope: scope_s.to_string(),
         target: target_s,
@@ -1682,21 +1954,33 @@ fn agent_hooks_status_blocking(
     };
     for agent_id in &list {
         let host = hosts.iter().find(|h| &h.agent == agent_id);
-        if global && spec_of(agent_id).is_some() && config_root(&home, None, spec_of(agent_id).expect("checked some")).is_none() {
-            out.notices.push(format!("{agent_id}：未检测到全局配置（host 疑似未安装）"));
+        if global
+            && spec_of(agent_id).is_some()
+            && config_root(&home, None, spec_of(agent_id).expect("checked some")).is_none()
+        {
+            out.notices
+                .push(format!("{agent_id}：未检测到全局配置（host 疑似未安装）"));
         }
         if spec_of(agent_id).is_none() {
-            out.notices.push(format!("{agent_id}：暂不支持一键安装。{hint}", hint = manual_hint(agent_id)));
+            out.notices.push(format!(
+                "{agent_id}：暂不支持一键安装。{hint}",
+                hint = manual_hint(agent_id)
+            ));
         }
-        out.agents.push(status_one(&home, project.as_deref(), agent_id, host));
+        out.agents
+            .push(status_one(&home, project.as_deref(), agent_id, host));
     }
     if !global {
         // 项目级 opencode 若缺 MCP，给出一句提醒（安装时会自动配，这里只读）
         if list.iter().any(|a| a == "opencode")
             && !opencode_mcp_present_text(&home, project.as_deref(), "opencode.json")
-            && project.as_deref().map(|p| p.join("opencode.json").exists()).unwrap_or(false)
+            && project
+                .as_deref()
+                .map(|p| p.join("opencode.json").exists())
+                .unwrap_or(false)
         {
-            out.notices.push("项目 opencode.json 存在但未注册 taskboard MCP，安装时会自动补".to_string());
+            out.notices
+                .push("项目 opencode.json 存在但未注册 taskboard MCP，安装时会自动补".to_string());
         }
     }
     Ok(out)
@@ -1705,8 +1989,11 @@ fn agent_hooks_status_blocking(
 /// 从 settings.json 文本中移除 ours 的 hook 组。返回 (新文本或None, 是否变更)。
 /// 若移除后顶层变为空 object，返回 None（调用方删除该文件）。
 fn stripped_settings(existing: &str) -> Result<(Option<String>, bool), String> {
-    let mut root: serde_json::Value = serde_json::from_str(existing)
-        .map_err(|e| err(format!("已有 .claude/settings.json 解析失败（未改动）: {e}")))?;
+    let mut root: serde_json::Value = serde_json::from_str(existing).map_err(|e| {
+        err(format!(
+            "已有 .claude/settings.json 解析失败（未改动）: {e}"
+        ))
+    })?;
     if !root.is_object() {
         return Err(err("已有 .claude/settings.json 顶层不是 object（未改动）"));
     }
@@ -1738,14 +2025,17 @@ fn stripped_settings(existing: &str) -> Result<(Option<String>, bool), String> {
         // hooks 下事件全空则删 hooks 键，避免残留空壳。
         hooks_obj.retain(|_, v| v.as_array().map(|a| !a.is_empty()).unwrap_or(true));
         if hooks_obj.is_empty() {
-            root.as_object_mut().expect("checked object").remove("hooks");
+            root.as_object_mut()
+                .expect("checked object")
+                .remove("hooks");
         }
     }
     if root != before {
         if root.as_object().map(|o| o.is_empty()).unwrap_or(false) {
             Ok((None, true))
         } else {
-            let text = serde_json::to_string_pretty(&root).map_err(|e| err(format!("序列化失败: {e}")))?;
+            let text =
+                serde_json::to_string_pretty(&root).map_err(|e| err(format!("序列化失败: {e}")))?;
             Ok((Some(text + "\n"), true))
         }
     } else {
@@ -1804,7 +2094,10 @@ mod tests {
         let s = std::fs::read_to_string(repo.join(".claude/settings.json")).unwrap();
         assert!(s.contains("${CLAUDE_PROJECT_DIR}/.claude/hooks/taskboard-session-start.sh"));
         for a in ["claude-code", "opencode"] {
-            assert!(status_one(&home, Some(&repo), a, None).installed, "{a} 应装好");
+            assert!(
+                status_one(&home, Some(&repo), a, None).installed,
+                "{a} 应装好"
+            );
         }
         // 幂等重装：零写入
         let mut r2 = InstallResult::empty("project", "x");
@@ -1838,10 +2131,15 @@ mod tests {
         // 全局必须用绝对路径（${CLAUDE_PROJECT_DIR} 在全局无意义）；命令值本身带双引号
         // （JSON 里转义为 \"），含空格路径不断裂
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
-        let cmd = v["hooks"]["SessionStart"][0]["hooks"][0]["command"].as_str().unwrap();
+        let cmd = v["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
         assert_eq!(
             cmd,
-            format!("\"{}/hooks/taskboard-session-start.sh\"", home.join(".claude").display())
+            format!(
+                "\"{}/hooks/taskboard-session-start.sh\"",
+                home.join(".claude").display()
+            )
         );
         assert!(!s.contains("CLAUDE_PROJECT_DIR"), "全局不得出现项目变量");
         let _ = std::fs::remove_dir_all(&home);
@@ -1863,15 +2161,16 @@ mod tests {
         for a in ["claude-code", "opencode"] {
             install_one(&home, None, a, exe, &mut res).unwrap();
         }
-        assert!(home.join(".claude/hooks/taskboard-session-start.sh").is_file());
+        assert!(home
+            .join(".claude/hooks/taskboard-session-start.sh")
+            .is_file());
         assert!(home.join(".config/opencode/plugins/taskboard.js").is_file());
         assert!(res.mcp_configured, "全局 MCP 应自动注册");
         assert!(
             !res.notices.iter().any(|n| n.contains("手动")),
             "自动合并成功后不应再提示手动"
         );
-        let after =
-            std::fs::read_to_string(home.join(".config/opencode/opencode.jsonc")).unwrap();
+        let after = std::fs::read_to_string(home.join(".config/opencode/opencode.jsonc")).unwrap();
         assert!(after.contains("// user comment"), "jsonc 注释必须原样保留");
         assert!(after.contains("\"taskboard\""), "MCP 条目应写入");
         // 卸载：备份 settings.json，用户文件保留
@@ -1879,7 +2178,9 @@ mod tests {
         for a in ["claude-code", "opencode"] {
             uninstall_one(&home, None, a, exe, &mut u).unwrap();
         }
-        assert!(!home.join(".claude/hooks/taskboard-session-start.sh").exists());
+        assert!(!home
+            .join(".claude/hooks/taskboard-session-start.sh")
+            .exists());
         assert!(!u.backups.is_empty(), "settings 改动应留备份");
         let _ = std::fs::remove_dir_all(&home);
     }
@@ -1897,19 +2198,28 @@ mod tests {
             "legacy settings.json 存在时应用"
         );
         install_global(&home, &["workbuddy"]);
-        assert!(home.join(".workbuddy/hooks/taskboard-session-start.sh").is_file());
+        assert!(home
+            .join(".workbuddy/hooks/taskboard-session-start.sh")
+            .is_file());
         assert!(!home.join(".workbuddy-ai").exists(), "不得新建 -ai 目录");
         // 通用变体：无 slash 引用
-        let sh = std::fs::read_to_string(home.join(".workbuddy/hooks/taskboard-session-start.sh")).unwrap();
+        let sh = std::fs::read_to_string(home.join(".workbuddy/hooks/taskboard-session-start.sh"))
+            .unwrap();
         assert!(!sh.contains("/task-start"), "通用变体不得含 slash 命令");
-        assert!(!sh.contains("CLAUDE_SESSION_ID"), "通用变体不得含 Claude 变量");
+        assert!(
+            !sh.contains("CLAUDE_SESSION_ID"),
+            "通用变体不得含 Claude 变量"
+        );
         let _ = std::fs::remove_dir_all(&home);
 
         // -ai 目录存在 → 优先 -ai
         let home2 = fake_home("wb-ai");
         std::fs::create_dir_all(home2.join(".workbuddy-ai")).unwrap();
         std::fs::create_dir_all(home2.join(".workbuddy")).unwrap();
-        assert_eq!(config_root(&home2, None, spec), Some(home2.join(".workbuddy-ai")));
+        assert_eq!(
+            config_root(&home2, None, spec),
+            Some(home2.join(".workbuddy-ai"))
+        );
         let _ = std::fs::remove_dir_all(&home2);
     }
 
@@ -1919,8 +2229,12 @@ mod tests {
         std::fs::create_dir_all(home.join(".trae-cn")).unwrap();
         std::fs::create_dir_all(home.join(".codebuddy")).unwrap();
         install_global(&home, &["trae", "codebuddy"]);
-        assert!(home.join(".trae-cn/hooks/taskboard-session-start.sh").is_file());
-        assert!(home.join(".codebuddy/hooks/taskboard-session-start.sh").is_file());
+        assert!(home
+            .join(".trae-cn/hooks/taskboard-session-start.sh")
+            .is_file());
+        assert!(home
+            .join(".codebuddy/hooks/taskboard-session-start.sh")
+            .is_file());
         // trae 写的是 hooks.json（不是 settings.json）
         assert!(home.join(".trae-cn/hooks.json").is_file());
         assert!(!home.join(".trae-cn/settings.json").exists());
@@ -1936,7 +2250,11 @@ mod tests {
         let mut res = InstallResult::empty("global", "x");
         install_one(&home, None, "codex", exe, &mut res).unwrap();
         assert!(res.files_written.is_empty());
-        assert!(res.notices.iter().any(|n| n.contains("codex") && n.contains("codex_hooks") || n.contains("AGENT_INSTRUCTIONS")));
+        assert!(res
+            .notices
+            .iter()
+            .any(|n| n.contains("codex") && n.contains("codex_hooks")
+                || n.contains("AGENT_INSTRUCTIONS")));
         assert!(!status_one(&home, None, "codex", None).installed);
         let _ = std::fs::remove_dir_all(&home);
     }
@@ -1960,7 +2278,12 @@ mod tests {
             r#"{"mcp":{"taskboard":{"type":"local","command":["/tmp/old-debug/taskboard","mcp"],"enabled":true}},"other":1}"#,
         )
         .unwrap();
-        let (changed, notice) = merge_opencode_mcp(&repo, "opencode.json", "/Applications/TaskBoard.app/Contents/MacOS/taskboard").unwrap();
+        let (changed, notice) = merge_opencode_mcp(
+            &repo,
+            "opencode.json",
+            "/Applications/TaskBoard.app/Contents/MacOS/taskboard",
+        )
+        .unwrap();
         assert!(changed, "stale dev 路径应原位更新");
         assert!(notice.is_none());
         let s = std::fs::read_to_string(repo.join("opencode.json")).unwrap();
@@ -1977,8 +2300,12 @@ mod tests {
             r#"{"mcp":{"taskboard":{"type":"local","command":["/usr/local/bin/myboard","serve"],"enabled":true}}}"#,
         )
         .unwrap();
-        let (changed, notice) =
-            merge_opencode_mcp(&repo, "opencode.json", "/Applications/TaskBoard.app/Contents/MacOS/taskboard").unwrap();
+        let (changed, notice) = merge_opencode_mcp(
+            &repo,
+            "opencode.json",
+            "/Applications/TaskBoard.app/Contents/MacOS/taskboard",
+        )
+        .unwrap();
         assert!(!changed);
         assert!(notice.is_some(), "应提示保留");
         let _ = std::fs::remove_dir_all(&repo);
@@ -1999,7 +2326,10 @@ mod tests {
         std::fs::write(cfg.join("opencode.jsonc"), "// hello\n{\"model\": \"x\"}\n").unwrap();
         let (changed, target, notice) = merge_global_opencode_mcp(&home, "/bin/taskboard").unwrap();
         assert!(changed);
-        assert!(target.contains("opencode.jsonc"), "应命中 jsonc，实际 {target}");
+        assert!(
+            target.contains("opencode.jsonc"),
+            "应命中 jsonc，实际 {target}"
+        );
         assert!(notice.is_none());
         let json = std::fs::read_to_string(cfg.join("opencode.json")).unwrap();
         assert_eq!(json, r#"{"other":1}"#, "json 不得被碰");
@@ -2027,7 +2357,10 @@ mod tests {
         let out = std::fs::read_to_string(cfg.join("opencode.jsonc")).unwrap();
         assert!(out.contains("// keep"), "注释保留");
         assert!(out.contains("\"other\""), "兄弟 server 保留");
-        assert!(out.contains("\"taskboard\"") && out.contains("/bin/taskboard"), "条目追加");
+        assert!(
+            out.contains("\"taskboard\"") && out.contains("/bin/taskboard"),
+            "条目追加"
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -2037,7 +2370,10 @@ mod tests {
         global_cfg(&home);
         let (changed, target, _) = merge_global_opencode_mcp(&home, "/bin/taskboard").unwrap();
         assert!(changed);
-        assert!(target.contains("opencode.json"), "缺省新建 opencode.json，实际 {target}");
+        assert!(
+            target.contains("opencode.json"),
+            "缺省新建 opencode.json，实际 {target}"
+        );
         let v: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(home.join(".config/opencode/opencode.json")).unwrap(),
         )
@@ -2066,7 +2402,11 @@ mod tests {
         )
         .unwrap();
         std::fs::remove_file(cfg.join("opencode.json")).unwrap();
-        let (c2, _, n2) = merge_global_opencode_mcp(&home, "/Applications/TaskBoard.app/Contents/MacOS/taskboard").unwrap();
+        let (c2, _, n2) = merge_global_opencode_mcp(
+            &home,
+            "/Applications/TaskBoard.app/Contents/MacOS/taskboard",
+        )
+        .unwrap();
         assert!(c2, "陈旧路径应更新");
         assert!(n2.is_none());
         let out = std::fs::read_to_string(cfg.join("opencode.jsonc")).unwrap();
@@ -2102,7 +2442,10 @@ mod tests {
         }
         assert!(!status_one(&home, Some(&repo), "claude-code", None).installed);
         assert!(!status_one(&home, Some(&repo), "opencode", None).installed);
-        assert!(!repo.join("opencode.json").exists(), "只含 ours 的 opencode.json 应删除");
+        assert!(
+            !repo.join("opencode.json").exists(),
+            "只含 ours 的 opencode.json 应删除"
+        );
         assert!(!u.backups.is_empty());
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(&home);
@@ -2123,7 +2466,10 @@ mod tests {
         let after = std::fs::read_to_string(repo.join("opencode.json")).unwrap();
         assert!(!after.contains("taskboard"), "条目应被摘除");
         assert!(after.contains("\"other\""), "兄弟键保留");
-        assert!(u.backups.iter().any(|b| b.contains("taskboard-bak")), "应上报备份路径");
+        assert!(
+            u.backups.iter().any(|b| b.contains("taskboard-bak")),
+            "应上报备份路径"
+        );
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(&home);
     }
@@ -2135,15 +2481,23 @@ mod tests {
         let home = fake_home("custom-script-home");
         let dir = repo.join(".claude").join("hooks");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("taskboard-session-start.sh"), "#!/bin/bash\necho mine\n").unwrap();
+        std::fs::write(
+            dir.join("taskboard-session-start.sh"),
+            "#!/bin/bash\necho mine\n",
+        )
+        .unwrap();
         let exe = "/Applications/TaskBoard.app/Contents/MacOS/taskboard";
         let mut res = InstallResult::empty("project", "x");
         install_one(&home, Some(&repo), "claude-code", exe, &mut res).unwrap();
-        let bak = std::fs::read_to_string(dir.join("taskboard-session-start.taskboard-bak")).unwrap();
+        let bak =
+            std::fs::read_to_string(dir.join("taskboard-session-start.taskboard-bak")).unwrap();
         assert!(bak.contains("echo mine"), "备份应为用户定制原文");
         let now = std::fs::read_to_string(dir.join("taskboard-session-start.sh")).unwrap();
         assert_eq!(now, SESSION_START_SH, "文件应已按模板覆盖");
-        assert!(res.notices.iter().any(|n| n.contains("备份")), "应 notice 告知覆盖+备份");
+        assert!(
+            res.notices.iter().any(|n| n.contains("备份")),
+            "应 notice 告知覆盖+备份"
+        );
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(&home);
     }
@@ -2188,7 +2542,11 @@ mod tests {
         std::fs::create_dir_all(home.join(".config").join("opencode")).unwrap();
         let n = global_opencode_mcp_notice(&home, "/tmp/build/target/debug/taskboard").unwrap();
         assert!(n.contains("手动") && n.contains("开发版"));
-        let n2 = global_opencode_mcp_notice(&home, "/Applications/TaskBoard.app/Contents/MacOS/taskboard").unwrap();
+        let n2 = global_opencode_mcp_notice(
+            &home,
+            "/Applications/TaskBoard.app/Contents/MacOS/taskboard",
+        )
+        .unwrap();
         assert!(!n2.contains("开发版"));
         // 已注册则无 notice
         std::fs::write(
@@ -2212,7 +2570,12 @@ mod tests {
         assert!(out.contains("\"other\""), "兄弟条目保留");
         assert!(out.contains("\"model\": \"y\""), "其他顶层键保留");
         // 删后仍是合法 JSON（本例无其他注释干扰结构）
-        let v: serde_json::Value = serde_json::from_str(&out.replace("// \"taskboard\": { broken\n", "").replace("// comment { with brace\n", "").replace("// trailing { \n", "")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(
+            &out.replace("// \"taskboard\": { broken\n", "")
+                .replace("// comment { with brace\n", "")
+                .replace("// trailing { \n", ""),
+        )
+        .unwrap();
         assert!(v["mcp"].get("taskboard").is_none());
         assert_eq!(v["mcp"]["other"]["type"], "remote");
     }
@@ -2220,7 +2583,8 @@ mod tests {
     #[test]
     fn global_jsonc_strip_last_and_only_child() {
         // 末条目：吃前逗号
-        let src = "{\"mcp\": {\"a\": 1, \"taskboard\": {\"command\": [\"/bin/taskboard\", \"mcp\"]}}}";
+        let src =
+            "{\"mcp\": {\"a\": 1, \"taskboard\": {\"command\": [\"/bin/taskboard\", \"mcp\"]}}}";
         let (s, e) = find_taskboard_entry_span(src).unwrap();
         let out = remove_entry_span(src, s, e);
         assert_eq!(out, "{\"mcp\": {\"a\": 1}}");
@@ -2236,9 +2600,15 @@ mod tests {
     fn entry_ours_detection() {
         let exe = "/Applications/TaskBoard.app/Contents/MacOS/taskboard";
         assert!(taskboard_entry_is_ours("\"taskboard\": {\"command\": [\"/Applications/TaskBoard.app/Contents/MacOS/taskboard\", \"mcp\"]}", exe));
-        assert!(taskboard_entry_is_ours("\"taskboard\": {\"command\": [\"python3\", \"mcp_server/server.py\"]}", exe));
+        assert!(taskboard_entry_is_ours(
+            "\"taskboard\": {\"command\": [\"python3\", \"mcp_server/server.py\"]}",
+            exe
+        ));
         assert!(taskboard_entry_is_ours("\"taskboard\": {\"command\": [\"C:\\\\Program Files\\\\TaskBoard\\\\taskboard.exe\", \"mcp\"]}", exe));
-        assert!(!taskboard_entry_is_ours("\"taskboard\": {\"command\": [\"/usr/local/bin/myboard\", \"serve\"]}", exe));
+        assert!(!taskboard_entry_is_ours(
+            "\"taskboard\": {\"command\": [\"/usr/local/bin/myboard\", \"serve\"]}",
+            exe
+        ));
     }
 
     #[test]
@@ -2260,7 +2630,10 @@ mod tests {
         assert!(!after.contains("/bin/taskboard"), "MCP 条目应被摘除");
         assert!(after.contains("// keep me"), "注释保留");
         assert!(after.contains("\"o\": 1"), "兄弟键保留");
-        assert!(u.backups.iter().any(|b| b.contains("taskboard-bak")), "应留备份");
+        assert!(
+            u.backups.iter().any(|b| b.contains("taskboard-bak")),
+            "应留备份"
+        );
         assert!(!status_one(&home, None, "opencode", None).installed);
         // 外来条目：保留 + notice
         std::fs::write(
@@ -2302,10 +2675,21 @@ mod tests {
         // 未知 agent 不报错（安装/状态时按手动指引返回 notice）
         let (_, _, list) = parse_request("global", None, vec!["nope".into()]).unwrap();
         assert_eq!(list, vec!["nope".to_string()]);
-        let (global, _, list) =
-            parse_request("global", None, vec!["opencode".into(), "claude-code".into(), "claude-code".into()]).unwrap();
+        let (global, _, list) = parse_request(
+            "global",
+            None,
+            vec![
+                "opencode".into(),
+                "claude-code".into(),
+                "claude-code".into(),
+            ],
+        )
+        .unwrap();
         assert!(global);
-        assert_eq!(list, vec!["opencode".to_string(), "claude-code".to_string()]);
+        assert_eq!(
+            list,
+            vec!["opencode".to_string(), "claude-code".to_string()]
+        );
     }
 
     #[test]
@@ -2313,7 +2697,9 @@ mod tests {
         // #193：target 下的 dev 路径重编即失效，不得自动写入全局配置。
         assert!(is_dev_binary("/tmp/build/target/debug/taskboard"));
         assert!(is_dev_binary("C:\\proj\\target\\debug\\taskboard.exe"));
-        assert!(!is_dev_binary("/Applications/TaskBoard.app/Contents/MacOS/taskboard"));
+        assert!(!is_dev_binary(
+            "/Applications/TaskBoard.app/Contents/MacOS/taskboard"
+        ));
         assert!(!is_dev_binary("/usr/local/bin/taskboard"));
         assert!(!is_dev_binary(""));
     }
@@ -2324,7 +2710,14 @@ mod tests {
         let repo = tmp("dev-warn");
         let home = fake_home("dev-warn-home");
         let mut res = InstallResult::empty("project", "x");
-        install_one(&home, Some(&repo), "claude-code", "/tmp/build/target/debug/taskboard", &mut res).unwrap();
+        install_one(
+            &home,
+            Some(&repo),
+            "claude-code",
+            "/tmp/build/target/debug/taskboard",
+            &mut res,
+        )
+        .unwrap();
         assert!(res.settings_merged);
         assert!(res.notices.iter().any(|n| n.contains("开发版")));
         let repo2 = tmp("dev-warn-rel");
@@ -2349,13 +2742,21 @@ mod tests {
     fn dump_real_probe() {
         let agents = probe_agent_hosts().unwrap();
         for a in agents.iter().filter(|a| a.present) {
-            println!("{:<12} {:<12} {:?} {:?} {:?}", a.agent, a.kind, a.binary, a.config_dir, a.app);
+            println!(
+                "{:<12} {:<12} {:?} {:?} {:?}",
+                a.agent, a.kind, a.binary, a.config_dir, a.app
+            );
         }
         let snap = snapshot_of(1, &agents);
         let text = serde_json::to_string(&snap).unwrap();
         let back: ScanSnapshot = serde_json::from_str(&text).unwrap();
         let (i, r) = diff_scan(Some(&back), &agents);
-        println!("--- 已安装 {} 个；与自身对比 diff: +{:?} -{:?}", agents.iter().filter(|a| a.present).count(), i, r);
+        println!(
+            "--- 已安装 {} 个；与自身对比 diff: +{:?} -{:?}",
+            agents.iter().filter(|a| a.present).count(),
+            i,
+            r
+        );
     }
 
     /* ===== #263：设备扫描 ===== */
@@ -2367,7 +2768,9 @@ mod tests {
         let ts = include_str!("../../src/agents.ts");
         let mut out = Vec::new();
         for line in ts.lines() {
-            let Some(idx) = line.find("value: '") else { continue };
+            let Some(idx) = line.find("value: '") else {
+                continue;
+            };
             let rest = &line[idx + "value: '".len()..];
             if let Some(end) = rest.find('\'') {
                 out.push(rest[..end].to_string());
@@ -2383,8 +2786,15 @@ mod tests {
         let mut be: Vec<String> = HOST_SPECS.iter().map(|s| s.id.to_string()).collect();
         be.sort();
         // 防漂移：前端新增 agent 必须同步在 HOST_SPECS 里给出探测口径（可留空数组）。
-        assert_eq!(fe, be, "HOST_SPECS 与 app/src/agents.ts 的 agent id 集合必须一致");
-        assert!(fe.len() >= 30, "agents.ts 解析疑似失败，只拿到 {} 条", fe.len());
+        assert_eq!(
+            fe, be,
+            "HOST_SPECS 与 app/src/agents.ts 的 agent id 集合必须一致"
+        );
+        assert!(
+            fe.len() >= 30,
+            "agents.ts 解析疑似失败，只拿到 {} 条",
+            fe.len()
+        );
     }
 
     #[test]
@@ -2430,12 +2840,15 @@ mod tests {
             &[
                 info("claude-code", "none"),
                 info("opencode", "none"),
-                info("trae", "cli"),   // 上一轮还在，本轮消失 → 疑似已卸载
-                info("glm", "app"),    // 同上，app 形态
+                info("trae", "cli"), // 上一轮还在，本轮消失 → 疑似已卸载
+                info("glm", "app"),  // 同上，app 形态
             ],
         );
         let (installed, removed) = diff_scan(Some(&prev), &cur);
-        assert_eq!(installed, vec!["claude-code".to_string(), "opencode".to_string()]);
+        assert_eq!(
+            installed,
+            vec!["claude-code".to_string(), "opencode".to_string()]
+        );
         assert_eq!(removed, vec!["trae".to_string(), "glm".to_string()]);
 
         // config-only → cli 视为补齐/重装，不重复计为"已安装"以外的事件。
@@ -2465,7 +2878,10 @@ mod tests {
         let back: ScanSnapshot = serde_json::from_str(&text).unwrap();
         assert_eq!(back.scanned_at, 1_789_000_000);
         assert_eq!(back.agents["claude-code"].kind, "cli");
-        assert_eq!(back.agents["claude-code"].binary.as_deref(), Some("~/.local/bin/claude"));
+        assert_eq!(
+            back.agents["claude-code"].binary.as_deref(),
+            Some("~/.local/bin/claude")
+        );
     }
 
     #[test]
@@ -2473,9 +2889,16 @@ mod tests {
         let home = fake_home("probe-bin");
         // 唯一名，避免与开发机真实 PATH 冲突；命中 <home>/bin 这一惯例目录。
         std::fs::create_dir_all(home.join("bin")).unwrap();
-        std::fs::write(home.join("bin").join("tb-probe-fixture-only"), "#!/bin/sh\n").unwrap();
+        std::fs::write(
+            home.join("bin").join("tb-probe-fixture-only"),
+            "#!/bin/sh\n",
+        )
+        .unwrap();
         let hit = find_binary(&home, &["tb-probe-fixture-only"]);
-        assert_eq!(hit.as_deref(), Some(home.join("bin").join("tb-probe-fixture-only").as_path()));
+        assert_eq!(
+            hit.as_deref(),
+            Some(home.join("bin").join("tb-probe-fixture-only").as_path())
+        );
         assert!(find_binary(&home, &["tb-probe-definitely-absent-xyz"]).is_none());
         assert!(find_binary(&home, &[]).is_none());
         let _ = std::fs::remove_dir_all(&home);
@@ -2484,7 +2907,10 @@ mod tests {
     #[test]
     fn find_app_matches_case_insensitively() {
         let apps = vec!["Cursor".to_string(), "WorkBuddy".to_string()];
-        assert_eq!(find_app(&apps, &["cursor"]).as_deref(), Some("/Applications/Cursor.app"));
+        assert_eq!(
+            find_app(&apps, &["cursor"]).as_deref(),
+            Some("/Applications/Cursor.app")
+        );
         assert_eq!(find_app(&apps, &["Trae"]), None);
         assert_eq!(find_app(&apps, &[]), None);
     }
@@ -2530,7 +2956,10 @@ mod tests {
             app: None,
         };
         let without = status_one(&home, None, "codebuddy", None);
-        assert!(!without.host_present && !without.installed, "无配置目录且无探测 → 未安装");
+        assert!(
+            !without.host_present && !without.installed,
+            "无配置目录且无探测 → 未安装"
+        );
         let with = status_one(&home, None, "codebuddy", Some(&info));
         assert!(with.host_present && !with.installed, "探测命中 → 可接入");
         let _ = std::fs::remove_dir_all(&home);
