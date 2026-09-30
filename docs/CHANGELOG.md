@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 已关闭 issue 滞留看板：`closed` 判据大小写敏感 + 英文 Project Status 未映射（#335）**
+
+  - **#335 `tasks.issue_state` 同一列存在 4 种大小写**：`closed` 422 / `OPEN` 96 / `CLOSED` 63 / `open` 40。`github.rs::fetch_project_issues`（ProjectV2 条目查询）取 `content["state"]`，而 **GraphQL 的 `IssueState` 是大写枚举 `OPEN`/`CLOSED`**，REST 则是小写 —— 该值被原样落库，全链路无归一化。详见 [docs/issue-335-closed-state-case.md](./issue-335-closed-state-case.md)。
+  - **#335 三处 closed 判据写死小写，大写行永不命中**：`sync.rs` 的 `t.state == "closed"`（`AGENTS.md §2.2` 优先级第 1 条「closed → done 远程权威覆盖」，**最高优先级分支对 Project 来源的 issue 完全失效**）、`db.rs::fallback_state_from_gh_state`、`commands.rs::set_project_status`（「已关闭就不再改 Project」的守卫形同虚设）。
+  - **#335 兜底同样失效**：`map_project_status()` 只认中文 OMS 文案，而本项目两个 Project 的 Status 选项是**英文**（`Released` / `Done`）⇒ 返回 `None` ⇒ 按 §2.2 第 4 条保持本地手动态 ⇒ 卡在 `todo`/`processed`。另注 `sync.rs` 的 stale 清扫写的是**小写** `closed`，与 GraphQL 大写进一步混用。
+  - **影响面（本地库实测）**：`issue_state = 'CLOSED'` 且 `status <> 'done'` 共 **29 行** —— fad-backend 13、foodsup-client 9、task-dashboard 4（#327–#330）、foodsup-app-h5-2.0 3；而 `issue_state = 'closed'` 且 `status <> 'done'` 为 **0 行**，反证缺陷只在大写一侧。
+  - **修复（四层，缺一不可）**：① 新增 `common::is_closed_state()`（`eq_ignore_ascii_case`）替换全部三处判据；② 新增 `common::normalize_issue_state()`，同步 / 按需拉取 / Python MCP 三路径落库前统一转小写；③ `map_project_status()` 追加**整值全等**（非子串，防 `Ready for release` 误判成 `done`）的英文分支，兼容 emoji 与连字符写法；④ 新增一次性存量数据修复，随 `SCHEMA_VERSION` 3→4 门控执行（先归一化、再修正状态）。
+  - **存量修复刻意不写 `done_at`**：一次修复拿不到真实关闭时间，而 `done_at` 唯一用途是「已完成任务保留 1 个月」的淘汰窗口（`WHERE done_at > 0`），臆造时间戳会启动淘汰倒计时;留 `0` 保证这些行不被误删（前端不读该列，展示不受影响）。修复语句为 best-effort：失败只记日志、不影响版本号推进，避免因失败导致 `needs_migration` 恒真而每次建连都跑迁移（回归 #329 修掉的「每次 `open_db` 写库」缺陷）。
+  - **⚠️ 唯一对外行为变更**：Project Status 为**英文**选项（`Done` / `Released` / `In progress` / `In Review` / `Backlog` / `To Do` 等）时，此前一律「保持本地手动态」，现在会映射到四态 —— 这是修复的必要组成，否则 closed 判据修好后兜底路径仍是坏的。既有的 `resolve_final_status_follows_priority` 用例原先用 `"Backlog"` 当「映射不到」的样例，已随本次变更改用真正未识别的值。
+  - **无 schema / MCP 工具 / i18n key 变更**（无增删改列；`SELECT_COLS` 未动）；前端零改动。
+  - **验证**：`cargo test --lib` 146 passed（+5）✅、`cargo test --test db_test` 25 passed（+1）✅、`cargo fmt --check` ✅、`cargo clippy --lib -- -D warnings` ✅、Python MCP `unittest` 36 passed（+3）✅；**3 项反向验证逐项通过**（改回缺陷写法必失败：`is_closed_state` 改大小写敏感 → 2 例失败；清空数据修复 → db_test 1 例失败；Python 侧改回 → 2 例失败）。
+
 - **Unreleased — code review P3 批次：版本号零校验且已漂移 / 15 篇孤岛文档 / ESLint 门禁形同虚设 / CI 缺构建与格式检查 7 项（#330）**
 
   - **#330 版本号「多处同步」零自动化校验，且已实际漂移**：版本号分散在 5 个文件（`package.json` / `package-lock.json` / `Cargo.toml` / `tauri.conf.json` / `Cargo.lock`），发版靠手抄，而**全仓库没有任何一步校验过**；实测前 4 处是 `0.6.5` 而 **`package-lock.json` 停在 `0.4.0`**（落后两个大版本）。`AGENTS.md §4.3/§6.4` 与 `release.yml` 注释还都只写「对齐**三处** version」，清单本身就不完整。详见 [docs/issue-330-p3-quality-gates.md](./issue-330-p3-quality-gates.md)。
