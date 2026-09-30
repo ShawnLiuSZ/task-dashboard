@@ -119,7 +119,9 @@ fn missing_detail(owner: &str, r: &IssueRef, owner_inferred: bool) -> String {
         r.repo, r.number
     );
     if owner_inferred {
-        s.push_str("；该 owner 是由账号推断的，若仓库属于其他命名空间，请用 `owner/repo#N` 形式指定");
+        s.push_str(
+            "；该 owner 是由账号推断的，若仓库属于其他命名空间，请用 `owner/repo#N` 形式指定",
+        );
     }
     s
 }
@@ -189,7 +191,11 @@ fn pick_account(conn: &Connection, owner: Option<&str>) -> Result<PickAccount, S
                 .iter()
                 .filter(|a| account_owners(a).contains(&lower))
                 .collect();
-            match matched.iter().find(|a| a.is_default).or_else(|| matched.first()) {
+            match matched
+                .iter()
+                .find(|a| a.is_default)
+                .or_else(|| matched.first())
+            {
                 Some(a) => (*a).clone(),
                 None => {
                     return Ok(PickAccount::Unavailable(format!(
@@ -268,7 +274,8 @@ fn build_task_row(
     );
     // Project Status 只能走 GraphQL，单 issue REST 响应没有 → 传空串 / None，
     // 于是 `resolve_final_status` 走到「兜底」分支：新建行按 §2.2 口径取 todo。
-    let status = crate::sync::resolve_final_status(raw.state == "closed", None, explicit_label, "", "todo");
+    let status =
+        crate::sync::resolve_final_status(raw.state == "closed", None, explicit_label, "", "todo");
     let done_at = if status == "done" { now } else { 0 };
     Ok(TaskUpsert {
         issue_key: r.key.clone(),
@@ -338,14 +345,15 @@ pub fn ensure_task_available(conn: &Connection, ref_: &str) -> Result<EnsureOutc
         )));
     }
 
-    let client = match crate::github::GitHubClient::new(pat, account.login.clone(), api_owner.clone()) {
-        Ok(c) => c,
-        Err(e) => {
-            return Ok(EnsureOutcome::Unavailable(format!(
-                "构造 GitHub 客户端失败: {e}"
-            )))
-        }
-    };
+    let client =
+        match crate::github::GitHubClient::new(pat, account.login.clone(), api_owner.clone()) {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(EnsureOutcome::Unavailable(format!(
+                    "构造 GitHub 客户端失败: {e}"
+                )))
+            }
+        };
     let raw = match client.fetch_issue(&api_owner, &r.repo, r.number) {
         Ok(Some(t)) => t,
         Ok(None) => {
@@ -398,14 +406,17 @@ mod tests {
 
     #[test]
     fn parse_ref_from_url_keeps_owner() {
-        let r = parse_issue_ref_parts("https://github.com/ShawnLiuSZ/task-dashboard/issues/248").unwrap();
+        let r = parse_issue_ref_parts("https://github.com/ShawnLiuSZ/task-dashboard/issues/248")
+            .unwrap();
         assert_eq!(r.owner.as_deref(), Some("ShawnLiuSZ"));
         assert_eq!(r.repo, "task-dashboard");
         assert_eq!(r.number, 248);
         assert_eq!(r.key, "task-dashboard#248");
         // 尾部锚点 / 空白容忍
         assert_eq!(
-            parse_issue_ref_parts("  https://github.com/o/r/issues/7  ").unwrap().key,
+            parse_issue_ref_parts("  https://github.com/o/r/issues/7  ")
+                .unwrap()
+                .key,
             "r#7"
         );
     }
@@ -513,7 +524,10 @@ mod tests {
     #[test]
     fn default_owner_falls_back_to_login_when_org_empty() {
         // org 为空时必须退回 login，否则 API URL 会拼成 `/repos//repo/...`
-        assert_eq!(default_owner_of(&account(1, "ShawnLiuSZ", "")), "ShawnLiuSZ");
+        assert_eq!(
+            default_owner_of(&account(1, "ShawnLiuSZ", "")),
+            "ShawnLiuSZ"
+        );
         assert_eq!(
             default_owner_of(&account(2, "bob", "FoodsUp-Inc")),
             "FoodsUp-Inc"
@@ -536,7 +550,9 @@ mod tests {
     fn pick_account_no_accounts_is_unavailable() {
         let c = conn_with_accounts(&[]);
         match pick_account(&c, None).unwrap() {
-            PickAccount::Unavailable(reason) => assert!(reason.contains("没有任何 GitHub 账号"), "{reason}"),
+            PickAccount::Unavailable(reason) => {
+                assert!(reason.contains("没有任何 GitHub 账号"), "{reason}")
+            }
             other => panic!("无账号应为 Unavailable，实际: {other:?}"),
         }
     }

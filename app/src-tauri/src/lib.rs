@@ -168,7 +168,11 @@ fn refresh_tray(app: &AppHandle) {
         n
     };
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_title(if count > 0 { Some(count.to_string()) } else { None });
+        let _ = tray.set_title(if count > 0 {
+            Some(count.to_string())
+        } else {
+            None
+        });
         let _ = tray.set_tooltip(Some(format!("TaskBoard · 处理中 {}", count)));
     }
 }
@@ -263,7 +267,10 @@ mod tests {
         let flag = AtomicBool::new(false);
         let a = SyncGuard::acquire(&flag).expect("首次应可获取");
         // 已有 guard 持有期间，再次获取应去重返回 None
-        assert!(SyncGuard::acquire(&flag).is_none(), "并发第二次获取应被去重");
+        assert!(
+            SyncGuard::acquire(&flag).is_none(),
+            "并发第二次获取应被去重"
+        );
         drop(a);
         // guard 释放后应能再次获取
         assert!(SyncGuard::acquire(&flag).is_some(), "释放后应可重新获取");
@@ -380,10 +387,8 @@ pub fn run() {
         .setup(|app| {
             // #206：不再启动自动注册全局 hooks——接入一律由用户在设置页手动一键安装。
             let handle = app.handle().clone();
-            let conn = db::init(&handle).map_err(|e| {
-                Box::new(std::io::Error::other(e))
-                    as Box<dyn std::error::Error>
-            })?;
+            let conn = db::init(&handle)
+                .map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>)?;
             app.manage(AppState {
                 db: Mutex::new(conn),
                 syncing: AtomicBool::new(false),

@@ -572,7 +572,11 @@ fn migrate_legacy_alters(conn: &Connection) {
             // **不再吞掉**：v0.3.16 之前是 `let _ = ...`，导致脏 DB 被静默接受，下次 sync
             // 触发 panic。默认静默（MCP 调用时不刷屏），仅 TASKBOARD_LOG=1 时输出。
             if crate::common::verbose_enabled() {
-                crate::tlog!("[db] 列迁移跳过（已存在或 schema 不兼容）: {} | sql={}", e, col_sql);
+                crate::tlog!(
+                    "[db] 列迁移跳过（已存在或 schema 不兼容）: {} | sql={}",
+                    e,
+                    col_sql
+                );
             }
         }
     }
@@ -733,7 +737,9 @@ fn migrate_v0315_to_accounts(conn: &Connection) -> Result<(), String> {
     if crate::common::verbose_enabled() {
         crate::tlog!(
             "[db] v0.3.15 → v0.3.16 自动迁移完成：新账号 id={} @{} (org={})",
-            new_id, login, org
+            new_id,
+            login,
+            org
         );
     }
     Ok(())
@@ -777,7 +783,11 @@ pub fn is_valid_board_mode(mode: &str) -> bool {
 }
 
 /// 写入某账号的看板列展示方式（仅接受合法值）。
-pub fn set_account_board_mode(conn: &Connection, account_id: i64, mode: &str) -> Result<(), String> {
+pub fn set_account_board_mode(
+    conn: &Connection,
+    account_id: i64,
+    mode: &str,
+) -> Result<(), String> {
     if !is_valid_board_mode(mode) {
         return Err(format!("非法的看板列展示方式: {mode}"));
     }
@@ -837,8 +847,10 @@ pub fn default_account_id(conn: &Connection) -> Result<i64, String> {
     if let Some(id) = id {
         return Ok(id);
     }
-    conn.query_row("SELECT id FROM accounts ORDER BY id ASC LIMIT 1", [], |r| r.get(0))
-        .map_err(|e| format!("无任何账号: {e}"))
+    conn.query_row("SELECT id FROM accounts ORDER BY id ASC LIMIT 1", [], |r| {
+        r.get(0)
+    })
+    .map_err(|e| format!("无任何账号: {e}"))
 }
 
 /// 把 id 指定的账号设为默认（is_default=1，其他归 0）。
@@ -960,11 +972,9 @@ pub fn update_account(
 /// 默认账号不可删除；须先把另一个账号设为默认。
 pub fn delete_account(conn: &Connection, id: i64) -> Result<(), String> {
     let is_default: i64 = conn
-        .query_row(
-            "SELECT is_default FROM accounts WHERE id = ?1",
-            [id],
-            |r| r.get(0),
-        )
+        .query_row("SELECT is_default FROM accounts WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })
         .unwrap_or(0);
     if is_default != 0 {
         // #216：仅剩一个账号时允许删除（删后无账号无默认，调用方把 active 归零）。
@@ -977,7 +987,9 @@ pub fn delete_account(conn: &Connection, id: i64) -> Result<(), String> {
     }
     // 检查账号是否存在
     let exists: i64 = conn
-        .query_row("SELECT COUNT(*) FROM accounts WHERE id = ?1", [id], |r| r.get(0))
+        .query_row("SELECT COUNT(*) FROM accounts WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })
         .unwrap_or(0);
     if exists == 0 {
         return Err(format!("账号 #{id} 不存在"));
@@ -1009,8 +1021,7 @@ pub fn delete_account(conn: &Connection, id: i64) -> Result<(), String> {
     // 6. 删除账号本身
     tx.execute("DELETE FROM accounts WHERE id = ?1", [id])
         .map_err(|e| format!("删除账号失败: {e}"))?;
-    tx.commit()
-        .map_err(|e| format!("提交事务失败: {e}"))?;
+    tx.commit().map_err(|e| format!("提交事务失败: {e}"))?;
     Ok(())
 }
 
@@ -1091,8 +1102,11 @@ pub fn prune_projects(
             .execute("DELETE FROM projects WHERE account_id = ?1", [account_id])
             .map_err(|e| format!("清空项目失败: {e}"))?;
         // #215：条目 id 一并清空（否则脏 item 指向已删项目）。
-        conn.execute("DELETE FROM project_items WHERE account_id = ?1", [account_id])
-            .map_err(|e| format!("清空项目条目失败: {e}"))?;
+        conn.execute(
+            "DELETE FROM project_items WHERE account_id = ?1",
+            [account_id],
+        )
+        .map_err(|e| format!("清空项目条目失败: {e}"))?;
         return Ok(n);
     }
     let placeholders: String = keep_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
@@ -1100,8 +1114,7 @@ pub fn prune_projects(
         "DELETE FROM projects WHERE account_id = ?1 AND github_id NOT IN ({})",
         placeholders
     );
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-        vec![Box::new(account_id)];
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(account_id)];
     for id in keep_ids {
         params.push(Box::new(id.clone()));
     }
@@ -1131,7 +1144,10 @@ pub struct ProjectStatus {
 }
 
 /// 列出某账号下所有项目的 Status 选项，按 order_index 升序。
-pub fn list_project_statuses(conn: &Connection, account_id: i64) -> Result<Vec<ProjectStatus>, String> {
+pub fn list_project_statuses(
+    conn: &Connection,
+    account_id: i64,
+) -> Result<Vec<ProjectStatus>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, account_id, project_github_id, name, order_index
@@ -1158,7 +1174,11 @@ pub fn list_project_statuses(conn: &Connection, account_id: i64) -> Result<Vec<P
 }
 
 /// 列出某项目的所有 Status 选项名称（有序），用于看板列排序。
-pub fn list_project_status_names(conn: &Connection, account_id: i64, project_github_id: &str) -> Result<Vec<String>, String> {
+pub fn list_project_status_names(
+    conn: &Connection,
+    account_id: i64,
+    project_github_id: &str,
+) -> Result<Vec<String>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT name FROM project_statuses
@@ -1167,7 +1187,9 @@ pub fn list_project_status_names(conn: &Connection, account_id: i64, project_git
         )
         .map_err(|e| format!("查询项目状态名失败: {e}"))?;
     let rows = stmt
-        .query_map(rusqlite::params![account_id, project_github_id], |r| r.get(0))
+        .query_map(rusqlite::params![account_id, project_github_id], |r| {
+            r.get(0)
+        })
         .map_err(|e| format!("遍历项目状态名失败: {e}"))?;
     let mut out = Vec::new();
     for r in rows {
@@ -1276,9 +1298,9 @@ pub fn resolve_project_write_target(
         None => Err(format!(
             "任务 {issue_key} 不在任何 Project 中（或同步尚未拉取条目 id），无法写回状态"
         )),
-        Some((_gid, name, item_id, field_id)) if item_id.is_empty() || field_id.is_empty() => Err(format!(
-            "任务 {issue_key} 在项目「{name}」中的写回 ID 不完整，请先同步一次补齐"
-        )),
+        Some((_gid, name, item_id, field_id)) if item_id.is_empty() || field_id.is_empty() => Err(
+            format!("任务 {issue_key} 在项目「{name}」中的写回 ID 不完整，请先同步一次补齐"),
+        ),
         Some((gid, name, item_id, field_id)) => Ok(ProjectWriteTarget {
             project_github_id: gid,
             project_name: name,
@@ -1334,7 +1356,10 @@ pub fn project_option_id(
 /// 清空某账号下所有项目的 Status 选项（sync 前调用）。
 pub fn clear_project_statuses(conn: &Connection, account_id: i64) -> Result<usize, String> {
     let n = conn
-        .execute("DELETE FROM project_statuses WHERE account_id = ?1", [account_id])
+        .execute(
+            "DELETE FROM project_statuses WHERE account_id = ?1",
+            [account_id],
+        )
         .map_err(|e| format!("清空项目状态失败: {e}"))?;
     Ok(n)
 }
@@ -1429,7 +1454,9 @@ pub fn upsert_label_mapping(conn: &Connection, input: &LabelMappingInput) -> Res
     // 校验 status 是否合法四态之一
     let valid_status = ["todo", "doing", "processed", "done"];
     if !valid_status.contains(&status) {
-        return Err(format!("非法 status: {status}，必须为 todo/doing/processed/done 之一"));
+        return Err(format!(
+            "非法 status: {status}，必须为 todo/doing/processed/done 之一"
+        ));
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1653,7 +1680,8 @@ pub fn load_column_rules(conn: &Connection, account_id: i64) -> Result<Vec<Colum
                 if crate::common::verbose_enabled() {
                     crate::tlog!(
                         "[db] 自定义列 {} 的 match_rules 非法，已跳过: {}",
-                        col.col_key, e
+                        col.col_key,
+                        e
                     );
                 }
             }
@@ -1947,7 +1975,18 @@ pub fn update_sync_log(
            removed = ?6, candidate_done = ?7, pruned = ?8,
            failed_sources = ?9, error_message = ?10
          WHERE id = ?1",
-        rusqlite::params![id, finished_at, status, added, updated, removed, candidate_done, pruned, failed_sources, error_message],
+        rusqlite::params![
+            id,
+            finished_at,
+            status,
+            added,
+            updated,
+            removed,
+            candidate_done,
+            pruned,
+            failed_sources,
+            error_message
+        ],
     )
     .map_err(|e| format!("更新同步日志失败: {e}"))?;
     Ok(())
@@ -2201,7 +2240,9 @@ pub struct Note {
 /// 列出所有记事，按 created_at 降序（最新的在前）。
 pub fn list_notes(conn: &Connection) -> Result<Vec<Note>, String> {
     let mut stmt = conn
-        .prepare("SELECT id, content, label, created_at, updated_at FROM notes ORDER BY created_at DESC")
+        .prepare(
+            "SELECT id, content, label, created_at, updated_at FROM notes ORDER BY created_at DESC",
+        )
         .map_err(|e| format!("查询记事失败: {e}"))?;
     let rows = stmt
         .query_map([], |r| {
@@ -2348,7 +2389,10 @@ pub struct AccountColumn {
 }
 
 /// 列出某账号下所有自定义列，按 order_index 升序。
-pub fn list_account_columns(conn: &Connection, account_id: i64) -> Result<Vec<AccountColumn>, String> {
+pub fn list_account_columns(
+    conn: &Connection,
+    account_id: i64,
+) -> Result<Vec<AccountColumn>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, account_id, col_key, col_name, match_rules, order_index
@@ -2385,15 +2429,28 @@ pub fn save_account_columns(
 ) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // 先删旧配置
-    tx.execute("DELETE FROM account_columns WHERE account_id = ?1", [account_id])
-        .map_err(|e| format!("清空旧列配置失败: {e}"))?;
+    tx.execute(
+        "DELETE FROM account_columns WHERE account_id = ?1",
+        [account_id],
+    )
+    .map_err(|e| format!("清空旧列配置失败: {e}"))?;
     // 再插入新配置
     for col in columns {
-        let match_rules = if col.match_rules.is_empty() { "[]" } else { &col.match_rules };
+        let match_rules = if col.match_rules.is_empty() {
+            "[]"
+        } else {
+            &col.match_rules
+        };
         tx.execute(
             "INSERT INTO account_columns (account_id, col_key, col_name, match_rules, order_index)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![account_id, col.col_key, col.col_name, match_rules, col.order_index],
+            rusqlite::params![
+                account_id,
+                col.col_key,
+                col.col_name,
+                match_rules,
+                col.order_index
+            ],
         )
         .map_err(|e| format!("插入列配置失败: {e}"))?;
     }
@@ -2517,8 +2574,18 @@ mod tests {
             &conn,
             1,
             &[
-                ("PVT_small".to_string(), "小".to_string(), 3, "org".to_string()),
-                ("PVT_big".to_string(), "大".to_string(), 9, "org".to_string()),
+                (
+                    "PVT_small".to_string(),
+                    "小".to_string(),
+                    3,
+                    "org".to_string(),
+                ),
+                (
+                    "PVT_big".to_string(),
+                    "大".to_string(),
+                    9,
+                    "org".to_string(),
+                ),
             ],
             1,
         )
@@ -2557,7 +2624,10 @@ mod tests {
                 field_id: "F2".to_string(),
             }
         );
-        assert_eq!(project_option_id(&conn, 1, "PVT_big", "开发中").unwrap(), "O1");
+        assert_eq!(
+            project_option_id(&conn, 1, "PVT_big", "开发中").unwrap(),
+            "O1"
+        );
         // 未知选项报错并列出可选；不在项目中的 issue 报错。
         assert!(project_option_id(&conn, 1, "PVT_big", "不存在").is_err());
         assert!(resolve_project_write_target(&conn, 1, "r#9").is_err());
@@ -2633,9 +2703,11 @@ mod tests {
         // 重开：去重生效 + 唯一索引重建，不报错。
         let conn = open_db(&path).unwrap();
         let n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM notes WHERE content = 'dup'", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM notes WHERE content = 'dup'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(n, 1, "重复 content 应只剩 1 条");
         let label: String = conn
@@ -2754,7 +2826,10 @@ mod tests {
             resolve_column_from_rules(&rules, "开发中"),
             Some("b".to_string())
         );
-        assert_eq!(resolve_column_from_rules(&rules, "需求"), Some("a".to_string()));
+        assert_eq!(
+            resolve_column_from_rules(&rules, "需求"),
+            Some("a".to_string())
+        );
         assert_eq!(resolve_column_from_rules(&rules, ""), None);
         assert_eq!(resolve_column_from_rules(&rules, "未知"), None);
     }
@@ -2853,9 +2928,7 @@ mod tests {
         let path = tmp_db("api-logs-prune");
         let conn = open_db(&path).unwrap();
         for i in 0..5 {
-            let e = vec![ApiLogEntry::new(
-                "GET", "/x", 200, true, 1, "req", "resp",
-            )];
+            let e = vec![ApiLogEntry::new("GET", "/x", 200, true, 1, "req", "resp")];
             insert_api_logs(&conn, "claim", 1, 0, 1000 + i, &e).unwrap();
         }
         // 上限 3（now 与 created_at 同量级 → 不触发超期淘汰）→ 只留最新 3 行。
@@ -3107,11 +3180,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 1, "缺索引应被热路径自愈重建");
-        assert_eq!(
-            schema_version(&conn),
-            99,
-            "已被写高的版本号不应被回退覆盖"
-        );
+        assert_eq!(schema_version(&conn), 99, "已被写高的版本号不应被回退覆盖");
         drop(conn);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
@@ -3143,7 +3212,10 @@ mod tests {
         let path = tmp_db("fresh-indexes");
         let conn = open_db(&path).unwrap();
         let missing = missing_indexes(&conn);
-        assert!(missing.is_empty(), "新库应补齐全部必填索引，仍缺: {missing:?}");
+        assert!(
+            missing.is_empty(),
+            "新库应补齐全部必填索引，仍缺: {missing:?}"
+        );
         assert!(
             schema_is_current(&conn),
             "新库建连后应处于稳态（版本号 + 索引 + 列全部达标）"

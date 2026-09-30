@@ -199,7 +199,12 @@ fn parse_issue_refs(text: &str, default_repo: &str) -> Vec<String> {
             // 可选冒号（半角或全角）
             if j < bytes.len() && bytes[j] == b':' {
                 j += 1;
-            } else if j < bytes.len() && bytes[j] == 0xEF && j + 2 < bytes.len() && bytes[j + 1] == 0xBC && bytes[j + 2] == 0x9A {
+            } else if j < bytes.len()
+                && bytes[j] == 0xEF
+                && j + 2 < bytes.len()
+                && bytes[j + 1] == 0xBC
+                && bytes[j + 2] == 0x9A
+            {
                 j += 3;
             }
             // 冒号后再跳过空白
@@ -218,7 +223,12 @@ fn parse_issue_refs(text: &str, default_repo: &str) -> Vec<String> {
                     // 跳过可选的冒号（半角或全角）
                     if j < bytes.len() && bytes[j] == b':' {
                         j += 1;
-                    } else if j < bytes.len() && bytes[j] == 0xEF && j + 2 < bytes.len() && bytes[j + 1] == 0xBC && bytes[j + 2] == 0x9A {
+                    } else if j < bytes.len()
+                        && bytes[j] == 0xEF
+                        && j + 2 < bytes.len()
+                        && bytes[j + 1] == 0xBC
+                        && bytes[j + 2] == 0x9A
+                    {
                         j += 3;
                     }
                     // 跳过空白
@@ -231,7 +241,11 @@ fn parse_issue_refs(text: &str, default_repo: &str) -> Vec<String> {
                         j += 1;
                     }
                 }
-                if j < bytes.len() && bytes[j] == b'#' && j + 1 < bytes.len() && bytes[j + 1].is_ascii_digit() {
+                if j < bytes.len()
+                    && bytes[j] == b'#'
+                    && j + 1 < bytes.len()
+                    && bytes[j + 1].is_ascii_digit()
+                {
                     found_first = true;
                     let num_start = j + 1;
                     let mut k = num_start;
@@ -340,7 +354,6 @@ fn sync_account_inner(
     now: i64,
     board_mode: &str,
 ) -> Result<AccountSyncResult, String> {
-
     // 发现并存储该账号下的全部 Project（best-effort）。
     let project_ids = match client.fetch_all_projects() {
         Ok(projects) => {
@@ -434,9 +447,7 @@ fn sync_account_inner(
                 .iter()
                 .map(|o| (o.name.clone(), o.option_id.clone(), o.order_index))
                 .collect();
-            if let Err(e) =
-                crate::db::upsert_project_statuses(conn, account.id, &gid, &opts, now)
-            {
+            if let Err(e) = crate::db::upsert_project_statuses(conn, account.id, &gid, &opts, now) {
                 crate::tlog!("[sync] 存储项目 {gid} 状态选项失败: {e}");
             }
             if !field.field_id.is_empty() {
@@ -448,11 +459,8 @@ fn sync_account_inner(
             }
         }
         if !item_ids.is_empty() {
-            let items: Vec<(String, String)> =
-                item_ids.into_iter().collect();
-            if let Err(e) =
-                crate::db::replace_project_items(conn, account.id, &gid, &items)
-            {
+            let items: Vec<(String, String)> = item_ids.into_iter().collect();
+            if let Err(e) = crate::db::replace_project_items(conn, account.id, &gid, &items) {
                 crate::tlog!("[sync] 存储项目 {gid} 条目 id 失败: {e}");
             }
         }
@@ -558,7 +566,10 @@ fn sync_account_inner(
 
     // 项目中发现的 issue 已在上面并行拉取时合并到 project_issues（去重：搜索源已有的跳过）。
     // 这确保「项目中有但用户非 assignee/author/mentions/commenter」的 issue 也能上板。
-    let existing_keys: HashSet<String> = raw.iter().map(|t| format!("{}#{}", t.repo, t.number)).collect();
+    let existing_keys: HashSet<String> = raw
+        .iter()
+        .map(|t| format!("{}#{}", t.repo, t.number))
+        .collect();
     let mut merged_from_project = 0usize;
     for t in project_issues {
         let k = format!("{}#{}", t.repo, t.number);
@@ -618,8 +629,8 @@ fn sync_account_inner(
     // （2 次 SELECT + 2×labels 点查 + 全表列加载 + match_rules 重复解析）。
     // 预加载失败则整账号同步失败，绝不用空快照继续——否则既有 status 会被
     // 默认 "todo" 覆盖，造成本地手动态批量丢失。
-    let label_rules = crate::db::load_label_rules(conn)
-        .map_err(|e| format!("预加载 label 映射失败: {e}"))?;
+    let label_rules =
+        crate::db::load_label_rules(conn).map_err(|e| format!("预加载 label 映射失败: {e}"))?;
     let column_rules = crate::db::load_column_rules(conn, account.id)
         .map_err(|e| format!("预加载自定义列失败: {e}"))?;
     let existing_map = crate::db::load_existing_tasks(conn, account.id)
@@ -728,16 +739,15 @@ fn sync_account_inner(
 
         // #278：父子关系。仅当该仓库的整组拉取成功时更新；失败则保留既有值
         // （与 PR 关联同款取舍，避免一次网络抖动把已有关联清空）。
-        let (parent_issue, sub_issues) = if links_failed_repos
-            .contains(&format!("{}/{}", t.repo_owner, t.repo))
-        {
-            (existing_parent_issue, existing_sub_issues)
-        } else {
-            links_by_key
-                .get(&key)
-                .map(|l| l.to_columns())
-                .unwrap_or((String::new(), String::new()))
-        };
+        let (parent_issue, sub_issues) =
+            if links_failed_repos.contains(&format!("{}/{}", t.repo_owner, t.repo)) {
+                (existing_parent_issue, existing_sub_issues)
+            } else {
+                links_by_key
+                    .get(&key)
+                    .map(|l| l.to_columns())
+                    .unwrap_or((String::new(), String::new()))
+            };
 
         pending.push(crate::db::TaskUpsert {
             issue_key: key,
@@ -778,8 +788,11 @@ fn sync_account_inner(
             .unchecked_transaction()
             .map_err(|e| format!("开启同步写入事务失败: {e}"))?;
         // 仅本账号的任务标记陈旧（避免「全部账号视图」下另一账号的同步误标本账号任务为陈旧）。
-        tx.execute("UPDATE tasks SET stale = 1 WHERE account_id = ?1", [account.id])
-            .map_err(|e| format!("标记陈旧任务失败: {e}"))?;
+        tx.execute(
+            "UPDATE tasks SET stale = 1 WHERE account_id = ?1",
+            [account.id],
+        )
+        .map_err(|e| format!("标记陈旧任务失败: {e}"))?;
         for row in &pending {
             // v0.4.1 (#250)：写入走 db::write_task（与「按需拉取单个 issue」共用同一份
             // 列清单与参数绑定）。同步路径是权威数据 → Upsert（冲突则覆盖）。
@@ -881,14 +894,26 @@ pub fn run(conn: &Connection, trigger_type: &str) -> Result<SyncResult, String> 
             std::thread::sleep(Duration::from_millis(800));
         }
         // 查当前账号对应的日志 id（#328：提到读 PAT 之前，下面的 continue 分支也要用它收尾）。
-        let log_id = log_ids.iter().find(|(aid, _)| *aid == account.id).map(|(_, lid)| *lid);
+        let log_id = log_ids
+            .iter()
+            .find(|(aid, _)| *aid == account.id)
+            .map(|(_, lid)| *lid);
         // #328：跳过的账号必须把 sync_logs 行收尾。原先 `continue` 前不回写，
         // 该行永久停留在 `status='running'`，前端「同步日志」永远显示「进行中」。
         let fail_log = |msg: &str| {
             if let Some(lid) = log_id {
                 let _ = crate::db::update_sync_log(
-                    conn, lid, now_secs(), "failed",
-                    0, 0, 0, 0, 0, "", msg,
+                    conn,
+                    lid,
+                    now_secs(),
+                    "failed",
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "",
+                    msg,
                 );
             }
         };
@@ -923,10 +948,17 @@ pub fn run(conn: &Connection, trigger_type: &str) -> Result<SyncResult, String> 
                 // 更新日志：成功
                 if let Some(lid) = log_id {
                     let _ = crate::db::update_sync_log(
-                        conn, lid, now_secs(), "success",
-                        r.added as i64, r.updated as i64, r.removed as i64,
-                        r.candidate_done as i64, 0,
-                        &r.failed_sources.join("; "), "",
+                        conn,
+                        lid,
+                        now_secs(),
+                        "success",
+                        r.added as i64,
+                        r.updated as i64,
+                        r.removed as i64,
+                        r.candidate_done as i64,
+                        0,
+                        &r.failed_sources.join("; "),
+                        "",
                     );
                 }
             }
@@ -935,8 +967,17 @@ pub fn run(conn: &Connection, trigger_type: &str) -> Result<SyncResult, String> 
                 // 更新日志：失败
                 if let Some(lid) = log_id {
                     let _ = crate::db::update_sync_log(
-                        conn, lid, now_secs(), "failed",
-                        0, 0, 0, 0, 0, "", &e,
+                        conn,
+                        lid,
+                        now_secs(),
+                        "failed",
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        "",
+                        &e,
                     );
                 }
             }
@@ -1002,8 +1043,10 @@ mod tests {
     #[test]
     fn account_board_mode_defaults_and_validates() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
-            .unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .unwrap();
         // 未配置默认 project
         assert_eq!(db::get_account_board_mode(&conn, 1), "project");
         // 合法值可写入并按账号隔离
@@ -1084,9 +1127,11 @@ mod tests {
 
         // 被跳过的账号必须把 sync_logs 行收尾，不能停在 running。
         let status: String = conn
-            .query_row("SELECT status FROM sync_logs ORDER BY id DESC LIMIT 1", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT status FROM sync_logs ORDER BY id DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
             .expect("应有一条同步日志");
         assert_eq!(status, "failed", "跳过（未配置 PAT）的账号也要收尾日志");
     }
@@ -1107,10 +1152,7 @@ mod tests {
         let prod = std::path::Path::new(
             "/Users/liushizhao/Library/Application Support/com.shawnliu.taskboard/taskboard.db",
         );
-        assert!(
-            prod.exists(),
-            "生产库应已存在（先运行过一次 App 同步）"
-        );
+        assert!(prod.exists(), "生产库应已存在（先运行过一次 App 同步）");
         // 关键：复制到临时库再跑，**绝不改写用户的生产库**。
         // 早期版本直接开生产库跑同步，属于误改用户数据的高危写法——任何 `cargo test --lib -- --ignored`
         // 都会触发，故改为临时副本，验证后删除。
@@ -1120,20 +1162,18 @@ mod tests {
         // `VACUUM INTO` 做一致性快照（含 WAL 内容，且对正在使用的库安全）。
         // #266：原固定名 taskboard_headless_test.db 在多进程/重跑时会与自身或别处冲突，
         // 改为带 pid 的唯一名（本测试虽 #[ignore]，仍按同一约定整改，避免遗留隐患）。
-        let tmp = std::env::temp_dir().join(format!(
-            "taskboard_headless_test_{}.db",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("taskboard_headless_test_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
         {
             let src = Connection::open(prod).expect("打开生产库（只读快照）");
-            src.execute(
-                "VACUUM INTO ?1",
-                [tmp.to_string_lossy().as_ref()],
-            )
-            .expect("VACUUM INTO 快照失败");
+            src.execute("VACUUM INTO ?1", [tmp.to_string_lossy().as_ref()])
+                .expect("VACUUM INTO 快照失败");
         }
-        crate::tlog!("[test] 已快照生产库到临时文件（不影响生产数据）：{}", tmp.display());
+        crate::tlog!(
+            "[test] 已快照生产库到临时文件（不影响生产数据）：{}",
+            tmp.display()
+        );
         // 快照经 open_db 统一补 schema/迁移（与 App 打开路径一致）。
         let conn = db::open_db(&tmp).expect("open_db 快照库");
 
@@ -1141,11 +1181,18 @@ mod tests {
         let res = run(&conn, "manual").expect("同步应成功");
         crate::tlog!(
             "[test] 同步完成：total={} added={} updated={} removed={} candidate_done={} pruned={}",
-            res.total, res.added, res.updated, res.removed, res.candidate_done, res.pruned
+            res.total,
+            res.added,
+            res.updated,
+            res.removed,
+            res.candidate_done,
+            res.pruned
         );
 
         let pr_gt0: i64 = conn
-            .query_row("SELECT COUNT(*) FROM tasks WHERE pr_number > 0", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM tasks WHERE pr_number > 0", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         let total: i64 = conn
             .query_row("SELECT COUNT(*) FROM tasks", [], |r| r.get(0))
@@ -1159,7 +1206,10 @@ mod tests {
             pr_gt0, total, diag_fetch_ok, diag_fetched, diag_map, diag_matched
         );
         let _ = std::fs::remove_file(&tmp);
-        assert!(pr_gt0 > 0, "期望至少 1 个任务的 pr_number > 0（PR 关联应落地）");
+        assert!(
+            pr_gt0 > 0,
+            "期望至少 1 个任务的 pr_number > 0（PR 关联应落地）"
+        );
     }
 
     // ===== 纯函数单元测试（不依赖网络） ==============================
@@ -1229,7 +1279,13 @@ mod tests {
         );
         // custom 列映射次之。
         assert_eq!(
-            resolve_final_status(false, Some("col_1".into()), Some("todo".into()), "✨开发中", "doing"),
+            resolve_final_status(
+                false,
+                Some("col_1".into()),
+                Some("todo".into()),
+                "✨开发中",
+                "doing"
+            ),
             "col_1"
         );
         // 非 todo 显式映射同样优先。
