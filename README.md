@@ -178,6 +178,8 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/issue-327-p0-functional-defects.md`](./docs/issue-327-p0-functional-defects.md) — **code review P0 批次**：About 小窗「确定」按钮因 capability 未覆盖 `about` 窗口 + `core:window:default` 不含 `allow-close` 而静默失效；设置面板「界面语言」切换器被误复制成重复的主题选择器；记事重复内容暴露原始 `UNIQUE constraint` 报错；`projects.number_of_items` 误取项目编号（而非 `items.totalCount`），使多 Project 时写错写回目标
 
+- [`docs/issue-328-p1-data-safety.md`](./docs/issue-328-p1-data-safety.md) — **code review P1 批次（数据安全与健壮性，9 项）**：tasks 物理重建自称「单事务」实则无事务（中断即丢本地态、失败后无自愈路径）；MCP 一行坏 JSON / 超大 `Content-Length` 直接结束或 abort 进程；同步全败仍返回 `Ok` 谎报成功且跳过的账号日志永久停在 running；`graphql()` 无限流处理致项目状态与父子关系静默降级；GUI 写命令吞掉「0 行受影响」；查询错误被折叠成「不在任何 Project 中」；403 一律当限流使权限问题白等 30s；`search()` 单条坏数据拖垮整个数据源
+
 - [`docs/issue-285-sync-empty-board.md`](./docs/issue-285-sync-empty-board.md) — **立即同步后看板空白、重启才恢复**：`rows_to_tasks` 两处缺陷——归属筛选分支漏 2 列（`Row::get(25)` 越界报错）+ `my-created` 误读恒空的 `meta.login` 恒返回空集；统一 SELECT 列清单 + 从 `accounts` 表取 login；`doSync` 走合并器并同步后重拉项目状态列
 
 - [`docs/v0.3.15-pat-auth.md`](./docs/v0.3.15-pat-auth.md) — v0.3.15 PAT 认证与 visual polish 设计文档（gh 替换、卡片配色、多账号规划）
