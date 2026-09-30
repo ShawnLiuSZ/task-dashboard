@@ -547,7 +547,9 @@ pub async fn set_project_status(app: AppHandle, key: String, status: String) -> 
                 rusqlite::Error::QueryReturnedNoRows => format!("任务不存在: {key}"),
                 _ => e.to_string(),
             })?;
-        if issue_state == "closed" {
+        // #335：判据必须大小写不敏感——`issue_state` 可能是 GraphQL 的大写 `CLOSED`，
+        // 写死小写会让这道「已关闭就不再写 Project」的守卫形同虚设。
+        if crate::common::is_closed_state(&issue_state) {
             return Err(format!("任务 {key} 在 GitHub 已关闭，无需再改 Project 状态"));
         }
         let (_login, org, pat) = crate::db::get_account_pat(&conn, account_id)?;
