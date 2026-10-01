@@ -13,6 +13,7 @@ import notesRaw from './components/NotesPanel.tsx?raw';
 import sessionsRaw from './components/SessionsPanel.tsx?raw';
 import settingsRaw from './components/SettingsPanel.tsx?raw';
 import logsRaw from './components/SyncLogsPanel.tsx?raw';
+import escHookRaw from './utils/useEscLayer.ts?raw';
 
 /**
  * #329 前端一致性批次的接线守卫。
@@ -24,8 +25,30 @@ import logsRaw from './components/SyncLogsPanel.tsx?raw';
 
 describe('Esc 分层接线（#329）', () => {
   it('ConfirmDialog 注册为 Esc 层，且只在最上层响应', () => {
-    expect(confirmRaw).toMatch(/registerEscLayer\(\)/);
-    expect(confirmRaw).toMatch(/isTop\(\)/);
+    // #344：层注册下沉到 useWindowEscLayer —— `onCancel` 每次渲染都是新引用，
+    // 放进 effect 依赖会让层级在父重渲染时被父子整体重排而**颠倒**
+    // （一次 Esc 直接关掉整个面板，而非取消对话框）。
+    expect(confirmRaw).toMatch(/useWindowEscLayer\(/);
+  });
+
+  it('#344 层级注册只发生一次：不在带不稳定回调依赖的 effect 里注册 Esc 层', () => {
+    // 组件侧：不再自己注册，也不再把 onClose/onCancel 放进 Esc effect 依赖
+    for (const [name, raw] of [
+      ['ConfirmDialog', confirmRaw],
+      ['SyncLogsPanel', logsRaw],
+    ] as [string, string][]) {
+      expect(raw, `${name} 不应自己注册 Esc 层`).not.toMatch(/registerEscLayer\(/);
+      expect(raw, `${name} 不得把 onClose/onCancel 放进 Esc effect 依赖`).not.toMatch(
+        /\}, \[on(Close|Cancel)\]\)/,
+      );
+    }
+    // hook 侧：层注册与 window 监听都只在挂载时做一次（依赖恒为 []）
+    expect(escHookRaw).toMatch(/export function useWindowEscLayer/);
+    expect(escHookRaw).toMatch(/handler\.current = onEsc/);
+    const effect = escHookRaw.match(
+      /const layer = registerEscLayer\(\);[\s\S]*?\}, \[\]\);/,
+    )?.[0];
+    expect(effect, '应能取到 useWindowEscLayer 里注册层的 effect').not.toBe('');
   });
 
   const escHolders: [string, string][] = [
@@ -39,7 +62,8 @@ describe('Esc 分层接线（#329）', () => {
 
   for (const [name, raw] of escHolders) {
     it(`${name} 的 Esc 处理前先问层级（否则会与确认框一起关闭）`, () => {
-      expect(raw).toMatch(/(isEscTop|isTop)\(\)/);
+      // #344：window 级面板改为经 useWindowEscLayer 走分层，元素级仍用 isEscTop()
+      expect(raw).toMatch(/(isEscTop|isTop)\(\)|useWindowEscLayer\(/);
     });
   }
 

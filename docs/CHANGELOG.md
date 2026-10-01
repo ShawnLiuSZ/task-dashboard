@@ -6,6 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 深度 code review 批次 #6：Esc 层注册放在不稳定 deps，父重渲染会颠倒层级（#344）**
+
+  - **#344 确认框打开时按 Esc 不取消对话框、直接关掉整个父面板**：`escLayer.ts` 的分层栈要求「子层晚于父层注册、早于父层释放」，但 `SyncLogsPanel`（`}, [onClose])`）与 `ConfirmDialog`（`}, [onCancel])`）把**层注册**放进了带**不稳定回调依赖**的 effect —— 那些回调每次父渲染都是新函数。确认框打开期间一次父重渲染会让两个 effect 一起重跑，按「destroy 自底向上 → create 自底向上」把层级整体重排：栈空 → `[对话框]` → `[对话框, 面板]`，**面板反过来压过自己的子层** ⇒ 一次 Esc 跳过用户的「取消」直接关面板。
+  - **触发路径均已在代码树中**：自动同步完成（`onSynced` → `loadSettings` → `setSettings`，默认 15/30 分钟一触发）、手动同步后 4 秒横幅消失计时器、20 秒轮询 + `focus` 处理器。其余四个面板免疫，因其 `useEscLayer` 用 `[]` 依赖。
+  - **修复**：新增 hook `useWindowEscLayer(onEsc)`，把**层注册**放进 `[]` 依赖的 effect（整个生命周期只注册一次）、**业务回调**放进 ref（引用变化不影响层级）—— 「层注册」与「业务回调」解耦。两个组件改用它，并在 `registerEscLayer` 文档里写明「每个实例只应调用一次」及原因。**权衡**：不做「每次重渲染主动重注册」的自愈式修正 —— 那正是缺陷本身；层级应只反映挂载关系，与重渲染次数无关。
+  - **本批唯一「正确机制因实现细节失效」的一项**：#329 的分层栈本身是对的，坏在调用方的注册方式。
+  - **测试**：① `escLayer.test.ts` 新增 2 例**直接把不变式钉在栈原语上**（不依赖源码正则）—— 一例把「父重渲染 → 子被父压过」的**缺陷形态写成期望值**作反面对照，一例验证「注册各一次 + 3 次重渲染」后子层始终在栈顶且 Esc 命中子层；② `panel-wiring.test.ts` 新增静态守卫（两组件不得自己 `registerEscLayer`、不得有 `}, [onClose])` / `}, [onCancel])`，hook 侧层注册 effect 依赖须恒为 `[]`）。
+  - **调整 2 条既有断言以跟随抽象**：#329 那两条用源码正则找 `registerEscLayer()` / `isTop()`，逻辑下沉后必然失效，故改为断言「走了分层 hook」。这是**跟随重构而非削弱** —— 真正的不变式由上述新增用例覆盖。
+  - **反向验证**：把 `SyncLogsPanel` 还原成缺陷形态 ⇒ 新守卫失败（`1 failed / 21 passed`）；恢复后 215 passed。
+  - **无 schema / MCP 工具签名 / i18n key 变更**；两组件 Props 接口与对外行为不变。
+
 - **Unreleased — CI 门禁盲区 / 操作类文档 `develop` 漂移 / 旧仓库名拼写残留（#336）**
 
   - **#336 `quality-check.yml` 的 `push` 只挂 `develop`，而该分支已不存在** ⇒ **直接 push 到 `main` 完全跳过重型门禁**（clippy / `cargo fmt --check` / `vite build` / `check-versions.py` / `scripts` 单测），只有 base = `main` 的 PR 才跑。这是 #330 刚加固完门禁后留下的缺口。**修复**：`push.branches` 补 `main`。详见 [docs/issue-336-docs-ci-reality-alignment.md](./issue-336-docs-ci-reality-alignment.md)。

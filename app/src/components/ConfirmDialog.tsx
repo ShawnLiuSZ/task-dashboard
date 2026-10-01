@@ -1,6 +1,5 @@
-import { useEffect, useRef } from 'react';
 import { useI18n } from '../i18n';
-import { registerEscLayer, type EscLayer } from '../utils/escLayer';
+import { useWindowEscLayer } from '../utils/useEscLayer';
 
 interface Props {
   /** 确认提示语。 */
@@ -29,20 +28,9 @@ export default function ConfirmDialog({
   // Esc 关闭等价于取消。
   // #329：确认框一定叠在某个面板之上，必须注册为「最上层」——否则面板的
   // Esc 监听器会收到同一个事件，一次 Esc 把确认框和面板一起关掉。
-  const escLayer = useRef<EscLayer | null>(null);
-  useEffect(() => {
-    const layer = registerEscLayer();
-    escLayer.current = layer;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && escLayer.current?.isTop()) onCancel();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      layer.release();
-      escLayer.current = null;
-    };
-  }, [onCancel]);
+  // #344：改走 useWindowEscLayer —— 层注册只发生一次（`onCancel` 每次渲染都是
+  // 新引用，放进 effect 依赖会让层级在某次父重渲染时被父子整体重排而颠倒）。
+  useWindowEscLayer(onCancel);
 
   return (
     <div className="modal-mask confirm-mask" onClick={onCancel}>
