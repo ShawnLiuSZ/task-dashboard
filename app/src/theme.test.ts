@@ -94,9 +94,7 @@ function liveListeners(): number {
 
 /** 找出某个函数当前挂在哪些实例上（用于断言「解绑作用于同一实例」）。 */
 function instancesHolding(fn: string): number[] {
-  return instances
-    .map((m, i) => (m.listeners.has(fn) ? i : -1))
-    .filter((i) => i >= 0);
+  return instances.map((m, i) => (m.listeners.has(fn) ? i : -1)).filter((i) => i >= 0);
 }
 
 describe('theme 系统主题监听（#329 / #343）', () => {
