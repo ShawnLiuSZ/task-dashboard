@@ -45,9 +45,7 @@ describe('Esc 分层接线（#329）', () => {
     // hook 侧：层注册与 window 监听都只在挂载时做一次（依赖恒为 []）
     expect(escHookRaw).toMatch(/export function useWindowEscLayer/);
     expect(escHookRaw).toMatch(/handler\.current = onEsc/);
-    const effect = escHookRaw.match(
-      /const layer = registerEscLayer\(\);[\s\S]*?\}, \[\]\);/,
-    )?.[0];
+    const effect = escHookRaw.match(/const layer = registerEscLayer\(\);[\s\S]*?\}, \[\]\);/)?.[0];
     expect(effect, '应能取到 useWindowEscLayer 里注册层的 effect').not.toBe('');
   });
 
