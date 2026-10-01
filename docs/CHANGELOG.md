@@ -6,6 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 深度 code review 批次 #7：MCP 分帧健壮性只修了 Rust 侧，Python 兜底一行坏数据即终止（#345）**
+
+  - **#345 Python MCP Server 进程被一行坏数据整个终止，agent 侧表现为随机 `connection closed`**：Rust `mcp.rs` 早在 #328 就改为四态 `ReadOutcome`（畸形帧 `continue` 而非退出），`mcp.rs:750-753` 也明确写着「客户端发 UTF-8 BOM、写入被截断…agent 侧就会随机看到 connection closed」—— **但当时只修了 Rust 侧**。Python `server.py` 仍把畸形与 EOF 折叠成 `(None, None)`，主循环见 `None` 即 `break`；且 `json.loads(body)` 未包 try，异常上抛后被 `main()` 的 `except` 吞掉再 `break`，效果相同。
+  - **修法**：移植四态 —— `MSG` / `EOF` / `MALFORMED`（本帧已完整消费 ⇒ 丢弃后 continue）/ `FATAL`（帧边界已丢失，body 未消费 ⇒ 只能终止）。关键区分：`Content-Length` 越界与头部不终止属 `FATAL`（继续读会把 body 字节当头部解析出垃圾），而 JSON 畸形 / 缺失 `Content-Length` 属 `MALFORMED`（边界已知，可安全继续）。
+  - **一并补上两个 DoS 上限**（Rust 侧 #328 已有、Python 侧原本**完全没有**）：`MAX_FRAME_BODY = 8 MiB`、`MAX_FRAME_HEADER = 8 KiB`；且 **NDJSON 分支原本连长度上限都没有** —— 客户端发一条无终止符的长行会让长驻进程堆无界增长，属同类 DoS，一并补齐。
+  - **刻意不改**：分帧仍靠**首字符**判定（`{` → NDJSON），故 BOM / 混入日志会走错路径并 EOF。这与 Rust 侧完全一致、属既有设计，本次用 `test_framing_is_decided_by_first_char` 显式钉住，避免后人误当「畸形帧」来「修」。
+  - **测试（此前该文件 36 个用例无一触碰 `read_message` / `main`）**：新增 `FramingTests` 14 例 —— 11 例驱动真实 `read_message`（两种分帧正常路径防回归 + 各类畸形/越界/截断），**3 例端到端驱动 `main()`**（桩 stdin/stdout，不触网）。
+  - **⚠️ 首次反向验证暴露的真实缺口**：缺陷症状（进程退出）由 `main()` 的**循环**决定，不是 `read_message` 的**分类**决定 —— 只测分类会漏掉「分类改对了但循环仍 break」的半修状态（当时只回退分类层，用例全绿）。补 3 例端到端后，两层可独立回退验证：回退 `main()` 的 `break` ⇒ 2 例失败；回退分类折叠 ⇒ 3 例失败。
+  - **遗留边界（记录备查）**：① Rust 侧 NDJSON 分支同样没有单帧长度上限（两侧对齐宜作独立议题）；② `serverInfo.version` 仍硬编码 `0.6.1`（Rust 用 `CARGO_PKG_VERSION`），`check-versions.py` 未覆盖该文件。
+  - **无 schema / MCP 工具签名（清单与参数不变）/ i18n key 变更**；改动限 `mcp_server/server.py` + 测试 + 文档。
+
 - **Unreleased — CI 门禁盲区 / 操作类文档 `develop` 漂移 / 旧仓库名拼写残留（#336）**
 
   - **#336 `quality-check.yml` 的 `push` 只挂 `develop`，而该分支已不存在** ⇒ **直接 push 到 `main` 完全跳过重型门禁**（clippy / `cargo fmt --check` / `vite build` / `check-versions.py` / `scripts` 单测），只有 base = `main` 的 PR 才跑。这是 #330 刚加固完门禁后留下的缺口。**修复**：`push.branches` 补 `main`。详见 [docs/issue-336-docs-ci-reality-alignment.md](./issue-336-docs-ci-reality-alignment.md)。

@@ -11,6 +11,8 @@
     python3 -m unittest discover -s mcp_server -p 'test_*.py' -v
 """
 
+import io
+import json
 import os
 import sqlite3
 import sys
@@ -565,6 +567,181 @@ class IssueStateCaseTest(unittest.TestCase):
         self.assertEqual(row3["status"], "todo")
         self.assertEqual(row3["issue_state"], "open")
         self.assertEqual(row3["done_at"], 0)
+
+
+class FramingTests(unittest.TestCase):
+    """#345：stdio 分帧健壮性——畸形帧不得终止进程。
+
+    #328 只修了 Rust 侧（`mcp::ReadOutcome` 四态），Python 兜底实现当时仍用
+    `(None, None)` 同时表示「EOF」与「畸形」，主循环见 `None` 即 `break` ⇒
+    一行坏 JSON / 一个坏 Content-Length body / 一个超大声明就整个进程退出，
+    agent 侧表现为随机 `connection closed`（与 Rust 侧修掉的症状完全一致）。
+
+    这些用例直接驱动真实的 `read_message`，不 mock。
+    """
+
+    def _read_all(self, payload):
+        """喂入字节流，返回连续读出的所有 outcome（直到 EOF / FATAL）。"""
+        stream = io.BytesIO(payload)
+        out = []
+        # 上限保护：正常输入下不会触发
+        for _ in range(50):
+            oc = S.read_message(stream)
+            out.append(oc)
+            if oc.kind in (S.ReadOutcome.EOF, S.ReadOutcome.FATAL):
+                break
+        return out
+
+    def test_valid_ndjson_still_reads(self):
+        """正常 NDJSON 不得被回归。"""
+        body = b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n'
+        outs = self._read_all(body)
+        self.assertEqual(outs[0].kind, S.ReadOutcome.MSG)
+        self.assertEqual(outs[0].msg["id"], 1)
+        self.assertEqual(outs[0].framing, S.NDJSON)
+        self.assertEqual(outs[-1].kind, S.ReadOutcome.EOF)
+
+    def test_valid_content_length_still_reads(self):
+        """正常 Content-Length 分帧不得被回归。"""
+        payload = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).encode()
+        frame = b"Content-Length: " + str(len(payload)).encode() + b"\r\n\r\n" + payload
+        outs = self._read_all(frame)
+        self.assertEqual(outs[0].kind, S.ReadOutcome.MSG)
+        self.assertEqual(outs[0].msg["id"], 2)
+        self.assertEqual(outs[0].framing, S.CONTENT_LENGTH)
+
+    def test_malformed_ndjson_then_valid_is_continued(self):
+        """核心回归：`{` 开头但 JSON 畸形的行，丢弃后仍必须能读到下一条合法消息。
+
+        典型场景：客户端写入被截断（写到一半的半截 JSON）后紧接着又发了完整消息。
+        旧实现把畸形与 EOF 折叠成 (None, None)，主循环直接 break ⇒ 进程退出。
+        """
+        payload = b'{"jsonrpc":"2.0","id":7\n' + b'{"jsonrpc":"2.0","id":8}\n'
+        outs = self._read_all(payload)
+        self.assertEqual(outs[0].kind, S.ReadOutcome.MALFORMED)
+        self.assertEqual(outs[1].kind, S.ReadOutcome.MSG, "畸形行不应终止后续读取")
+        self.assertEqual(outs[1].msg["id"], 8)
+        self.assertEqual(outs[-1].kind, S.ReadOutcome.EOF)
+
+    def test_framing_is_decided_by_first_char(self):
+        """分帧判定口径（与 Rust 侧一致）：首个有效字符是 `{` 走 NDJSON，否则走头解析。
+
+        非 `{` 开头的行（混入日志、BOM 等）会进入 Content-Length 头路径并最终 EOF ——
+        这是**格式判定的既有设计**，两侧一致，本次不改；本用例把它钉住，
+        避免后人误以为它属于「畸形帧」。
+        """
+        self.assertEqual(self._read_all(b"not json\n")[0].kind, S.ReadOutcome.EOF)
+        self.assertEqual(
+            self._read_all(b"\xef\xbb\xbf" + b'{"id":8}\n')[0].kind,
+            S.ReadOutcome.EOF,
+        )
+
+    def test_malformed_content_length_body_then_valid_is_continued(self):
+        """坏 CL body：body 已完整消费 ⇒ 丢弃后仍能继续。"""
+        bad = b"{not json"
+        good = json.dumps({"jsonrpc": "2.0", "id": 9}).encode()
+        payload = (
+            b"Content-Length: " + str(len(bad)).encode() + b"\r\n\r\n" + bad
+            + b"Content-Length: " + str(len(good)).encode() + b"\r\n\r\n" + good
+        )
+        outs = self._read_all(payload)
+        self.assertEqual(outs[0].kind, S.ReadOutcome.MALFORMED)
+        self.assertEqual(outs[1].kind, S.ReadOutcome.MSG, "坏 body 不应终止后续读取")
+        self.assertEqual(outs[1].msg["id"], 9)
+
+    def test_missing_content_length_is_malformed(self):
+        """头正常收尾但缺 Content-Length ⇒ 边界已知，跳过后可继续。"""
+        payload = b"X-Other: 1\r\n\r\n" + b'{"jsonrpc":"2.0","id":10}\n'
+        outs = self._read_all(payload)
+        self.assertEqual(outs[0].kind, S.ReadOutcome.MALFORMED)
+        self.assertEqual(outs[1].kind, S.ReadOutcome.MSG)
+
+    def test_unparseable_content_length_is_malformed(self):
+        payload = b"Content-Length: 12 34\r\n\r\n" + b"{\"jsonrpc\":\"2.0\",\"id\":11}\n"
+        outs = self._read_all(payload)
+        self.assertEqual(outs[0].kind, S.ReadOutcome.MALFORMED)
+        self.assertEqual(outs[1].kind, S.ReadOutcome.MSG)
+
+    def test_oversized_content_length_is_fatal(self):
+        """超大声明 ⇒ Fatal（body 未消费，继续读只会错位）。"""
+        payload = b"Content-Length: 99999999999\r\n\r\n"
+        outs = self._read_all(payload)
+        self.assertEqual(outs[0].kind, S.ReadOutcome.FATAL)
+        self.assertEqual(len(outs), 1, "Fatal 后不得再继续读")
+
+    def test_zero_content_length_is_fatal(self):
+        outs = self._read_all(b"Content-Length: 0\r\n\r\n")
+        self.assertEqual(outs[0].kind, S.ReadOutcome.FATAL)
+
+    def test_truncated_body_is_eof(self):
+        """body 被截断 ⇒ 流结束（而非畸形）。"""
+        outs = self._read_all(b"Content-Length: 500\r\n\r\n" + b"{}")
+        self.assertEqual(outs[0].kind, S.ReadOutcome.EOF)
+
+    def test_header_at_stream_end_is_eof(self):
+        """头写到流末尾就断了 ⇒ 是 EOF（流结束），与 Rust 侧 `Ok(0) → Eof` 一致。"""
+        outs = self._read_all(b"Content-Length: 2\r\n")
+        self.assertEqual(outs[0].kind, S.ReadOutcome.EOF)
+
+    def test_header_over_limit_is_fatal(self):
+        """头超过上限仍不终止 ⇒ 边界未知，Fatal。"""
+        outs = self._read_all(b"X-Pad: " + b"a" * (S.MAX_FRAME_HEADER + 16) + b"\r\n")
+        self.assertEqual(outs[0].kind, S.ReadOutcome.FATAL)
+
+    def test_oversized_ndjson_line_is_fatal(self):
+        """无终止符的超长 NDJSON 行 ⇒ 不得无界增长（与 Rust 侧同一 DoS 类别）。"""
+        outs = self._read_all(b"{" + b"a" * (S.MAX_FRAME_BODY + 10))
+        self.assertEqual(outs[0].kind, S.ReadOutcome.FATAL)
+
+    def test_empty_stream_is_eof(self):
+        outs = self._read_all(b"")
+        self.assertEqual(outs[0].kind, S.ReadOutcome.EOF)
+
+    def test_main_keeps_serving_after_malformed_frame(self):
+        """端到端：畸形帧之后 `main()` **必须继续服务**，而不是退出进程。
+
+        #345 的核心症状是「进程退出」，而那由 `main()` 的循环决定、不是
+        `read_message` 的分类决定。只测分类会漏掉「分类对了但循环仍然 break」
+        这种半修状态，故这里直接驱动 `main()`（桩掉 stdin/stdout，不触网）。
+        """
+        payload = b'{"jsonrpc":"2.0","id":1\n' + b'{"jsonrpc":"2.0","id":2}\n'
+        responses = self._run_main(payload)
+        # 第 1 条畸形 → 无响应；第 2 条合法 → 必须有响应
+        self.assertEqual(
+            len(responses), 1, "畸形帧后仍应处理后续合法消息，实际收到 %d 条响应" % len(responses)
+        )
+        self.assertEqual(responses[0].get("id"), 2)
+
+    def test_main_survives_repeated_malformed_frames(self):
+        """连续多条畸形帧也不得终止（真实客户端偶发脏数据很常见）。"""
+        payload = b"{bad1\n{bad2\n" + b'{"jsonrpc":"2.0","id":3}\n'
+        responses = self._run_main(payload)
+        self.assertEqual(len(responses), 1)
+        self.assertEqual(responses[0].get("id"), 3)
+
+    def test_main_malformed_only_still_exits_cleanly(self):
+        """全是畸形帧时最终退出，且不产生任何响应（不写垃圾）。"""
+        self.assertEqual(self._run_main(b"{bad\n{bad2\n"), [])
+
+    def _run_main(self, payload):
+        """用字节流驱动 `main()`，返回它写出的响应消息列表。"""
+        out = io.BytesIO()
+
+        class _Stdin:
+            buffer = io.BytesIO(payload)
+
+        class _Stdout:
+            buffer = out
+
+        real_stdin, real_stdout, real_argv = sys.stdin, sys.stdout, sys.argv
+        sys.stdin, sys.stdout = _Stdin(), _Stdout()  # type: ignore[assignment]
+        sys.argv = ["server.py"]
+        try:
+            S.main()
+        finally:
+            sys.stdin, sys.stdout, sys.argv = real_stdin, real_stdout, real_argv
+        chunks = [c for c in out.getvalue().split(b"\n") if c.strip()]
+        return [json.loads(c.decode()) for c in chunks]
 
 
 if __name__ == "__main__":
