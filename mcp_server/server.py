@@ -1036,9 +1036,53 @@ TOOL_BY_NAME = {t["name"]: t for t in TOOLS}
 NDJSON = "ndjson"
 CONTENT_LENGTH = "content-length"
 
+# #345：与 Rust 侧 mcp.rs 对齐的分帧上限。MCP 消息远小于此值，上限只用于挡住畸形声明。
+MAX_FRAME_BODY = 8 * 1024 * 1024
+MAX_FRAME_HEADER = 8 * 1024
+
+
+class ReadOutcome:
+    """#345：``read_message`` 的四态结果。
+
+    区分「输入流结束」与「这一帧畸形」是关键：原实现用 ``(None, None)`` 同时表示两者，
+    于是**一行坏 JSON 就让主循环跳出、stdio 断开**——agent 侧表现为随机
+    ``connection closed``（与 Rust 侧 #328 修掉的症状完全一致，只是当时只修了 Rust 侧）。
+
+    状态与 Rust 侧 ``mcp::ReadOutcome`` 一一对应：
+    ``MSG``（有效消息）/ ``EOF``（流结束）/ ``MALFORMED``（本帧已完整消费，丢弃后继续读）
+    / ``FATAL``（帧边界已丢失，只能终止）。
+    """
+
+    MSG = "msg"
+    EOF = "eof"
+    MALFORMED = "malformed"
+    FATAL = "fatal"
+
+    def __init__(self, kind, msg=None, framing=None, why=""):
+        self.kind = kind
+        self.msg = msg
+        self.framing = framing
+        self.why = why
+
+    @classmethod
+    def msg(cls, value, framing):
+        return cls(cls.MSG, msg=value, framing=framing)
+
+    @classmethod
+    def eof(cls):
+        return cls(cls.EOF)
+
+    @classmethod
+    def malformed(cls, why):
+        return cls(cls.MALFORMED, why=why)
+
+    @classmethod
+    def fatal(cls, why):
+        return cls(cls.FATAL, why=why)
+
 
 def read_message(stream):
-    """读取一条 JSON-RPC 消息，返回 (msg, framing)。EOF 返回 (None, None)。
+    """读取一条 JSON-RPC 消息，返回 ``ReadOutcome``。
 
     MCP stdio 规范为换行分隔 JSON；LSP 风格 Content-Length 头作为历史兼容保留。
     首个有效字符判定分帧格式：`{` → NDJSON，否则 → Content-Length。
@@ -1047,21 +1091,32 @@ def read_message(stream):
     while True:
         line = stream.readline()
         if not line:
-            return None, None
+            return ReadOutcome.eof()
         if isinstance(line, bytes):
             line = line.decode("utf-8", "replace")
         if line.strip():
             break
 
     if line.lstrip().startswith("{"):
+        if len(line) > MAX_FRAME_BODY:
+            # 与 Rust 侧一致：NDJSON 分支此前无长度上限，无终止符的长行会撑爆内存。
+            return ReadOutcome.fatal(
+                "NDJSON 行超过 %d 字节仍未终止" % MAX_FRAME_BODY
+            )
         try:
-            return json.loads(line), NDJSON
+            return ReadOutcome.msg(json.loads(line), NDJSON)
         except ValueError as e:
-            print("[taskboard-mcp] NDJSON 解析失败，跳过该行: %s" % e, file=sys.stderr)
-            return None, None
+            # 该行已完整消费（readline 读到了换行）⇒ 丢弃后能安全地继续读下一条。
+            return ReadOutcome.malformed("NDJSON 解析失败: %s" % e)
 
     headers = {}
+    header_bytes = 0
     while True:
+        header_bytes += len(line)
+        if header_bytes > MAX_FRAME_HEADER:
+            return ReadOutcome.fatal(
+                "头部超过 %d 字节仍未终止，无法定位帧边界" % MAX_FRAME_HEADER
+            )
         stripped = line.rstrip("\r\n")
         if stripped == "":
             break
@@ -1070,20 +1125,34 @@ def read_message(stream):
             headers[k.strip().lower()] = v.strip()
         line = stream.readline()
         if not line:
-            return None, None
+            return ReadOutcome.eof()
         if isinstance(line, bytes):
             line = line.decode("utf-8", "replace")
 
+    raw_length = headers.get("content-length")
     try:
-        length = int(headers.get("content-length", "0"))
-    except ValueError:
-        length = 0
-    if length <= 0:
-        return None, None
+        length = int(raw_length)
+    except (TypeError, ValueError):
+        length = None
+    if length is None:
+        # 头部已正常收尾（帧边界已知）⇒ 丢弃后继续读下一条是安全的。
+        return ReadOutcome.malformed("Content-Length 头缺失或不可解析")
+    # #345：越界长度必须判 FATAL——body 尚未消费，继续读会把 body 字节当头部解析。
+    if length <= 0 or length > MAX_FRAME_BODY:
+        return ReadOutcome.fatal(
+            "Content-Length=%d 超出允许范围（1..=%d）" % (length, MAX_FRAME_BODY)
+        )
     body = stream.read(length)
+    if body is None or len(body) < length:
+        # body 被截断 ⇒ 视为流结束
+        return ReadOutcome.eof()
     if isinstance(body, bytes):
         body = body.decode("utf-8", "replace")
-    return json.loads(body), CONTENT_LENGTH
+    try:
+        return ReadOutcome.msg(json.loads(body), CONTENT_LENGTH)
+    except ValueError as e:
+        # body 已完整消费 ⇒ 可以安全地继续读下一条。
+        return ReadOutcome.malformed("Content-Length 帧 JSON 解析失败: %s" % e)
 
 
 def write_message(stream, msg, framing):
@@ -1179,20 +1248,30 @@ def main():
     ostream = sys.stdout.buffer
     handled = 0
     while True:
-        try:
-            msg, framing = read_message(istream)
-        except Exception as e:  # noqa: BLE001
-            sys.stderr.write(f"[taskboard-mcp] 读取消息失败: {e}\n")
+        # #345：read_message 自身已把四态都表达清楚（不再抛异常给外层兜底成 break）。
+        outcome = read_message(istream)
+        # #345：只有真正的流结束 / 帧边界丢失才退出。一条畸形消息不再拖垮整个进程
+        # ——丢弃该帧继续服务（原实现把「畸形」与「EOF」都折叠成 None，主循环直接跳出、
+        # stdio 断开，agent 侧表现为随机 connection closed，与 Rust 侧 #328 修掉的
+        # 症状完全一致，只是当时只修了 Rust 侧）。
+        if outcome.kind in (ReadOutcome.EOF, ReadOutcome.FATAL):
+            if outcome.why:
+                sys.stderr.write(
+                    f"[taskboard-mcp] 无法继续读取，退出: {outcome.why}\n"
+                )
             break
-        if msg is None:
-            break
+        if outcome.kind == ReadOutcome.MALFORMED:
+            sys.stderr.write(
+                f"[taskboard-mcp] 跳过一条无法解析的消息: {outcome.why}\n"
+            )
+            continue
         try:
-            resp = handle(msg)
+            resp = handle(outcome.msg)
         except Exception as e:  # noqa: BLE001
             sys.stderr.write(f"[taskboard-mcp] 处理异常: {e}\n")
             resp = None
         if resp is not None:
-            write_message(ostream, resp, framing)
+            write_message(ostream, resp, outcome.framing)
         handled += 1
     if handled == 0:
         sys.stderr.write(
