@@ -258,57 +258,6 @@ impl Drop for SyncGuard<'_> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sync_guard_dedupes_concurrent_acquisition() {
-        let flag = AtomicBool::new(false);
-        let a = SyncGuard::acquire(&flag).expect("首次应可获取");
-        // 已有 guard 持有期间，再次获取应去重返回 None
-        assert!(
-            SyncGuard::acquire(&flag).is_none(),
-            "并发第二次获取应被去重"
-        );
-        drop(a);
-        // guard 释放后应能再次获取
-        assert!(SyncGuard::acquire(&flag).is_some(), "释放后应可重新获取");
-        assert!(!flag.load(Ordering::SeqCst), "释放后标志应复位");
-    }
-
-    /// #232：`.app` bundle 根定位 —— 隔离标记实际落在这一层，而非可执行文件本身。
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn resolves_app_bundle_root_from_executable() {
-        let exe = std::path::Path::new("/Applications/TaskBoard.app/Contents/MacOS/taskboard");
-        assert_eq!(
-            super::bundle_root_from_exe(exe),
-            Some(std::path::PathBuf::from("/Applications/TaskBoard.app"))
-        );
-    }
-
-    /// 裸二进制（`cargo run` / `cargo test`）不在 `.app` 内，应返回 None 而非误判。
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn bundle_root_is_none_outside_app_bundle() {
-        let exe =
-            std::path::Path::new("/Users/me/dev/dashboard/app/src-tauri/target/debug/taskboard");
-        assert_eq!(super::bundle_root_from_exe(exe), None);
-    }
-
-    /// 可执行文件位于 bundle 内更深一层目录时，仍应上溯到 `.app` 根。
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn bundle_root_handles_nested_executable() {
-        let exe = std::path::Path::new("/opt/TaskBoard.app/Contents/MacOS/helpers/probe");
-        assert_eq!(
-            super::bundle_root_from_exe(exe),
-            Some(std::path::PathBuf::from("/opt/TaskBoard.app"))
-        );
-    }
-}
-
 /// 打开专用于同步的独立连接。
 ///
 /// 同步会跨大量 GitHub 网络 I/O 反复写库，若与 UI 命令共享 `AppState.db` 的
@@ -562,4 +511,55 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("TaskBoard 启动失败");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_guard_dedupes_concurrent_acquisition() {
+        let flag = AtomicBool::new(false);
+        let a = SyncGuard::acquire(&flag).expect("首次应可获取");
+        // 已有 guard 持有期间，再次获取应去重返回 None
+        assert!(
+            SyncGuard::acquire(&flag).is_none(),
+            "并发第二次获取应被去重"
+        );
+        drop(a);
+        // guard 释放后应能再次获取
+        assert!(SyncGuard::acquire(&flag).is_some(), "释放后应可重新获取");
+        assert!(!flag.load(Ordering::SeqCst), "释放后标志应复位");
+    }
+
+    /// #232：`.app` bundle 根定位 —— 隔离标记实际落在这一层，而非可执行文件本身。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resolves_app_bundle_root_from_executable() {
+        let exe = std::path::Path::new("/Applications/TaskBoard.app/Contents/MacOS/taskboard");
+        assert_eq!(
+            super::bundle_root_from_exe(exe),
+            Some(std::path::PathBuf::from("/Applications/TaskBoard.app"))
+        );
+    }
+
+    /// 裸二进制（`cargo run` / `cargo test`）不在 `.app` 内，应返回 None 而非误判。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bundle_root_is_none_outside_app_bundle() {
+        let exe =
+            std::path::Path::new("/Users/me/dev/dashboard/app/src-tauri/target/debug/taskboard");
+        assert_eq!(super::bundle_root_from_exe(exe), None);
+    }
+
+    /// 可执行文件位于 bundle 内更深一层目录时，仍应上溯到 `.app` 根。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bundle_root_handles_nested_executable() {
+        let exe = std::path::Path::new("/opt/TaskBoard.app/Contents/MacOS/helpers/probe");
+        assert_eq!(
+            super::bundle_root_from_exe(exe),
+            Some(std::path::PathBuf::from("/opt/TaskBoard.app"))
+        );
+    }
 }

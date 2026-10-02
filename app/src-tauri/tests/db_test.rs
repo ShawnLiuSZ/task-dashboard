@@ -40,7 +40,7 @@ fn open_db_creates_schema_and_writes_defaults() {
     // 仅作兼容兜底，默认空字符串是合法状态。
     for (k, v_default) in db::DEFAULT_SETTINGS.iter() {
         let actual = db::get_setting(&conn, k);
-        if *v_default == "" {
+        if v_default.is_empty() {
             continue; // 允许为空
         }
         assert!(!actual.is_empty(), "默认设置 {} 不应为空", k);

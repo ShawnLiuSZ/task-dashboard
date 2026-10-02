@@ -125,6 +125,20 @@ def strip_tag_prefix(tag: str) -> str:
     return t[1:] if t[:1] in ("v", "V") else t
 
 
+def mcp_server_version(server_src: str) -> str | None:
+    """从 server.py 里取 serverInfo 报告的版本。
+
+    #359：Rust 侧用 `env!("CARGO_PKG_VERSION")` 自动取值，Python 侧曾硬编码
+    `"0.6.1"` 而实际已是 0.6.5 ⇒ `initialize` 向 agent 报过期版本且无门禁。
+    现在 Python 侧改为读 `Cargo.toml`，本函数用于**反向校验**：万一有人再改回
+    硬编码，这里会因「读不到 `_app_version()` 调用」而报错。
+    """
+    if "_app_version()" in server_src:
+        return None  # 已改为单一来源，无需比对
+    m = re.search(r'"serverInfo"\s*:\s*\{[^}]*?"version"\s*:\s*"([^"]+)"', server_src)
+    return m.group(1) if m else None
+
+
 def main() -> int:
     def read(rel: str) -> str:
         return (ROOT / rel).read_text(encoding="utf-8")
@@ -166,6 +180,15 @@ def main() -> int:
         for label, value in refs:
             if value != canonical:
                 problems.append(f"{rel}（{label}）= v{value}，应为 v{canonical}")
+
+    # ---- 2.5 Python MCP 的 serverInfo 版本（#359）--------------------------- #
+    # 已改为读 Cargo.toml 后「无硬编码值可比」；若有人改回硬编码则此处报错。
+    mcp_hardcoded = mcp_server_version(read("mcp_server/server.py"))
+    if mcp_hardcoded is not None:
+        problems.append(
+            f"mcp_server/server.py 又把 serverInfo 版本硬编码成 {mcp_hardcoded}，"
+            "应改为调用 _app_version()（以 Cargo.toml 为单一来源）"
+        )
 
     # ---- 3. 可选：与触发本次 CI 的 tag 比对 -------------------------------- #
     tag = os.environ.get("GITHUB_REF_NAME") or os.environ.get("TAG_NAME") or ""
