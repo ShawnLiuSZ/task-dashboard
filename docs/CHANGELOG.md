@@ -6,6 +6,15 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 深度 code review 批次 #4：崩溃残留的 `tasks_new` 永久孤立，整个看板静默丢失（#340）**
+
+  - **#340 崩溃窗口残留的 `tasks_new` 永久孤立，用户整个看板静默丢失且无法恢复**（本批唯一**数据永久丢失**项）：`migrate_tasks_v2_rebuild` 事务停在 `DROP TABLE tasks`（已提交）与 `RENAME`（未执行）之间 ⇒ 留下 **`tasks` 缺失、`tasks_new` 保有全量数据** 的状态。`migrate_tasks_v2_rebuild` doc comment 自己把它列为头号动机，#328 也加了 `DROP TABLE IF EXISTS tasks_new` 自愈，**但该 DROP 只在重建函数内部可达**，而前置条件 `tasks_uses_legacy_key()` 在 `tasks` 已不存在时为 false ⇒ **自愈分支恰好在最需要时不可达** ⇒ `SCHEMA` 建出空 `tasks`、结构检查通过、`user_version` 盖到 4 ⇒ 迁移此后再不重跑。
+  - **实测（探针）**：`after-open: tasks_visible=0 orphan_tasks_new=1 user_version=4`；`after-2nd-open: tasks_visible=0 orphan_tasks_new=1 user_version=4` —— **二次打开不自愈**，与「下次启动重试」的设计预期直接矛盾。⚠️ **非 #328 引入的回归**（基线 `f66f83f` 行为相同）：#328 事务化把窗口从两次独立提交缩成一个事务，但没堵上这个洞，而其 doc comment 让人以为已修。
+  - **修复**：在 `fresh` 短路**之前**探测 `!tasks 存在 && tasks_new 存在` 并 `RENAME` 回收，让既有 `missing_columns` / `MIGRATION_DDL` 按正常路径收敛。**这是恢复不是迁移**，故不触碰 `user_version`。
+  - **⚠️ 实现中新发现的坑（第一版被新写的测试当场打红）**：探测块必须放在 `SCHEMA` **之前**（放晚了会「先建空表再 RENAME 失败」），但若 `tasks_new` 是**列不全**的同名表，`RENAME` 后 `SCHEMA` 的 `CREATE INDEX ... ON tasks(ownership)` 会因缺列失败、**整个库打不开** —— 比修复前「看板为空但能打开」更糟。故加 `issue_key` 列指纹判定（#155 重建后 tasks 的标志性列），命中失败则维持原状、下次启动重试。
+  - **无 DDL / 列变更**（迁移路径完全复用既有逻辑）；稳态下不产生任何写语句，不影响 #329 的「稳态零写锁」优化。
+  - **验证**：`cargo test --test db_test` 26 passed（25 → +1）✅、`cargo test --lib` 146 passed ✅、`cargo fmt --check` ✅、`cargo clippy --lib -- -D warnings` ✅（CI 实际门禁范围）；**反向验证**（删掉探测块）1 例失败（`0 passed / 1 failed`）。新用例 6 组断言含**手动态不被默认 todo 覆盖**与**二次打开幂等**。夹具刻意用**真实 `tasks` 布局**（先 `open_db` 建库再 `RENAME`）—— 手写精简列名会测到「SCHEMA 索引先失败」而非目标行为。
+  - **附带发现**：`cargo clippy --tests` 在 `main` 上已有 **5 处**存量 error（`db_test.rs:43`、`commands.rs:2158`、`lib.rs:262` 等）。本 PR 未新增，但 CI 的 `rust-clippy` job 只跑 `--lib`、覆盖不到，可作独立议题跟进。
 - **Unreleased — 深度 code review 批次 #3：仓库级 GraphQL 失败被降级成 `Ok(空)`，父子关联被静默清空（#342）**
 
   - **#342 仓库改名 / 转移 / 删除 / token 失权时，issue 的父子关联被静默清空且无任何报错**：#328 为避免「单个编号 NOT_FOUND 导致 25 个 issue 关联一起丢」而把 `fetch_issue_links` 改为宽松模式，放行判据是 `v["data"].is_null()` —— 但 **`data` 是仓库包装层**。仓库级失败时 GitHub 返回 `{"data":{"r":null},"errors":[…]}`，`data` 是**非 null 对象** ⇒ 守卫不触发 ⇒ 解析器命中 `data.r` 为 null 返回**空 map 而非 `Err`**。
