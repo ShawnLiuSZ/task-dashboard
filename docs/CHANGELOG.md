@@ -16,6 +16,46 @@
   - **调整 2 条既有断言以跟随抽象**：#329 那两条用源码正则找 `registerEscLayer()` / `isTop()`，逻辑下沉后必然失效，故改为断言「走了分层 hook」。这是**跟随重构而非削弱** —— 真正的不变式由上述新增用例覆盖。
   - **反向验证**：把 `SyncLogsPanel` 还原成缺陷形态 ⇒ 新守卫失败（`1 failed / 21 passed`）；恢复后 215 passed。
   - **无 schema / MCP 工具签名 / i18n key 变更**；两组件 Props 接口与对外行为不变。
+- **Unreleased — 深度 code review 批次 #5：`theme.ts` 用新 `matchMedia` 对象解绑导致 no-op（#343）**
+
+  - **#343 显式选择浅色/深色后，系统主题变化仍会覆盖它 —— #329 的修复实际没生效**：按 CSSOM View 规范，`Window.matchMedia(q)` 每次返回 **new** MediaQueryList（各自独立的 EventTarget 监听列表）。#329 只记了**函数引用**，解绑时重新 `matchMedia(DARK_QUERY)` 拿到**新对象**去 `removeEventListener` ⇒ **对旧对象上的监听器无效**，解绑恒为 no-op。
+  - **双重后果**：① 用户选 light/dark 后，系统主题一变仍触发 `applyTheme('auto')`；② **监听器泄漏** —— 每次 `setMode('auto')` 都在新对象上加一个，N 次切换 ⇒ 每次系统主题变更触发 N 次（幂等故无额外视觉症状）。
+  - **既有测试为何发现不了**：`theme.test.ts` 的打桩是 `matchMedia: () => media`（**每次返回同一对象，与平台行为正好相反**）；那条名为「解绑用同一函数引用（否则 removeEventListener 静默失效）」的用例**只比较函数身份、从不比较 MediaQueryList 身份**，精确记录了自己无法观测的失败模式；`systemThemeListenerBound()` 标志位无论移除成功与否都置 `null`，故所有断言在完全泄漏的构建上照样通过。
+  - **修复**：持有 **MediaQueryList 实例本身**（`systemThemeListener` → `systemMql`），解绑作用于同一对象。模块对外 API 签名与语义均不变。
+  - **测试**：先把打桩改为平台语义（每次产出新对象 + 监听集合挂在该实例 + `function` 表达式保留 `this`，跨实例移除天然无效），并新增真实度量 `liveListeners()`（统计所有实例上仍挂着的监听器总数 —— 调用次数口径看不出问题，旧实现在此也是「1」）。新增 3 例；保留全部 4 条 #329 既有用例未削弱。
+  - **反向验证**：还原 `theme.ts` 后**新增 3 例全败、既有 4 例仍通过**，失败数值精确对应泄漏模型（`expected 3 to be 1` / `expected 5 to be 0`）—— 同时**实证了旧测试为何无效**。恢复后 215 passed。
+  - **无 schema / MCP 工具签名 / i18n key 变更**；改动限 `app/src/theme{,.test}.ts`。
+- **Unreleased — 深度 code review 批次 #4：崩溃残留的 `tasks_new` 永久孤立，整个看板静默丢失（#340）**
+
+  - **#340 崩溃窗口残留的 `tasks_new` 永久孤立，用户整个看板静默丢失且无法恢复**（本批唯一**数据永久丢失**项）：`migrate_tasks_v2_rebuild` 事务停在 `DROP TABLE tasks`（已提交）与 `RENAME`（未执行）之间 ⇒ 留下 **`tasks` 缺失、`tasks_new` 保有全量数据** 的状态。`migrate_tasks_v2_rebuild` doc comment 自己把它列为头号动机，#328 也加了 `DROP TABLE IF EXISTS tasks_new` 自愈，**但该 DROP 只在重建函数内部可达**，而前置条件 `tasks_uses_legacy_key()` 在 `tasks` 已不存在时为 false ⇒ **自愈分支恰好在最需要时不可达** ⇒ `SCHEMA` 建出空 `tasks`、结构检查通过、`user_version` 盖到 4 ⇒ 迁移此后再不重跑。
+  - **实测（探针）**：`after-open: tasks_visible=0 orphan_tasks_new=1 user_version=4`；`after-2nd-open: tasks_visible=0 orphan_tasks_new=1 user_version=4` —— **二次打开不自愈**，与「下次启动重试」的设计预期直接矛盾。⚠️ **非 #328 引入的回归**（基线 `f66f83f` 行为相同）：#328 事务化把窗口从两次独立提交缩成一个事务，但没堵上这个洞，而其 doc comment 让人以为已修。
+  - **修复**：在 `fresh` 短路**之前**探测 `!tasks 存在 && tasks_new 存在` 并 `RENAME` 回收，让既有 `missing_columns` / `MIGRATION_DDL` 按正常路径收敛。**这是恢复不是迁移**，故不触碰 `user_version`。
+  - **⚠️ 实现中新发现的坑（第一版被新写的测试当场打红）**：探测块必须放在 `SCHEMA` **之前**（放晚了会「先建空表再 RENAME 失败」），但若 `tasks_new` 是**列不全**的同名表，`RENAME` 后 `SCHEMA` 的 `CREATE INDEX ... ON tasks(ownership)` 会因缺列失败、**整个库打不开** —— 比修复前「看板为空但能打开」更糟。故加 `issue_key` 列指纹判定（#155 重建后 tasks 的标志性列），命中失败则维持原状、下次启动重试。
+  - **无 DDL / 列变更**（迁移路径完全复用既有逻辑）；稳态下不产生任何写语句，不影响 #329 的「稳态零写锁」优化。
+  - **验证**：`cargo test --test db_test` 26 passed（25 → +1）✅、`cargo test --lib` 146 passed ✅、`cargo fmt --check` ✅、`cargo clippy --lib -- -D warnings` ✅（CI 实际门禁范围）；**反向验证**（删掉探测块）1 例失败（`0 passed / 1 failed`）。新用例 6 组断言含**手动态不被默认 todo 覆盖**与**二次打开幂等**。夹具刻意用**真实 `tasks` 布局**（先 `open_db` 建库再 `RENAME`）—— 手写精简列名会测到「SCHEMA 索引先失败」而非目标行为。
+  - **附带发现**：`cargo clippy --tests` 在 `main` 上已有 **5 处**存量 error（`db_test.rs:43`、`commands.rs:2158`、`lib.rs:262` 等）。本 PR 未新增，但 CI 的 `rust-clippy` job 只跑 `--lib`、覆盖不到，可作独立议题跟进。
+- **Unreleased — 深度 code review 批次 #3：仓库级 GraphQL 失败被降级成 `Ok(空)`，父子关联被静默清空（#342）**
+
+  - **#342 仓库改名 / 转移 / 删除 / token 失权时，issue 的父子关联被静默清空且无任何报错**：#328 为避免「单个编号 NOT_FOUND 导致 25 个 issue 关联一起丢」而把 `fetch_issue_links` 改为宽松模式，放行判据是 `v["data"].is_null()` —— 但 **`data` 是仓库包装层**。仓库级失败时 GitHub 返回 `{"data":{"r":null},"errors":[…]}`，`data` 是**非 null 对象** ⇒ 守卫不触发 ⇒ 解析器命中 `data.r` 为 null 返回**空 map 而非 `Err`**。
+  - **安全网恰好在最需要它时失效**：`Ok(空)` ⇒ `sync.rs` 视作成功 ⇒ `links_failed_repos` 收不到该仓库 ⇒ 落入 `unwrap_or((String::new(), String::new()))` 写空 ⇒ `TASK_CONFLICT_UPDATE` 无条件覆盖 `parent_issue` / `sub_issues` ⇒ 关联清空。`sync.rs` 那道「失败则保留既有值，避免一次网络抖动把已有关联清空」的保险**正是为此场景设计**，却被绕过。
+  - **修复**：新增纯函数 `repo_level_failure`，把判据精确落在 **`data.r`** 这一层（仓库级失败 ⇒ `Err`），并在解析前调用。**不能把宽松整体关掉**——那会让 #328 想修的「25 个关联一起丢」重新出现；两类失败的区分点是 `data.r` 是否为对象（仓库有效 + 个别别名取不到 ⇒ 仍按宽松采信其余编号）。
+  - **仍为只读**：不新增任何对 GitHub 的写操作，`AGENTS.md §2.1` 数据单向流动约束不变。
+  - **无 schema / MCP 工具签名 / i18n key 变更**；改动限 `app/src-tauri/src/github.rs` 一个源文件 + 文档。
+  - **验证**：`cargo test --lib` 148 passed（146 → +2）✅、`db_test` 25 passed ✅、`cargo fmt --check` ✅、`cargo clippy --lib -- -D warnings` ✅、`check-mcp-columns.py` / `check-doc-links.py` / `check-versions.py` ✅；**反向验证**：判据改回「只看顶层 `data`」则 1 例失败（`1 passed / 1 failed`）。新增的第 2 例是**反向对照**（仓库有效 + 个个别名失败 ⇒ 不得判失败），防修复过度连带关掉 #328 的宽松收益。
+- **Unreleased — 深度 code review 批次 #2：全局 `opencode.jsonc` 空 `mcp` 被写成非法 JSON（#341）**
+
+  - **#341 全局 `opencode.jsonc` 的空 `mcp` 对象被合并成非法 JSON，写坏用户全局配置**：`hooks.rs::find_top_object_span` 返回的是**键起始引号**位置而非 `{` 位置，而唯一调用方按 `{` 位置使用 ⇒ `inner` 恒以 `mcp":` 开头 ⇒ **空对象守卫是死代码**、`else` 分支永远执行 ⇒ 把 `,` 插进 `{` 后面，产出 `"mcp": {,`。后果：**用户全局配置被写坏、opencode 自身无法启动**，而安装流程返回 `Ok`（UI 报「安装成功」，用户不知需要从备份恢复）。
+  - **「注释型 JSONC + 空 `mcp`」是 opencode 标准配置形态**（用户手写最小配置的常见结果），非边缘场景。**非空 `mcp` 不暴露缺陷**（插入点恰为合法追加），故既有测试 `global_merge_jsonc_appends_into_existing_mcp`（只覆盖非空、且只断言 `contains()` 从不解析）结构上抓不到。
+  - **修复（两处，缺一不可）**：① 返回值改为 `{` 的位置，让 span 契约与调用方语义一致；② 空对象分支格式串同步修正 —— 改动 ① 之后 `text[..ms + 1]` 已含开括号，原格式串会多写一个字面 `{`，**只改 ① 会把 `"mcp": {,` 换成 `"mcp": {{`，仍是非法 JSON**（本次新写测试当场抓出）。详见 [docs/issue-341-opencode-jsonc-empty-mcp.md](./issue-341-opencode-jsonc-empty-mcp.md)。
+  - **无 schema / MCP 工具签名 / i18n key 变更**；改动限于 `app/src-tauri/src/hooks.rs` 一个源文件 + 文档。
+  - **验证**：`cargo test --lib` 148 passed（146 → +2）✅、`cargo test --test db_test` 25 passed ✅、`cargo fmt --check` ✅、`cargo clippy --lib -- -D warnings` ✅、`check-doc-links.py` / `check-mcp-columns.py` / `check-versions.py` ✅；**反向验证**（返回值改回键起始位置）2 例均失败。
+- **Unreleased — 深度 code review 批次：卡片点击完全失灵（P0）等 8 项缺陷（#339–#346）**
+
+  - 本批 8 项来自一次跨模块深度 review（范围 `v0.6.5 → HEAD`，含 #327/#328/#329/#330/#335/#336）。基线全绿（212 vitest + 171 cargo + `tsc` / `i18n:check` / `check-mcp-columns.py`），**8 项全部逃过现有测试**。
+  - **共同根因模式：「只改了一半」** —— 三项高危都源于重构只覆盖了一侧：`TaskCard` 漏改身份生产端（消费端全改）；MCP 分帧健壮性只做 Rust 侧、Python 兜底未同步；崩溃残留自愈只覆盖了 `tasks` 仍存在的一个分支。
+  - **[#339](https://github.com/ShawnLiuSZ/task-dashboard/issues/339)（P0）点击任务卡片完全无响应，详情面板不可达**：#329 把前端任务身份升级为 `issueKey@accountId`（聚合视图下同一 issue 来自两个账号时 `issueKey` 会重复），消费端（`Board` 4 处 `active` 判定 + `App` 的 `selectedTask` 查找）全部改用 `taskIdentity`，但**生产端 `TaskCard.tsx` 根本没进那次 diff**，仍在发裸 `issueKey`。两者永不相等 ⇒ `selectedTask` 恒 `null` ⇒ 四个看板视图 100% 无法打开详情。**既有测试给了虚假安全感**：`panel-wiring.test.ts` 用正则只断言消费端有 8 处 `taskIdentity`，从不检查生产者。**修复**：两处调用点改传 `taskIdentity(task)`；**写操作仍用 `issueKey`**（后端按 `issue_key` 定位，边界不变，测试显式锁住）。详见 [docs/issue-339-taskcard-select-identity.md](./issue-339-taskcard-select-identity.md)。
+  - 其余 7 项（各自独立 issue / 分支 / PR，见对应文档）：[#340](https://github.com/ShawnLiuSZ/task-dashboard/issues/340) 崩溃窗口残留 `tasks_new` 永久孤立致看板静默丢失；[#341](https://github.com/ShawnLiuSZ/task-dashboard/issues/341) 全局 `opencode.jsonc` 空 `mcp` 被合并成非法 JSON；[#342](https://github.com/ShawnLiuSZ/task-dashboard/issues/342) 仓库级 GraphQL 失败被降级成 `Ok(空)`、父子关联被清空；[#343](https://github.com/ShawnLiuSZ/task-dashboard/issues/343) `theme.ts` 用新 `matchMedia` 对象解绑导致 no-op；[#344](https://github.com/ShawnLiuSZ/task-dashboard/issues/344) Esc 层注册放在不稳定 deps 致层级颠倒；[#345](https://github.com/ShawnLiuSZ/task-dashboard/issues/345) MCP 分帧健壮性只修 Rust 侧；[#346](https://github.com/ShawnLiuSZ/task-dashboard/issues/346) `synced_at` 不在 `ENSURE_COLUMNS`。
+  - **本批次无 schema / MCP 工具签名变更**（`SELECT_COLS` 未动；#346 改的是 Python 侧建表补列清单，非 `tasks` 列定义）；**无 i18n key 变更**。
 
 - **Unreleased — CI 门禁盲区 / 操作类文档 `develop` 漂移 / 旧仓库名拼写残留（#336）**
 
