@@ -6,6 +6,13 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 深度 code review 批次 #2：全局 `opencode.jsonc` 空 `mcp` 被写成非法 JSON（#341）**
+
+  - **#341 全局 `opencode.jsonc` 的空 `mcp` 对象被合并成非法 JSON，写坏用户全局配置**：`hooks.rs::find_top_object_span` 返回的是**键起始引号**位置而非 `{` 位置，而唯一调用方按 `{` 位置使用 ⇒ `inner` 恒以 `mcp":` 开头 ⇒ **空对象守卫是死代码**、`else` 分支永远执行 ⇒ 把 `,` 插进 `{` 后面，产出 `"mcp": {,`。后果：**用户全局配置被写坏、opencode 自身无法启动**，而安装流程返回 `Ok`（UI 报「安装成功」，用户不知需要从备份恢复）。
+  - **「注释型 JSONC + 空 `mcp`」是 opencode 标准配置形态**（用户手写最小配置的常见结果），非边缘场景。**非空 `mcp` 不暴露缺陷**（插入点恰为合法追加），故既有测试 `global_merge_jsonc_appends_into_existing_mcp`（只覆盖非空、且只断言 `contains()` 从不解析）结构上抓不到。
+  - **修复（两处，缺一不可）**：① 返回值改为 `{` 的位置，让 span 契约与调用方语义一致；② 空对象分支格式串同步修正 —— 改动 ① 之后 `text[..ms + 1]` 已含开括号，原格式串会多写一个字面 `{`，**只改 ① 会把 `"mcp": {,` 换成 `"mcp": {{`，仍是非法 JSON**（本次新写测试当场抓出）。详见 [docs/issue-341-opencode-jsonc-empty-mcp.md](./issue-341-opencode-jsonc-empty-mcp.md)。
+  - **无 schema / MCP 工具签名 / i18n key 变更**；改动限于 `app/src-tauri/src/hooks.rs` 一个源文件 + 文档。
+  - **验证**：`cargo test --lib` 148 passed（146 → +2）✅、`cargo test --test db_test` 25 passed ✅、`cargo fmt --check` ✅、`cargo clippy --lib -- -D warnings` ✅、`check-doc-links.py` / `check-mcp-columns.py` / `check-versions.py` ✅；**反向验证**（返回值改回键起始位置）2 例均失败。
 - **Unreleased — 深度 code review 批次：卡片点击完全失灵（P0）等 8 项缺陷（#339–#346）**
 
   - 本批 8 项来自一次跨模块深度 review（范围 `v0.6.5 → HEAD`，含 #327/#328/#329/#330/#335/#336）。基线全绿（212 vitest + 171 cargo + `tsc` / `i18n:check` / `check-mcp-columns.py`），**8 项全部逃过现有测试**。

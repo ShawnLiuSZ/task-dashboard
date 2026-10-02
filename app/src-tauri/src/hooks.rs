@@ -1073,8 +1073,13 @@ fn match_json_brace(b: &[u8], open: usize) -> Option<usize> {
     None
 }
 
-/// 在 JSONC 文本顶层定位 `"key": {...}`（键起始..值结束 `}` 之后）。
+/// 在 JSONC 文本顶层定位 `"key": {...}`，返回 **`{` 的位置** .. 值结束 `}` 之后。
 /// 与 find_taskboard_entry_span 同样的字符串/注释感知（只找第一个顶层命中）。
+///
+/// #341：返回值必须是 `{` 的位置（`j`），**不能**是键起始位置（`key_start`）。
+/// 调用方按「`ms` 是 `{` 的位置」使用它做「空对象判定 + 在 `{` 后插入」的定位；
+/// 若误传键起始位置，`inner` 会落在键名上（恒以 `mcp":` 开头）⇒ 空判定恒为 false
+/// ⇒ 空对象场景下把 `,` 插进 `{` 后面，产出非法 JSONC（`"mcp": {,`）。
 fn find_top_object_span(text: &str, key: &str) -> Option<(usize, usize)> {
     let b = text.as_bytes();
     let n = b.len();
@@ -1096,7 +1101,8 @@ fn find_top_object_span(text: &str, key: &str) -> Option<(usize, usize)> {
                         }
                         if j < n && b[j] == b'{' {
                             if let Some(end) = match_json_brace(b, j) {
-                                return Some((key_start, end));
+                                // #341：返回 `{` 的位置 j，而非 key_start。
+                                return Some((j, end));
                             }
                         }
                     }
@@ -1258,9 +1264,11 @@ fn merge_global_opencode_mcp(
     }
     let entry = taskboard_mcp_kv(exe);
     let next = if let Some((ms, me)) = find_top_object_span(&text, "mcp") {
+        // #341：`ms` 是 `{` 的位置、`me` 是值结束 `}` 之后，两者语义见 find_top_object_span。
+        // 空对象：`text[..ms + 1]` 已含开括号，直接在其后换行写入即可。
         let inner = &text[ms + 1..me - 1];
         if inner.trim().is_empty() {
-            format!("{}{{\n  {}\n}}{}", &text[..ms + 1], entry, &text[me - 1..])
+            format!("{}\n  {}\n{}", &text[..ms + 1], entry, &text[me - 1..])
         } else {
             format!("{},\n  {}{}", &text[..me - 1], entry, &text[me - 1..])
         }
@@ -2362,6 +2370,88 @@ mod tests {
             "条目追加"
         );
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// #341：空 `"mcp": {}` 的 JSONC 合并后必须仍是**合法 JSON**。
+    ///
+    /// 缺陷现场：`find_top_object_span` 曾返回键起始位置而非 `{` 位置 ⇒ 空判定恒 false
+    /// ⇒ `,` 被插到 `{` 后面，产出 `"mcp": {,`，**用户全局配置被写坏、opencode 无法启动**，
+    /// 而安装流程仍返回 `Ok`（UI 报「安装成功」）。
+    ///
+    /// 既有 `global_merge_jsonc_appends_into_existing_mcp` 只覆盖非空 `mcp` 且只断言
+    /// `contains()`，结构上抓不到本缺陷——故这里必须显式解析。
+    ///
+    /// **反向验证**：把 `find_top_object_span` 的返回值改回 `key_start` 时本例必然失败。
+    #[test]
+    fn global_merge_jsonc_empty_mcp_object_stays_valid_json() {
+        // 两种书写形态都覆盖：带空格换行（常规格式化）与紧凑无空格（手写最小配置）。
+        for (tag, src) in [
+            ("spaced", "// keep\n{\n  \"mcp\": {}\n}\n"),
+            ("compact", "// keep\n{\"mcp\":{}}\n"),
+        ] {
+            let home = fake_home(&format!("gempty-{tag}"));
+            let cfg = global_cfg(&home);
+            let path = cfg.join("opencode.jsonc");
+            std::fs::write(&path, src).unwrap();
+
+            let (changed, _, _) = merge_global_opencode_mcp(&home, "/bin/taskboard").unwrap();
+            assert!(changed, "[{tag}] 应发生写入");
+
+            let out = std::fs::read_to_string(&path).unwrap();
+            assert!(out.contains("// keep"), "[{tag}] 注释保留");
+            assert!(
+                out.contains("\"taskboard\""),
+                "[{tag}] 条目应写入，实际: {out}"
+            );
+            // 剥离行注释后必须是合法 JSON（缺陷现场会得到 `"mcp": {,`）
+            let stripped: String = out
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let parsed: Result<serde_json::Value, _> = serde_json::from_str(&stripped);
+            assert!(parsed.is_ok(), "[{tag}] 产出非法 JSON: {out}");
+            // 结构正确：mcp 下确有 taskboard 兄弟节点
+            assert_eq!(
+                parsed.unwrap()["mcp"]["taskboard"]["command"][0],
+                "/bin/taskboard",
+                "[{tag}] mcp.taskboard 结构异常"
+            );
+            let _ = std::fs::remove_dir_all(&home);
+        }
+    }
+
+    /// #341：`find_top_object_span` 的第一个返回值必须是 `{` 的位置。
+    ///
+    /// 直接锁住契约本身（而非只靠合并结果的间接断言），使「返回值语义被改回键起始
+    /// 位置」这一回归在任何调用方之前就被发现。
+    #[test]
+    fn find_top_object_span_returns_brace_position() {
+        for src in [
+            r#"{"mcp": {}}"#,
+            r#"{"mcp":{}}"#,
+            r#"{"a":1,"mcp": {"x":2}}"#,
+        ] {
+            let (ms, me) = find_top_object_span(src, "mcp").expect("应找到 mcp");
+            assert_eq!(
+                &src[ms..ms + 1],
+                "{",
+                "返回值应指向 `{{`；实际 src[{ms}..]={:?}（src={src}）",
+                &src[ms..ms + 1]
+            );
+            // me 是值结束 `}` 之后
+            assert_eq!(
+                &src[me - 1..me],
+                "}",
+                "me 应指向值结束的 }} 之后（src={src}）"
+            );
+            // 由此派生的切片在调用方语义下必须自洽：`ms + 1` 落在 `{` 之后、`me - 1` 落在值内
+            let inner = &src[ms + 1..me - 1];
+            assert!(
+                inner.is_empty() || !inner.starts_with('{'),
+                "内层切片应落在 {{ 之后（src={src}，inner={inner:?}）"
+            );
+        }
     }
 
     #[test]
