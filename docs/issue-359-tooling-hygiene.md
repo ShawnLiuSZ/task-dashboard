@@ -60,7 +60,7 @@
 
 ## 测试 / 验收
 
-- **`scripts/test_check_versions.py` 新增 3 例**（117 → 120）：
+- **`scripts/test_check_versions.py` 新增 3 例**（114 → 117）：
   - `test_mcp_server_version_is_not_hardcoded` — 真实仓库的 `server.py` 不得硬编码
   - `test_mcp_server_hardcoded_version_is_detected` — 构造硬编码源码，`mcp_server_version()` 必须识别出来
   - `test_python_mcp_reports_the_current_version` — `_app_version()` 必须等于 `Cargo.toml` 版本（真正跨语言对齐）
@@ -71,7 +71,7 @@
   | `server.py` 改回硬编码 `0.6.1` | `check-versions.py` 报「又把 serverInfo 版本硬编码成 0.6.1」✗ |
   | clippy 改回 `--lib` | 由 `check-workflow-yaml.py` 的 workflow 校验 + 本地 `--all-targets` 双保障 |
 
-已跑：`cargo clippy --all-targets -p taskboard -- -D warnings`（0 error，此前 5）、`cargo fmt --check`、`cargo test` 150 + 26、Python MCP 53、scripts 120（117 → +3）、`check-versions.py`、`check-mcp-columns.py`、`check-workflow-yaml.py`。
+已跑：`cargo clippy --all-targets -p taskboard -- -D warnings`（0 error，此前 5）、`cargo fmt --check`、`cargo test` 150 + 26、Python MCP 53、scripts 117（114 → +3）、`check-versions.py`、`check-mcp-columns.py`、`check-workflow-yaml.py`。
 
 ## 遗留说明
 
