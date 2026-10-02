@@ -91,5 +91,5 @@ test result: FAILED. 0 passed; 1 failed
 - Issue：[#355](https://github.com/ShawnLiuSZ/task-dashboard/issues/355)
 - 引入该守卫的前序改动：#328（见 [`docs/issue-328-p1-data-safety.md`](./issue-328-p1-data-safety.md)）
 - 源文件：[`app/src-tauri/src/commands.rs`](../app/src-tauri/src/commands.rs)、[`app/src-tauri/src/common.rs`](../app/src-tauri/src/common.rs)
-- 本批其余 4 项：[#356](../docs/issue-356-project-issue-updated-at.md)、[#357](../docs/issue-357-mcp-framing-and-args.md)、[#358](../docs/issue-358-issue-url-anchor.md)、[#359](../docs/issue-359-tooling-hygiene.md)
+- 本批其余 4 项见 [`docs/CHANGELOG.md`](./CHANGELOG.md) 的「深度 code review 批次（第二批）」块（#356 / #357 / #358 / #359）
 - CHANGELOG：[`docs/CHANGELOG.md`](./CHANGELOG.md)
