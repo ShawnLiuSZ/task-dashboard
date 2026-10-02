@@ -82,5 +82,6 @@
 - Issue：[#359](https://github.com/ShawnLiuSZ/task-dashboard/issues/359)
 - 被本 PR 引用为「防御性冗余」依据：[#346](https://github.com/ShawnLiuSZ/task-dashboard/issues/346)
 - 源文件：[`mcp_server/server.py`](../mcp_server/server.py)、[`scripts/check-versions.py`](../scripts/check-versions.py)、[`scripts/check-mcp-columns.py`](../scripts/check-mcp-columns.py)、[`.github/workflows/quality-check.yml`](../.github/workflows/quality-check.yml)
-- 本批其余项见 [`docs/CHANGELOG.md`](./CHANGELOG.md) 的「深度 code review 批次（第二批）」块（#355 / #356 / #357 / #358）
+
+- 本批其余项：[#355](./issue-355-require-affected-remaining-writes.md) / [#356](./issue-356-project-issue-updated-at.md) / [#357](./issue-357-mcp-framing-and-args.md) / [#358](./issue-358-issue-url-anchor.md)
 - CHANGELOG：[`docs/CHANGELOG.md`](./CHANGELOG.md)

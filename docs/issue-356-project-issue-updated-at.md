@@ -60,5 +60,6 @@ updated_at: String::new(),   // 恒空
 
 - Issue：[#356](https://github.com/ShawnLiuSZ/task-dashboard/issues/356)
 - 抽纯函数的先例：[`app/src-tauri/src/github.rs`](../app/src-tauri/src/github.rs) 的 `org_projects_query`（#327）
-- 本批其余 4 项见 [`docs/CHANGELOG.md`](./CHANGELOG.md) 的「深度 code review 批次（第二批）」块（#355 / #357 / #358 / #359）
+
+- 本批其余项：[#355](./issue-355-require-affected-remaining-writes.md) / [#357](./issue-357-mcp-framing-and-args.md) / [#358](./issue-358-issue-url-anchor.md) / [#359](./issue-359-tooling-hygiene.md)
 - CHANGELOG：[`docs/CHANGELOG.md`](./CHANGELOG.md)

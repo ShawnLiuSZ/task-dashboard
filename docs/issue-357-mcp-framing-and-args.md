@@ -98,5 +98,6 @@ list_my_tasks({status: 123})  →  返回整块看板，isError: false
 - Issue：[#357](https://github.com/ShawnLiuSZ/task-dashboard/issues/357)
 - 前序：[#345](./issue-345-python-mcp-framing.md)（Python 侧同一批问题）、[`docs/issue-328-p1-data-safety.md`](./issue-328-p1-data-safety.md)（Rust 侧四态 + `MAX_FRAME_BODY`）
 - 源文件：[`app/src-tauri/src/mcp.rs`](../app/src-tauri/src/mcp.rs)
-- 本批其余项见 [`docs/CHANGELOG.md`](./CHANGELOG.md) 的「深度 code review 批次（第二批）」块（#355 / #356 / #358 / #359）
+
+- 本批其余项：[#355](./issue-355-require-affected-remaining-writes.md) / [#356](./issue-356-project-issue-updated-at.md) / [#358](./issue-358-issue-url-anchor.md) / [#359](./issue-359-tooling-hygiene.md)
 - CHANGELOG：[`docs/CHANGELOG.md`](./CHANGELOG.md)
