@@ -13,6 +13,8 @@ import notesRaw from './components/NotesPanel.tsx?raw';
 import sessionsRaw from './components/SessionsPanel.tsx?raw';
 import settingsRaw from './components/SettingsPanel.tsx?raw';
 import logsRaw from './components/SyncLogsPanel.tsx?raw';
+import taskCardRaw from './components/TaskCard.tsx?raw';
+import { taskIdentity } from './utils/taskIdentity';
 
 /**
  * #329 前端一致性批次的接线守卫。
@@ -67,6 +69,32 @@ describe('任务身份跨账号唯一（#329）', () => {
 
   it('指纹纳入 accountId（否则换账号不刷新）', () => {
     expect(appRaw).toMatch(/taskListSignature/);
+  });
+});
+
+describe('任务身份生产端与消费端同口径（#339）', () => {
+  // #339：`TaskCard` 未跟进 #329，仍发裸 `issueKey`，而消费端全用 `taskIdentity` ⇒
+  // 点击后 `App` 查不回任务，详情面板彻底不可达。上面那组断言只查消费端，正是漏网之处，
+  // 故这里必须把**生产端**也锁住。
+  it('TaskCard 的点击与键盘路径都传身份，而非裸 issueKey', () => {
+    // 两处调用点（onClick / Enter-Space）都必须是 taskIdentity(task)
+    expect(taskCardRaw).not.toMatch(/onSelectKey\(task\.issueKey\)/);
+    expect(taskCardRaw.match(/onSelectKey\(taskIdentity\(task\)\)/g) ?? []).toHaveLength(2);
+  });
+
+  it('写操作仍用 issueKey（后端按 issue_key 定位，不可换成身份）', () => {
+    // claimIssue 是写路径，必须保持裸键
+    expect(taskCardRaw).toMatch(/claimIssue\(task\.issueKey\)/);
+  });
+
+  it('身份实参能被 App 的查找式命中（端到端契约）', () => {
+    const task = { issueKey: 'ShawnLiuSZ/task-dashboard#329', accountId: 1 };
+    // 复刻 App.tsx:487 的查找
+    const emitted = taskIdentity(task);
+    expect(emitted).toBe('ShawnLiuSZ/task-dashboard#329@1');
+    expect([task].find((t) => taskIdentity(t) === emitted) ?? null).not.toBeNull();
+    // 旧生产端发出的裸键查不回 —— 这正是 #339 的缺陷本体
+    expect([task].find((t) => taskIdentity(t) === task.issueKey) ?? null).toBeNull();
   });
 });
 
