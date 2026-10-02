@@ -2190,11 +2190,10 @@ mod tests {
             ""
         );
         // 落库侧：真实时间戳能被转成秒（不再是 0）
-        assert_eq!(
+        assert!(
             crate::common::iso8601_to_secs(&GitHubClient::project_item_updated_at(
                 &serde_json::json!({"updatedAt": "2026-09-20T10:00:00Z"})
             )) > 0,
-            true,
             "真实 updatedAt 必须能转成非 0 秒，否则卡片日期仍为空"
         );
     }
