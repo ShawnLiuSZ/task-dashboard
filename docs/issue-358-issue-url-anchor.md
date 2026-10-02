@@ -113,6 +113,7 @@ assert_eq!(
 
 - Issue：[#358](https://github.com/ShawnLiuSZ/task-dashboard/issues/358)
 - 源文件：[`app/src-tauri/src/on_demand.rs`](../app/src-tauri/src/on_demand.rs)；对照 [`mcp_server/server.py`](../mcp_server/server.py)
-- 同类问题（注释声称的覆盖范围与实际不符）：见 [`docs/CHANGELOG.md`](./CHANGELOG.md) 的「深度 code review 批次（第二批）」块中 #355 项
-- 本批其余项见 [`docs/CHANGELOG.md`](./CHANGELOG.md) 的「深度 code review 批次（第二批）」块（#355 / #356 / #357 / #359）
+- 同类问题（注释声称的覆盖范围与实际不符）：[#355](./issue-355-require-affected-remaining-writes.md)
+
+- 本批其余项：[#355](./issue-355-require-affected-remaining-writes.md) / [#356](./issue-356-project-issue-updated-at.md) / [#357](./issue-357-mcp-framing-and-args.md) / [#359](./issue-359-tooling-hygiene.md)
 - CHANGELOG：[`docs/CHANGELOG.md`](./CHANGELOG.md)
