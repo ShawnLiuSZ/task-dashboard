@@ -392,6 +392,34 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
     let _ = conn.pragma_update(None, "synchronous", "NORMAL");
     let _ = conn.pragma_update(None, "busy_timeout", 5000);
+    // ── 崩溃残留回收（#340）─────────────────────────────────────────────
+    // `migrate_tasks_v2_rebuild` 的事务里有两个提交点之间的窗口：
+    //   DROP TABLE tasks → INSERT..SELECT → ALTER TABLE tasks_new RENAME TO tasks
+    // 若进程在 `DROP` 之后、`RENAME` 之前被杀/断电，库里会留下 **`tasks` 缺失、
+    // `tasks_new` 保有全量数据** 的状态。
+    //
+    // 此前该状态无法自愈：`fresh = !table_exists(tasks)` 为真 ⇒ 跳过重建分支 ⇒
+    // 重建函数开头的 `DROP TABLE IF EXISTS tasks_new`（#328 加的自愈）永不可达 ⇒
+    // 随后 `SCHEMA` 建出一个**空 tasks**、结构检查通过、user_version 盖到最新 ⇒
+    // 迁移此后再不重跑，用户的 status / session_* / handoff / work_branch 永久丢失。
+    //
+    // 故在 `fresh` 短路**之前**先探测并回收：把 tasks_new 原位改名为 tasks，
+    // 让既有迁移逻辑（`missing_columns` / `MIGRATION_DDL`）按正常路径收敛。
+    // 注意这**不是**迁移，而是纯恢复，故不触碰 user_version（只由低往高推进）。
+    //
+    // ⚠️ 必须确认 tasks_new **确实是 tasks 布局**才 RENAME，否则 SCHEMA 的
+    // `CREATE INDEX ... ON tasks(ownership)` 会因缺列而整个 batch 失败 —— 那比
+    // 「看板为空但能打开」更糟（库直接打不开）。故用 `issue_key` 列做指纹：
+    // 它是 #155 重建后 tasks 的标志性列，非 tasks 表不会命中。
+    if !table_exists(&conn, "tasks")
+        && table_exists(&conn, "tasks_new")
+        && table_has_column(&conn, "tasks_new", "issue_key")
+    {
+        match conn.execute("ALTER TABLE tasks_new RENAME TO tasks", []) {
+            Ok(_) => crate::tlog!("[db] 已从崩溃残留的 tasks_new 恢复 tasks 表"),
+            Err(e) => crate::tlog!("[db] 恢复残留 tasks_new 失败，保留原状待下次重试: {e}"),
+        }
+    }
     // ── 迁移门控（#329）────────────────────────────────────────────────
     // `tasks` 不存在 ⇒ 全新库：`SCHEMA` 足以建出最新布局，迁移语句基本是幂等空转
     // （少数 ALTER 会因列已存在而报错并被忽略），跑一轮把 `user_version` 落地更省心。
@@ -527,6 +555,13 @@ fn schema_version(conn: &Connection) -> i64 {
 fn table_exists(conn: &Connection, name: &str) -> bool {
     conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")
         .and_then(|mut s| s.exists([name]))
+        .unwrap_or(false)
+}
+
+/// 指定表是否含某列（只读）。用于 #340 的残留表指纹判定。
+fn table_has_column(conn: &Connection, table: &str, col: &str) -> bool {
+    conn.prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2")
+        .and_then(|mut s| s.exists(rusqlite::params![table, col]))
         .unwrap_or(false)
 }
 
