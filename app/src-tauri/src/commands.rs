@@ -2458,10 +2458,25 @@ mod tests {
         // 而 `mod tests` 里我们自己写的用例也含同样的调用 ⇒ 计数被自己抬高，
         // 阈值形同虚设：删掉一处真实调用后计数仍在阈值之上，用例照样通过
         // （反向验证时真的被骗过一次）。
-        let guarded = src
+        // #367：截断点用 `#[cfg(test)]` 而非 `mod tests` —— 后者依赖「`mod tests`
+        // 是本文件唯一的测试模块」这一未被守护的前提；测试模块被改名/拆分后截断点
+        // 会消失，计数重新把测试代码算进去 ⇒ 静默退化成 #355 修复前的失效状态。
+        let test_marker = src.find("#[cfg(test)]");
+        let marker = test_marker.unwrap_or_else(|| {
+            panic!(
+                "commands.rs 里找不到 #[cfg(test)]，静态断言已失去意义（测试模块被改名或移除？）"
+            )
+        });
+        // 守卫：截断点之前必须确实读到了生产代码，否则下面的计数没有意义
+        // （范式同 lint-config.test.ts 的「本条测试失去意义」用例）。
+        let production = &src[..marker];
+        assert!(
+            production.contains(&needle),
+            "截断点之前没找到任何 require_affected 调用，静态断言已失去意义"
+        );
+        let guarded = production
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
-            .take_while(|l| !l.trim_start().starts_with("mod tests {"))
             .filter(|l| l.contains(&needle))
             .count();
         assert_eq!(
