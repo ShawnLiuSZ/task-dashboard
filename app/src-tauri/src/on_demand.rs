@@ -42,18 +42,33 @@ pub fn parse_issue_ref_parts(ref_: &str) -> Result<IssueRef, String> {
         if parts.len() >= 4 {
             let owner = parts[0].trim();
             let repo = parts[1];
-            if let Ok(n) = parts[3].trim_start_matches('#').parse::<i64>() {
-                if n > 0 && !repo.is_empty() {
-                    return Ok(IssueRef {
-                        owner: if owner.is_empty() {
-                            None
-                        } else {
-                            Some(owner.to_string())
-                        },
-                        repo: repo.to_string(),
-                        number: n,
-                        key: format!("{repo}#{n}"),
-                    });
+            // #358：第 3 段必须是 `issues` 或 `pull`。此前**完全忽略**该段 ⇒
+            // `.../discussions/7`、`.../wiki/7` 会被当成 issue 接受，而 Python
+            // 侧的正则要求 `(?:issues|pull)` 会拒绝 ⇒ 两侧对同一输入给出相反答案。
+            let kind_ok = matches!(parts[2], "issues" | "pull");
+            // #358：编号取**前导数字段**。此前对 `parts[3]` 整体 parse 且只用
+            // `trim_start_matches('#')`（只剥前导 `#`）⇒ `.../issues/7#issuecomment-1`
+            // （GitHub UI 复制链接的**标准形式**）解析失败。Python 侧 `(\d+)` 是
+            // search 语义、天然只取前导数字，故两侧本就应对齐。
+            let digits: String = parts[3]
+                .trim_start_matches('#')
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if kind_ok {
+                if let Ok(n) = digits.parse::<i64>() {
+                    if n > 0 && !repo.is_empty() {
+                        return Ok(IssueRef {
+                            owner: if owner.is_empty() {
+                                None
+                            } else {
+                                Some(owner.to_string())
+                            },
+                            repo: repo.to_string(),
+                            number: n,
+                            key: format!("{repo}#{n}"),
+                        });
+                    }
                 }
             }
         }
@@ -419,13 +434,69 @@ mod tests {
         assert_eq!(r.repo, "task-dashboard");
         assert_eq!(r.number, 248);
         assert_eq!(r.key, "task-dashboard#248");
-        // 尾部锚点 / 空白容忍
+        // 空白容忍
         assert_eq!(
             parse_issue_ref_parts("  https://github.com/o/r/issues/7  ")
                 .unwrap()
                 .key,
             "r#7"
         );
+    }
+
+    /// #358：**尾部锚点**必须能解析 —— 这是 GitHub UI「复制链接」的标准形式
+    /// （`.../issues/7#issuecomment-1`），agent 极常见地直接粘这个 URL。
+    ///
+    /// 缺陷现场：编号被整体 `parse::<i64>()`，而 `trim_start_matches('#')` 只剥
+    /// **前导** `#` ⇒ `7#issuecomment-1` 解析失败。
+    /// 注意 `parse_issue_ref_parts_accepts_urls` 里那条「尾部锚点 / 空白容忍」的
+    /// 注释所声称的锚点容忍当时**是假的** —— 它只测了空白。
+    ///
+    /// **反向验证**：把编号解析改回「整体 parse + 只剥前导 `#`」时本例失败。
+    #[test]
+    fn parse_url_tolerates_trailing_anchor() {
+        for (input, expect_n) in [
+            ("https://github.com/o/r/issues/7#issuecomment-1", 7),
+            ("https://github.com/o/r/pull/12#issue-1", 12),
+            ("https://github.com/o/r/issues/7#", 7),
+            ("https://github.com/o/r/issues/7#issuecomment-999999", 7),
+            // 前导 `#` 也一并容忍（`#7` 形式）
+            ("https://github.com/o/r/issues/#7", 7),
+        ] {
+            let got = parse_issue_ref_parts(input)
+                .unwrap_or_else(|e| panic!("应能解析尾部锚点 {input}，实际报错: {e}"));
+            assert_eq!(got.number, expect_n, "输入 {input}");
+            assert_eq!(got.repo, "r", "输入 {input}");
+            assert_eq!(got.key, format!("r#{expect_n}"), "输入 {input}");
+        }
+    }
+
+    /// #358：第 3 段必须是 `issues` / `pull` —— 与 Python 侧正则
+    /// `github\.com/([^/]+)/([^/#?]+)/(?:issues|pull)/(\d+)` 对齐。
+    ///
+    /// 缺陷现场：Rust **完全忽略**该段 ⇒ `.../discussions/7` 被当成 issue 接受，
+    /// 而 Python 侧拒绝 ⇒ 同一 agent 输入两侧给出相反答案。
+    ///
+    /// **反向验证**：去掉 `kind_ok` 判断时第 2 条断言失败。
+    #[test]
+    fn parse_url_requires_issues_or_pull_segment() {
+        // 接受
+        for good in [
+            "https://github.com/o/r/issues/7",
+            "https://github.com/o/r/pull/12",
+        ] {
+            assert!(parse_issue_ref_parts(good).is_ok(), "应接受 {good}");
+        }
+        // 拒绝：非 issue/pull 型资源
+        for bad in [
+            "https://github.com/o/r/discussions/7",
+            "https://github.com/o/r/wiki/7",
+            "https://github.com/o/r/milestone/7",
+        ] {
+            assert!(
+                parse_issue_ref_parts(bad).is_err(),
+                "{bad} 不是 issue/pull 资源，应拒绝（与 Python 侧一致）"
+            );
+        }
     }
 
     #[test]
@@ -435,6 +506,8 @@ mod tests {
         assert!(parse_issue_ref_parts("repo#abc").is_err());
         assert!(parse_issue_ref_parts("repo#0").is_err());
         assert!(parse_issue_ref_parts("#12").is_err());
+        // #358：URL 形态下的编号必须为纯数字（前导数字段也解析不出时）
+        assert!(parse_issue_ref_parts("https://github.com/o/r/issues/abc").is_err());
         // 错误文案保持原样（对 agent 可见）
         assert_eq!(
             parse_issue_ref_parts("repo#abc").unwrap_err(),
