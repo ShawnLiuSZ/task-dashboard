@@ -355,7 +355,12 @@ pub fn clear_session(
     key: String,
 ) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    crate::common::clear_task_session(&conn, &key)?;
+    // #355：与 update_task_status / record_session / set_work_branch 同一守卫——
+    // key 不存在时 0 行受影响必须报错。此前直接丢弃返回值，前端传一个陈旧
+    // issueKey（仓库改名、同步清理等都会产生）会收到 Ok、UI 显示成功却什么都没改，
+    // 且 MCP 侧同名工具会报错 ⇒ 两侧行为不一致。
+    let n = crate::common::clear_task_session(&conn, &key)?;
+    crate::common::require_affected(n, &key)?;
     // #181：同上，多窗口同步。
     let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
@@ -406,7 +411,9 @@ pub fn record_handoff(
 ) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     // v0.3.49 (#147)：SQL 走公共模块（与 mcp.rs 同一实现）。
-    crate::common::record_task_handoff(&conn, &key, &text)?;
+    // #355：同 clear_session——0 行受影响须报错，GUI/MCP 行为保持一致。
+    let n = crate::common::record_task_handoff(&conn, &key, &text)?;
+    crate::common::require_affected(n, &key)?;
     // #181：同上，多窗口同步。
     let _ = app.emit(crate::TASKS_CHANGED_EVENT, key);
     Ok(())
@@ -2429,22 +2436,87 @@ mod tests {
         );
     }
 
-    /// #328 防回归：GUI 写命令必须校验「0 行受影响」。
+    /// #328 / #355 防回归：GUI 写命令必须校验「0 行受影响」。
     ///
-    /// 这几处此前直接丢弃 `common::set_task_status` / `touch_session` / `set_work_branch`
-    /// 的返回值 ⇒ 前端传一个已不存在的 `issueKey` 会收到 `Ok`，UI 显示成功但什么都没改。
-    /// 三个命令都带 Tauri `AppHandle`，单测无法直接调用，故用**源码静态断言**守住调用点
-    /// （与前端用 `?raw` 做样式静态断言同一手法）。反向验证：把任一处的
-    /// `require_affected` 调用删掉，计数降到 2，用例失败。
+    /// 这些命令此前直接丢弃 `common::set_task_status` / `touch_session` /
+    /// `set_work_branch` / `clear_task_session` / `record_task_handoff` 的返回值
+    /// ⇒ 前端传一个已不存在的 `issueKey` 会收到 `Ok`，UI 显示成功但什么都没改，
+    /// 而 MCP 侧同名工具会报错 ⇒ 两侧行为不一致。
+    ///
+    /// 它们都带 Tauri `AppHandle`，单测无法直接调用，故用**源码静态断言**守住调用点
+    /// （与前端用 `?raw` 做样式静态断言同一手法）。
+    ///
+    /// #355 同时把断言改成 `assert_eq!(…, 5)` 并**排除 `mod tests` 与注释**：旧写法对
+    /// 整份源码计数，而本文件测试用例自身也含同样的调用，计数被抬高到阈值之上 ⇒
+    /// 删掉一处真实守卫后用例仍通过（首次反向验证确实被骗过）。**反向验证**：删掉任一
+    /// 处的 `require_affected` 调用，计数变为 4，用例失败。
     #[test]
     fn write_commands_check_affected_rows() {
         let src = include_str!("commands.rs");
         // 拼接 needle，避免静态断言把「断言自身」也数进去。
         let needle = ["crate::common::", "require_affected("].concat();
-        let guarded = src.matches(&needle).count();
-        assert!(
-            guarded >= 3,
-            "update_task_status / record_session / set_work_branch 都应走 require_affected，实测仅 {guarded} 处"
+        // #355：必须**排除测试代码与注释**再计数。旧写法对整个源码 `matches()`，
+        // 而 `mod tests` 里我们自己写的用例也含同样的调用 ⇒ 计数被自己抬高，
+        // 阈值形同虚设：删掉一处真实调用后计数仍在阈值之上，用例照样通过
+        // （反向验证时真的被骗过一次）。
+        let guarded = src
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .take_while(|l| !l.trim_start().starts_with("mod tests {"))
+            .filter(|l| l.contains(&needle))
+            .count();
+        assert_eq!(
+            guarded, 5,
+            "五条 GUI 写路径（update_task_status / record_session / set_work_branch / \
+             clear_session / record_handoff）都应恰好有一处 require_affected，实测 {guarded} 处"
         );
+    }
+
+    /// #355 行为回归：`clear_session` / `record_handoff` 对**不存在的 key** 必须报错。
+    ///
+    /// 与上面的静态断言互补：这里真的跑一次写入（这两个命令的 DB 逻辑都在
+    /// `common` 层、可直接测），断言 `require_affected` 会把 0 行翻译成
+    /// 「任务不存在」而不是静默成功。
+    #[test]
+    fn clear_session_and_record_handoff_reject_missing_key() {
+        let conn = Connection::open_in_memory().unwrap();
+        // 缺列会污染断言（先报 no such column），故先建一张最小的 tasks 表。
+        conn.execute_batch(
+            "CREATE TABLE tasks (
+               issue_key   TEXT PRIMARY KEY,
+               session_id  TEXT,
+               session_agent TEXT,
+               session_at  INTEGER,
+               handoff     TEXT NOT NULL DEFAULT ''
+             );
+             INSERT INTO tasks (issue_key, session_id, session_agent, session_at, handoff)
+               VALUES ('o/r#1', 'sess-1', 'claude-code', 1000, 'hi');",
+        )
+        .unwrap();
+
+        // — 存在的 key：正常写入，0 行守卫不应误伤
+        let n = crate::common::clear_task_session(&conn, "o/r#1").unwrap();
+        crate::common::require_affected(n, "o/r#1").expect("存在的 key 不应报错");
+        let n = crate::common::record_task_handoff(&conn, "o/r#1", "交接内容").unwrap();
+        crate::common::require_affected(n, "o/r#1").expect("存在的 key 不应报错");
+
+        // — 不存在的 key：0 行 ⇒ 必须翻译成错误
+        for missing in ["o/r#999", "", "garbage"] {
+            let n = crate::common::clear_task_session(&conn, missing).unwrap();
+            let err = crate::common::require_affected(n, missing)
+                .expect_err("clear_session 对不存在的 key 必须报错");
+            assert!(
+                err.contains("任务不存在"),
+                "错误文案应说明任务不存在，实际 {err}"
+            );
+
+            let n = crate::common::record_task_handoff(&conn, missing, "x").unwrap();
+            let err = crate::common::require_affected(n, missing)
+                .expect_err("record_handoff 对不存在的 key 必须报错");
+            assert!(
+                err.contains("任务不存在"),
+                "错误文案应说明任务不存在，实际 {err}"
+            );
+        }
     }
 }
