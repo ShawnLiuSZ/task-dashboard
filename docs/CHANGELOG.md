@@ -6,6 +6,15 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 深度 code review 批次 #5：`theme.ts` 用新 `matchMedia` 对象解绑导致 no-op（#343）**
+
+  - **#343 显式选择浅色/深色后，系统主题变化仍会覆盖它 —— #329 的修复实际没生效**：按 CSSOM View 规范，`Window.matchMedia(q)` 每次返回 **new** MediaQueryList（各自独立的 EventTarget 监听列表）。#329 只记了**函数引用**，解绑时重新 `matchMedia(DARK_QUERY)` 拿到**新对象**去 `removeEventListener` ⇒ **对旧对象上的监听器无效**，解绑恒为 no-op。
+  - **双重后果**：① 用户选 light/dark 后，系统主题一变仍触发 `applyTheme('auto')`；② **监听器泄漏** —— 每次 `setMode('auto')` 都在新对象上加一个，N 次切换 ⇒ 每次系统主题变更触发 N 次（幂等故无额外视觉症状）。
+  - **既有测试为何发现不了**：`theme.test.ts` 的打桩是 `matchMedia: () => media`（**每次返回同一对象，与平台行为正好相反**）；那条名为「解绑用同一函数引用（否则 removeEventListener 静默失效）」的用例**只比较函数身份、从不比较 MediaQueryList 身份**，精确记录了自己无法观测的失败模式；`systemThemeListenerBound()` 标志位无论移除成功与否都置 `null`，故所有断言在完全泄漏的构建上照样通过。
+  - **修复**：持有 **MediaQueryList 实例本身**（`systemThemeListener` → `systemMql`），解绑作用于同一对象。模块对外 API 签名与语义均不变。
+  - **测试**：先把打桩改为平台语义（每次产出新对象 + 监听集合挂在该实例 + `function` 表达式保留 `this`，跨实例移除天然无效），并新增真实度量 `liveListeners()`（统计所有实例上仍挂着的监听器总数 —— 调用次数口径看不出问题，旧实现在此也是「1」）。新增 3 例；保留全部 4 条 #329 既有用例未削弱。
+  - **反向验证**：还原 `theme.ts` 后**新增 3 例全败、既有 4 例仍通过**，失败数值精确对应泄漏模型（`expected 3 to be 1` / `expected 5 to be 0`）—— 同时**实证了旧测试为何无效**。恢复后 215 passed。
+  - **无 schema / MCP 工具签名 / i18n key 变更**；改动限 `app/src/theme{,.test}.ts`。
 - **Unreleased — 深度 code review 批次 #4：崩溃残留的 `tasks_new` 永久孤立，整个看板静默丢失（#340）**
 
   - **#340 崩溃窗口残留的 `tasks_new` 永久孤立，用户整个看板静默丢失且无法恢复**（本批唯一**数据永久丢失**项）：`migrate_tasks_v2_rebuild` 事务停在 `DROP TABLE tasks`（已提交）与 `RENAME`（未执行）之间 ⇒ 留下 **`tasks` 缺失、`tasks_new` 保有全量数据** 的状态。`migrate_tasks_v2_rebuild` doc comment 自己把它列为头号动机，#328 也加了 `DROP TABLE IF EXISTS tasks_new` 自愈，**但该 DROP 只在重建函数内部可达**，而前置条件 `tasks_uses_legacy_key()` 在 `tasks` 已不存在时为 false ⇒ **自愈分支恰好在最需要时不可达** ⇒ `SCHEMA` 建出空 `tasks`、结构检查通过、`user_version` 盖到 4 ⇒ 迁移此后再不重跑。
