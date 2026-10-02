@@ -61,3 +61,67 @@ describe('Esc 分层仲裁（#329）', () => {
     expect(escLayerDepth()).toBe(0);
   });
 });
+
+/**
+ * #344：把「父重渲染导致层级颠倒」这条不变式显式钉住。
+ *
+ * 场景：`ConfirmDialog`（子）叠在 `SyncLogsPanel`（父）之上时，父组件发生一次
+ * 重渲染。若两层的注册都放在带不稳定依赖（`onClose` / `onCancel`）的 effect 里，
+ * React 会按「destroy 自底向上 → create 自底向上」把两层整体重排：
+ *
+ * ```text
+ * destroy: 子 release() → 父 release() → 栈空
+ * create : 子 register() → [子]
+ * create : 父 register() → [子, 父]   ← 父压过了自己的子层
+ * ```
+ *
+ * 此时 `isTop()` 对子为 false、对父为 true ⇒ 一次 Esc 关掉**整个面板**，
+ * 而不是取消对话框 —— 用户想取消却丢了面板。
+ *
+ * 修复后（`useWindowEscLayer` 的层注册只在 `[]` 依赖的 effect 里发生一次），
+ * 重渲染不会触发任何注销/注册，层级原样保持。
+ */
+describe('Esc 层级在父重渲染后不得颠倒（#344）', () => {
+  it('模拟 effect 依赖不稳定时的重排：子层会被父层压过（缺陷形态）', () => {
+    const panel1 = registerEscLayer();
+    const dialog1 = registerEscLayer();
+    expect(dialog1.isTop()).toBe(true);
+
+    // —— 一次「父重渲染」：destroy 自底向上，再 create 自底向上（子→父）
+    dialog1.release();
+    panel1.release();
+    const dialog2 = registerEscLayer(); // 子先创建
+    const panel2 = registerEscLayer(); // 父后创建
+    // ❌ 缺陷形态：父在子之上
+    expect(panel2.isTop()).toBe(true);
+    expect(dialog2.isTop()).toBe(false);
+
+    dialog2.release();
+    panel2.release();
+    expect(escLayerDepth()).toBe(0);
+  });
+
+  it('层注册只做一次时，父重渲染后层级原样保持（修复形态）', () => {
+    // 面板与对话框各注册一次，此后只做重渲染（无注销/注册）
+    const panel = registerEscLayer();
+    const dialog = registerEscLayer();
+    // 若干次「重渲染」：不触碰注册，层级不变
+    for (let i = 0; i < 3; i++) {
+      expect(dialog.isTop(), `第 ${i + 1} 次重渲染后子层仍应在栈顶`).toBe(true);
+      expect(panel.isTop(), `第 ${i + 1} 次重渲染后父层不应在栈顶`).toBe(false);
+    }
+    // Esc 命中子层 → 只取消对话框
+    const handledBy: string[] = [];
+    const onEsc = (name: string) => () => {
+      if ((name === 'dialog' ? dialog : panel).isTop()) handledBy.push(name);
+    };
+    onEsc('dialog')();
+    expect(handledBy).toEqual(['dialog']);
+    expect(panel.isTop()).toBe(false);
+
+    dialog.release();
+    expect(panel.isTop()).toBe(true);
+    panel.release();
+    expect(escLayerDepth()).toBe(0);
+  });
+});

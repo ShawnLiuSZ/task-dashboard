@@ -14,6 +14,11 @@
  * 已注册的层则严格按栈顶判定——单层场景下它自己就是栈顶，照常响应。
  * React 18 StrictMode 的双调用（mount→unmount→mount）由「按 token 精确出栈」
  * 保证不会残留。
+ *
+ * ⚠️ #344 **层级完全由「注册/注销的时序」决定，而注册必须只发生一次**
+ * （见 [`registerEscLayer`] 的说明）：把注册放进带不稳定依赖的 effect，会让
+ * 父子层在某次重渲染时按「先销毁后创建、子先父后」的顺序整体重排，从而**颠倒**
+ * 层级。请一律走 `useEscLayer`（元素级）或 `useWindowEscLayer`（window 级）。
  */
 export interface EscLayer {
   /** 是否轮到本层处理 Esc。 */
@@ -24,6 +29,14 @@ export interface EscLayer {
 
 const stack: symbol[] = [];
 
+/**
+ * 注册一个 Esc 层。**每个组件实例整个生命周期内只应调用一次。**
+ *
+ * #344：重复调用会破坏层级。React 在一次 commit 里的 passive effect 顺序是
+ * 「destroy 自底向上 → create 自底向上」，若父子两层的注册都放在带不稳定依赖的
+ * effect 里，父重渲染会让它们**一起重排**：先全部销毁（栈空），再按子→父创建，
+ * 于是**父层压过了自己的子层** —— 一次 Esc 直接关掉整个面板而不只是取消对话框。
+ */
 export function registerEscLayer(): EscLayer {
   const token = Symbol('esc-layer');
   stack.push(token);
