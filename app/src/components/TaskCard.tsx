@@ -3,12 +3,17 @@ import type { Task } from '../types';
 import { api, openExternal, reportError } from '../api';
 import { useT } from '../i18n';
 import ConfirmDialog from './ConfirmDialog';
+import { taskIdentity } from '../utils/taskIdentity';
 
 interface Props {
   task: Task;
   active: boolean;
   /** v0.3.49 (#145)：稳定回调（父组件直接传 setState 类稳定引用），卡片内再绑定 key，
-      配合 memo 避免每轮重渲染。 */
+      配合 memo 避免每轮重渲染。
+      #339：实参是**前端身份** `issueKey@accountId`（`taskIdentity(task)`），不是裸
+      `issueKey`——消费端（`Board` 的 `active` 判定、`App` 的 `selectedTask` 查找）已自
+      #329 起统一用 `taskIdentity`，生产端必须同口径，否则点击后查不回任务、详情面板不可达。
+      ⚠️ 写操作仍用 `task.issueKey`（后端按 `issue_key` 定位），两者不可混用。 */
   onSelectKey: (key: string) => void;
   /** v0.3.22+：仓库颜色索引（0-19），用于仓库名标签配色。 */
   repoIndex?: number;
@@ -48,7 +53,7 @@ function TaskCard({ task, active, onSelectKey, repoIndex, showGhStatus }: Props)
       className={`card${active ? ' active' : ''}${
         task.candidateDone ? ' candidate' : ''
       }${task.ownership === 'notassignee' ? ' unassigned' : ''}${mine ? ' mine' : ''}`}
-      onClick={() => onSelectKey(task.issueKey)}
+      onClick={() => onSelectKey(taskIdentity(task))}
       role="button"
       tabIndex={0}
       aria-pressed={active}
@@ -56,7 +61,7 @@ function TaskCard({ task, active, onSelectKey, repoIndex, showGhStatus }: Props)
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          onSelectKey(task.issueKey);
+          onSelectKey(taskIdentity(task));
         }
       }}
     >
