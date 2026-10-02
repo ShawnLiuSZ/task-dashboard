@@ -2161,8 +2161,7 @@ mod tests {
         ));
         // 注意：不再在连接存活期 remove_file。并行测试各自占用不同文件，无互删风险；
         // 残留文件由 OS 在临时目录回收，不影响正确性。
-        let conn = crate::db::open_db(&path).expect("打开测试库");
-        conn
+        crate::db::open_db(&path).expect("打开测试库")
     }
 
     /// #266 防回归：两次 `mem_conn()` 必须返回不同路径（连接存活期互不干扰）。

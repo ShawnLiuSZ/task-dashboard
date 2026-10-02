@@ -157,5 +157,40 @@ class TestRealRepository(unittest.TestCase):
                 os.environ["GITHUB_REF_NAME"] = old
 
 
+    # ---- #359：Python MCP 的 serverInfo 版本 -------------------------------- #
+    # 原先 server.py 硬编码 "0.6.1"（实际 0.6.5）且本脚本不覆盖该文件 ⇒
+    # `initialize` 向 agent 报过期版本、漂移无门禁。
+    def test_mcp_server_version_is_not_hardcoded(self):
+        import check_versions as cv
+
+        src = (cv.ROOT / "mcp_server/server.py").read_text(encoding="utf-8")
+        # 已改为单一来源 ⇒ 返回 None（无可比的硬编码值）
+        self.assertIsNone(
+            cv.mcp_server_version(src),
+            "server.py 不应再硬编码 serverInfo 版本，应调用 _app_version()",
+        )
+
+    def test_mcp_server_hardcoded_version_is_detected(self):
+        import check_versions as cv
+
+        bad = '"serverInfo": {"name": "taskboard", "version": "0.6.1"},'
+        self.assertEqual(cv.mcp_server_version(bad), "0.6.1")
+
+    def test_python_mcp_reports_the_current_version(self):
+        """server.py 的 _app_version() 必须与 Cargo.toml 一致（单一来源）。"""
+        import check_versions as cv
+
+        cargo = cv.cargo_toml_version(
+            (cv.ROOT / "app/src-tauri/Cargo.toml").read_text(encoding="utf-8")
+        )
+        self.assertIsNotNone(cargo)
+        sys.path.insert(0, str(cv.ROOT / "mcp_server"))
+        try:
+            import server as S
+
+            self.assertEqual(S._app_version(), cargo)
+        finally:
+            sys.path.pop(0)
+
 if __name__ == "__main__":
     unittest.main()

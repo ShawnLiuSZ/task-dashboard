@@ -108,6 +108,17 @@ def py_ensure_columns(py_src: str) -> list[str]:
     return names
 
 
+def py_insert_cols(py_src: str) -> list[str]:
+    """从 `TASK_INSERT_COLS = (...)` 里取写入列名 (#359)。"""
+    m = re.search(r"TASK_INSERT_COLS\s*=\s*\((.*?)\n\)", py_src, re.DOTALL)
+    if not m:
+        die("server.py 里找不到 TASK_INSERT_COLS 定义")
+    names = re.findall(r'"([A-Za-z_][A-Za-z0-9_]*)"', m.group(1))
+    if not names:
+        die("TASK_INSERT_COLS 解析出 0 列，检查 server.py 里的格式是否改动过")
+    return names
+
+
 def split_cols(blob: str) -> list[str]:
     # Python 侧是多行字符串隐式拼接（每段都带引号），Rust 侧是单个裸字符串。
     # 必须先全局剥掉引号再按逗号切：否则跨行片段会同时含有上一行的收尾引号和
@@ -153,6 +164,22 @@ def main() -> int:
         problems.append(
             "server.py::ENSURE_COLUMNS 未覆盖 SELECT_COLS 的列: "
             f"{', '.join(not_ensured)}（往 SELECT_COLS 加列时必须同步补 ALTER）"
+        )
+
+    # (#359) `ENSURE_COLUMNS` 必须覆盖**写入**列清单 `TASK_INSERT_COLS`。
+    #
+    # 性质说明：这是**防御性冗余**，不是修某个可达故障 —— #346 已复核 `synced_at`
+    # 这条差集在真实代码路径中不可达（INSERT 列清单按实际表结构过滤，有列必被插入；
+    # 而真正「老到缺列」的库会先被 LEGACY_TASKS_COLUMNS 判定拒绝服务）。
+    # 加这条断言的目的是让「往 TASK_INSERT_COLS 加列 ⇒ 必须同步补 ALTER」成为
+    # 可机械校验的不变量，杜绝将来新增列时的静默漂移。
+    insert_cols = py_insert_cols(server_src)
+    not_ensured_insert = [c for c in insert_cols if c not in ensure_set]
+    if not_ensured_insert:
+        problems.append(
+            "server.py::ENSURE_COLUMNS 未覆盖 TASK_INSERT_COLS 的列: "
+            f"{', '.join(not_ensured_insert)}"
+            "（往 TASK_INSERT_COLS 加列时必须同步补 ALTER）"
         )
 
     # 兜底：旧列名写法（tasks.key 已于 #155 改名 issue_key）。

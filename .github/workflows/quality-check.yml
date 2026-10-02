@@ -46,7 +46,11 @@ jobs:
 
       - name: Run Clippy
         working-directory: app/src-tauri
-        run: cargo clippy --lib -p taskboard -- -D warnings
+        # #359：`--all-targets` —— 原先只有 `--lib`，**测试代码里的 lint 完全没被
+        # 检查**（`tests/db_test.rs` / 各文件的 `mod tests`）。`main` 上因此积压了
+        # 5 处存量 error（本次一并修掉），而 CI 却一直全绿。
+        # 注意 `--all-targets` 会编译并 lint 测试目标，比 `--lib` 慢一些。
+        run: cargo clippy --all-targets -p taskboard -- -D warnings
 
   frontend-lint:
     name: Frontend Lint

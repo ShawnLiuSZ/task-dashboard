@@ -202,6 +202,16 @@ ENSURE_COLUMNS = (
     ("done_at", "INTEGER NOT NULL DEFAULT 0"),
     ("comments_count", "INTEGER NOT NULL DEFAULT 0"),
     ("stale", "INTEGER NOT NULL DEFAULT 0"),
+    # #359：补齐 TASK_INSERT_COLS 的最后一列，使「写列 ⊆ 建列」成为可校验不变量。
+    #
+    # 背景：#346 曾把这处差集判为**误报**并据实关闭 —— 因为 `_write_task_if_absent`
+    # 的 INSERT 列清单按实际表结构过滤（列存在必被插入、列不存在则表上也无该列、
+    # 无约束可违），且 `synced_at` 自 Initial commit 起就在 `SCHEMA` 内，真正
+    # 「老到缺列」的库会先被 LEGACY_TASKS_COLUMNS 判定拒绝服务。
+    # 本条因此是**防御性冗余**：补它不修复任何可达故障，只是让
+    # `check-mcp-columns.py` 的新断言能常绿、并杜绝将来新增写列时的静默漂移。
+    # DEFAULT 0 与 db.rs 其余整数时间列的口径一致。
+    ("synced_at", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 # v0.3.50 物理重建（#155）之前的列名。Python MCP 不做表重建，遇到这些列直接拒绝服务。
@@ -301,6 +311,29 @@ def _is_custom_column(key, status):
 #   * 状态判定：closed → done；显式 label 映射；否则 todo（Project Status 需 GraphQL，REST 给不了）
 #   * 落库用 ON CONFLICT DO NOTHING，绝不覆盖同步写入的 project_status / mentioned 等字段
 # --------------------------------------------------------------------------- #
+def _app_version():
+    """#359：应用版本的**单一来源** = ``app/src-tauri/Cargo.toml`` 的 ``[package] version``。
+
+    #359 之前这里硬编码 ``"0.6.1"``，而实际版本是 ``0.6.5``（Rust 侧用
+    ``env!("CARGO_PKG_VERSION")`` 自动取值），且 ``scripts/check-versions.py``
+    不覆盖本文件 ⇒ 漂移无门禁、agent 通过 ``initialize`` 拿到的是过期版本。
+
+    解析失败（源码树不完整 / 打包分发时缺 Cargo.toml）时回落 ``"0.0.0"``：
+    MCP server 是便携兜底路径，不应因为读不到版本号就拒绝启动。
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    cargo = os.path.join(here, "..", "app", "src-tauri", "Cargo.toml")
+    try:
+        with open(cargo, encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r'^version\s*=\s*"([^"]+)"', line.strip())
+                if m:
+                    return m.group(1)
+    except OSError:
+        pass
+    return "0.0.0"
+
+
 GITHUB_API = "https://api.github.com"
 
 # 与 Rust `db.rs::TASK_INSERT_HEAD` 的列清单一致。
@@ -1188,7 +1221,7 @@ def handle(msg):
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "taskboard", "version": "0.6.1"},
+                "serverInfo": {"name": "taskboard", "version": _app_version()},
             },
         }
 

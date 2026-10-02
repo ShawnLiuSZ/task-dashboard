@@ -32,3 +32,8 @@ CLAUDE.local.md
 !opencode.json
 !.opencode/
 !.opencode/**
+
+# Python 字节码缓存（#359）：本地跑 scripts / mcp_server 的单测时生成，
+# 不应进版本库 —— 曾被 `git add -A` 误提交（.pyc 与源码不同步会误导 review）。
+__pycache__/
+*.py[cod]
