@@ -428,6 +428,21 @@ pub fn build_links_query(owner: &str, repo: &str, numbers: &[i64]) -> String {
     )
 }
 
+/// #342：判断 `fetch_issue_links` 的返回是否为**仓库级失败**。
+///
+/// 判据是 `data.r`（GraphQL 查询里 `repository(...)` 的别名）为 null 或缺失。
+/// **不能**用顶层 `data` 是否为 null——那是非 null 的包装对象，即使仓库整体解析失败
+/// 也依然有值，那样判据永不触发。
+///
+/// 仓库有效但个别 issue 别名 NOT_FOUND 时 `data.r` 是对象（有 `name` / `owner` 字段），
+/// 不判为失败——这正是 #328 想要的宽松容错，二者必须区分开。
+fn repo_level_failure(v: &serde_json::Value) -> bool {
+    match v.get("data").and_then(|d| d.get("r")) {
+        Some(r) => r.is_null() || !r.is_object(),
+        None => true,
+    }
+}
+
 /// #278：解析 `fetch_issue_links` 的 GraphQL 返回，纯函数（不发网络）。
 ///
 /// 入参形如 `{"data": {"r": {"name", "owner", "a0": {...}, "a1": null, ...}}}`。
@@ -878,7 +893,16 @@ impl GitHubClient {
     /// #328：改用**宽松模式**（[`Self::graphql_partial`]）。原先走严格模式，只要整块
     /// 返回里带 `errors`（单个编号 NOT_FOUND / FORBIDDEN 即可触发）就整块失败，
     /// 25 个 issue 的父子关系一起丢。宽松模式下 `data` 有值即采信，取不到的编号自然
-    /// 不落进 map，其余编号照常更新；只有 `data` 整体为 null 时才返回 `Err`。
+    /// 不落进 map，其余编号照常更新。
+    ///
+    /// #342：宽松判据必须落在 **`data.r`（仓库包装层）** 这一点上，而不是顶层 `data`。
+    /// 仓库改名 / 转移 / 删除 / token 失权时 GitHub 返回 `{"data":{"r":null},"errors":[…]}`，
+    /// 顶层 `data` 是**非 null 对象** ⇒ [`Self::graphql_partial`] 的 `v["data"].is_null()`
+    /// 不触发 ⇒ 宽松放行 ⇒ 解析器命中 `data.r` 为 null 返回**空 map**（非 `Err`），
+    /// 上层 `sync.rs` 视作成功、`links_failed_repos` 收不到该仓库 ⇒ 已有关联被空值覆盖。
+    /// 那道「失败则保留既有值」的安全网恰好在最需要它的场景被绕过。
+    /// 故本函数显式把 `data.r` 为 null / 缺失视为**整块失败**并返回 `Err`，
+    /// 宽松只保留给「仓库有效、个别别名 NOT_FOUND」的容错语义。
     pub fn fetch_issue_links(
         &self,
         owner: &str,
@@ -890,9 +914,15 @@ impl GitHubClient {
             if chunk.is_empty() {
                 continue;
             }
-            out.extend(parse_links_from_graphql(
-                &self.graphql_partial(&build_links_query(owner, repo, chunk))?,
-            ));
+            let v = self.graphql_partial(&build_links_query(owner, repo, chunk))?;
+            // #342：`data.r` 为 null/缺失 ⇒ 仓库级失败（改名/转移/无权），必须 Err。
+            // 注意不能用 `data` 是否为 null 判断——它是非 null 的包装对象。
+            if repo_level_failure(&v) {
+                return Err(format!(
+                    "{owner}/{repo} 关联查询返回空仓库（仓库改名/转移/删除，或 token 无权访问？）"
+                ));
+            }
+            out.extend(parse_links_from_graphql(&v));
         }
         Ok(out)
     }
@@ -2367,6 +2397,74 @@ mod tests {
         assert!(l.parent.is_none(), "缺 number 的 parent 应丢弃");
         assert_eq!(l.sub_issues.len(), 1);
         assert_eq!(l.sub_issues[0].number, 6);
+    }
+
+    // ========================================================================
+    // #342：仓库级失败不得被降级成 Ok(空)
+    // ========================================================================
+
+    /// #342 核心防线：**仓库级失败**（改名/转移/删除/token 失权）必须被识别为失败。
+    ///
+    /// 缺陷现场：GitHub 返回 `{"data":{"r":null},"errors":[…NOT_FOUND…]}`，
+    /// 顶层 `data` 是**非 null 的包装对象** ⇒ `graphql_partial` 的 `v["data"].is_null()`
+    /// 不触发 ⇒ 宽松放行 ⇒ 解析器返回空 map 而非 `Err` ⇒ 上层 `sync.rs` 视作成功、
+    /// `links_failed_repos` 收不到该仓库 ⇒ 已有关联被空值覆盖（父子关系静默清空）。
+    ///
+    /// **反向验证**：把判据改回「顶层 `data` 是否为 null」时本例必然失败。
+    #[test]
+    fn repo_level_null_is_detected_as_failure() {
+        // 缺陷现场：仓库整体解析失败
+        let not_found = serde_json::json!({
+            "data": {"r": null},
+            "errors": [{"type": "NOT_FOUND", "message": "Could not resolve to a Repository"}]
+        });
+        // 关键前提：顶层 data 非 null —— 这正是旧判据漏掉它的原因
+        assert!(
+            !not_found["data"].is_null(),
+            "顶层 data 是包装对象，非 null"
+        );
+        assert!(
+            repo_level_failure(&not_found),
+            "data.r 为 null ⇒ 仓库级失败"
+        );
+
+        // 同类形态：`data.r` 非 null 但不是对象（形状异常时同样不可采信）
+        assert!(repo_level_failure(
+            &serde_json::json!({"data": {"r": "oops"}})
+        ));
+        // 缺失 `data` / 缺失 `r` 也算失败（无法确认仓库有效）
+        assert!(repo_level_failure(&serde_json::json!({})));
+        assert!(repo_level_failure(&serde_json::json!({"data": {}})));
+        // data 整体为 null（限流等场景，graphql_partial 已会 Err，这里兜底）
+        assert!(repo_level_failure(&serde_json::json!({"data": null})));
+    }
+
+    /// #342 反向对照：**仓库有效 + 个别别名 NOT_FOUND** 必须**不算**失败。
+    ///
+    /// 这是 #328 引入宽松模式的本意，不能被本修复误伤（否则 25 个 issue 的父子
+    /// 关系又会因为一个编号被删而整块丢失）。
+    #[test]
+    fn repo_level_failure_keeps_partial_tolerance() {
+        let v = serde_json::json!({
+            "data": {"r": {
+                "name": "task-dashboard",
+                "owner": {"login": "ShawnLiuSZ"},
+                "a0": {"number": 278, "title": "ok",
+                       "url": "https://github.com/o/r/issues/278",
+                       "parent": {"number": 100, "title": "epic",
+                                  "url": "https://github.com/o/r/issues/100"}},
+                "a1": null   // 个别编号取不到（被删 / 无权）—— 不应整块失败
+            }},
+            "errors": [{"type": "NOT_FOUND", "path": ["r","a1"]}]
+        });
+        assert!(
+            !repo_level_failure(&v),
+            "仓库有效时不得判失败（否则丢掉 #328 的宽松收益）"
+        );
+        // 且仍应正常解析出 a0 的关联
+        let m = parse_links_from_graphql(&v);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[&278].parent.as_ref().unwrap().number, 100);
     }
 
     // ========================================================================
