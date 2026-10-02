@@ -13,6 +13,9 @@ import notesRaw from './components/NotesPanel.tsx?raw';
 import sessionsRaw from './components/SessionsPanel.tsx?raw';
 import settingsRaw from './components/SettingsPanel.tsx?raw';
 import logsRaw from './components/SyncLogsPanel.tsx?raw';
+import escHookRaw from './utils/useEscLayer.ts?raw';
+import taskCardRaw from './components/TaskCard.tsx?raw';
+import { taskIdentity } from './utils/taskIdentity';
 
 /**
  * #329 前端一致性批次的接线守卫。
@@ -24,8 +27,28 @@ import logsRaw from './components/SyncLogsPanel.tsx?raw';
 
 describe('Esc 分层接线（#329）', () => {
   it('ConfirmDialog 注册为 Esc 层，且只在最上层响应', () => {
-    expect(confirmRaw).toMatch(/registerEscLayer\(\)/);
-    expect(confirmRaw).toMatch(/isTop\(\)/);
+    // #344：层注册下沉到 useWindowEscLayer —— `onCancel` 每次渲染都是新引用，
+    // 放进 effect 依赖会让层级在父重渲染时被父子整体重排而**颠倒**
+    // （一次 Esc 直接关掉整个面板，而非取消对话框）。
+    expect(confirmRaw).toMatch(/useWindowEscLayer\(/);
+  });
+
+  it('#344 层级注册只发生一次：不在带不稳定回调依赖的 effect 里注册 Esc 层', () => {
+    // 组件侧：不再自己注册，也不再把 onClose/onCancel 放进 Esc effect 依赖
+    for (const [name, raw] of [
+      ['ConfirmDialog', confirmRaw],
+      ['SyncLogsPanel', logsRaw],
+    ] as [string, string][]) {
+      expect(raw, `${name} 不应自己注册 Esc 层`).not.toMatch(/registerEscLayer\(/);
+      expect(raw, `${name} 不得把 onClose/onCancel 放进 Esc effect 依赖`).not.toMatch(
+        /\}, \[on(Close|Cancel)\]\)/,
+      );
+    }
+    // hook 侧：层注册与 window 监听都只在挂载时做一次（依赖恒为 []）
+    expect(escHookRaw).toMatch(/export function useWindowEscLayer/);
+    expect(escHookRaw).toMatch(/handler\.current = onEsc/);
+    const effect = escHookRaw.match(/const layer = registerEscLayer\(\);[\s\S]*?\}, \[\]\);/)?.[0];
+    expect(effect, '应能取到 useWindowEscLayer 里注册层的 effect').not.toBe('');
   });
 
   const escHolders: [string, string][] = [
@@ -39,7 +62,8 @@ describe('Esc 分层接线（#329）', () => {
 
   for (const [name, raw] of escHolders) {
     it(`${name} 的 Esc 处理前先问层级（否则会与确认框一起关闭）`, () => {
-      expect(raw).toMatch(/(isEscTop|isTop)\(\)/);
+      // #344：window 级面板改为经 useWindowEscLayer 走分层，元素级仍用 isEscTop()
+      expect(raw).toMatch(/(isEscTop|isTop)\(\)|useWindowEscLayer\(/);
     });
   }
 
@@ -67,6 +91,32 @@ describe('任务身份跨账号唯一（#329）', () => {
 
   it('指纹纳入 accountId（否则换账号不刷新）', () => {
     expect(appRaw).toMatch(/taskListSignature/);
+  });
+});
+
+describe('任务身份生产端与消费端同口径（#339）', () => {
+  // #339：`TaskCard` 未跟进 #329，仍发裸 `issueKey`，而消费端全用 `taskIdentity` ⇒
+  // 点击后 `App` 查不回任务，详情面板彻底不可达。上面那组断言只查消费端，正是漏网之处，
+  // 故这里必须把**生产端**也锁住。
+  it('TaskCard 的点击与键盘路径都传身份，而非裸 issueKey', () => {
+    // 两处调用点（onClick / Enter-Space）都必须是 taskIdentity(task)
+    expect(taskCardRaw).not.toMatch(/onSelectKey\(task\.issueKey\)/);
+    expect(taskCardRaw.match(/onSelectKey\(taskIdentity\(task\)\)/g) ?? []).toHaveLength(2);
+  });
+
+  it('写操作仍用 issueKey（后端按 issue_key 定位，不可换成身份）', () => {
+    // claimIssue 是写路径，必须保持裸键
+    expect(taskCardRaw).toMatch(/claimIssue\(task\.issueKey\)/);
+  });
+
+  it('身份实参能被 App 的查找式命中（端到端契约）', () => {
+    const task = { issueKey: 'ShawnLiuSZ/task-dashboard#329', accountId: 1 };
+    // 复刻 App.tsx:487 的查找
+    const emitted = taskIdentity(task);
+    expect(emitted).toBe('ShawnLiuSZ/task-dashboard#329@1');
+    expect([task].find((t) => taskIdentity(t) === emitted) ?? null).not.toBeNull();
+    // 旧生产端发出的裸键查不回 —— 这正是 #339 的缺陷本体
+    expect([task].find((t) => taskIdentity(t) === task.issueKey) ?? null).toBeNull();
   });
 });
 

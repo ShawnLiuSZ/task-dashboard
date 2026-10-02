@@ -1,8 +1,8 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import { useI18n } from '../i18n';
 import ConfirmDialog from './ConfirmDialog';
-import { registerEscLayer, type EscLayer } from '../utils/escLayer';
+import { useWindowEscLayer } from '../utils/useEscLayer';
 import type { ApiLog, SyncLog } from '../types';
 
 /** v0.3.49 (#148)：同步触发类型走 i18n（此前硬编码中文）。 */
@@ -163,20 +163,10 @@ export default function SyncLogsPanel({ onClose }: Props) {
 
   // v0.3.49 (#150)：Esc 关闭 + dialog 语义。
   // #329：注册为 Esc 层——确认框后注册即为最上层，面板这时不响应 Esc。
-  const escLayer = useRef<EscLayer | null>(null);
-  useEffect(() => {
-    const layer = registerEscLayer();
-    escLayer.current = layer;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && escLayer.current?.isTop()) onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      layer.release();
-      escLayer.current = null;
-    };
-  }, [onClose]);
+  // #344：改走 useWindowEscLayer —— `onClose` 每次渲染都是新引用，若把它放进
+  // effect 依赖，确认框打开期间的一次父重渲染会让父子层一起重排、**颠倒**层级，
+  // 表现为一次 Esc 直接关掉整个面板而不是取消对话框。
+  useWindowEscLayer(onClose);
 
   const visibleApiLogs = filterApiLogs(apiLogs, kindFilter);
 
