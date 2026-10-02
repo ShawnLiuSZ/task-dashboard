@@ -6,6 +6,14 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 深度 code review 批次：卡片点击完全失灵（P0）等 8 项缺陷（#339–#346）**
+
+  - 本批 8 项来自一次跨模块深度 review（范围 `v0.6.5 → HEAD`，含 #327/#328/#329/#330/#335/#336）。基线全绿（212 vitest + 171 cargo + `tsc` / `i18n:check` / `check-mcp-columns.py`），**8 项全部逃过现有测试**。
+  - **共同根因模式：「只改了一半」** —— 三项高危都源于重构只覆盖了一侧：`TaskCard` 漏改身份生产端（消费端全改）；MCP 分帧健壮性只做 Rust 侧、Python 兜底未同步；崩溃残留自愈只覆盖了 `tasks` 仍存在的一个分支。
+  - **[#339](https://github.com/ShawnLiuSZ/task-dashboard/issues/339)（P0）点击任务卡片完全无响应，详情面板不可达**：#329 把前端任务身份升级为 `issueKey@accountId`（聚合视图下同一 issue 来自两个账号时 `issueKey` 会重复），消费端（`Board` 4 处 `active` 判定 + `App` 的 `selectedTask` 查找）全部改用 `taskIdentity`，但**生产端 `TaskCard.tsx` 根本没进那次 diff**，仍在发裸 `issueKey`。两者永不相等 ⇒ `selectedTask` 恒 `null` ⇒ 四个看板视图 100% 无法打开详情。**既有测试给了虚假安全感**：`panel-wiring.test.ts` 用正则只断言消费端有 8 处 `taskIdentity`，从不检查生产者。**修复**：两处调用点改传 `taskIdentity(task)`；**写操作仍用 `issueKey`**（后端按 `issue_key` 定位，边界不变，测试显式锁住）。详见 [docs/issue-339-taskcard-select-identity.md](./issue-339-taskcard-select-identity.md)。
+  - 其余 7 项（各自独立 issue / 分支 / PR，见对应文档）：[#340](https://github.com/ShawnLiuSZ/task-dashboard/issues/340) 崩溃窗口残留 `tasks_new` 永久孤立致看板静默丢失；[#341](https://github.com/ShawnLiuSZ/task-dashboard/issues/341) 全局 `opencode.jsonc` 空 `mcp` 被合并成非法 JSON；[#342](https://github.com/ShawnLiuSZ/task-dashboard/issues/342) 仓库级 GraphQL 失败被降级成 `Ok(空)`、父子关联被清空；[#343](https://github.com/ShawnLiuSZ/task-dashboard/issues/343) `theme.ts` 用新 `matchMedia` 对象解绑导致 no-op；[#344](https://github.com/ShawnLiuSZ/task-dashboard/issues/344) Esc 层注册放在不稳定 deps 致层级颠倒；[#345](https://github.com/ShawnLiuSZ/task-dashboard/issues/345) MCP 分帧健壮性只修 Rust 侧；[#346](https://github.com/ShawnLiuSZ/task-dashboard/issues/346) `synced_at` 不在 `ENSURE_COLUMNS`。
+  - **本批次无 schema / MCP 工具签名变更**（`SELECT_COLS` 未动；#346 改的是 Python 侧建表补列清单，非 `tasks` 列定义）；**无 i18n key 变更**。
+
 - **Unreleased — CI 门禁盲区 / 操作类文档 `develop` 漂移 / 旧仓库名拼写残留（#336）**
 
   - **#336 `quality-check.yml` 的 `push` 只挂 `develop`，而该分支已不存在** ⇒ **直接 push 到 `main` 完全跳过重型门禁**（clippy / `cargo fmt --check` / `vite build` / `check-versions.py` / `scripts` 单测），只有 base = `main` 的 PR 才跑。这是 #330 刚加固完门禁后留下的缺口。**修复**：`push.branches` 补 `main`。详见 [docs/issue-336-docs-ci-reality-alignment.md](./issue-336-docs-ci-reality-alignment.md)。
