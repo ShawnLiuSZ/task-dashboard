@@ -448,59 +448,99 @@ fn tool_delete_note(conn: &Connection, id: i64) -> Result<Value, String> {
     Ok(json!({ "ok": true, "note_id": id }))
 }
 
+/// #357：给 JSON 值一个可读的类型名，用于「参数必须是字符串」类类型错误。
+fn json_type_name(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "布尔值",
+        Value::Number(_) => "数字",
+        Value::String(_) => "字符串",
+        Value::Array(_) => "数组",
+        Value::Object(_) => "对象",
+    }
+}
+
 fn call_tool(conn: &Connection, name: &str, args: &Map<String, Value>) -> Result<Value, String> {
-    let get =
-        |k: &str| -> Option<String> { args.get(k).and_then(|v| v.as_str()).map(|s| s.to_string()) };
+    // #357：参数必须是字符串。此前用 `as_str()` 静默丢弃非字符串值 ⇒
+    // `list_my_tasks({status: 123})` 会**返回整块看板且 isError: false**，
+    // 而 Python 兜底侧正确报错 ⇒ 同一个 agent 输入，正式路径给错数据。
+    //
+    // `get_opt` 用于「可选且类型错误等于不传」的宽松场景（如 status 过滤器）；
+    // `get_req` 用于「必填」，非字符串时给出明确类型错误而非「缺少参数」。
+    // `get_opt` 同样要校验类型：可选 ≠ 「类型错误等于不传」。此前
+    // `list_my_tasks({status: 123})` 就是在这里被静默丢弃过滤器的。
+    let get_opt = |k: &str| -> Result<Option<String>, String> {
+        match args.get(k) {
+            None => Ok(None),
+            Some(v) => v
+                .as_str()
+                .map(|s| Some(s.to_string()))
+                .ok_or_else(|| format!("参数 {k} 必须是字符串，实际收到 {}", json_type_name(v))),
+        }
+    };
+    let get_req = |k: &str| -> Result<String, String> {
+        match args.get(k) {
+            Some(v) => v
+                .as_str()
+                .map(|s| s.to_string())
+                .ok_or_else(|| format!("参数 {k} 必须是字符串，实际收到 {}", json_type_name(v))),
+            None => Err(format!("缺少 {k} 参数")),
+        }
+    };
     match name {
-        "list_my_tasks" => tool_list(conn, get("status").as_deref(), get("ownership").as_deref()),
+        "list_my_tasks" => tool_list(
+            conn,
+            get_opt("status")?.as_deref(),
+            get_opt("ownership")?.as_deref(),
+        ),
         "get_task_status" => {
-            let issue = get("issue").ok_or("缺少 issue 参数")?;
+            let issue = get_req("issue")?;
             tool_get(conn, &issue)
         }
         "update_task_status" => {
-            let issue = get("issue").ok_or("缺少 issue 参数")?;
-            let status = get("status").ok_or("缺少 status 参数")?;
+            let issue = get_req("issue")?;
+            let status = get_req("status")?;
             tool_update(conn, &issue, &status)
         }
         "record_session" => {
-            let issue = get("issue").ok_or("缺少 issue 参数")?;
-            let sid = get("session_id").ok_or("缺少 session_id 参数")?;
+            let issue = get_req("issue")?;
+            let sid = get_req("session_id")?;
             tool_record_session(
                 conn,
                 &issue,
                 &sid,
-                get("agent").as_deref(),
-                get("branch").as_deref(),
-                get("work_dir").as_deref(),
+                get_opt("agent")?.as_deref(),
+                get_opt("branch")?.as_deref(),
+                get_opt("work_dir")?.as_deref(),
             )
         }
         "set_work_branch" => {
-            let issue = get("issue").ok_or("缺少 issue 参数")?;
-            let branch = get("branch").ok_or("缺少 branch 参数")?;
+            let issue = get_req("issue")?;
+            let branch = get_req("branch")?;
             tool_set_work_branch(conn, &issue, &branch)
         }
         "record_handoff" => {
-            let issue = get("issue").ok_or("缺少 issue 参数")?;
-            let text = get("text").ok_or("缺少 text 参数")?;
+            let issue = get_req("issue")?;
+            let text = get_req("text")?;
             tool_record_handoff(conn, &issue, &text)
         }
         "clear_session" => {
-            let issue = get("issue").ok_or("缺少 issue 参数")?;
+            let issue = get_req("issue")?;
             tool_clear_session(conn, &issue)
         }
         "list_notes" => tool_list_notes(conn),
         "add_note" => {
-            let content = get("content").ok_or("缺少 content 参数")?;
-            tool_add_note(conn, Some(&content), get("label").as_deref())
+            let content = get_req("content")?;
+            tool_add_note(conn, Some(&content), get_opt("label")?.as_deref())
         }
         "update_note" => {
             let id = note_id_arg(args)?;
-            let content = get("content").ok_or("缺少 content 参数")?;
+            let content = get_req("content")?;
             tool_update_note(conn, id, Some(&content))
         }
         "update_note_label" => {
             let id = note_id_arg(args)?;
-            let label = get("label").ok_or("缺少 label 参数")?;
+            let label = get_req("label")?;
             tool_update_note_label(conn, id, Some(&label))
         }
         "delete_note" => {
@@ -789,6 +829,10 @@ fn read_message(r: &mut impl Read) -> ReadOutcome {
     if first[0] == b'{' {
         let mut line = vec![first[0]];
         let mut byte = [0u8; 1];
+        // #357：单帧上限。#328 只给 Content-Length 分支加了 `MAX_FRAME_BODY`，
+        // 而本分支原先无界增长 —— 客户端发一条**无终止符**的长行即可让长驻
+        // MCP 进程的堆无界增长（与 #328 修掉的 `Content-Length: 99999999999`
+        // 属同一类 DoS）。超限时无法定位帧边界 ⇒ Fatal。
         loop {
             match r.read(&mut byte) {
                 Ok(0) | Err(_) => break, // 末行可能无换行结尾
@@ -797,6 +841,11 @@ fn read_message(r: &mut impl Read) -> ReadOutcome {
                         break;
                     }
                     line.push(byte[0]);
+                    if line.len() > MAX_FRAME_BODY {
+                        return ReadOutcome::Fatal(format!(
+                            "NDJSON 行超过 {MAX_FRAME_BODY} 字节仍未遇到换行"
+                        ));
+                    }
                 }
             }
         }
@@ -834,9 +883,14 @@ fn read_message(r: &mut impl Read) -> ReadOutcome {
             break;
         }
     }
-    // 头部正常收尾但缺 Content-Length：帧边界（头部结束处）已确定，可继续读下一条。
+    // #357：缺 / 不可解析 Content-Length 必须判 **Fatal**，不能是 Malformed。
+    //
+    // 原注释称「头部正常收尾 ⇒ 帧边界已确定，可继续读下一条」—— 该推理是错的：
+    // 缺 Content-Length 恰恰说明**正文长度未知**，流位置并未确定（头部结束处是
+    // 正文的首字节）。按 Malformed 继续读，后续读取会把正文字节当头部解析，
+    // 产出更多垃圾帧。原实现的对比项 `len == 0` 已正确判 Fatal，两者口径应一致。
     let Some(len) = content_length else {
-        return ReadOutcome::Malformed("Content-Length 头缺失或不可解析".to_string());
+        return ReadOutcome::Fatal("Content-Length 头缺失或不可解析，无法定位正文边界".to_string());
     };
     // #328：越界长度**必须**判 Fatal——body 尚未消费，继续读会立刻错位。
     if len == 0 || len > MAX_FRAME_BODY {
@@ -1166,6 +1220,52 @@ mod tests {
     }
 
     // ========================================================================
+    // #357：参数类型必须校验（不得静默丢弃）
+    // ========================================================================
+
+    /// #357：`list_my_tasks({status: 123})` 此前**静默丢弃过滤器、返回整块看板
+    /// 且 `isError: false`**，而 Python 兜底侧正确报错 ⇒ 同一 agent 输入，
+    /// 正式路径给错数据、兜底路径给错误。
+    ///
+    /// **反向验证**：把 `get_opt` 改回 `and_then(as_str)` 时本用例失败。
+    #[test]
+    fn non_string_args_are_rejected() {
+        let conn = crate::db::open_db(std::path::Path::new(":memory:")).expect("内存库");
+        let mut args = serde_json::Map::new();
+        args.insert("status".into(), serde_json::json!(123));
+        let err = call_tool(&conn, "list_my_tasks", &args)
+            .expect_err("非字符串 status 必须报错而不是静默丢弃过滤器");
+        assert!(
+            err.contains("status") && err.contains("字符串"),
+            "错误应说明哪个参数、期望什么类型，实际: {err}"
+        );
+        assert!(err.contains("数字"), "错误应说明实际收到的类型: {err}");
+
+        // 必填参数同样：非字符串不能退化成「缺少参数」
+        let mut args = serde_json::Map::new();
+        args.insert("issue".into(), serde_json::json!(true));
+        let err = call_tool(&conn, "get_task_status", &args).expect_err("非字符串 issue 必须报错");
+        assert!(
+            err.contains("issue") && !err.contains("缺少"),
+            "应报类型错误而非「缺少参数」，实际: {err}"
+        );
+    }
+
+    /// #357 防回归：合法字符串参数仍正常工作（类型校验不得误伤）。
+    #[test]
+    fn string_args_still_accepted() {
+        let conn = crate::db::open_db(std::path::Path::new(":memory:")).expect("内存库");
+        let mut args = serde_json::Map::new();
+        args.insert("status".into(), serde_json::json!("todo"));
+        args.insert("ownership".into(), serde_json::json!("assigned"));
+        call_tool(&conn, "list_my_tasks", &args).expect("合法字符串参数必须被接受");
+
+        // 缺省（None）仍按「未传」处理，不报错
+        let empty = serde_json::Map::new();
+        call_tool(&conn, "list_my_tasks", &empty).expect("缺省参数必须仍可调用");
+    }
+
+    // ========================================================================
     // #328：stdio 分帧健壮性
     // ========================================================================
 
@@ -1212,6 +1312,65 @@ mod tests {
         match read_message(&mut cur) {
             ReadOutcome::Fatal(msg) => assert!(msg.contains("头部超过"), "{msg}"),
             _ => panic!("头部不终止必须判为 Fatal 而不是无界读取"),
+        }
+    }
+
+    /// #357：**缺 / 不可解析 `Content-Length` 必须判 `Fatal`**，不能是 `Malformed`。
+    ///
+    /// 缺 Content-Length 恰恰说明**正文长度未知**、流位置并未确定（头部结束处
+    /// 就是正文首字节）。若判 Malformed 让主循环 `continue`，后续读取会把
+    /// 正文字节当头部解析出更多垃圾帧 —— 这正是 `len == 0` 早已判 Fatal、
+    /// 而本分支却判 Malformed 的口径不一致之处。
+    ///
+    /// **反向验证**：把本分支改回 `Malformed` 时本用例失败。
+    #[test]
+    fn read_message_missing_content_length_is_fatal() {
+        for raw in [
+            // 头正常收尾但完全没有 Content-Length
+            &b"X-Other: 1\r\n\r\n"[..],
+            // Content-Length 值不可解析
+            &b"Content-Length: 12 34\r\n\r\n"[..],
+            // 空值
+            &b"Content-Length: \r\n\r\n"[..],
+        ] {
+            let mut cur = std::io::Cursor::new(raw.to_vec());
+            match read_message(&mut cur) {
+                ReadOutcome::Fatal(msg) => {
+                    assert!(msg.contains("Content-Length"), "应报告缺 CL: {msg}")
+                }
+                _ => panic!("缺/坏 Content-Length 必须判 Fatal（Malformed 会导致流错位）"),
+            }
+        }
+    }
+
+    /// #357：NDJSON 分支必须也有单帧上限——无终止符的长行会无界撑爆堆。
+    ///
+    /// 这是与 #328 的 `MAX_FRAME_BODY` 同类的 DoS，#328 只覆盖了 Content-Length 分支。
+    /// **反向验证**：删掉 NDJSON 分支的长度判断时本用例失败。
+    #[test]
+    fn read_message_caps_ndjson_line_size() {
+        // 一个永不换行的超长 '{' 开头行
+        let mut input = vec![b'{'];
+        input.extend(std::iter::repeat(b'a').take(MAX_FRAME_BODY + 32));
+        let mut cur = std::io::Cursor::new(input);
+        match read_message(&mut cur) {
+            ReadOutcome::Fatal(msg) => assert!(msg.contains("NDJSON"), "{msg}"),
+            _ => panic!("超长且无终止符的 NDJSON 行必须判 Fatal（否则堆无界增长）"),
+        }
+    }
+
+    /// #357 防回归：正常 NDJSON 行**不受**新增上限影响（上限须留足余量）。
+    #[test]
+    fn read_message_accepts_large_but_legal_ndjson() {
+        let body = format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"{}\"}}",
+            "p".repeat(64 * 1024)
+        );
+        let input = format!("{}\n", body).into_bytes();
+        let mut cur = std::io::Cursor::new(input);
+        match read_message(&mut cur) {
+            ReadOutcome::Msg(v, Framing::Ndjson) => assert_eq!(v["id"], 9),
+            _ => panic!("64 KiB 的正常 NDJSON 消息必须正常解析"),
         }
     }
 
