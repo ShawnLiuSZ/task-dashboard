@@ -1136,33 +1136,21 @@ impl GitHubClient {
         Ok(map)
     }
 
-    /// 拉取项目中全部 issue 条目的完整信息（title, state, labels, assignees 等），
-    /// 用于发现「项目中有但搜索源未覆盖」的 issue，合并进同步数据。
-    /// 返回 `(status_map, discovered_issues, item_ids)`。
-    pub fn fetch_project_issues(
-        &self,
-        project_id: &str,
-        org: &str,
-    ) -> Result<ProjectIssuesResult, String> {
-        let mut status_map: HashMap<String, String> = HashMap::new();
-        let mut issues: Vec<RawTask> = Vec::new();
-        // #215：issue_key -> project item id（写回用）。
-        let mut item_ids: HashMap<String, String> = HashMap::new();
-        let mut cursor: Option<String> = None;
-        for _ in 0..100 {
-            let after = match &cursor {
-                Some(c) => format!(r#", after:"{}""#, c),
-                None => String::new(),
-            };
-            let q = format!(
-                r#"query {{ node(id:"{pid}") {{ ... on ProjectV2 {{ items(first:50{after}) {{
+    /// #356：项目条目查询串（抽成纯函数，沿用 #327 `org_projects_query` 的做法，
+    /// 使「查询形状」可被单测锁定）。
+    ///
+    /// ⚠️ issue 分支里的 `updatedAt` **不可删**：漏选它会让 `updated_at` 恒为 0，
+    /// 仅经 Project 发现的 issue 卡片日期永久空白（该缺陷已真实发生过一次）。
+    fn project_items_query(project_id: &str, after: &str) -> String {
+        format!(
+            r#"query {{ node(id:"{pid}") {{ ... on ProjectV2 {{ items(first:50{after}) {{
                   pageInfo {{ hasNextPage endCursor }}
                   nodes {{
                     id
                     content {{
                       __typename
                       ... on Issue {{
-                        number title url state
+                        number title url state updatedAt
                         repository {{ name owner {{ login }} }}
                         assignees(first:10) {{ nodes {{ login }} }}
                         labels(first:20) {{ nodes {{ name }} }}
@@ -1181,9 +1169,38 @@ impl GitHubClient {
                     }}
                   }}
                 }} }} }} }}"#,
-                pid = project_id,
-                after = after,
-            );
+            pid = project_id,
+            after = after,
+        )
+    }
+
+    /// #356：读项目条目的 `updatedAt`（RFC3339）。
+    ///
+    /// 缺失或为 null 时返回空串（下游 `iso8601_to_secs` 转 0），与该文件既有的
+    /// 「字段缺失即回落」容错策略一致，不 panic。抽成纯函数以便单测。
+    fn project_item_updated_at(content: &serde_json::Value) -> String {
+        content["updatedAt"].as_str().unwrap_or("").to_string()
+    }
+
+    /// 拉取项目中全部 issue 条目的完整信息（title, state, labels, assignees 等），
+    /// 用于发现「项目中有但搜索源未覆盖」的 issue，合并进同步数据。
+    /// 返回 `(status_map, discovered_issues, item_ids)`。
+    pub fn fetch_project_issues(
+        &self,
+        project_id: &str,
+        org: &str,
+    ) -> Result<ProjectIssuesResult, String> {
+        let mut status_map: HashMap<String, String> = HashMap::new();
+        let mut issues: Vec<RawTask> = Vec::new();
+        // #215：issue_key -> project item id（写回用）。
+        let mut item_ids: HashMap<String, String> = HashMap::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..100 {
+            let after = match &cursor {
+                Some(c) => format!(r#", after:"{}""#, c),
+                None => String::new(),
+            };
+            let q = Self::project_items_query(project_id, &after);
             let resp = self.graphql(&q)?;
             let items = &resp["data"]["node"]["items"];
             let page_nodes = items["nodes"]
@@ -1263,7 +1280,9 @@ impl GitHubClient {
                     title,
                     url: html_url,
                     state,
-                    updated_at: String::new(),
+                    // #356：取 GraphQL 的 `updatedAt`（RFC3339）。缺失/为 null
+                    // 时回落空串 —— 与既有容错一致，且下游 iso8601_to_secs 会转 0。
+                    updated_at: Self::project_item_updated_at(content),
                     repo,
                     repo_owner: owner.to_string(),
                     assignees,
@@ -2120,6 +2139,66 @@ mod tests {
     }
 
     /// #215：写回 mutation 文本组装（纯函数，不碰网络）。
+    /// #356 防回归：项目条目查询**必须选取 `updatedAt`**。
+    ///
+    /// 缺陷现场：查询里没有该字段、而 `RawTask.updated_at` 又写死空串 ⇒ 仅经
+    /// Project 发现的 issue `updated_at` 恒为 0，卡片日期永久空白。
+    ///
+    /// **反向验证**：从查询串里删掉 `updatedAt` 时本例必然失败。
+    #[test]
+    fn project_items_query_selects_updated_at() {
+        let q = GitHubClient::project_items_query("PVT_1", "");
+        assert!(
+            q.contains("updatedAt"),
+            "issue 分支必须选取 updatedAt，否则 updated_at 恒为 0"
+        );
+        // updatedAt 必须落在 Issue 分支里（PullRequest 分支不需要）
+        let issue_part = q
+            .split("... on Issue")
+            .nth(1)
+            .and_then(|s| s.split("... on PullRequest").next())
+            .expect("应能切出 Issue 分支");
+        assert!(
+            issue_part.contains("updatedAt"),
+            "updatedAt 必须属于 Issue 分支"
+        );
+        // 分页游标仍正常注入（抽成纯函数后不能漏 after）
+        let page2 = GitHubClient::project_items_query("PVT_1", r#", after:"CUR""#);
+        assert!(page2.contains(r#", after:"CUR""#), "分页游标必须注入查询");
+    }
+
+    /// #356：`updatedAt` 缺失 / 为 null 时回落空串，不得 panic。
+    #[test]
+    fn project_item_updated_at_tolerates_missing_and_null() {
+        assert_eq!(
+            GitHubClient::project_item_updated_at(
+                &serde_json::json!({"updatedAt": "2026-09-20T10:00:00Z"})
+            ),
+            "2026-09-20T10:00:00Z"
+        );
+        // 缺失 / null / 非字符串 —— 一律空串（下游 iso8601_to_secs 转 0）
+        assert_eq!(
+            GitHubClient::project_item_updated_at(&serde_json::json!({})),
+            ""
+        );
+        assert_eq!(
+            GitHubClient::project_item_updated_at(&serde_json::json!({"updatedAt": null})),
+            ""
+        );
+        assert_eq!(
+            GitHubClient::project_item_updated_at(&serde_json::json!({"updatedAt": 12345})),
+            ""
+        );
+        // 落库侧：真实时间戳能被转成秒（不再是 0）
+        assert_eq!(
+            crate::common::iso8601_to_secs(&GitHubClient::project_item_updated_at(
+                &serde_json::json!({"updatedAt": "2026-09-20T10:00:00Z"})
+            )) > 0,
+            true,
+            "真实 updatedAt 必须能转成非 0 秒，否则卡片日期仍为空"
+        );
+    }
+
     #[test]
     fn project_status_mutation_shape() {
         let q = GitHubClient::project_status_mutation("P", "I", "F", "O");
