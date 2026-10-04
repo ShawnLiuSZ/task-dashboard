@@ -74,13 +74,35 @@
 | `about-window.test.ts` | 从 `about.json` 删 `allow-close`（#327 缺陷形态） | FAILED ✓ |
 | `notes-layout.test.ts` | 给面板加回行内 `style={{flex:'0 0 25%'}}`（#202 缺陷形态） | FAILED ✓ |
 
-**结论：6 处均为真正承重的断言，无同类失效。** 它们普遍具备三个良好特征，可作为后续新增静态断言的范式：
+**结论：6 处均为承重的断言**；审计过程中额外发现其中一条（#344 我自己写的）守卫失效并已修复。 它们普遍具备三个良好特征，可作为后续新增静态断言的范式：
 
 1. **剥离注释**后再匹配（`notes-layout.test.ts` / `styles.test.ts` / `about-window.test.ts`）—— 避免注释里提到的写法被命中；
 2. **「失去意义」守卫**（`lint-config.test.ts`）—— 先断言「确实读到了东西」，再断言内容；
 3. **双向相等**而非单向包含（`lint-config.test.ts` 比对真实导出集合与配置名单）。
 
 > 审计中曾出现一次误判：首次注入行内样式时正则未匹配到 `<aside className="notes-panel">`（我误按 `<div>` 匹配），导致「反向验证没失败」的假警报。修正选择器后如期失败。**这本身印证了此类验证必须确认注入真的生效** —— 否则会把「注入失败」误读成「断言失效」。
+
+### 审计发现 #367 的一处失效守卫（已修）
+
+审计 `panel-wiring.test.ts` 时发现，**#344 我自己写的那条守卫其实是失效的**：
+
+```ts
+const effect = escHookRaw.match(/.../)?.[0];
+expect(effect, '应能取到 useWindowEscLayer 里注册层的 effect').not.toBe('');
+```
+
+`?.[0]` 无匹配时是 **`undefined`**，而 `expect(undefined).not.toBe('')` **会通过**（`undefined !== ''`）⇒ 守卫恒真。
+
+实测确认：破坏 `useEscLayer` 里的注册层片段后，该用例**仍然 25 passed 全绿**。加 `?? ''` 兜底后，同一注入如实失败：
+
+```
+AssertionError: 应能取到 useWindowEscLayer 里注册层的 effect: expected '' not to be ''
+Tests  1 failed | 24 passed (25)
+```
+
+**同一文件里另外三处同类守卫都写对了**（`?? ''` 后接 `not.toBe('')`），只有这一处漏了。已全仓复查 `not.toBe('')` 守卫 —— 仅此一处是 `?.[0]` 无兜底，其余均为 `?? ''`。
+
+Rust 侧无同类问题：`String` 没有 `undefined` 语义，`Option<String>::unwrap_or_default()` 得到的就是空串，`assert!(!x.is_empty())` 行为确定。#367 的 `production.contains(&needle)` 守卫同样不存在静默通过。
 
 ## 相关链接
 
