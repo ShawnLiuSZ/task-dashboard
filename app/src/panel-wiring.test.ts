@@ -47,7 +47,11 @@ describe('Esc 分层接线（#329）', () => {
     // hook 侧：层注册与 window 监听都只在挂载时做一次（依赖恒为 []）
     expect(escHookRaw).toMatch(/export function useWindowEscLayer/);
     expect(escHookRaw).toMatch(/handler\.current = onEsc/);
-    const effect = escHookRaw.match(/const layer = registerEscLayer\(\);[\s\S]*?\}, \[\]\);/)?.[0];
+    // ⚠️ 必须用 `?? ''` 兜底，不能只写 `?.[0]`：无匹配时 `?.[0]` 是 `undefined`，
+    // 而 `expect(undefined).not.toBe('')` **会通过**（undefined !== ''）⇒ 守卫失效、
+    // 断言永不失败。下方已用「破坏注册层」的注入实测过该失效。
+    const effect =
+      escHookRaw.match(/const layer = registerEscLayer\(\);[\s\S]*?\}, \[\]\);/)?.[0] ?? '';
     expect(effect, '应能取到 useWindowEscLayer 里注册层的 effect').not.toBe('');
   });
 

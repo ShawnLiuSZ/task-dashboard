@@ -73,9 +73,16 @@
 
 已跑：`cargo clippy --all-targets -p taskboard -- -D warnings`（0 error，此前 5）、`cargo fmt --check`、`cargo test` 150 + 26、Python MCP 53、scripts 117（114 → +3）、`check-versions.py`、`check-mcp-columns.py`、`check-workflow-yaml.py`。
 
-## 遗留说明
+## 遗留说明（实测后修订）
 
-`--all-targets` 比 `--lib` 慢（会编译并 lint 测试目标）。CI 的 `rust-clippy` job 耗时因此上升，本次实测在可接受范围内；若后续成为瓶颈，可考虑加 `cargo clippy --all-targets --no-deps` 或拆分 job。
+`--all-targets` 确实比 `--lib` 多编译并 lint 测试目标。**但实测它并非瓶颈**：
+
+| run | 总耗时 | Rust Clippy job |
+|---|---|---|
+| `37034050182`（本批） | 1m19s | pass |
+| `37039217670`（本批后） | 1m24s | pass |
+
+整条 `quality-check` 流水线仍约 **1.5 分钟**，`rust-clippy` 与其余 job 并行执行。因此**不需要** `--no-deps` 或拆分 job —— 原先此处写的「若后续成为瓶颈可考虑…」属于未实测的推测，现按实测数据撤回。
 
 ## 相关链接
 
