@@ -6,6 +6,15 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 深度 code review 第三批：SessionsPanel 打开外链失败时界面静默（#370）**
+
+  - **#370 「任务会话」面板点击任务链接打不开时，界面毫无反应也不报错**：`void api.openInBrowser(task.url)` **只丢弃 Promise、不为 rejection 提供处理器**，于是 `invoke` 的 reject 变成未处理拒绝。而 `api.ts` 早有收口好的 `openExternal`（内部 `.catch(reportError)`），`SessionsPanel` 是全仓 6 个组件里**唯一**绕过它的漏网之处。
+  - **可达性非理论**：`open_in_browser` 有多条现实失败路径 —— `validate_browser_url` 仅放行 `https://github.com` 与 `*.ghe.com`（历史数据混入其他 host 即被拒）、以及 macOS `open` / Windows `cmd /C start` / Linux `xdg-open` 的 `spawn()` 失败（无默认浏览器、进程上限、沙箱限制）。
+  - **「只改了一半」模式的第四次实例**：`docs/bug-audit-2026-09.md` 的 **P0-#11 早已记录该模式**并建议「封装统一 `openExternal` 内部 catch，替换各处裸调用」；#329 完成封装并替换 5 处，**唯独漏了 SessionsPanel**。前三次：#339 `TaskCard` 未跟进 `taskIdentity`、#345 MCP 分帧只修 Rust 侧、#357 `get_req` 改了而 `get_opt` 仍静默丢弃。
+  - **修复**：一行（改走 `openExternal` + 补 import，`api` 仍被该文件其他 3 处使用故不产生 unused）。
+  - **测试**：把「封装 + 全部替换」变成可机械校验的不变量 —— ① 六个组件均不得裸调 `api.openInBrowser`；② **额外锁定 `openExternal` 自身必须带 `.catch`**（否则大家确实都在调 `openExternal`、第 ① 条仍全绿，收口形同虚设而无人察觉 —— #369 失效守卫教训的直接应用）。**反向验证两个方向各自独立**：改回裸调用 ⇒ ① FAILED；去掉 `.catch` ⇒ ② FAILED。`npm test` 221 → 223 passed。
+  - **无 schema / MCP 工具签名 / i18n key 变更**；`handleOpenTask` 签名不变。
+
 - **Unreleased — 静态守卫自诊断加固 + 全仓静态断言审计（#367）**
 
   - **#367 #355 修掉失效守卫后留下的新脆弱点**：`take_while("mod tests {")` 依赖「该文件只有唯一测试模块」这一**未被守护的前提** —— 测试模块改名/拆分后截断点消失，计数重新把测试代码算进去 ⇒ 静默退化成 #355 修复前的失效状态。修复：截断点改用 `#[cfg(test)]`（语义更准）并补「截断点之前确实读到生产代码」的守卫，范式取自 `lint-config.test.ts` 已有的「本条测试失去意义」用例。
