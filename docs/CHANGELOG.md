@@ -6,6 +6,14 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 深度 code review 第三批 · 续：看板列静默错序 / 静默退回 project 模式（#372）**
+
+  - **#372 聚合视图下列表加载失败只落 `console.warn`，看板静默降级**：`listProjectStatuses` 失败 ⇒ `projectStatuses` 为空 ⇒ `sortProjectStatusKeys` 退化为**字母序**；`listAccountColumns` 失败 ⇒ `accountColumns` 为空 ⇒ `resolveBoardView` 从 `'custom'` **整体退回 `'project'`** —— 用户看到列全变了却不知原因。**后者比 `bug-audit-2026-09` P2-#7 记录的更严重**（审计只记了第一处，漏了同文件 `:266` 的同形缺陷）。
+  - **修法**：改用 `reportError` 上抛到全局错误横幅 —— 仓库早在 `App.tsx` 就写下过这条经验（「避免无 UI 上下文的异步失败只落在 console 里造成点了没反应」），`openExternal`（#370）正是同源同解。**保留 #145 的隔离语义**（单账号失败仍返回空数组继续聚合，不因单账号失败而整块为空）。单账号视图本就调 `setError`、可见性正常，未改动。
+  - **测试**：新增 2 例，**反向验证两处各自独立**（各改回 `console.warn` 均 FAILED）。写断言时我先后踩了两次自己的坑 —— ① `[\s\S]*?` 跨到另一个 catch；② 固定长度 + 假定缩进而那个 catch 塞了 4 行注释。最终改为「定位调用 → 定位紧随的 `.catch(` → 限定其后窗口」，**不再依赖跨块匹配与缩进假设**。`npm test` 223 → 225 passed。
+  - **附：对 `bug-audit-2026-09.md` 的逐条复核结论** —— P0-#5（`branch`/`handoff` 未写入 `SCHEMA`）**已修**、P0-#6（`setBoardMode` 并发竞争）**已不成立**（那段代码已重构）、P0-#11 由 #370 修掉、P0-#13 测试覆盖不足**大幅改善**（前端 20 文件 225 例 / Rust 186 例 / Python 170 例）。该审计基于 2026-09 旧代码、部分条目已过期；按 `AGENTS.md §5.5`（历史记录不改）本次未动它，仅在此记录复核结论。
+  - **无 schema / MCP 工具签名 / i18n key 变更**。
+
 - **Unreleased — 深度 code review 第三批：SessionsPanel 打开外链失败时界面静默（#370）**
 
   - **#370 「任务会话」面板点击任务链接打不开时，界面毫无反应也不报错**：`void api.openInBrowser(task.url)` **只丢弃 Promise、不为 rejection 提供处理器**，于是 `invoke` 的 reject 变成未处理拒绝。而 `api.ts` 早有收口好的 `openExternal`（内部 `.catch(reportError)`），`SessionsPanel` 是全仓 6 个组件里**唯一**绕过它的漏网之处。

@@ -142,6 +142,48 @@ describe('AgentPanel 项目目录提交（#329）', () => {
   });
 });
 
+describe('聚合视图加载失败必须可见（#372）', () => {
+  // 「全部账号视图」下 `listProjectStatuses` / `listAccountColumns` 的单账号失败被
+  // 隔离成空数组（#145 有意为之），但此前**只落 console.warn** ⇒
+  //   · projectStatuses 为空 → `sortProjectStatusKeys` 退化为字母序（看板列静默错序）
+  //   · accountColumns 为空 → `resolveBoardView` 从 'custom' **退回 'project'**
+  //     （Board.tsx:91），即看板静默换了列模式
+  // 两条后果都是「用户看到界面变了却不知原因」，故必须经 reportError 上抛。
+  it('聚合视图不得用 console.warn 作为加载失败的唯一出口', () => {
+    // 注意：projectStatuses 与 accountColumns 的聚合分支在**两个不同函数**里，
+    // 各自有一个 `if (s.viewMode === 'all')` ⇒ 必须逐个匹配AllOf，不能只取第一个。
+    const blocks = [...appRaw.matchAll(/if \(s\.viewMode === 'all'\) \{([\s\S]*?)\n {8}\}/g)];
+    expect(blocks.length, '应能匹配到两个聚合分支（projectStatuses / accountColumns）').toBe(2);
+
+    for (const [, allView] of blocks) {
+      // 聚合分支内不得残留 console.warn 作为错误出口
+      expect(allView, '聚合分支不得用 console.warn 作为唯一错误出口').not.toMatch(/console\.warn/);
+    }
+
+    // 两处列表加载各自的 .catch 内都须有 reportError。
+    // 用「catch 开头 → 其后 800 字符内出现 reportError」限定归属，避免 `[\s\S]*?`
+    // 一路跨到另一个 catch（第一版正是这么写错的：段长限制写死成 `{0,600}` 且假定了
+    // 一个并不存在的缩进 —— 实际那个 catch 里塞了 4 行注释，长度超限）。
+    for (const fn of ['listProjectStatuses', 'listAccountColumns']) {
+      const at = appRaw.indexOf(`${fn}(a.id)`);
+      expect(at, `应能找到 ${fn} 调用`).toBeGreaterThan(-1);
+      const after = appRaw.slice(at, at + 1200);
+      const catchAt = after.indexOf('.catch(');
+      expect(catchAt, `${fn} 应带 .catch 隔离`).toBeGreaterThan(-1);
+      expect(
+        after.slice(catchAt, catchAt + 800),
+        `${fn} 加载失败必须经 reportError 上抛（不得只落 console）`,
+      ).toMatch(/reportError\(/);
+    }
+  });
+
+  it('单账号视图的失败已走 setError（可见），不得被改回 console-only', () => {
+    // 单账号路径本就调 setError，此断言防回退
+    expect(appRaw).toMatch(/加载项目状态选项失败[\s\S]*?setError\(/);
+    expect(appRaw).toMatch(/加载自定义列配置失败[\s\S]*?setError\(/);
+  });
+});
+
 describe('外链打开统一走 openExternal（#370）', () => {
   // `void api.openInBrowser(...)` 只丢弃 Promise、**不会**吞掉 rejection ⇒ 命令失败
   // （validate_browser_url 拒绝 / spawn 失败）时界面毫无反应也不报错。
