@@ -14,6 +14,7 @@ import sessionsRaw from './components/SessionsPanel.tsx?raw';
 import settingsRaw from './components/SettingsPanel.tsx?raw';
 import logsRaw from './components/SyncLogsPanel.tsx?raw';
 import escHookRaw from './utils/useEscLayer.ts?raw';
+import apiRaw_ from './api.ts?raw';
 import taskCardRaw from './components/TaskCard.tsx?raw';
 import { taskIdentity } from './utils/taskIdentity';
 
@@ -138,6 +139,34 @@ describe('AgentPanel 项目目录提交（#329）', () => {
   it('显式动作（安装 / 卸载 / 手动刷新）仍用实时值', () => {
     expect(agentRaw).toMatch(/await op\(hooksScope, hooksTarget\(\), agents\)/);
     expect(agentRaw).toMatch(/await refreshHooksStatus\(hooksTarget\(\)\)/);
+  });
+});
+
+describe('外链打开统一走 openExternal（#370）', () => {
+  // `void api.openInBrowser(...)` 只丢弃 Promise、**不会**吞掉 rejection ⇒ 命令失败
+  // （validate_browser_url 拒绝 / spawn 失败）时界面毫无反应也不报错。
+  // `openExternal` 内部 `.catch(reportError)`，是全仓唯一正确形态。
+  // #329 批量替换时漏了 SessionsPanel 一处，本组断言防它再次漏网。
+  const panels: [string, string][] = [
+    ['TaskCard', taskCardRaw],
+    ['DetailPanel', detailRaw],
+    ['AboutPanel', aboutRaw],
+    ['AccountsPanel', accountsRaw],
+    ['SessionsPanel', sessionsRaw],
+    ['App', appRaw],
+  ];
+
+  it('六个组件都不再直接裸调 api.openInBrowser（须走 openExternal）', () => {
+    for (const [name, raw] of panels) {
+      expect(raw, `${name} 不得裸调 api.openInBrowser`).not.toMatch(/api\.openInBrowser\s*\(/);
+    }
+  });
+
+  it('openExternal 自身必须带 .catch（否则收口形同虚设）', () => {
+    const apiRaw = apiRaw_;
+    expect(apiRaw).toMatch(
+      /export function openExternal\(url: string\): void \{[\s\S]*?api\.openInBrowser\(url\)\.catch\(reportError\)/,
+    );
   });
 });
 

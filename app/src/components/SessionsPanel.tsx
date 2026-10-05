@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api } from '../api';
+import { api, openExternal } from '../api';
 import ConfirmDialog from './ConfirmDialog';
 import { useT } from '../i18n';
 import type { Task } from '../types';
@@ -123,7 +123,11 @@ export default function SessionsPanel() {
   }, []);
 
   const handleOpenTask = useCallback((task: Task) => {
-    void api.openInBrowser(task.url);
+    // #370：走 openExternal（内部 `.catch(reportError)`）——`void api.openInBrowser`
+    // 只丢弃 Promise、不会吞掉 rejection ⇒ 命令失败时界面毫无反应也不报错。
+    // 本文件曾是与 #329 批量替换**唯一**的漏网之处（同 #339 TaskCard、#345 MCP 分帧
+    // 的「只改了一半」模式）。
+    openExternal(task.url);
   }, []);
 
   const handleClear = useCallback(
