@@ -201,7 +201,11 @@ function BoardApp() {
               .filter((a) => a.id)
               .map((a) =>
                 api.listProjectStatuses(a.id).catch((e) => {
-                  console.warn(`加载账号 @${a.login} 的项目状态失败:`, e);
+                  // #372：单账号失败仍要**隔离**（该账号列缺失不断整板，见 #145），
+                  // 但不能只落 console —— 那会让 `projectStatuses` 退化为空数组、
+                  // 看板列**静默改用字母序**，用户既看不到错误也不知为何顺序变了。
+                  // 改为经 reportError 上抛到全局错误横幅（与 openExternal 同源同解）。
+                  reportError(`加载账号 @${a.login} 的项目状态失败: ${e}`);
                   return [] as ProjectStatus[];
                 }),
               ),
@@ -259,7 +263,11 @@ function BoardApp() {
           const results = await Promise.all(
             accounts.map((a) =>
               api.listAccountColumns(a.id).catch((e) => {
-                console.warn(`加载账号 @${a.login} 的自定义列失败:`, e);
+                // #372：同 listProjectStatuses —— 单账号失败仍隔离（#145），但不能
+                // 只落 console。accountColumns 为空会让 `resolveBoardView` 从
+                // 'custom' **退回 'project'**（Board.tsx:91），即看板静默从「自定义列」
+                // 切成「项目列」，用户看到的是列全变了却不知原因。
+                reportError(`加载账号 @${a.login} 的自定义列失败: ${e}`);
                 return [] as AccountColumn[];
               }),
             ),
