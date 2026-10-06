@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api } from '../api';
+import { api, reportError } from '../api';
 import { useI18n, type LangMode } from '../i18n';
 import type { Account, AccountColumn, BoardMode, Project, Settings } from '../types';
 import { themeManager, type ThemeMode } from '../theme';
@@ -635,9 +635,19 @@ function AccountCard({
 }) {
   const [boardMode, setBoardMode] = useState<BoardMode>(account.boardMode ?? 'project');
 
+  // #374：这条写路径原先既无错误出口、也不回滚乐观更新 ⇒ 保存失败时界面仍显示
+  // 新选的模式（看起来成功），刷新后又跳回旧值，用户不知发生了什么。
+  // 同文件其他写路径（saveSettings / saveColumns）都有可见出口，只有这里漏了 ——
+  // 因为 AccountCard 没有自己的 err 状态（外层 SettingsPanel 的那个它拿不到）。
   const handleBoardModeChange = async (mode: BoardMode) => {
-    setBoardMode(mode);
-    await onBoardModeChange(mode);
+    const prev = account.boardMode ?? 'project';
+    setBoardMode(mode); // 乐观更新
+    try {
+      await onBoardModeChange(mode);
+    } catch (e) {
+      setBoardMode(prev); // 失败回滚，使 UI 与后端重新一致
+      reportError(String(e)); // 可见提示，不静默吞掉
+    }
   };
 
   if (!state) return null;

@@ -142,6 +142,34 @@ describe('AgentPanel 项目目录提交（#329）', () => {
   });
 });
 
+describe('写路径的乐观更新必须可回滚且有错误出口（#374）', () => {
+  // AccountCard 的 handleBoardModeChange 原先既无 try/catch、也不回滚乐观更新：
+  // 保存失败时 `<select>` 仍显示新值（看起来成功），刷新后跳回旧值。
+  // 同文件其他写路径（saveSettings / saveColumns）都有可见出口，只有它漏了 ——
+  // 因为 AccountCard 没有自己的 err 状态，外层 SettingsPanel 的那个它拿不到。
+  it('handleBoardModeChange 必须同时具备 try/catch、reportError 与回滚', () => {
+    const fn =
+      settingsRaw.match(
+        /const handleBoardModeChange = async \(mode: BoardMode\) => \{[\s\S]*?\n {2}\};/,
+      )?.[0] ?? '';
+    expect(fn, '应能取到 handleBoardModeChange 函数体').not.toBe('');
+    expect(fn).toMatch(/try \{/);
+    expect(fn).toMatch(/catch \(e\)/);
+    // 失败必须可见
+    expect(fn).toMatch(/reportError\(/);
+    // 失败必须回滚乐观更新（setBoardMode(prev)），否则 UI 与后端不一致
+    expect(fn).toMatch(/setBoardMode\(prev\)/);
+    // 成功路径仍是乐观更新
+    expect(fn).toMatch(/setBoardMode\(mode\)/);
+  });
+
+  it('AccountCard 自身持有错误出口时优先用它（若将来给 AccountCard 加 err 状态）', () => {
+    // 本断言只锁定「不得退回无出口」：函数体里既没有 reportError 也没有 setErr 就失败。
+    const fn = settingsRaw.match(/const handleBoardModeChange[\s\S]*?\n {2}\};/)?.[0] ?? '';
+    expect(fn).toMatch(/reportError\(|setErr\(/);
+  });
+});
+
 describe('聚合视图加载失败必须可见（#372）', () => {
   // 「全部账号视图」下 `listProjectStatuses` / `listAccountColumns` 的单账号失败被
   // 隔离成空数组（#145 有意为之），但此前**只落 console.warn** ⇒
