@@ -6,6 +6,15 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 深度 code review 第三批 · 续二：看板列模式乐观更新无回滚，UI 与后端分叉（#374）**
+
+  - **#374 切换「看板列展示方式」保存失败时无提示且不回滚**：`handleBoardModeChange` 先 `setBoardMode(mode)` 乐观更新、再 `await onBoardModeChange(mode)`（最终是 `api.setAccountBoardMode`）却**无 `try/catch`** ⇒ 失败时 `<select>` 仍显示新值（看起来成功），刷新后跳回旧值，用户不知发生了什么。
+  - **比 #372 更重**：#372 是「界面静默降级」，本项是「**界面显示的状态与后端实际不一致**」。
+  - **根因是范式没被套用**：`AccountCard` 自身没有错误状态（外层 `SettingsPanel` 的 `err` 它取不到），而同文件其他写路径都有出口 —— `saveSettings` 用 `catch → setErr`，自定义列操作用 `state.msg`。**只有这条漏了**。
+  - **修复**：补 `catch`，失败时 **`setBoardMode(prev)` 回滚** + `reportError` 上抛。成功路径行为不变。
+  - **测试**：2 例，逐项锁定「`try/catch` + `reportError` + 回滚」三者齐全；第二例留余地（将来改用 `setErr` 也应接受）。**反向验证特意覆盖「加了 `try/catch` 但没回滚」的半修状态** —— 这是最常见的假修复，断言必须能识别它（实测如期 FAILED）。`npm test` 225 → 227 passed。
+  - **无 schema / MCP 工具签名 / i18n key 变更**。
+
 - **Unreleased — 深度 code review 第三批 · 续：看板列静默错序 / 静默退回 project 模式（#372）**
 
   - **#372 聚合视图下列表加载失败只落 `console.warn`，看板静默降级**：`listProjectStatuses` 失败 ⇒ `projectStatuses` 为空 ⇒ `sortProjectStatusKeys` 退化为**字母序**；`listAccountColumns` 失败 ⇒ `accountColumns` 为空 ⇒ `resolveBoardView` 从 `'custom'` **整体退回 `'project'`** —— 用户看到列全变了却不知原因。**后者比 `bug-audit-2026-09` P2-#7 记录的更严重**（审计只记了第一处，漏了同文件 `:266` 的同形缺陷）。
