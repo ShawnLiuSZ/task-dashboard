@@ -73,6 +73,49 @@ describe('deviceStateOf', () => {
     expect(isNewlyInstalled('codex', null)).toBe(false);
   });
 
+  /**
+   * #399：`deviceStateOf` 的 `!info.present` 守卫此前**永远走不到**。
+   *
+   * 根因在测试辅助函数：`host(agent, kind)` 把 `present` 写成 `kind !== 'none'`，
+   * 于是 `present === false` **必然蕴含** `kind === 'none'` ⇒ 删掉守卫里的
+   * `!info.present` 后行为完全一致 ⇒ mutation **存活**。
+   *
+   * 但 `AgentHostInfo` 里 `present` 与 `kind` 是**两个独立字段**（`types.ts:315-316`），
+   * 类型系统**不强制**二者一致。也就是说「`present === false` 但 `kind` 非 none」
+   * 是**类型允许的输入**，而守卫存在的意义正是处理它 ——
+   * 否则扫描端一旦报出这种组合，界面会把一个**并未安装**的 agent 显示成
+   * 「已安装 cli / app / config-only」。
+   *
+   * 本例**显式构造该组合**，把守卫锁住。
+   */
+  it('present=false 但 kind 非 none 时必须判 none（两个字段独立，不得互相推导）', () => {
+    // 手工构造：绕开 host() 辅助函数，刻意让 present 与 kind 不一致
+    const inconsistent: AgentHostInfo = {
+      agent: 'claude-code',
+      present: false,
+      kind: 'cli',
+      binary: '/usr/local/bin/claude',
+      configDir: null,
+      app: null,
+    };
+    const scan: AgentScanResult = {
+      agents: [inconsistent],
+      newlyInstalled: [],
+      newlyRemoved: [],
+      previousScannedAt: null,
+      scannedAt: 1767225600,
+      hasPrevious: true,
+    };
+    // 反向契约：present 为权威，kind 只是「最强信号」提示
+    expect(
+      deviceStateOf('claude-code', scan),
+      'present=false 是权威判据，不得因为 kind 非 none 就报成已安装',
+    ).toBe('none');
+    // 前置不变式：辅助函数 host() 本身不得被「修正」成不相关的行为
+    expect(host('x', 'cli').present, 'host() 辅助函数现有语义不应被本例改动').toBe(true);
+    expect(host('x', 'none').present).toBe(false);
+  });
+
   it('deviceDetail 串起命中的路径，缺路径时为空串', () => {
     const s = scan({
       agents: [
