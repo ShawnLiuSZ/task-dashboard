@@ -445,6 +445,67 @@ mod tests {
         }
     }
 
+    /// #387：与 Python `server.py::_iso_to_secs` 的**共享对照表**。
+    ///
+    /// 读 `mcp_server/fixtures/iso_parity.json` —— **两侧读同一份文件**，
+    /// 避免各自维护副本而悄悄漂移。#155（`tasks.key` → `issue_key` 只改一侧）
+    /// 已证明双实现副本必然漂移，且 CI 兜不住（`server.py` 不参与 Tauri 构建）。
+    #[test]
+    fn iso8601_to_secs_matches_python_on_agreed_domain() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../mcp_server/fixtures/iso_parity.json"
+        );
+        let raw = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("读不到共享对照表 {path}: {e}"));
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("对照表应为合法 JSON");
+        let rows = v["must_agree"].as_array().expect("须有 must_agree 数组");
+        assert!(
+            rows.len() >= 20,
+            "对照表过小（{} 行），可能被误删",
+            rows.len()
+        );
+        for row in rows {
+            let input = row["input"].as_str().expect("input 应为字符串");
+            let expect = row["secs"].as_i64().expect("secs 应为整数");
+            assert_eq!(
+                iso8601_to_secs(input),
+                expect,
+                "{input:?}：两侧应一致（Python 侧读同一张表）"
+            );
+        }
+    }
+
+    /// #387：锁定与 Python 的 **4 处已知分歧**，避免有人只改一侧而不自知。
+    ///
+    /// 四处都是 Rust 侧更宽松（把非法日期算成某个值）而 Python 更严格（返回 0），
+    /// 或 Rust 更严格（`sec>59` 归 0）而 Python 依赖 C 库进位。
+    /// `sec=60` 一条尤其要注意：**Python 的结果取决于底层 C 库**（glibc 接受闰秒，
+    /// musl / Windows 未必），故不可把该值当作跨平台契约。
+    #[test]
+    fn iso8601_to_secs_known_divergence_locked() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../mcp_server/fixtures/iso_parity.json"
+        );
+        let raw = std::fs::read_to_string(path).expect("读不到共享对照表");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("合法 JSON");
+        let rows = v["known_divergence"]
+            .as_array()
+            .expect("须有 known_divergence 数组");
+        assert!(!rows.is_empty(), "已知分歧表不应为空");
+        for row in rows {
+            let input = row["input"].as_str().expect("input 应为字符串");
+            let expect = row["rust"].as_i64().expect("rust 字段应为整数");
+            assert_eq!(
+                iso8601_to_secs(input),
+                expect,
+                "{input:?}：Rust 侧行为已变更，须确认是有意为之（分歧原因：{}）",
+                row["note"].as_str().unwrap_or("")
+            );
+        }
+    }
+
     #[test]
     fn normalize_status_covers_four_states_and_chinese() {
         for s in ["todo", "doing", "processed", "done"] {

@@ -371,14 +371,27 @@ def _table_columns(table):
 
 
 def _iso_to_secs(s):
-    """RFC3339 'YYYY-MM-DDTHH:MM:SSZ' → Unix 秒；失败返回 0（对齐 Rust `iso8601_to_secs`）。"""
+    """RFC3339 'YYYY-MM-DDTHH:MM:SSZ' → Unix 秒；失败返回 0（对齐 Rust `iso8601_to_secs`）。
+
+    #386：原先直接返回 `calendar.timegm(...)`，对 1970 前的输入会得到**负数**
+    （如 `1969-01-01` → `-31536000`），而 Rust 侧有显式的 `y < 1970` 守卫返回 `0`。
+    同一 issue 被两条路径先后写入时，`created_at` / `updated_at` 会取决于谁最后动手 ——
+    下游「相对时间」展示遇到负值还会显示成荒谬文案。负值统一折成 `0`（即「无时间」）。
+
+    两侧其余分歧见 KB 文档 `docs/issue-387-iso-parity-two-implementations.md`：
+    Python 的 `strptime` 校验逐月天数（`2024-02-30` → 0）且要求字段零填充
+    （`2024-1-01` → 0），Rust 两处都更宽松。**Python 一侧更严格、且严格方向都是
+    「无时间」= 0**，属失败关闭，故保持现状并在两侧各加对照测试锁定。
+    """
     s = (s or "").strip()
     if len(s) < 19:
         return 0
     try:
-        return calendar.timegm(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S"))
+        secs = calendar.timegm(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S"))
     except ValueError:
         return 0
+    # Rust `iso8601_to_secs` 对 `y < 1970` 返回 0；此处对齐，避免写入负时间戳。
+    return secs if secs >= 0 else 0
 
 
 def _classify(assignees, login):
