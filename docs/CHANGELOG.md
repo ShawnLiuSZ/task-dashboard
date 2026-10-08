@@ -6,7 +6,7 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **断言强度审计续篇：`match_close_keyword` 手写扫描器的后词边界与文本末尾（#413）**
+- **v0.6.6（2026-10-08）— 断言强度审计续篇：`match_close_keyword` 手写扫描器的后词边界与文本末尾（#413）**
 
   - 审 `parse_issue_refs` 的核心 —— 逐字节走 `text.as_bytes()` 的**手写扫描器**，从 **PR 正文**提取关闭关键词。实测 7 个变异**2 个真实缺口存活**：①**后词边界检查被删** ⇒ `fixedX` / `closed_foo` 被当成关闭标记（可能**误关闭**无关 issue）；②**文本末尾 `return Some(end)` 改成 `None`** ⇒ 关键词位于正文最末时匹配不到（末行就是「Fixed」是极常见形态）。
   - 💡 **等价变异判别清单第二次命中**：中文分支 `==` 改成 `eq_ignore_ascii_case` **存活**但等价（只影响 ASCII），**正确结论是「存活但不计数」**。
@@ -14,7 +14,7 @@
   - 修复为 1 例三层，含反向契约。**lib 176 → 177**，clippy 0 error，fmt 干净。
   - 详见 [`issue-413-close-keyword-boundary.md`](./issue-413-close-keyword-boundary.md)
 
-- **断言强度审计续篇：#215 写回路径的 mutation 形状断言过弱（#411）**
+- **v0.6.6（2026-10-08）— 断言强度审计续篇：#215 写回路径的 mutation 形状断言过弱（#411）**
 
   - 审 `project_status_mutation` —— **TaskBoard 唯一向 GitHub 写入**的地方。现有断言是 `contains("updateProjectV2ItemFieldValue")`，改成 `...FieldValues`（拼写错误）**断言仍通过**。
   - 实测 8 个变异**5 个存活**：`mutation`→`query`、响应选集丢弃、`input:` 包装丢弃、mutation 名字拼错。**严重性如实界定为低于 #409** —— 这 5 处在运行期**都是响亮失败**（GitHub 直接拒绝；且 `set_project_item_status` 明确校验 `projectV2Item.id`，为空即报「GitHub 未返回确认」），**不存在静默数据损坏**。
@@ -24,7 +24,7 @@
   - ⚠️ **过程中一次事故**：为验证「还原是否干净」我跑了 `git checkout <file>`，**把自己的 68 行测试删掉了**（靠事先留的备份恢复）。**`git status`/`git diff --stat` 安全，`git checkout <file>` 破坏性** —— 它不区分「变异残留」与「我自己的改动」。
   - 详见 [`issue-411-write-path-mutation-shape.md`](./issue-411-write-path-mutation-shape.md)
 
-- **断言强度审计续篇：Project 条目查询的字段选集几乎全无守护（#409）**
+- **v0.6.6（2026-10-08）— 断言强度审计续篇：Project 条目查询的字段选集几乎全无守护（#409）**
 
   - 审 `project_items_query`（#356 抽成纯函数）。**关键背景是这个函数已被同类缺陷咬过一次** —— 注释写着「⚠️ issue 分支的 `updatedAt` **不可删**…**该缺陷已真实发生过一次**」，但 #356 当时**只补了 `updatedAt` 一条断言**，其余字段选集全部无人守护。
   - 实测 **9 个变异全部存活**：漏 `pageInfo`/`hasNextPage`/`endCursor` ⇒ **分页在第 50 条停住、之后的 issue 永不出现**；`items/fieldValues/assignees/labels(first:N)` 改成 `first:0` ⇒ 各自功能静默失效；`comments{totalCount:0}`、`author{login:""}` ⇒ 评论数恒 0、作者列空白。**全部不报语法错** —— `first:0` 与 `totalCount: 0` 都是**合法 GraphQL**，请求成功、字段为空、客户端回落默认值，**无任何错误信号**。
@@ -32,7 +32,7 @@
   - ⚠️ **纪律 2 补上「位置也要断言」**：`s.replace(old, new, 1)` 命中的是**第一处**同名片段 —— `pageInfo {{...}}` 在 1083 行与 1154 行各出现一次、**前者属于另一个函数** ⇒ 目标函数毫发无损 ⇒ 5 个变异「存活」。改为 `s.index(old, FUNC)` 后 9/9 全捕获。这比纪律 1「注入须确认生效」**更隐蔽**：注入确实生效了，只是生效在错误位置。**本系列已三次犯「变异落到错误位置」**。
   - 详见 [`issue-409-project-items-fields.md`](./issue-409-project-items-fields.md)
 
-- **断言强度审计续篇：GraphQL 链接查询的顶层字段选集无人断言（#407）**
+- **v0.6.6（2026-10-08）— 断言强度审计续篇：GraphQL 链接查询的顶层字段选集无人断言（#407）**
 
   - 选 `build_links_query` / `repo_level_failure` 是因为 #278 抽它们时注释就写明「GraphQL 语法错只在真实请求时才暴露，**代价高**」。14 个变异：**10 捕获**（含 #342 缺陷本体与它注释里警告的「错用顶层 data 判据」）、**1 等价变异**（`is_null() || !is_object()` ≡ `!is_object()`，因 `Null.is_object()` 恒 `false`）、**2 真实存活**。
   - **根因：只断言了参数、没断言字段选集** —— 原有断言只有 `q.contains("a0: issue(number: 278)")`，那是 issue 的**参数**，从未断言节点**选了什么字段**。`parent` 与 `subIssues` **内部**的 `number title url` 都有断言，唯独**顶层**漏了 —— 而顶层恰是 `parse_links_from_graphql` **建键的依据**。
@@ -40,7 +40,7 @@
   - 修复用**前缀断言**（`starts_with("number title url parent")`）而非解析嵌套花括号 —— 第一版 `split_once("}")` 把 `parent { ... }` 的嵌套内容一起吃进来了。本仓无 GraphQL 解析器且 §2.5 不引入新依赖，故只校验前缀顺序。**反向验证 6/6**；lib 174 全绿，clippy 0 error，fmt 干净。
   - 详见 [`issue-407-link-fragment-fields.md`](./issue-407-link-fragment-fields.md)
 
-- **断言强度审计续篇：`Board.tsx` 列顺序零覆盖，回落分支 `orderMap` 是死代码（#405）**
+- **v0.6.6（2026-10-08）— 断言强度审计续篇：`Board.tsx` 列顺序零覆盖，回落分支 `orderMap` 是死代码（#405）**
 
   - 选它是因为 `projectKeys` 决定**看板列顺序**、且其回落路径正是 #372 的「看板列静默错序」点。实测 5 个变异**全部存活**，两个原因都需记录：①测试只传 **1 个** status 且 `tasks={[]}`，没有「两列以上 + 需重排」的输入；②**更根本** —— 全仓唯一调用点 `Board.tsx:145` **不传第二个参数** `projectStatuses`，而 `orderMap` 分支**只在传了该参数时可达**，主路径压根不经过这个函数 ⇒ **对 `orderIndex` 的 4 个变异天然无效**。
   - ⚠️ **「签名承诺了、调用点用不上」**：`sortProjectStatusKeys` 承诺可按 `orderIndex` 排序，但该能力**实际不可用**。可能有意备用、也可能重构残留 —— **属产品判断，本次不改代码**，KB 给出两个选项（保留则注释写明备用路径 / 清理则删死分支，回落行为不变）。
@@ -48,7 +48,7 @@
   - 💡 **补测试 → 再 mutation → 发现新缺口，两次迭代才收敛**：补完 3 例后重验发现**两个我自己也没覆盖的存活变异**（主路径漏 `done` 列、回落不过滤空列）⇒ 又补 2 例。**断言写完不等于有效，仍要用 mutation 验收新测试本身**。另踩一坑：合成列列头走 **i18n**（`已完成` / `未标注`）而非内部 key，第一版按 `/done/i` 匹配失败，被断言消息里的实际列序点出来才发现。
   - 详见 [`issue-405-board-column-order-coverage.md`](./issue-405-board-column-order-coverage.md)
 
-- **断言强度审计续篇：悬空项收尾 —— legacy 判据可证明永不决定（#404，无代码变更）**
+- **v0.6.6（2026-10-08）— 断言强度审计续篇：悬空项收尾 —— legacy 判据可证明永不决定（#404，无代码变更）**
 
   - #402 标注了「未能构造的窄场景」，本 issue 收尾。**探针迭代 4 次**：①手工造表 → `open_db` 失败；②从真实库改名 `issue_key` → **探针无效**（不是真正 legacy 布局）；③补 6 列但漏建 1 个索引名；④补齐 6 列 + **8 个索引名全建**（已是能构造的最窄状态）⇒ **两侧仍相同**。此时正确结论不是「守卫无用」，而是**转向可构造性分析**。
   - **决定性结构事实**：`open_db` 里 `schema_is_current` 在 **427 行**求值、`execute_batch(SCHEMA)` 在 **438 行** —— **探测发生在建表之前**；而 `SCHEMA` 的 `tasks` 是现代布局、**没有 `key` 列**。故要让它成为决定性因素需「全现代结构 + 遗留 `key`」，而 `tasks` 拿到现代结构只有 `SCHEMA` 与 `migrate_tasks_v2_rebuild` 两条途径，**两者都不创建 `key`** ⇒ **对任何迁移流程可达的状态，它都不是决定性因素**。
@@ -56,7 +56,7 @@
   - 💡 **方法论真正的产出：等价变异有强弱之分**。**弱等价**（「试了几个状态都没差异」）**不足以下结论**；**强等价**（代码路径分析 + **可达性论证**）才可下结论。并沉淀**存活变异完整排查路径**：①变异方向对吗 ②能构造出差异状态吗 ③有第二个等价守卫吗 ④该状态可达吗 —— 四步全过才判定等价。**连续 N 次换构造仍无差异时，别再换构造 —— 该问「这个状态可达吗？」**
   - 详见 [`issue-404-schema-is-current-legacy-undecidable.md`](./issue-404-schema-is-current-legacy-undecidable.md)
 
-- **断言强度审计续篇：悬空项落实 —— `schema_is_current` 的 legacy 判据是冗余守卫（#402，无代码变更）**
+- **v0.6.6（2026-10-08）— 断言强度审计续篇：悬空项落实 —— `schema_is_current` 的 legacy 判据是冗余守卫（#402，无代码变更）**
 
   - #400 审计时把变异 ⑤ 标注为「推测未实测」。**推测必须落实** —— 留着不验证就是给审计留一个未验证的断言。
   - **我原先的推测是错的**：`REQUIRED_COLUMNS` 实际**不含** `issue_key`。但用 `legacy_tasks_db` 的真实 DDL 造库探针实测后，结论是**变异为等价变异** —— `missing_columns` 对真实 pre-#155 表必然非空 ⇒ **同样**强制 `needs_migration = true`；且 `run_migrations` 里**独立地**再检查一次 `tasks_uses_legacy_key`。**同一条件被检查两次，删掉一次不改变行为** —— 冗余本身是好事（纵深防御），mutation 存活正是它的表现。
@@ -65,7 +65,7 @@
   - **无代码变更**，方法论文档的等价变异清单已补该条。
   - 详见 [`issue-402-schema-is-current-legacy-check-redundant.md`](./issue-402-schema-is-current-legacy-check-redundant.md)
 
-- **断言强度审计续篇：`agent-groups` 测试辅助函数耦合字段（新盲区类型 E）（#400）**
+- **v0.6.6（2026-10-08）— 断言强度审计续篇：`agent-groups` 测试辅助函数耦合字段（新盲区类型 E）（#400）**
 
   - 审计 14 个变异，**13 个捕获良好**（`groupOf` 全部 6 分支、`newlyRemoved` 优先级、`summarize` 三项、`GROUP_ORDER` 顺序、`deviceDetail` 拼接顺序）。**唯一存活的暴露了一个测试设计缺陷**。
   - 辅助函数 `host(agent, kind)` 写成 `present: kind !== 'none'`，于是 `present === false` **必然蕴含** `kind === 'none'` ⇒ 删掉 `deviceStateOf` 的 `!info.present` 守卫后行为完全一致 ⇒ **mutation 存活**。但 `types.ts` 里二者是**独立字段、类型系统不强制一致**，该组合是**类型允许的输入**，而守卫正是为处理它而存在（否则界面会把**并未安装**的 agent 显示成「已安装」）。**契约在代码里不在类型里，而测试辅助函数替生产代码补上了这个不变量。**
@@ -75,7 +75,7 @@
   - 方法论文档已同步扩为**五类盲区**。
   - 详见 [`issue-400-agent-groups-helper-coupling.md`](./issue-400-agent-groups-helper-coupling.md)
 
-- **断言强度审计续篇：`theme.ts` 模块加载期逻辑结构上不可测（#399）**
+- **v0.6.6（2026-10-08）— 断言强度审计续篇：`theme.ts` 模块加载期逻辑结构上不可测（#399）**
 
   - 按方法论文档流程续审，选 `theme.ts` 的理由是**缺陷史** —— #343 在这里找到过真实 bug。审计 8 个目标，**#343 / #329 本体均被捕获**（回归良好），但发现一处结构性缺口。
   - **问题**：`theme.test.ts` 顶层 `import './theme'` 让**模块体在 `beforeEach` 的 `stubEnv()` 之前执行一次** ⇒ `window` / `localStorage` 不存在 ⇒ 模块尾部的 `applyTheme(storedTheme)`（防 FOUC）与 `if (storedTheme === 'auto') bindSystemThemeListener()`（首屏跟随系统）被 `try/catch` **静默吞掉**。
@@ -86,7 +86,7 @@
   - **方法论定位**：纪律 4「信号覆盖被测对象」的**新形态** —— #384 是「过滤条件不含用例名」，本项是「**模块根本没在测试环境里跑**」。共同点：**信号（测试通过）覆盖了对象，但没覆盖对象在该环境下的实际行为**；检测手段同为纪律 1 的「删掉整段看是否全绿」。
   - 详见 [`issue-399-theme-moduleload-untestable.md`](./issue-399-theme-moduleload-untestable.md)
 
-- **断言强度审计方法论沉淀（11 项审计的总结）**
+- **v0.6.6（2026-10-08）— 断言强度审计方法论沉淀（11 项审计的总结）**
 
   - 新增 [`methodology-assertion-strength-audit.md`](./methodology-assertion-strength-audit.md)，并在 **AGENTS.md 新增 §5.6** 作为评估断言强度时的强制入口。
   - **核心结论：断言强度靠读代码判断极易出错** —— #376 的表驱动用例读起来完全合理，只有 mutation 才暴露它漏守 8 个字段。
@@ -94,7 +94,7 @@
   - **11 项里只有 3 项是真实的代码缺陷**（#376 / #384 / #388），另有 **3 项是守卫自身有盲区**（#390 / #392 / #394）、**5 项仅缺守护**（#378 / #380 / #382 / #386 / #396）⇒ **测试的主要作用不是抓 bug，是把隐含契约显式化**。
   - 同时记录**我自己犯过的十余次「测量手段本身出错」** —— 方法的失效方式比方法本身更值得沉淀；并显式声明该文档是草稿而非圣经，**若与实践不符以实践为准并修正文档**。
 
-- **Unreleased — 断言强度审计（十一）：`db.rs` 首次审计 —— #340 指纹保护无测试（#396）**
+- **v0.6.6（2026-10-08）— 断言强度审计（十一）：`db.rs` 首次审计 —— #340 指纹保护无测试（#396）**
 
   - `db.rs` 是本仓**唯一「最坏事故类别 + 零审计」的组合** —— #340 是**永久数据丢失**（`tasks` 被 DROP、`tasks_new` 保有全量数据却打不开库、版本号盖到最新、迁移此后再不重跑）。审计 8 个目标，**最关键的判据只被守住一半**。
   - **发现**：`open_db` 里逐字写着「⚠️ 必须确认 tasks_new **确实是 tasks 布局**才 RENAME，否则 SCHEMA 的 `CREATE INDEX ... ON tasks(ownership)` 会因缺列而整个 batch 失败 —— 那比『看板为空但能打开』更糟（**库直接打不开**）」，**但这条保护没有任何测试**。已有用例只覆盖**正向**（真实 tasks 布局 ⇒ 应恢复），**反向情形（`tasks_new` 存在但并非 tasks 布局）完全没测**。
@@ -106,7 +106,7 @@
   - 另记 1 个存活但**不是缺陷**的等价变异：去掉 `table_exists(tasks_new)` 判据 —— 全新库上两表都不存在，而 `table_has_column` 对不存在的表返回 `false`，条件仍为假。
   - 详见 [`issue-396-tasks-new-fingerprint-untested.md`](./issue-396-tasks-new-fingerprint-untested.md)
 
-- **Unreleased — 断言强度审计（十）：CSS 静态断言 helper 只认精确选择器（#394）**
+- **v0.6.6（2026-10-08）— 断言强度审计（十）：CSS 静态断言 helper 只认精确选择器（#394）**
 
   - 审 `notes-layout.test.ts` 与 `styles.test.ts`（两者用 `?raw` 读 `styles.css` 做静态断言，因 vitest 跑在 node 环境无 DOM/布局引擎、§2.5 不引入 jsdom）。**同一个 `decls()` helper 在两个文件里各写了一份**（30 + 25 = **55 个守卫**受影响），且只匹配精确选择器字面量。
   - **盲区 1（最讽刺）**：锚点 `(?:^|[},])` **不含 `{`** ⇒ `@media` 内规则的 selector 前驱是 `{` ⇒ **完全不可见**；而 **#259 的缺陷本体正是「窄屏四列被压成 ~18px 竖条」** —— 要防的问题所在的空间恰好是守卫的盲区。
@@ -116,7 +116,7 @@
   - **归纳出更一般的规律**（本系列第 3 例，成因各不相同）：#390 枚举只手写 6 个组件、#392 正则只匹配一种写法、**#394 解析只认一种语法形态** ⇒ **断言的实现形式（枚举 / 字面量 / 语法子集）必须覆盖问题出现的全部语法形式**。
   - 详见 [`issue-394-css-decls-selector-shape.md`](./issue-394-css-decls-selector-shape.md)
 
-- **Unreleased — 断言强度审计（九）：#344 Esc 依赖守卫正则过窄（#392）**
+- **v0.6.6（2026-10-08）— 断言强度审计（九）：#344 Esc 依赖守卫正则过窄（#392）**
 
   - `#390` 修好 `panel-wiring.test.ts` 的 openExternal **枚举**盲区后，本项是该文件的第二类盲区 —— **正则过窄**。
   - 守卫原文 `not.toMatch(/\}, \[on(Close|Cancel)\]\)/)` **只匹配依赖数组恰好等于 `[onClose]` 的形态**。而 #344 要防的是「**不稳定的回调依赖导致 Esc 层整体重排**」这**一类**问题（面板压过子层 ⇒ 一次 Esc 跳过取消直接关面板），不是「恰好等于 `[onClose]`」这一个写法。
@@ -127,7 +127,7 @@
   - **与 #390 根因同源**：守卫覆盖范围窄于它要防的问题域。两者印证 —— **测试断言的措辞形式（枚举 / 相等 / 正则）必须匹配它要防的问题的粒度**，否则会在同一问题的其他写法前静默失效。
   - 详见 [`issue-392-esc-deps-regex-too-narrow.md`](./issue-392-esc-deps-regex-too-narrow.md)
 
-- **Unreleased — 断言强度审计（八）：前端组件测试 —— openExternal 守卫的枚举盲区（#390）**
+- **v0.6.6（2026-10-08）— 断言强度审计（八）：前端组件测试 —— openExternal 守卫的枚举盲区（#390）**
 
   - **结构性事实**：3 个组件测试文件全部用 `renderToStaticMarkup`（19 处），而服务端渲染**完全丢弃事件处理器**，且全仓**零交互模拟** ⇒ **任何组件测试都不可能抓到事件绑定缺陷**。在 §2.5 不引入 jsdom 的约束下，`panel-wiring.test.ts` 的静态正则守卫是唯一防线。
   - **但该守卫只遍历手写的 6 项枚举**：该文件已 import 12 个组件的 `?raw`，清单只有 6 个（`components/` 下共 **16 个** `.tsx`）。实测往 `AgentPanel` / `SettingsPanel` 各注入一处 `api.openInBrowser(` ⇒ **panel-wiring 全绿**；清单内的 `SessionsPanel` 注入才失败。
@@ -139,7 +139,7 @@
   - **如实记录遗留局限**：`renderToStaticMarkup` 使组件测试**无法验证事件绑定**（`onClick` 绑错函数、回调内部逻辑错误当前无任何测试能发现），修它需引入 jsdom 违反 §2.5，应作独立提案评估。本 issue 只把「静态可查」那部分的覆盖从 6 个扩到 16 个 + `App.tsx`。
   - 详见 [`issue-390-openbrowser-guard-enumeration.md`](./issue-390-openbrowser-guard-enumeration.md)
 
-- **Unreleased — 断言强度审计（七）：双实现一致性 —— 日期转换两侧 5 处分歧（#388）**
+- **v0.6.6（2026-10-08）— 断言强度审计（七）：双实现一致性 —— 日期转换两侧 5 处分歧（#388）**
 
   - **`server.py::_iso_to_secs` 与 Rust `iso8601_to_secs` 是两份完全独立的实现**（一个手写闭式公式、一个调 `strptime`），而 Python docstring 明确声称「对齐 Rust」。实测 **5 处不一致**。
   - **真实缺陷**：Python 直接返回 `calendar.timegm(...)`，`1969-01-01` 得到**负数** `-31536000`，而 Rust 有显式 `y < 1970` 守卫返回 `0` ⇒ 同一 issue 被两条路径先后写入时 `created_at` / `updated_at` **取决于谁最后动手**，下游「相对时间」遇到负值显示荒谬文案。修复：`return secs if secs >= 0 else 0`。
@@ -150,7 +150,7 @@
   - **插曲**：第一版 fixture 我照 Rust 抄了 `sec=60` 的期望值，测试当场报 `1704067260 != 0` —— 共享表的第一道价值生效。这是「期望值必须外部来源、必须实测」纪律的**第三次**生效（#378 手算 `2024-02-30` 出错是第一次）。
   - 详见 [`issue-388-iso-parity-two-implementations.md`](./issue-388-iso-parity-two-implementations.md)
 
-- **Unreleased — 断言强度审计（六）：Python 侧第一批 —— MCP 引用解析形态覆盖缺口（#386）**
+- **v0.6.6（2026-10-08）— 断言强度审计（六）：Python 侧第一批 —— MCP 引用解析形态覆盖缺口（#386）**
 
   - **`mcp_server/server.py::parse_issue_ref_parts` 是 agent 每次调用 MCP 工具的入口**（`update_task_status(issue, ...)` / `record_session` 等全部走它），而 AGENTS.md §8.6 要求它与 Rust `on_demand.rs` 行为等价。实测 **4 个变异存活**。
   - **最关键的一个**：`(?:issues|pull)` 退化为 `(?:issues)` ⇒ **`/pull/{n}` 链接全部解析失败**，且失败方式是抛「无法解析 issue 引用」—— 看起来像「用户填错了引用」，**不会有任何告警**。另 3 个：漏 `rstrip("/")` 使 `owner/repo/#N` 解析出错误 repo、`rpartition`→`split` 改多 `#` 行为、删空引用守卫改错误消息。
@@ -160,7 +160,7 @@
   - **本轮第五次「测量手段本身出错」**：验证脚本 grep 只匹配 `FAILED (failures=`，而 `url-pull` 产生 `errors=1`（异常 vs 断言失败）⇒ 报成 `??`。五条纪律共同点：**先验证测量手段本身，再采信结论**。
   - 详见 [`issue-386-python-mcp-parse-ref-coverage.md`](./issue-386-python-mcp-parse-ref-coverage.md)
 
-- **Unreleased — 断言强度审计（五）：Rust 侧第四批 —— GraphQL 链接解析别名守卫「空洞为真」（#384）**
+- **v0.6.6（2026-10-08）— 断言强度审计（五）：Rust 侧第四批 —— GraphQL 链接解析别名守卫「空洞为真」（#384）**
 
   - **审计前 `parse_links_from_graphql` 只有 2 条平凡断言**（`{}` 与 `{"data": {}}` → 空），整条父子链接解析路径几无直接覆盖。
   - **发现真实漏洞（空洞为真）**：别名守卫 `!key.starts_with('a') || !key.chars().skip(1).all(is_ascii_digit)` 中，Rust 的 `Iterator::all` 对**空迭代器返回 `true`** ⇒ 光秃秃的 `"a"` 被当成合法别名放行，与紧邻注释声明的「别名固定为 `a<序号>`」相悖。实测 `{"a":{"number":994},"a1":{"number":101}}` 解析出 `[994, 101]`。
@@ -172,7 +172,7 @@
   - **本轮第四次「测量手段本身出错」**：`cargo test --lib parse_links` 的过滤条件**不含新用例名**，用例**根本没跑**就报「存活」；改跑全量后 3/3 全捕获。至此形成四条纪律 —— ①注入须确认生效 ②变异方向须表达真实缺陷 ③期望值须外部来源 ④**过滤条件须覆盖被测用例**，共同点是**先验证测量手段本身，再采信结论**。
   - 详见 [`issue-384-parse-links-alias-guard.md`](./issue-384-parse-links-alias-guard.md)
 
-- **Unreleased — 断言强度审计（四）：Rust 侧第三批 —— URL 白名单子域边界无守护（#382）**
+- **v0.6.6（2026-10-08）— 断言强度审计（四）：Rust 侧第三批 —— URL 白名单子域边界无守护（#382）**
 
   - **`common::validate_browser_url` 是 `open_in_browser` 命令的唯一闸门**，而 URL 来自 issue 正文 / PR 链接 / agent session 工作目录等**外部数据**（#370 确认 `SessionsPanel` 走这条路）。实测 **4 个变异存活，其中 2 个是真实的白名单逃逸**。
   - **逃逸形态（当前实现正确拒绝，但无守护）**：`ends_with(".ghe.com")` → `ends_with("ghe.com")` 会放行 `evilghe.com` / `notghe.com`（任何人可注册的域）；→ `contains("ghe.com")` 还会放行 `ghe.com.attacker.net` / `a.ghe.com.evil.net`。
@@ -183,7 +183,7 @@
   - **变异方向教训**：userinfo 变异我第一次取了 `@` **后段**（存活），差点误判成「测试仍弱」—— 实际是**变异方向反了**，`@` 后段才是真实 host，取它本就是正确行为。与 #380 轮「把『只跑一次』写成无限循环」同类：**变异必须表达真实缺陷方向，否则存活不代表测试弱**。
   - 详见 [`issue-382-browser-url-whitelist-boundary.md`](./issue-382-browser-url-whitelist-boundary.md)
 
-- **Unreleased — 断言强度审计（三）：Rust 侧第二批 —— Project Status 映射表 33/45 条目无测试守护（#380）**
+- **v0.6.6（2026-10-08）— 断言强度审计（三）：Rust 侧第二批 —— Project Status 映射表 33/45 条目无测试守护（#380）**
 
   - **`sync.rs::map_project_status` / `map_project_status_en` 逐条 mutation 后只有 7 个条目被用例点名**（`done`/`completed`/`closed`/`released`/`ready for release`/`in review`/`in testing`），**实测 33 个条目删掉后无任何测试失败**。这两张表是 **#335 修复的核心产出**，函数注释逐字点名了「按整值精确匹配，不做子串匹配」「不认识的选项仍返回 `None`，绝不臆造」这份**显式契约**。
   - **缺陷形态是静默降级而非报错**（比 #378 更难发现）：删掉一个英文条目后落 `_ => None` ⇒「保持本地手动态」，而这**本就是许多 Project Status 的正确表现** ⇒ 不报错、不告警、UI 完全正常。删中文判据词同理会落到下一个 `contains` 或英文表。
@@ -194,7 +194,7 @@
   - **附记本轮自身的一次失误**：用脚本做字符串插入点替换时 anchor 只取 `fn xxx() {` 一行，上方 `#[test]` 与 doc 留在原地 ⇒ 叠加成 `duplicated attribute` 且**原函数丢失 `#[test]` 变成 dead code**。值得记录的是 **`cargo test` 当时仍然通过（166 passed）**，只有 `clippy --all-targets` 才暴露 —— 若只跑 `cargo test` 就提交，等于把「原测试静默失效」合进 `main`，**与本 issue 修的正是同一类问题**。
   - 详见 [`issue-380-status-map-table-contract.md`](./issue-380-status-map-table-contract.md)
 
-- **Unreleased — 断言强度审计（二）：Rust 侧第一批 —— `iso8601_to_secs` 零测试覆盖（#378）**
+- **v0.6.6（2026-10-08）— 断言强度审计（二）：Rust 侧第一批 —— `iso8601_to_secs` 零测试覆盖（#378）**
 
   - **`common::iso8601_to_secs` 没有任何测试**，却被 `sync.rs` / `on_demand.rs` / `github.rs` **三个生产模块调用**；它含 Gregorian 闰年算术（`month_adjust` + 世纪年规则）与 6 项输入范围校验。唯一间接覆盖是 `sync.rs` 里一处 `> 0` 断言 —— 它无法区分「解析正确」与「解析出一个荒谬但为正的值」。
   - **实测 6 个变异全部存活**（注入后跑全部 lib 测试 160 passed，无一失败）：闰年规则退化为朴素 `%4`、`month_adjust` 漏 `m > 2`、`d - 1` 写成 `d`、去掉 `y < 1970` 守卫、月份上界放到 `1..=13`、时区偏移 `* 3600` 写成 `* 3601`。**缺陷形态是「静默偏移 86400」而非返回 0/负数**，正是最难察觉的一类。
@@ -204,7 +204,7 @@
   - **审计方法论沉淀**：①「零测试的高调用量纯函数」应优先审；②每次注入都要确认注入生效（本轮第一版脚本因 `$` 被 shell 吞掉报「注入失败」，若采信就会把注入失败误判为断言失效）；③变异设计须能区分语义（第一轮把「只跑一次」写成 `for (let once = true; once;)` —— 那是**无限**循环、等价变异，白耗一轮）；④期望值必须外部来源，本轮我手算 `2024-02-27` 即算错（`1_708_128_000` → 实际 `1_708_992_000`），测试当场拦下。
   - 详见 [`issue-378-iso8601-test-coverage.md`](./issue-378-iso8601-test-coverage.md)
 
-- **Unreleased — 断言强度审计（一）：`taskSig` 契约字段清单无人守护（#376）**
+- **v0.6.6（2026-10-08）— 断言强度审计（一）：`taskSig` 契约字段清单无人守护（#376）**
 
   - **#376 对 `taskSig.ts` 做逐字段 mutation（每次删一个字段再跑测试），15 个字段中 8 个删掉后无任何测试失败**：含两处**真实 bug** —— 漏 `updatedAt` ⇒ issue 被评论时同步只改 `updated_at`、其余字段全不变 ⇒ `applyTasks` 直接 return ⇒ **TaskCard 日期不刷新**；漏 `workDir` ⇒ agent 经 MCP `record_session` 设的工作目录**不刷新**（后者正是 #287 引入该字段要解决的问题）。
   - **根因：测试按「字段组」断言而非逐字段** —— session 三件套一次改三个，只要组内任意一个仍在签名里指纹就会变 ⇒ 断言通过 ⇒ **单独**删掉某个字段测不出来。`taskSig.ts` 注释逐个点名了必须纳入的字段（#181 / #220），即一份**显式契约**，却没有任何测试在守。
@@ -213,7 +213,7 @@
   - **无运行时行为变更**：只改测试、不动 `taskSig.ts`。两处真实 bug 是「未来重构可能引入」的隐患，而非当前已存在的缺陷。
   - **方法论**：断言强度靠读代码判断极易出错 —— 本项的表驱动用例**读起来完全合理**，只有 mutation 才暴露问题。这与 #367 审计的结论一致：判定标准应是「注入缺陷后能否失败」。审计中我也一度把 mutation 失败误判为「注入没生效」，因此本轮每次注入都**附带打印源码残留计数**确认后才采信。
 
-- **Unreleased — 深度 code review 第三批 · 续二：看板列模式乐观更新无回滚，UI 与后端分叉（#374）**
+- **v0.6.6（2026-10-08）— 深度 code review 第三批 · 续二：看板列模式乐观更新无回滚，UI 与后端分叉（#374）**
 
   - **#374 切换「看板列展示方式」保存失败时无提示且不回滚**：`handleBoardModeChange` 先 `setBoardMode(mode)` 乐观更新、再 `await onBoardModeChange(mode)`（最终是 `api.setAccountBoardMode`）却**无 `try/catch`** ⇒ 失败时 `<select>` 仍显示新值（看起来成功），刷新后跳回旧值，用户不知发生了什么。
   - **比 #372 更重**：#372 是「界面静默降级」，本项是「**界面显示的状态与后端实际不一致**」。
@@ -222,7 +222,7 @@
   - **测试**：2 例，逐项锁定「`try/catch` + `reportError` + 回滚」三者齐全；第二例留余地（将来改用 `setErr` 也应接受）。**反向验证特意覆盖「加了 `try/catch` 但没回滚」的半修状态** —— 这是最常见的假修复，断言必须能识别它（实测如期 FAILED）。`npm test` 225 → 227 passed。
   - **无 schema / MCP 工具签名 / i18n key 变更**。
 
-- **Unreleased — 深度 code review 第三批 · 续：看板列静默错序 / 静默退回 project 模式（#372）**
+- **v0.6.6（2026-10-08）— 深度 code review 第三批 · 续：看板列静默错序 / 静默退回 project 模式（#372）**
 
   - **#372 聚合视图下列表加载失败只落 `console.warn`，看板静默降级**：`listProjectStatuses` 失败 ⇒ `projectStatuses` 为空 ⇒ `sortProjectStatusKeys` 退化为**字母序**；`listAccountColumns` 失败 ⇒ `accountColumns` 为空 ⇒ `resolveBoardView` 从 `'custom'` **整体退回 `'project'`** —— 用户看到列全变了却不知原因。**后者比 `bug-audit-2026-09` P2-#7 记录的更严重**（审计只记了第一处，漏了同文件 `:266` 的同形缺陷）。
   - **修法**：改用 `reportError` 上抛到全局错误横幅 —— 仓库早在 `App.tsx` 就写下过这条经验（「避免无 UI 上下文的异步失败只落在 console 里造成点了没反应」），`openExternal`（#370）正是同源同解。**保留 #145 的隔离语义**（单账号失败仍返回空数组继续聚合，不因单账号失败而整块为空）。单账号视图本就调 `setError`、可见性正常，未改动。
@@ -230,7 +230,7 @@
   - **附：对 `bug-audit-2026-09.md` 的逐条复核结论** —— P0-#5（`branch`/`handoff` 未写入 `SCHEMA`）**已修**、P0-#6（`setBoardMode` 并发竞争）**已不成立**（那段代码已重构）、P0-#11 由 #370 修掉、P0-#13 测试覆盖不足**大幅改善**（前端 20 文件 225 例 / Rust 186 例 / Python 170 例）。该审计基于 2026-09 旧代码、部分条目已过期；按 `AGENTS.md §5.5`（历史记录不改）本次未动它，仅在此记录复核结论。
   - **无 schema / MCP 工具签名 / i18n key 变更**。
 
-- **Unreleased — 深度 code review 第三批：SessionsPanel 打开外链失败时界面静默（#370）**
+- **v0.6.6（2026-10-08）— 深度 code review 第三批：SessionsPanel 打开外链失败时界面静默（#370）**
 
   - **#370 「任务会话」面板点击任务链接打不开时，界面毫无反应也不报错**：`void api.openInBrowser(task.url)` **只丢弃 Promise、不为 rejection 提供处理器**，于是 `invoke` 的 reject 变成未处理拒绝。而 `api.ts` 早有收口好的 `openExternal`（内部 `.catch(reportError)`），`SessionsPanel` 是全仓 6 个组件里**唯一**绕过它的漏网之处。
   - **可达性非理论**：`open_in_browser` 有多条现实失败路径 —— `validate_browser_url` 仅放行 `https://github.com` 与 `*.ghe.com`（历史数据混入其他 host 即被拒）、以及 macOS `open` / Windows `cmd /C start` / Linux `xdg-open` 的 `spawn()` 失败（无默认浏览器、进程上限、沙箱限制）。
@@ -239,7 +239,7 @@
   - **测试**：把「封装 + 全部替换」变成可机械校验的不变量 —— ① 六个组件均不得裸调 `api.openInBrowser`；② **额外锁定 `openExternal` 自身必须带 `.catch`**（否则大家确实都在调 `openExternal`、第 ① 条仍全绿，收口形同虚设而无人察觉 —— #369 失效守卫教训的直接应用）。**反向验证两个方向各自独立**：改回裸调用 ⇒ ① FAILED；去掉 `.catch` ⇒ ② FAILED。`npm test` 221 → 223 passed。
   - **无 schema / MCP 工具签名 / i18n key 变更**；`handleOpenTask` 签名不变。
 
-- **Unreleased — 静态守卫自诊断加固 + 全仓静态断言审计（#367）**
+- **v0.6.6（2026-10-08）— 静态守卫自诊断加固 + 全仓静态断言审计（#367）**
 
   - **#367 #355 修掉失效守卫后留下的新脆弱点**：`take_while("mod tests {")` 依赖「该文件只有唯一测试模块」这一**未被守护的前提** —— 测试模块改名/拆分后截断点消失，计数重新把测试代码算进去 ⇒ 静默退化成 #355 修复前的失效状态。修复：截断点改用 `#[cfg(test)]`（语义更准）并补「截断点之前确实读到生产代码」的守卫，范式取自 `lint-config.test.ts` 已有的「本条测试失去意义」用例。
   - **⚠️ 按实测更正了问题判断**：我原以为旧实现在「新增更靠前的测试模块」时会因计数被截掉而报「实测 0 处」（误导性报错），**构造场景逐一验证后发现并非如此** —— `mod tests {` 仍能正确命中、计数仍是 5。**新守卫的真实价值不在「能否失败」而在「报错是否自诊断」**：顶部插入测试模块时旧写法静默通过（报「实测 5 处」），新写法明确报「静态断言已失去意义」。这再次印证 #355 / #358 的教训：**静默通过的失效断言比直接失败的更危险**。
@@ -249,7 +249,7 @@
   - **实测数据**：`--all-targets` 确实多 lint 测试目标，但整条 `quality-check` 流水线实测仍约 **1.5 分钟**（`rust-clippy` 与其余 job 并行），**不是瓶颈**，故不需要 `--no-deps` 或拆分 job。
   - **无运行时行为变更**（改动仅限 `app/src-tauri/src/commands.rs` 的测试代码 + 文档）。
 
-- **Unreleased — 深度 code review 批次（第二批）：写路径 0 行守卫 / Project issue 缺日期 / Rust 侧 MCP 三处缺口 / URL 锚点 / 工具链卫生（#355–#359）**
+- **v0.6.6（2026-10-08）— 深度 code review 批次（第二批）：写路径 0 行守卫 / Project issue 缺日期 / Rust 侧 MCP 三处缺口 / URL 锚点 / 工具链卫生（#355–#359）**
 
   - 本批 5 项来自第一批（#339–#346）review 中标记为「未展开」的较低优先级遗留项。与第一批同源，**共性仍是「门禁有盲区」**：`commands.rs` 的静态守卫被自身污染、CI clippy 只跑 `--lib`、`check-mcp-columns.py` 只校验读列。
   - **[#355](https://github.com/ShawnLiuSZ/task-dashboard/issues/355) `clear_session` / `record_handoff` 未守 `require_affected`**：key 不存在时返回 `Ok`（前端显示成功）却什么都没改、还误发 `TASKS_CHANGED_EVENT`，而 MCP 侧同名工具正确报错 ⇒ 两侧不一致。可达性非理论：GUI 传的 `task.issueKey` 来自列表快照，而 `sync.rs` 会硬 `DELETE` 30 天前的 `done` 行、仓库改名也改 `issue_key`。**修复**：两处先接返回值再过守卫。详见 [docs/issue-355-require-affected-remaining-writes.md](./issue-355-require-affected-remaining-writes.md)。
@@ -261,7 +261,7 @@
   - **本批测试增量**：前端 0（纯后端 / 工具链批次）、`cargo test` 150 + 26、Python MCP 53、scripts 114 → 117。
   - **行为变更**：`initialize` 返回的 `serverInfo.version` 由 `0.6.1` → `0.6.5`（此后随发版自动同步）；issue 永久链接带锚点时正式 MCP 路径不再报错。**无 schema / `tasks` 列定义 / MCP 工具签名（清单与参数不变）/ i18n key 变更**。
 
-- **Unreleased — 深度 code review 批次 #7：MCP 分帧健壮性只修了 Rust 侧，Python 兜底一行坏数据即终止（#345）**
+- **v0.6.6（2026-10-08）— 深度 code review 批次 #7：MCP 分帧健壮性只修了 Rust 侧，Python 兜底一行坏数据即终止（#345）**
 
   - **#345 Python MCP Server 进程被一行坏数据整个终止，agent 侧表现为随机 `connection closed`**：Rust `mcp.rs` 早在 #328 就改为四态 `ReadOutcome`（畸形帧 `continue` 而非退出），`mcp.rs:750-753` 也明确写着「客户端发 UTF-8 BOM、写入被截断…agent 侧就会随机看到 connection closed」—— **但当时只修了 Rust 侧**。Python `server.py` 仍把畸形与 EOF 折叠成 `(None, None)`，主循环见 `None` 即 `break`；且 `json.loads(body)` 未包 try，异常上抛后被 `main()` 的 `except` 吞掉再 `break`，效果相同。
   - **修法**：移植四态 —— `MSG` / `EOF` / `MALFORMED`（本帧已完整消费 ⇒ 丢弃后 continue）/ `FATAL`（帧边界已丢失，body 未消费 ⇒ 只能终止）。关键区分：`Content-Length` 越界与头部不终止属 `FATAL`（继续读会把 body 字节当头部解析出垃圾），而 JSON 畸形 / 缺失 `Content-Length` 属 `MALFORMED`（边界已知，可安全继续）。
@@ -271,7 +271,7 @@
   - **⚠️ 首次反向验证暴露的真实缺口**：缺陷症状（进程退出）由 `main()` 的**循环**决定，不是 `read_message` 的**分类**决定 —— 只测分类会漏掉「分类改对了但循环仍 break」的半修状态（当时只回退分类层，用例全绿）。补 3 例端到端后，两层可独立回退验证：回退 `main()` 的 `break` ⇒ 2 例失败；回退分类折叠 ⇒ 3 例失败。
   - **遗留边界（记录备查）**：① Rust 侧 NDJSON 分支同样没有单帧长度上限（两侧对齐宜作独立议题）；② `serverInfo.version` 仍硬编码 `0.6.1`（Rust 用 `CARGO_PKG_VERSION`），`check-versions.py` 未覆盖该文件。
   - **无 schema / MCP 工具签名（清单与参数不变）/ i18n key 变更**；改动限 `mcp_server/server.py` + 测试 + 文档。
-- **Unreleased — 深度 code review 批次 #6：Esc 层注册放在不稳定 deps，父重渲染会颠倒层级（#344）**
+- **v0.6.6（2026-10-08）— 深度 code review 批次 #6：Esc 层注册放在不稳定 deps，父重渲染会颠倒层级（#344）**
 
   - **#344 确认框打开时按 Esc 不取消对话框、直接关掉整个父面板**：`escLayer.ts` 的分层栈要求「子层晚于父层注册、早于父层释放」，但 `SyncLogsPanel`（`}, [onClose])`）与 `ConfirmDialog`（`}, [onCancel])`）把**层注册**放进了带**不稳定回调依赖**的 effect —— 那些回调每次父渲染都是新函数。确认框打开期间一次父重渲染会让两个 effect 一起重跑，按「destroy 自底向上 → create 自底向上」把层级整体重排：栈空 → `[对话框]` → `[对话框, 面板]`，**面板反过来压过自己的子层** ⇒ 一次 Esc 跳过用户的「取消」直接关面板。
   - **触发路径均已在代码树中**：自动同步完成（`onSynced` → `loadSettings` → `setSettings`，默认 15/30 分钟一触发）、手动同步后 4 秒横幅消失计时器、20 秒轮询 + `focus` 处理器。其余四个面板免疫，因其 `useEscLayer` 用 `[]` 依赖。
@@ -281,7 +281,7 @@
   - **调整 2 条既有断言以跟随抽象**：#329 那两条用源码正则找 `registerEscLayer()` / `isTop()`，逻辑下沉后必然失效，故改为断言「走了分层 hook」。这是**跟随重构而非削弱** —— 真正的不变式由上述新增用例覆盖。
   - **反向验证**：把 `SyncLogsPanel` 还原成缺陷形态 ⇒ 新守卫失败（`1 failed / 21 passed`）；恢复后 215 passed。
   - **无 schema / MCP 工具签名 / i18n key 变更**；两组件 Props 接口与对外行为不变。
-- **Unreleased — 深度 code review 批次 #5：`theme.ts` 用新 `matchMedia` 对象解绑导致 no-op（#343）**
+- **v0.6.6（2026-10-08）— 深度 code review 批次 #5：`theme.ts` 用新 `matchMedia` 对象解绑导致 no-op（#343）**
 
   - **#343 显式选择浅色/深色后，系统主题变化仍会覆盖它 —— #329 的修复实际没生效**：按 CSSOM View 规范，`Window.matchMedia(q)` 每次返回 **new** MediaQueryList（各自独立的 EventTarget 监听列表）。#329 只记了**函数引用**，解绑时重新 `matchMedia(DARK_QUERY)` 拿到**新对象**去 `removeEventListener` ⇒ **对旧对象上的监听器无效**，解绑恒为 no-op。
   - **双重后果**：① 用户选 light/dark 后，系统主题一变仍触发 `applyTheme('auto')`；② **监听器泄漏** —— 每次 `setMode('auto')` 都在新对象上加一个，N 次切换 ⇒ 每次系统主题变更触发 N 次（幂等故无额外视觉症状）。
@@ -290,7 +290,7 @@
   - **测试**：先把打桩改为平台语义（每次产出新对象 + 监听集合挂在该实例 + `function` 表达式保留 `this`，跨实例移除天然无效），并新增真实度量 `liveListeners()`（统计所有实例上仍挂着的监听器总数 —— 调用次数口径看不出问题，旧实现在此也是「1」）。新增 3 例；保留全部 4 条 #329 既有用例未削弱。
   - **反向验证**：还原 `theme.ts` 后**新增 3 例全败、既有 4 例仍通过**，失败数值精确对应泄漏模型（`expected 3 to be 1` / `expected 5 to be 0`）—— 同时**实证了旧测试为何无效**。恢复后 215 passed。
   - **无 schema / MCP 工具签名 / i18n key 变更**；改动限 `app/src/theme{,.test}.ts`。
-- **Unreleased — 深度 code review 批次 #4：崩溃残留的 `tasks_new` 永久孤立，整个看板静默丢失（#340）**
+- **v0.6.6（2026-10-08）— 深度 code review 批次 #4：崩溃残留的 `tasks_new` 永久孤立，整个看板静默丢失（#340）**
 
   - **#340 崩溃窗口残留的 `tasks_new` 永久孤立，用户整个看板静默丢失且无法恢复**（本批唯一**数据永久丢失**项）：`migrate_tasks_v2_rebuild` 事务停在 `DROP TABLE tasks`（已提交）与 `RENAME`（未执行）之间 ⇒ 留下 **`tasks` 缺失、`tasks_new` 保有全量数据** 的状态。`migrate_tasks_v2_rebuild` doc comment 自己把它列为头号动机，#328 也加了 `DROP TABLE IF EXISTS tasks_new` 自愈，**但该 DROP 只在重建函数内部可达**，而前置条件 `tasks_uses_legacy_key()` 在 `tasks` 已不存在时为 false ⇒ **自愈分支恰好在最需要时不可达** ⇒ `SCHEMA` 建出空 `tasks`、结构检查通过、`user_version` 盖到 4 ⇒ 迁移此后再不重跑。
   - **实测（探针）**：`after-open: tasks_visible=0 orphan_tasks_new=1 user_version=4`；`after-2nd-open: tasks_visible=0 orphan_tasks_new=1 user_version=4` —— **二次打开不自愈**，与「下次启动重试」的设计预期直接矛盾。⚠️ **非 #328 引入的回归**（基线 `f66f83f` 行为相同）：#328 事务化把窗口从两次独立提交缩成一个事务，但没堵上这个洞，而其 doc comment 让人以为已修。
@@ -299,7 +299,7 @@
   - **无 DDL / 列变更**（迁移路径完全复用既有逻辑）；稳态下不产生任何写语句，不影响 #329 的「稳态零写锁」优化。
   - **验证**：`cargo test --test db_test` 26 passed（25 → +1）✅、`cargo test --lib` 146 passed ✅、`cargo fmt --check` ✅、`cargo clippy --lib -- -D warnings` ✅（CI 实际门禁范围）；**反向验证**（删掉探测块）1 例失败（`0 passed / 1 failed`）。新用例 6 组断言含**手动态不被默认 todo 覆盖**与**二次打开幂等**。夹具刻意用**真实 `tasks` 布局**（先 `open_db` 建库再 `RENAME`）—— 手写精简列名会测到「SCHEMA 索引先失败」而非目标行为。
   - **附带发现**：`cargo clippy --tests` 在 `main` 上已有 **5 处**存量 error（`db_test.rs:43`、`commands.rs:2158`、`lib.rs:262` 等）。本 PR 未新增，但 CI 的 `rust-clippy` job 只跑 `--lib`、覆盖不到，可作独立议题跟进。
-- **Unreleased — 深度 code review 批次 #3：仓库级 GraphQL 失败被降级成 `Ok(空)`，父子关联被静默清空（#342）**
+- **v0.6.6（2026-10-08）— 深度 code review 批次 #3：仓库级 GraphQL 失败被降级成 `Ok(空)`，父子关联被静默清空（#342）**
 
   - **#342 仓库改名 / 转移 / 删除 / token 失权时，issue 的父子关联被静默清空且无任何报错**：#328 为避免「单个编号 NOT_FOUND 导致 25 个 issue 关联一起丢」而把 `fetch_issue_links` 改为宽松模式，放行判据是 `v["data"].is_null()` —— 但 **`data` 是仓库包装层**。仓库级失败时 GitHub 返回 `{"data":{"r":null},"errors":[…]}`，`data` 是**非 null 对象** ⇒ 守卫不触发 ⇒ 解析器命中 `data.r` 为 null 返回**空 map 而非 `Err`**。
   - **安全网恰好在最需要它时失效**：`Ok(空)` ⇒ `sync.rs` 视作成功 ⇒ `links_failed_repos` 收不到该仓库 ⇒ 落入 `unwrap_or((String::new(), String::new()))` 写空 ⇒ `TASK_CONFLICT_UPDATE` 无条件覆盖 `parent_issue` / `sub_issues` ⇒ 关联清空。`sync.rs` 那道「失败则保留既有值，避免一次网络抖动把已有关联清空」的保险**正是为此场景设计**，却被绕过。
@@ -307,14 +307,14 @@
   - **仍为只读**：不新增任何对 GitHub 的写操作，`AGENTS.md §2.1` 数据单向流动约束不变。
   - **无 schema / MCP 工具签名 / i18n key 变更**；改动限 `app/src-tauri/src/github.rs` 一个源文件 + 文档。
   - **验证**：`cargo test --lib` 148 passed（146 → +2）✅、`db_test` 25 passed ✅、`cargo fmt --check` ✅、`cargo clippy --lib -- -D warnings` ✅、`check-mcp-columns.py` / `check-doc-links.py` / `check-versions.py` ✅；**反向验证**：判据改回「只看顶层 `data`」则 1 例失败（`1 passed / 1 failed`）。新增的第 2 例是**反向对照**（仓库有效 + 个个别名失败 ⇒ 不得判失败），防修复过度连带关掉 #328 的宽松收益。
-- **Unreleased — 深度 code review 批次 #2：全局 `opencode.jsonc` 空 `mcp` 被写成非法 JSON（#341）**
+- **v0.6.6（2026-10-08）— 深度 code review 批次 #2：全局 `opencode.jsonc` 空 `mcp` 被写成非法 JSON（#341）**
 
   - **#341 全局 `opencode.jsonc` 的空 `mcp` 对象被合并成非法 JSON，写坏用户全局配置**：`hooks.rs::find_top_object_span` 返回的是**键起始引号**位置而非 `{` 位置，而唯一调用方按 `{` 位置使用 ⇒ `inner` 恒以 `mcp":` 开头 ⇒ **空对象守卫是死代码**、`else` 分支永远执行 ⇒ 把 `,` 插进 `{` 后面，产出 `"mcp": {,`。后果：**用户全局配置被写坏、opencode 自身无法启动**，而安装流程返回 `Ok`（UI 报「安装成功」，用户不知需要从备份恢复）。
   - **「注释型 JSONC + 空 `mcp`」是 opencode 标准配置形态**（用户手写最小配置的常见结果），非边缘场景。**非空 `mcp` 不暴露缺陷**（插入点恰为合法追加），故既有测试 `global_merge_jsonc_appends_into_existing_mcp`（只覆盖非空、且只断言 `contains()` 从不解析）结构上抓不到。
   - **修复（两处，缺一不可）**：① 返回值改为 `{` 的位置，让 span 契约与调用方语义一致；② 空对象分支格式串同步修正 —— 改动 ① 之后 `text[..ms + 1]` 已含开括号，原格式串会多写一个字面 `{`，**只改 ① 会把 `"mcp": {,` 换成 `"mcp": {{`，仍是非法 JSON**（本次新写测试当场抓出）。详见 [docs/issue-341-opencode-jsonc-empty-mcp.md](./issue-341-opencode-jsonc-empty-mcp.md)。
   - **无 schema / MCP 工具签名 / i18n key 变更**；改动限于 `app/src-tauri/src/hooks.rs` 一个源文件 + 文档。
   - **验证**：`cargo test --lib` 148 passed（146 → +2）✅、`cargo test --test db_test` 25 passed ✅、`cargo fmt --check` ✅、`cargo clippy --lib -- -D warnings` ✅、`check-doc-links.py` / `check-mcp-columns.py` / `check-versions.py` ✅；**反向验证**（返回值改回键起始位置）2 例均失败。
-- **Unreleased — 深度 code review 批次：卡片点击完全失灵（P0）等 8 项缺陷（#339–#346）**
+- **v0.6.6（2026-10-08）— 深度 code review 批次：卡片点击完全失灵（P0）等 8 项缺陷（#339–#346）**
 
   - 本批 8 项来自一次跨模块深度 review（范围 `v0.6.5 → HEAD`，含 #327/#328/#329/#330/#335/#336）。基线全绿（212 vitest + 171 cargo + `tsc` / `i18n:check` / `check-mcp-columns.py`），**8 项全部逃过现有测试**。
   - **共同根因模式：「只改了一半」** —— 三项高危都源于重构只覆盖了一侧：`TaskCard` 漏改身份生产端（消费端全改）；MCP 分帧健壮性只做 Rust 侧、Python 兜底未同步；崩溃残留自愈只覆盖了 `tasks` 仍存在的一个分支。
@@ -323,7 +323,7 @@
   - **第 8 项 [#346](https://github.com/ShawnLiuSZ/task-dashboard/issues/346)（`synced_at` 不在 `ENSURE_COLUMNS`）经复核为误报、已关闭**：其声称的 `NOT NULL constraint failed` 需「列存在且 `NOT NULL`」+「该列不在 INSERT 列表」同时成立，而 `_write_task_if_absent` 的 INSERT 列清单正是从实际表结构过滤出来的（有列必被插入、无列无约束可违）；且 `synced_at` 自 Initial commit 起即在 `SCHEMA` 内，真正「老到缺列」的库会先被 `LEGACY_TASKS_COLUMNS` 判定拒绝服务。**未提交无效修复**，推理详见该 issue 内评论。
   - **本批次无 schema / MCP 工具签名变更**（`SELECT_COLS` 未动，`tasks` 列定义未改）；**无 i18n key 变更**。
 
-- **Unreleased — CI 门禁盲区 / 操作类文档 `develop` 漂移 / 旧仓库名拼写残留（#336）**
+- **v0.6.6（2026-10-08）— CI 门禁盲区 / 操作类文档 `develop` 漂移 / 旧仓库名拼写残留（#336）**
 
   - **#336 `quality-check.yml` 的 `push` 只挂 `develop`，而该分支已不存在** ⇒ **直接 push 到 `main` 完全跳过重型门禁**（clippy / `cargo fmt --check` / `vite build` / `check-versions.py` / `scripts` 单测），只有 base = `main` 的 PR 才跑。这是 #330 刚加固完门禁后留下的缺口。**修复**：`push.branches` 补 `main`。详见 [docs/issue-336-docs-ci-reality-alignment.md](./issue-336-docs-ci-reality-alignment.md)。
   - **#336 操作类文档仍按「集成分支 = `develop`」描述**：`AGENTS.md`（8 处）、`CONTRIBUTING.md`（2 处）、`mcp_server/AGENT_INSTRUCTIONS{,.en}.md`（各 5 处）、`.claude` / `.opencode` 的 `task-start.md`（4 + 2 处）、`README.md`（1 处），以及 `mcp.rs` / `commands.rs` / `common.rs` / `server.py` 里 `set_work_branch` 的文档注释与**工具 description**（6 处，对 agent 可见）。这些不是历史叙述，而是**指导下一步动作的指令** —— 照错做会从已不存在的 `develop` 开分支，且 tool description 会把错误基线喂给每个调用 MCP 的 agent。**修复**：统一改为 `main`；`AGENTS.md §6.1` 删除「集成分支」行、`§6.3` 删除 `develop → main` 发版行，常规流程改为单主干。
@@ -333,7 +333,7 @@
   - **无运行时行为变更**（改动为文档 / CI 配置 / 注释）；**无 schema / MCP 工具签名 / i18n key 变更**（`SELECT_COLS` 未动）。
   - **验证**：`check-workflow-yaml.py` 6 文件 ✅、`check-doc-links.py` 无断链无孤岛 ✅、`check-mcp-columns.py` 28 列 ✅、`check-versions.py` 0.6.5 ✅、`scripts` 单测 ✅、`cargo fmt --check` ✅、`cargo clippy -- -D warnings` ✅、`cargo test --lib` / `--test db_test` ✅、Python MCP 单测 ✅；全仓库检索 `develop` 后，剩余位置**只**落在「历史知识库文档 / CHANGELOG 历史条目 / 工具能力描述与 fixtures / `quality-check.yml` 的兼容项」四类之内。
 
-- **Unreleased — 已关闭 issue 滞留看板：`closed` 判据大小写敏感 + 英文 Project Status 未映射（#335）**
+- **v0.6.6（2026-10-08）— 已关闭 issue 滞留看板：`closed` 判据大小写敏感 + 英文 Project Status 未映射（#335）**
 
   - **#335 `tasks.issue_state` 同一列存在 4 种大小写**：`closed` 422 / `OPEN` 96 / `CLOSED` 63 / `open` 40。`github.rs::fetch_project_issues`（ProjectV2 条目查询）取 `content["state"]`，而 **GraphQL 的 `IssueState` 是大写枚举 `OPEN`/`CLOSED`**，REST 则是小写 —— 该值被原样落库，全链路无归一化。详见 [docs/issue-335-closed-state-case.md](./issue-335-closed-state-case.md)。
   - **#335 三处 closed 判据写死小写，大写行永不命中**：`sync.rs` 的 `t.state == "closed"`（`AGENTS.md §2.2` 优先级第 1 条「closed → done 远程权威覆盖」，**最高优先级分支对 Project 来源的 issue 完全失效**）、`db.rs::fallback_state_from_gh_state`、`commands.rs::set_project_status`（「已关闭就不再改 Project」的守卫形同虚设）。
@@ -345,7 +345,7 @@
   - **无 schema / MCP 工具 / i18n key 变更**（无增删改列；`SELECT_COLS` 未动）；前端零改动。
   - **验证**：`cargo test --lib` 146 passed（+5）✅、`cargo test --test db_test` 25 passed（+1）✅、`cargo fmt --check` ✅、`cargo clippy --lib -- -D warnings` ✅、Python MCP `unittest` 36 passed（+3）✅；**3 项反向验证逐项通过**（改回缺陷写法必失败：`is_closed_state` 改大小写敏感 → 2 例失败；清空数据修复 → db_test 1 例失败；Python 侧改回 → 2 例失败）。
 
-- **Unreleased — code review P3 批次：版本号零校验且已漂移 / 15 篇孤岛文档 / ESLint 门禁形同虚设 / CI 缺构建与格式检查 7 项（#330）**
+- **v0.6.6（2026-10-08）— code review P3 批次：版本号零校验且已漂移 / 15 篇孤岛文档 / ESLint 门禁形同虚设 / CI 缺构建与格式检查 7 项（#330）**
 
   - **#330 版本号「多处同步」零自动化校验，且已实际漂移**：版本号分散在 5 个文件（`package.json` / `package-lock.json` / `Cargo.toml` / `tauri.conf.json` / `Cargo.lock`），发版靠手抄，而**全仓库没有任何一步校验过**；实测前 4 处是 `0.6.5` 而 **`package-lock.json` 停在 `0.4.0`**（落后两个大版本）。`AGENTS.md §4.3/§6.4` 与 `release.yml` 注释还都只写「对齐**三处** version」，清单本身就不完整。详见 [docs/issue-330-p3-quality-gates.md](./issue-330-p3-quality-gates.md)。
   - **修复**：新增 `scripts/check-versions.py`（5 个文件必须一致，`package-lock.json` 的两处 `version` 都要对）+ 校验 README 中英的「当前版本」字符串（模式只匹配 `最新/latest vX.Y.Z` 与尾注，**不**匹配 `v0.3.24 及以下` 这类历史叙述）+ 可在 CI 与 `GITHUB_REF_NAME` tag 比对；接入 `quality-check.yml`。修正 `package-lock.json` → 0.6.5；`AGENTS.md` 与 `release.yml` 口径统一为「四处 + lockfile」。
@@ -360,7 +360,7 @@
   - **无运行时行为变更**（前端 / Rust / MCP 逻辑未动）；**无 schema / MCP 工具 / i18n key 变更**（仍 389 keys）。唯一代码层改动是 `cargo fmt` 的纯格式化。
   - **验证**：`npm test` 212 passed（+18）✅、`npx tsc --noEmit` ✅、`npm run build` ✅、`npm run i18n:check` 389 keys ✅、`npm run lint` 0 warnings（`--max-warnings 0`）✅、`npx prettier --check` ✅、`cargo fmt --check` ✅、`cargo clippy --lib -- -D warnings` ✅、`cargo test --lib` 141 passed ✅、`cargo test --test db_test` 24 passed ✅、`scripts/check-versions.py` ✅、`scripts/check-doc-links.py` 163 文件 / 无孤岛 ✅、`scripts/check-mcp-columns.py` 28 列 ✅、`scripts/check-workflow-yaml.py` 6 文件 ✅、`scripts` 单测 114 OK ✅；**11 项反向验证逐项通过**（改回缺陷写法必失败）。
 
-- **Unreleased — code review P2 批次：校验脚本误报漏报 / MCP 列清单缺失 / 主线程阻塞 / 前端健壮性 18 项（#329）**
+- **v0.6.6（2026-10-08）— code review P2 批次：校验脚本误报漏报 / MCP 列清单缺失 / 主线程阻塞 / 前端健壮性 18 项（#329）**
 
   - **#329 `merge-cleanup.py::CLOSE_RE` 丢中间 issue 编号**：编号用可重复捕获组 `(?:\s*#\s*(\d+)(?!\d))*` 收集，`(?:\u2026)*` 是非捕获组，内层 `(\d+)` 每轮迭代**覆盖**前一轮 ⇒ `m.groups()` 只剩「第一个 + 最后一个」。实测 `extract_issue_refs('t','Closes #1 #2 #3')` → `[1, 3]`，**#2 静默丢失**（该 issue 永不被自动关闭）；原单测只测 2 个编号，恰落在「首 + 尾 = 全部」的巧合区间。详见 [docs/issue-329-p2-quality.md](./issue-329-p2-quality.md)。
   - **修复**：编号串**整体**捕获，再用 `ISSUE_NUM_RE.findall()` 逐个取出。
@@ -390,7 +390,7 @@
   - **无 schema / 无 MCP 工具 / 无 Tauri command 签名 / 无 i18n key 变更**：与 schema 相关只有「何时/如何跑迁移」（`user_version` 门控 + 只读探测 + `notes` 去重进迁移 + `PROJECT_ITEMS_DDL` 拆出），列仍 28 列受 `check-mcp-columns.py` 校验。`handoff_len` 语义由字节改字符是本批唯一对外契约变动。
   - **验证**：`npm test` 194 passed（+39）✅、`npx tsc --noEmit` ✅、`npm run build` ✅、`npm run i18n:check` 389 keys ✅、`npm run lint` 16 warnings（0 error）✅、`npx prettier --check` ✅、`cargo clippy --lib -- -D warnings` ✅、`cargo test --lib` 141 passed（+12）✅、`scripts/check-doc-links.py` 162 文件 ✅、`scripts/check-mcp-columns.py` 28 列 + ensure 覆盖 33 列 ✅、`scripts/check-workflow-yaml.py` 6 文件 ✅、`scripts` 单测 86 OK ✅；**18 项断言逐项通过反向验证**（改回缺陷写法必失败；前端 4 处同时回退令 8 例失败）。
 
-- **Unreleased — code review P0 批次：About 按钮失效 / 语言切换器丢失 / 记事重复报错 / 项目条目数取错（#327）**
+- **v0.6.6（2026-10-08）— code review P0 批次：About 按钮失效 / 语言切换器丢失 / 记事重复报错 / 项目条目数取错（#327）**
 
   - **#327 About 小窗「确定」按钮失效**：capability 只声明了 `windows:["main"]`，而 `about` 是独立 webview，不匹配任何 capability ⇒ 零 IPC 权限；且 `core:window:default`（实测 28 项）不含 `allow-close`，`getCurrentWindow().close()` 被 ACL 拒绝、按钮静默失效（#325 功能实际未生效）。详见 [docs/issue-327-p0-functional-defects.md](./issue-327-p0-functional-defects.md)。
   - **修复**：新增 `capabilities/about.json`（`windows:["about"]` + `core:window:allow-close`）；移除 `main` 上从未被前端调用的 `allow-show` / `allow-hide`。
@@ -403,7 +403,7 @@
   - **无 schema / 无 MCP 工具 / 无 i18n key 变更**：历史 `number_of_items` 旧值会在下次成功同步时被 `upsert_projects` 覆盖，无需迁移脚本。
   - **验证**：`npm test` 155 passed（+4）✅、`npx tsc --noEmit` ✅、`npm run i18n:check` 389 keys ✅、`npm run lint` 18 warnings（无新增）✅、`npx prettier --check` ✅、`cargo clippy --lib -- -D warnings` ✅、`cargo test --lib` 119 passed（+3）✅、`scripts/check-doc-links.py` ✅、`scripts/check-mcp-columns.py` 28 列 ✅；4 项静态/单测断言均通过反向验证（改回缺陷写法必失败）。
 
-- **Unreleased — code review P1 批次：迁移无事务 / MCP 分帧退出 / 同步静默失败 / 403 误判限流等 9 项（#328）**
+- **v0.6.6（2026-10-08）— code review P1 批次：迁移无事务 / MCP 分帧退出 / 同步静默失败 / 403 误判限流等 9 项（#328）**
 
   - **#328 `migrate_tasks_v2_rebuild` 自称「单事务」实则无事务**：`rusqlite::execute_batch` **不会隐式开启事务**（只是逐条 `prepare` + `step`），`DROP TABLE tasks` 与 `ALTER … RENAME` 是两次独立提交。① 两步之间进程被杀 → `tasks` 丢失、数据滞留 `tasks_new`，下次启动 `CREATE TABLE IF NOT EXISTS tasks` 重建**空表**，本地权威态（`status` / `session_*` / `handoff` / `work_branch` / `work_dir`）永久丢失；② 中途失败残留 `tasks_new`（`CREATE TABLE` 无 `IF NOT EXISTS`）后，此后每次 `open_db` 都报 already exists ⇒ `needs_v2` 恒 `false` ⇒ `user_version` 永不推进，而查询报 `no such column: issue_key`，日志只有默认静默的 `tlog!`，**无自愈路径**。详见 [docs/issue-328-p1-data-safety.md](./issue-328-p1-data-safety.md)。
   - **修复**：`DROP TABLE IF EXISTS tasks_new` 自愈残留 + `BEGIN IMMEDIATE … COMMIT` 包住整段（`PRAGMA user_version = 2` 也进事务），失败显式 `ROLLBACK`。
