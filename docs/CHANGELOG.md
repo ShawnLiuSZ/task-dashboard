@@ -6,6 +6,15 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **断言强度审计续篇：悬空项落实 —— `schema_is_current` 的 legacy 判据是冗余守卫（#402，无代码变更）**
+
+  - #400 审计时把变异 ⑤ 标注为「推测未实测」。**推测必须落实** —— 留着不验证就是给审计留一个未验证的断言。
+  - **我原先的推测是错的**：`REQUIRED_COLUMNS` 实际**不含** `issue_key`。但用 `legacy_tasks_db` 的真实 DDL 造库探针实测后，结论是**变异为等价变异** —— `missing_columns` 对真实 pre-#155 表必然非空 ⇒ **同样**强制 `needs_migration = true`；且 `run_migrations` 里**独立地**再检查一次 `tasks_uses_legacy_key`。**同一条件被检查两次，删掉一次不改变行为** —— 冗余本身是好事（纵深防御），mutation 存活正是它的表现。
+  - ⚠️ **探针本身也要先验证**：第二次探针从真实库把 `issue_key` 改名成 `key`，两侧仍相同，**差点据此判「守卫无用」** —— 但那不是真正的 legacy 布局（缺 `gh_state` / `updated_at TEXT`）⇒ 重建读不到列 ⇒ 两种情况都停在坏状态 ⇒ **看起来等价，实为探针无效**。**「两种情况结果相同」有两种可能：真的等价，或探针没测到差异。**
+  - **如实记录未能构造的窄场景**：「`key` 仍在但 6 个 `REQUIRED_COLUMNS` 已补齐且索引齐全」—— 需在 legacy 表上建引用 `issue_key` 的索引（会报 `no such column`），我未构造成功，故**既不能断言必要、也不能断言多余**。
+  - **无代码变更**，方法论文档的等价变异清单已补该条。
+  - 详见 [`issue-402-schema-is-current-legacy-check-redundant.md`](./issue-402-schema-is-current-legacy-check-redundant.md)
+
 - **断言强度审计续篇：`agent-groups` 测试辅助函数耦合字段（新盲区类型 E）（#400）**
 
   - 审计 14 个变异，**13 个捕获良好**（`groupOf` 全部 6 分支、`newlyRemoved` 优先级、`summarize` 三项、`GROUP_ORDER` 顺序、`deviceDetail` 拼接顺序）。**唯一存活的暴露了一个测试设计缺陷**。

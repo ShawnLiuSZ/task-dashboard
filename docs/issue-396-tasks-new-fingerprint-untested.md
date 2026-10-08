@@ -32,7 +32,7 @@
 | ⑦ | `is_valid_board_mode` 放行任意值 | 捕获 ✅ |
 | ⑧ | `is_valid_board_mode` 漏掉 `custom` | 捕获 ✅ |
 
-⑤ 未深追：`REQUIRED_COLUMNS` 含 `issue_key`，legacy 布局缺列时 `missing_columns` 大概率已覆盖该判据（属推测，**未实测**，如实标注）。
+⑤ **已落实 —— 结论是等价变异（守卫冗余）**：`REQUIRED_COLUMNS` 实际**不含** `issue_key`（我原先的推测有误），但 `missing_columns` 对真实 pre-#155 表必然非空 ⇒ 同样强制 `needs_migration = true`；且 `run_migrations` 里**独立地**再检查一次 `tasks_uses_legacy_key`。删除该判据不改变行为，属**可证明的等价变异**。完整推导、探针双侧输出与一处探针设计错误见 [`issue-402`](./issue-402-schema-is-current-legacy-check-redundant.md)。
 
 ## 发现：代码里有明确警告的保护，却完全没有测试
 
