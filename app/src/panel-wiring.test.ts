@@ -41,8 +41,14 @@ describe('Esc 分层接线（#329）', () => {
       ['SyncLogsPanel', logsRaw],
     ] as [string, string][]) {
       expect(raw, `${name} 不应自己注册 Esc 层`).not.toMatch(/registerEscLayer\(/);
+      // #391：原正则是 `/\}, \[on(Close|Cancel)\]\)/` —— **只匹配依赖数组恰好等于
+      // `[onClose]` 的形态**。实测注入 `}, [onClose, t]);`（同样是不稳定依赖、同样会
+      // 让 Esc 层整体重排）⇒ **全绿漏网**。#344 要防的正是「不稳定依赖」这**一类**，
+      // 不是「恰好等于 `[onClose]`」这一个写法。
+      //
+      // 改为：匹配**任何**含 onClose/onCancel 的依赖数组（允许中间有其他依赖）。
       expect(raw, `${name} 不得把 onClose/onCancel 放进 Esc effect 依赖`).not.toMatch(
-        /\}, \[on(Close|Cancel)\]\)/,
+        /\},\s*\[[^\]]*\bon(Close|Cancel)\b[^\]]*\]\)/,
       );
     }
     // hook 侧：层注册与 window 监听都只在挂载时做一次（依赖恒为 []）
