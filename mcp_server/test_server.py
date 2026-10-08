@@ -143,6 +143,75 @@ class OnDemandTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             S.parse_issue_ref_parts("repo#0")
 
+    # ── 引用解析：形态覆盖（#385）────────────────────────────────────────
+    def test_parse_url_forms_guarded(self):
+        """URL 分支的四种形态逐条锁定。
+
+        审计实测：`(?:issues|pull)` 退化为 `(?:issues)` 时，**整个测试套件无任何
+        报错**——`/pull/{n}` 链接会突然抛「无法解析 issue 引用」，而这看起来像
+        「用户填错了引用」，不会有任何告警。
+
+        Rust 侧 `on_demand.rs:459,485` 已有 `/pull/` 断言，Python 侧此前没有，
+        两侧实现要求等价（AGENTS.md §8.6）却测试覆盖不对称——本例补齐。
+
+        注：repo 名分隔符 `[^/#?]+` 放宽为 `[^/]+` 在**合法 URL 上是等价变异**
+        （路径段本就不含 `?`/`#`），只有畸形 URL 才分歧，故不作为缺口计入。
+        """
+        # 1. PR 链接：GitHub 的 `/pull/{n}` 与 `/issues/{n}` 都必须接受
+        p = S.parse_issue_ref_parts("https://github.com/acme/web/pull/42")
+        self.assertEqual(
+            (p["owner"], p["repo"], p["number"], p["key"]),
+            ("acme", "web", 42, "web#42"),
+        )
+        # 2. repo 名不得吞掉 `?` / `#`（URL 常带查询串与锚点）
+        for raw, num in [
+            ("https://github.com/acme/web/issues/7?x=1", 7),
+            ("https://github.com/acme/web/issues/7#issue-1", 7),
+            ("https://github.com/acme/web/pull/8#issue-2", 8),
+        ]:
+            p = S.parse_issue_ref_parts(raw)
+            self.assertEqual((p["repo"], p["number"]), ("web", num), raw)
+        # 3. 省略 `issues|pull` 段的畸形 URL 应走 `#` 分支而不是误解析
+        with self.assertRaises(ValueError):
+            S.parse_issue_ref_parts("https://github.com/acme/web/7")
+
+    def test_parse_repo_ref_edge_forms_guarded(self):
+        """`repo#N` 形态的边界：尾斜杠、多 `#`、多余路径段。
+
+        审计实测：`left.rstrip("/")` 写成 `left`（漏尾斜杠裁剪）、
+        `rpartition` 写成 `split`（多 `#` 处理不同），**均无任何测试失败**。
+        """
+        # 尾斜杠：`owner/repo/#N` 必须与 `owner/repo#N` 等价
+        a = S.parse_issue_ref_parts("acme/web/#123")
+        b = S.parse_issue_ref_parts("acme/web#123")
+        self.assertEqual(
+            (a["owner"], a["repo"], a["number"], a["key"]),
+            (b["owner"], b["repo"], b["number"], b["key"]),
+            "尾斜杠不应改变解析结果",
+        )
+        # 多余路径段：只取最后一段作 repo
+        p = S.parse_issue_ref_parts("a/b/c/web#7")
+        self.assertEqual((p["repo"], p["key"]), ("web", "web#7"))
+        # 多个 `#`：`rpartition` 取**最后一个** `#` 之后作编号。
+        # 必须断言**具体错误消息**——只断言「抛 ValueError」判别力不足：
+        # 把 `rpartition` 换成 `split`（`left, right = ref.split("#")`）同样抛
+        # ValueError（unpack 时长不匹配），两种写法在测试眼里完全一样。
+        with self.assertRaises(ValueError) as cm:
+            S.parse_issue_ref_parts("a#b#c")
+        self.assertIn("编号非法", str(cm.exception))
+        # `owner/repo#abc` 同理：编号段非法而非「无法解析引用」
+        with self.assertRaises(ValueError) as cm:
+            S.parse_issue_ref_parts("acme/web#abc")
+        self.assertIn("编号非法", str(cm.exception))
+
+        # 空引用：必须断言**专属消息**。
+        # 同样原因——删掉 `if not ref` 守卫后，空串会落到末尾的「无法解析 issue 引用」
+        # 分支，仍抛 ValueError，只断言异常类型则测不出差异。
+        for bad in ["", "   ", None]:
+            with self.assertRaises(ValueError) as cm:
+                S.parse_issue_ref_parts(bad)
+            self.assertIn("引用为空", str(cm.exception), f"{bad!r} 应报「issue 引用为空」")
+
     # ── 纯函数 ───────────────────────────────────────────────────────────
     def test_iso_to_secs(self):
         self.assertEqual(S._iso_to_secs("2026-09-15T02:26:31Z"), 1789439191)
