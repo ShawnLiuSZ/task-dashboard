@@ -21,12 +21,40 @@ import sessionsPanelRaw from './components/SessionsPanel.tsx?raw';
 // 剥离注释：断言只针对声明本身，避免注释里提到写法（如「原先用 overflow: hidden」）就被命中。
 const styles = stylesRaw.replace(/\/\*[\s\S]*?\*\//g, '');
 
-/** 取出某选择器的全部声明块（同一选择器可能出现在分组合并规则中，故返回数组）。 */
+/**
+ * 取出「作用于某元素的全部声明块」。
+ *
+ * #393：原实现只匹配**精确选择器字面量**：
+ * ```ts
+ * const re = new RegExp(`(?:^|[},])\s*${escaped}\s*\{([^}]*)\}`, 'gm');
+ * ```
+ * 两个系统性盲区（实测 5 种形态中 4 种漏网）：
+ * 1. **锚点 `(?:^|[},])` 不含 `{`** ⇒ `@media` / `@supports` 块**内的规则完全不可见**。
+ *    而 #259 的缺陷本体正是「窄屏四列被压成 ~18px 竖条」—— 响应式回归恰好活在媒体查询里。
+ * 2. **只认字面量相等** ⇒ 后代选择器 `.notes-page .notes-card-cols`（作用于同一元素、
+ *    特异性更高、实际生效）与合并选择器 `.notes-card-cols, .sidebar` 都被漏掉。
+ *
+ * 改为：全局提取所有「选择器 + 声明体」对，再按**最后一个复合选择器**精确匹配。
+ * `([^{}]+)\{([^{}]*)\}` 会跳过 `@media` 外壳（其声明体含 `{`），直接取到内层规则。
+ */
 function decls(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`(?:^|[},])\\s*${escaped}\\s*\\{([^}]*)\\}`, 'gm');
-  const hits = [...styles.matchAll(re)].map((m) => m[1]);
-  expect(hits.length, `styles.css 中找不到规则 ${selector}`).toBeGreaterThan(0);
+  // 匹配语义：规则选择器（按逗号拆开、去掉祖先前缀后）**以调用方选择器结尾**。
+  // 这样同时覆盖四种写法：
+  //   · 完全相同            `.notes-card-cols`
+  //   · 后代（祖先前缀）    `.notes-page .notes-card-cols`
+  //   · 合并规则里的其中一项 `.notes-card-cols, .sidebar`
+  //   · 调用方自带后代      `.notes-page .notes-panel`
+  // 用 endsWith 而非 startsWith / 包含，避免 `.note-col` 误命中 `.note-col--p1`。
+  const target = selector.trim();
+  const ruleRe = /([^{}]+)\{([^{}]*)\}/g;
+  const hits: string[] = [];
+  for (const m of styles.matchAll(ruleRe)) {
+    const selectorList = m[1];
+    const body = m[2];
+    const applies = selectorList.split(',').some((part) => part.trim().endsWith(target));
+    if (applies) hits.push(body);
+  }
+  expect(hits.length, `styles.css 中找不到作用于 ${selector} 的规则`).toBeGreaterThan(0);
   return hits.join('\n');
 }
 
