@@ -226,10 +226,74 @@ describe('外链打开统一走 openExternal（#370）', () => {
     ['App', appRaw],
   ];
 
-  it('六个组件都不再直接裸调 api.openInBrowser（须走 openExternal）', () => {
+  it('**所有**组件都不再直接裸调 api.openInBrowser（须走 openExternal）', () => {
     for (const [name, raw] of panels) {
       expect(raw, `${name} 不得裸调 api.openInBrowser`).not.toMatch(/api\.openInBrowser\s*\(/);
     }
+  });
+
+  // #389：上一条只遍历**手写的 6 项枚举**，新增组件（或当时不在清单里的组件）
+  // 引入裸调用时守卫完全不响。实测往 `AgentPanel` / `SettingsPanel` 各注入一处
+  // `api.openInBrowser(` —— panel-wiring 全套**仍然全绿**，而往清单内的
+  // `SessionsPanel` 注入才会失败。
+  //
+  // 这是「只改了一半」模式的第 5 次实例（#339 TaskCard / #345 MCP 分帧 /
+  // #357 get_opt / #370 openExternal / 本项）：**每次都是「修复处有守卫、
+  // 守卫本身有盲区」**。
+  //
+  // 修法与 #376 / #380 同源：把「手写枚举」换成**从目录自动枚举**，
+  // 让新增组件天然落在守卫范围内，无需记得同步维护清单。
+  it('自动枚举：新增组件若裸调 api.openInBrowser 也会被守卫抓到', () => {
+    // `import.meta.glob` 在 vitest 下按字面量静态展开 —— 组件目录里的每个
+    // .tsx 都自动进入这张表，新增文件无需改本测试。
+    // 注意要同时枚举 `./App.tsx` —— 它在 src 根目录、不在 components/ 下，
+    // 而手写清单里一直有它。只写 './components/*.tsx' 会漏掉（本人第一版就漏了，
+    // 由下一条的反向契约当场抓出，见该条注释）。
+    const allComponents = {
+      ...(import.meta.glob('./components/*.tsx', {
+        query: '?raw',
+        import: 'default',
+        eager: true,
+      }) as Record<string, string>),
+      ...(import.meta.glob('./App.tsx', {
+        query: '?raw',
+        import: 'default',
+        eager: true,
+      }) as Record<string, string>),
+    };
+    const names = Object.keys(allComponents).sort();
+    // 守卫若因路径写错而静默匹配到 0 个文件，就会变成恒真断言（#367 的教训）
+    expect(names.length).toBeGreaterThan(10);
+
+    const offenders = names.filter((name) => /api\.openInBrowser\s*\(/.test(allComponents[name]));
+    expect(
+      offenders,
+      `这些组件裸调了 api.openInBrowser（须走 openExternal）：${offenders.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('自动枚举确实覆盖了手写清单之外的组件（否则上一条形同虚设）', () => {
+    const allComponents = {
+      ...(import.meta.glob('./components/*.tsx', {
+        query: '?raw',
+        import: 'default',
+        eager: true,
+      }) as Record<string, string>),
+      ...(import.meta.glob('./App.tsx', {
+        query: '?raw',
+        import: 'default',
+        eager: true,
+      }) as Record<string, string>),
+    };
+    const autoNames = Object.keys(allComponents).map((p) => p.split('/').pop());
+    // 反向契约：自动枚举的范围必须是手写清单的**超集**。
+    // 若有人后来把手写清单当成唯一来源，这里会因「清单里有自动枚举没有的」而失败。
+    const listed = panels.map(([name]) => `${name}.tsx`);
+    const missing = listed.filter((f) => !autoNames.includes(f));
+    expect(missing, `手写清单里有自动枚举未覆盖的文件：${missing.join(', ')}`).toEqual([]);
+    // 并显式确认「清单外组件确实存在且已被自动枚举覆盖」——否则这条守卫只是
+    // 在一个很小的目录上打转（当前 components/ 下共 14 个组件，清单只有 6 个）。
+    expect(autoNames.length).toBeGreaterThan(panels.length);
   });
 
   it('openExternal 自身必须带 .catch（否则收口形同虚设）', () => {

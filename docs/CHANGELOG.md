@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 断言强度审计（八）：前端组件测试 —— openExternal 守卫的枚举盲区（#390）**
+
+  - **结构性事实**：3 个组件测试文件全部用 `renderToStaticMarkup`（19 处），而服务端渲染**完全丢弃事件处理器**，且全仓**零交互模拟** ⇒ **任何组件测试都不可能抓到事件绑定缺陷**。在 §2.5 不引入 jsdom 的约束下，`panel-wiring.test.ts` 的静态正则守卫是唯一防线。
+  - **但该守卫只遍历手写的 6 项枚举**：该文件已 import 12 个组件的 `?raw`，清单只有 6 个（`components/` 下共 **16 个** `.tsx`）。实测往 `AgentPanel` / `SettingsPanel` 各注入一处 `api.openInBrowser(` ⇒ **panel-wiring 全绿**；清单内的 `SessionsPanel` 注入才失败。
+  - **「只改了一半」模式的第 5 次实例，且递归了一层**：#370 修的正是 `SessionsPanel` 裸调并**加了这条守卫**，但守卫只覆盖当时已知的 6 个组件 ⇒ 前四次是「只改了一半的**代码**」，这次是「只覆盖了一半的**守卫**」。
+  - **修复**：与 #376 / #380 同源 —— **手写枚举 → `import.meta.glob` 自动枚举**（`components/*.tsx` + `App.tsx`），新增组件天然在范围内，**无需记得同步维护清单**。
+  - **两条防恒真守卫**（#367 教训）：实测 `import.meta.glob` 路径写错时**静默匹配 0 个文件不报错**（`BAD=0`），守卫会变成恒真断言。故加 `names.length > 10` 下限 + **反向契约**（自动枚举范围须是手写清单的**严格超集**）。
+  - **反向验证 7/7**：6 个原漏网组件 + `App.tsx` 全部捕获；破坏 glob 路径也捕获（`expected 1 to be greater than 10`）。
+  - **过程中我犯了两次同类错误，都被当场抓出**：① 第一版只写 `'./components/*.tsx'`，漏了根目录的 `App.tsx` ⇒ **由我自己写的反向契约当场报出**（若无它，这个盲区会随修复合入 main，**与本 issue 修的正是同一类问题**）；② 验证时误判「守卫存活」，实际是 **vitest 变换缓存**返回旧结果 —— 本轮**第六次**「测量手段本身出错」。
+  - **如实记录遗留局限**：`renderToStaticMarkup` 使组件测试**无法验证事件绑定**（`onClick` 绑错函数、回调内部逻辑错误当前无任何测试能发现），修它需引入 jsdom 违反 §2.5，应作独立提案评估。本 issue 只把「静态可查」那部分的覆盖从 6 个扩到 16 个 + `App.tsx`。
+  - 详见 [`issue-390-openbrowser-guard-enumeration.md`](./issue-390-openbrowser-guard-enumeration.md)
+
 - **Unreleased — 断言强度审计（七）：双实现一致性 —— 日期转换两侧 5 处分歧（#388）**
 
   - **`server.py::_iso_to_secs` 与 Rust `iso8601_to_secs` 是两份完全独立的实现**（一个手写闭式公式、一个调 `strptime`），而 Python docstring 明确声称「对齐 Rust」。实测 **5 处不一致**。
