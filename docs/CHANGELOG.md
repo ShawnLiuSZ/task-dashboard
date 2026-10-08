@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 断言强度审计（十一）：`db.rs` 首次审计 —— #340 指纹保护无测试（#396）**
+
+  - `db.rs` 是本仓**唯一「最坏事故类别 + 零审计」的组合** —— #340 是**永久数据丢失**（`tasks` 被 DROP、`tasks_new` 保有全量数据却打不开库、版本号盖到最新、迁移此后再不重跑）。审计 8 个目标，**最关键的判据只被守住一半**。
+  - **发现**：`open_db` 里逐字写着「⚠️ 必须确认 tasks_new **确实是 tasks 布局**才 RENAME，否则 SCHEMA 的 `CREATE INDEX ... ON tasks(ownership)` 会因缺列而整个 batch 失败 —— 那比『看板为空但能打开』更糟（**库直接打不开**）」，**但这条保护没有任何测试**。已有用例只覆盖**正向**（真实 tasks 布局 ⇒ 应恢复），**反向情形（`tasks_new` 存在但并非 tasks 布局）完全没测**。
+  - **后果实测**：指纹在 ⇒ `tasks_new` **保留原状**（安全侧）；指纹去掉 ⇒ 被**当成 tasks 升为看板主表**。**与 #376 `taskSig` 完全同型：契约被逐字写在注释里，却只守住契约的一半。**
+  - **修复**：补 1 例，三层断言 —— 前置确认（确实处于目标状态）/ 核心（`tasks_new` 必须仍存在，断言消息直接引用源码警告）/ **反向契约**（恢复出的 `tasks` 必须带 `issue_key`，证明它不是那张被 `DROP COLUMN` 的残表）。
+  - **反向验证**：指纹校验变异由**存活**转为**捕获**；`!table_exists(tasks)` 判据移除亦被捕获。
+  - **方法论：为什么 `db.rs` 适合 mutation** —— 它虽依赖真实 SQLite，但可测的是纯逻辑（迁移门控条件、恢复探测的可达性、`SCHEMA` 与迁移列表的一致性）。**不需要对 SQL 执行做 mutation**：要测的是「这段代码在什么状态下才会跑」，而 #340 的形态（自愈分支不可达）恰是可达性缺陷，**注入「把前置条件改成永不成立」一测就暴露**，读代码极易漏判。
+  - ⚠️ **又犯了 #380 的同一个错误**（当时已写进 KB，本次仍重犯）：插入点替换的 anchor 只取 `fn xxx() {` 一行 ⇒ 上方 doc + `#[test]` 留在原地 ⇒ `duplicated attribute` + **原函数失去 `#[test]` 变 dead code**，而 **`cargo test` 仍通过（27 passed）**，只有 clippy 暴露。**教训固化**：插入点替换必须**连 `#[test]` 一起锚定**，或插入后**立即**跑 `clippy --all-targets` —— 这是 clippy 门禁（#366）的第二重价值。
+  - 另记 1 个存活但**不是缺陷**的等价变异：去掉 `table_exists(tasks_new)` 判据 —— 全新库上两表都不存在，而 `table_has_column` 对不存在的表返回 `false`，条件仍为假。
+  - 详见 [`issue-396-tasks-new-fingerprint-untested.md`](./issue-396-tasks-new-fingerprint-untested.md)
+
 - **Unreleased — 断言强度审计（十）：CSS 静态断言 helper 只认精确选择器（#394）**
 
   - 审 `notes-layout.test.ts` 与 `styles.test.ts`（两者用 `?raw` 读 `styles.css` 做静态断言，因 vitest 跑在 node 环境无 DOM/布局引擎、§2.5 不引入 jsdom）。**同一个 `decls()` helper 在两个文件里各写了一份**（30 + 25 = **55 个守卫**受影响），且只匹配精确选择器字面量。
