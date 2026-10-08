@@ -935,6 +935,80 @@ fn migration_v4_normalizes_issue_state_and_repairs_closed_status() {
 /// ```
 ///
 /// **反向验证**：删掉 `open_db` 里的探测块后本例必然失败。
+/// #394：`open_db` 的 #340 恢复探测**必须**用 `issue_key` 列指纹确认
+/// `tasks_new` 确实是 tasks 布局才 RENAME。
+///
+/// **为什么这条重要**：源码注释里写明了这个保护的理由 ——
+/// 「⚠️ 必须确认 tasks_new **确实是 tasks 布局**才 RENAME，否则 SCHEMA 的
+/// `CREATE INDEX ... ON tasks(ownership)` 会因缺列而整个 batch 失败 ——
+/// 那比『看板为空但能打开』更糟（**库直接打不开**）」。
+///
+/// **审计发现**：此前**只有正向用例**（`open_db_recovers_orphaned_tasks_new_after_crash`
+/// 造的是**真实** tasks 布局，含 `issue_key`，断言「应被恢复」）。
+/// **反向情形 —— `tasks_new` 存在但并非 tasks 布局 —— 完全没有测试**。
+///
+/// 后果实测：去掉指纹校验后，一个非 tasks 布局的 `tasks_new` 会被**当成 tasks 消费掉**
+/// （RENAME 成功、`tasks_new` 消失），把一张结构不对的表升为看板主表 —— 正是注释警告的
+/// 那条路径。反之指纹生效时 `tasks_new` 被**保留原状**待下次重试，是安全的一侧。
+#[test]
+fn open_db_does_not_rename_nonlayout_tasks_new() {
+    let dir = tempdir();
+    let path = dir.join("taskboard.db");
+
+    // ── 构造：`tasks_new` 存在但**缺 `issue_key` 指纹列** ⇒ 不是 tasks 布局
+    {
+        let conn = db::open_db(&path).expect("构造底库必须成功");
+        // 模拟重建事务里 tasks_new 被建成不完整布局（先删依赖该列的索引）
+        conn.execute_batch(
+            "ALTER TABLE tasks RENAME TO tasks_new;
+             DROP INDEX IF EXISTS idx_tasks_issue_key;
+             ALTER TABLE tasks_new DROP COLUMN issue_key;",
+        )
+        .unwrap();
+    }
+
+    // ── 前置确认：此刻确实处于「tasks 缺失 + tasks_new 非 tasks 布局」
+    {
+        let conn = db::open_db(&path).expect("再次打开必须成功");
+        let tasks_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tasks'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tasks_exists, 1, "SCHEMA 应已重建出空 tasks 表");
+    }
+
+    // ── 核心断言：非 tasks 布局的 tasks_new **不得被 RENAME 消费**
+    let conn = db::open_db(&path).expect("open_db 必须成功");
+    let still_there: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tasks_new'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        still_there, 1,
+        "非 tasks 布局的 tasks_new 必须保留原状（不得 RENAME 成 tasks）—— \
+         否则 SCHEMA 的 CREATE INDEX 会因缺列而整个 batch 失败，库直接打不开"
+    );
+
+    // 反向契约：恢复出的 tasks 不得是那张结构不对的表 —— 必须带 issue_key 指纹列。
+    let has_issue_key: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name='issue_key'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        has_issue_key, 1,
+        "tasks 必须带 issue_key 列（证明它不是那张被 DROP COLUMN 的残表）"
+    );
+}
+
 #[test]
 fn open_db_recovers_orphaned_tasks_new_after_crash() {
     let dir = tempdir();
