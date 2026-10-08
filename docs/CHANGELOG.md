@@ -6,6 +6,16 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 断言强度审计（六）：Python 侧第一批 —— MCP 引用解析形态覆盖缺口（#386）**
+
+  - **`mcp_server/server.py::parse_issue_ref_parts` 是 agent 每次调用 MCP 工具的入口**（`update_task_status(issue, ...)` / `record_session` 等全部走它），而 AGENTS.md §8.6 要求它与 Rust `on_demand.rs` 行为等价。实测 **4 个变异存活**。
+  - **最关键的一个**：`(?:issues|pull)` 退化为 `(?:issues)` ⇒ **`/pull/{n}` 链接全部解析失败**，且失败方式是抛「无法解析 issue 引用」—— 看起来像「用户填错了引用」，**不会有任何告警**。另 3 个：漏 `rstrip("/")` 使 `owner/repo/#N` 解析出错误 repo、`rpartition`→`split` 改多 `#` 行为、删空引用守卫改错误消息。
+  - **跨侧覆盖不对称（额外发现）**：`on_demand.rs:459,485` **已有** `/pull/` 断言而 Python 侧完全没有 ⇒ Rust 改正则时 Python 侧无人发现。与 #155（改名漏改 Python 侧、读路径静默失效几个版本）同类风险面，只是那次靠人工比对列名发现、这次靠断言审计发现。
+  - **关键技术点：断言必须断言**错误消息**而非只断言异常类型**。我第一版只写 `assertRaises(ValueError)`，结果 `rpartition`→`split` **依旧存活** —— 后者也抛 `ValueError`（unpack 长度不匹配），两种写法在测试眼里完全一样。改为断言 `编号非法` / `引用为空` 后 **6/6 全捕获**。**这正是 #376「断言看起来合理 ≠ 有判别力」的教训落在自己身上。**
+  - **诚实标注 1 个存活不是缺陷**：`[^/#?]+` 放宽为 `[^/]+` 对合法 URL 是等价变异（路径段本就不含 `?`/`#`），只有畸形 URL 才分歧，不计入缺口。
+  - **本轮第五次「测量手段本身出错」**：验证脚本 grep 只匹配 `FAILED (failures=`，而 `url-pull` 产生 `errors=1`（异常 vs 断言失败）⇒ 报成 `??`。五条纪律共同点：**先验证测量手段本身，再采信结论**。
+  - 详见 [`issue-386-python-mcp-parse-ref-coverage.md`](./issue-386-python-mcp-parse-ref-coverage.md)
+
 - **Unreleased — 断言强度审计（五）：Rust 侧第四批 —— GraphQL 链接解析别名守卫「空洞为真」（#384）**
 
   - **审计前 `parse_links_from_graphql` 只有 2 条平凡断言**（`{}` 与 `{"data": {}}` → 空），整条父子链接解析路径几无直接覆盖。
