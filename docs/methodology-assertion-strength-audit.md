@@ -76,6 +76,23 @@
 
 **做法**：Python `datetime` / `strftime` 等标准库算出真值，逐条核对。
 
+### 纪律 3b：名称类断言必须配**反向契约**
+
+`assert!(q.contains("someName"))` 只要求「包含」，因此以下全部逃逸：
+
+| 逃逸形态 | 例子 |
+|---|---|
+| 拼写错误 | `...FieldValue` → `...FieldValues` |
+| 版本后缀 | `v1` → `v1Beta` |
+| 前缀重复 | `item` → `itemItem` |
+
+**必须**额外断言「**不**出现 `someName` + 多余字符的变体」。
+
+实例：#411 的 `contains("updateProjectV2ItemFieldValue")` 挡不住
+`updateProjectV2ItemFieldValues`（GitHub 会报未知字段）。
+
+与 #407 同族：**断言了「包含某物」，没断言「恰好是某物」**。
+
 ### 纪律 4：过滤条件 / 信号必须**覆盖被测对象**
 
 **反面教材**：验证 `title-X` / `url-X` 时用了 `vitest run src/panel-wiring.test.ts`，而新用例名 `link_from_node_defaults_...` **不含 `panel-wiring`** ⇒ **用例根本没跑**，我却据此报「存活」。

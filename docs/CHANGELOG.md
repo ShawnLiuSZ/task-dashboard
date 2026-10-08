@@ -6,6 +6,16 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **断言强度审计续篇：#215 写回路径的 mutation 形状断言过弱（#411）**
+
+  - 审 `project_status_mutation` —— **TaskBoard 唯一向 GitHub 写入**的地方。现有断言是 `contains("updateProjectV2ItemFieldValue")`，改成 `...FieldValues`（拼写错误）**断言仍通过**。
+  - 实测 8 个变异**5 个存活**：`mutation`→`query`、响应选集丢弃、`input:` 包装丢弃、mutation 名字拼错。**严重性如实界定为低于 #409** —— 这 5 处在运行期**都是响亮失败**（GitHub 直接拒绝；且 `set_project_item_status` 明确校验 `projectV2Item.id`，为空即报「GitHub 未返回确认」），**不存在静默数据损坏**。
+  - **仍需锁定的两条理由**：①**响应选集是查询与调用方之间的契约** —— 漏掉则每次写回都报「GitHub 未返回确认」，**#215 整体不可用**，而该症状极具误导性（代码里的错误提示会把排查者引向 PAT 权限，不会想到是查询少选一个字段）；②本函数存在的**全部意义**就是「纯函数、可单测」。
+  - 修复为 1 例六层，含**反向契约「不得出现名字+多余字符的变体」**。**反向验证 7/7**；lib 175 → 176，clippy 0 error。
+  - 💡 **方法论新增纪律 3b：名称类断言必须配反向契约** —— `contains("someName")` 只要求包含，故拼写错误（`...Value`→`...Values`）、版本后缀（`v1`→`v1Beta`）、前缀重复（`item`→`itemItem`）**全部逃逸**。与 #407 同族：**断言了「包含某物」，没断言「恰好是某物」**。
+  - ⚠️ **过程中一次事故**：为验证「还原是否干净」我跑了 `git checkout <file>`，**把自己的 68 行测试删掉了**（靠事先留的备份恢复）。**`git status`/`git diff --stat` 安全，`git checkout <file>` 破坏性** —— 它不区分「变异残留」与「我自己的改动」。
+  - 详见 [`issue-411-write-path-mutation-shape.md`](./issue-411-write-path-mutation-shape.md)
+
 - **断言强度审计续篇：Project 条目查询的字段选集几乎全无守护（#409）**
 
   - 审 `project_items_query`（#356 抽成纯函数）。**关键背景是这个函数已被同类缺陷咬过一次** —— 注释写着「⚠️ issue 分支的 `updatedAt` **不可删**…**该缺陷已真实发生过一次**」，但 #356 当时**只补了 `updatedAt` 一条断言**，其余字段选集全部无人守护。

@@ -2300,6 +2300,74 @@ mod tests {
         assert!(q.contains(r#"singleSelectOptionId: "O""#));
     }
 
+    /// #409：`project_status_mutation` 的**精确形状**（写回路径，#215）。
+    ///
+    /// **为什么补**：现有 `project_status_mutation_shape` 用的是
+    /// `q.contains("updateProjectV2ItemFieldValue")` —— **子串匹配**，所以把名字改成
+    /// `updateProjectV2ItemFieldValues`（拼写错误、GitHub 会报错）**断言仍然通过**。
+    /// 另有 4 处形状无人断言：`mutation` 关键字、`input:` 包装、响应选集、mutation 名字。
+    ///
+    /// **严重性如实界定**：这四处失效在**运行期都是响亮失败**，不是静默损坏 ——
+    /// `mutation`→`query`、拼错名字、丢 `input:` 都会被 GitHub 拒绝；
+    /// 且 `set_project_item_status` 明确校验响应
+    /// （`v["data"][...]["projectV2Item"]["id"]` 为空即报「GitHub 未返回确认」）。
+    /// **故严重性低于 #409 的分页静默截断。**
+    ///
+    /// 但仍需锁定，理由有二：
+    /// ① **响应选集是查询与调用方之间的契约** ——
+    ///    `set_project_item_status` 依赖 `projectV2Item { id }`，漏掉它会让 #215
+    ///    **整个功能失效**（每次写回都报「GitHub 未返回确认」）。
+    /// ② 本函数存在的**全部意义**就是「纯函数、可单测」，让 GraphQL 形状错误
+    ///    在 CI 就暴露，而不是等真实请求（#278 的立论）。
+    #[test]
+    fn project_status_mutation_exact_shape_is_guarded() {
+        let q = GitHubClient::project_status_mutation("PVT_1", "PVTF_2", "FIELD_3", "OPT_4");
+
+        // ① 必须是 **mutation** 而非 query（写路径的前提）
+        assert!(
+            q.starts_with("mutation {"),
+            "写回必须是 mutation 开头 —— 变成 query 会让整个写操作失效，实际开头：{:.40}",
+            q
+        );
+        assert!(!q.starts_with("query {"), "写回绝不能是 query");
+
+        // ② mutation 名字必须**精确匹配**（子串匹配挡不住拼写错误）
+        assert!(
+            q.contains("updateProjectV2ItemFieldValue("),
+            "mutation 名字必须精确为 updateProjectV2ItemFieldValue"
+        );
+        // 反向契约：不得出现「名字 + 多余字符」的变体（子串断言的经典漏网形态）
+        assert!(
+            !q.contains("updateProjectV2ItemFieldValues"),
+            "mutation 名字不得带多余字符（原 contains 断言挡不住此类拼写错误）"
+        );
+
+        // ③ input: 包装必须存在（否则 GraphQL 语法错）
+        assert!(
+            q.contains("updateProjectV2ItemFieldValue(input: {"),
+            "必须用 input: 包装参数"
+        );
+
+        // ④ 响应选集是**与调用方的契约**：set_project_item_status 读 projectV2Item.id
+        assert!(
+            q.contains("projectV2Item { id }"),
+            "响应必须选 projectV2Item {{ id }} —— 调用方据此判定写回成功，漏掉则功能整体失效"
+        );
+
+        // ⑤ 四个 id 各自出现在对应字段名之后（防参数错位）
+        for (field, value) in [
+            ("projectId", "PVT_1"),
+            ("itemId", "PVTF_2"),
+            ("fieldId", "FIELD_3"),
+            ("singleSelectOptionId", "OPT_4"),
+        ] {
+            assert!(
+                q.contains(&format!(r#"{field}: "{value}""#)),
+                "{field} 必须携带 {value}（防参数错位）"
+            );
+        }
+    }
+
     /// #228：日志摘要截断（空白折叠 + 多字节安全）。
     #[test]
     fn summarize_text_truncates() {
