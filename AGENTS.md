@@ -212,6 +212,24 @@ CI：`/.github/workflows/i18n-check.yml` 在 PR 时自动校验 i18n 一致性�
 - 新增文档后**必须**在 README.md / CHANGELOG.md / 涉及的 PRD 章节建立反向链接（避免孤岛文档）。
 - 旧文档若被新文档取代，在文档顶部标注「⚠️ 已被 `<new-doc>` 取代」并保留 1 个版本周期后删除。
 
+### 5.6 评估「测试是否真的在守什么」
+
+怀疑某处断言太弱（手写枚举 / 精确计数 / 正则守卫 / 表驱动分组），**不要靠读代码判断** ——
+断言强度靠读代码判断极易出错：#376 的表驱动用例读起来完全合理，只有 mutation 才暴露它漏守 8 个字段。
+
+动手前先读 [`docs/methodology-assertion-strength-audit.md`](./docs/methodology-assertion-strength-audit.md)，
+它沉淀了 11 项审计的**五条纪律**（注入确认生效 / 变异方向与位置 / 期望值外部来源 / 信号覆盖被测对象 /
+**判结果只用退出码**）、**四类盲区**归纳、**等价变异判别清单**与可复用流程。
+
+其中两条最易踩：
+
+1. **判测试结果只用退出码**（`(npx vitest run … >/dev/null 2>&1); echo $?`），
+   不要 `grep` 解析输出文本 —— 输出的汇总行与失败输出行极易混淆。
+2. **用脚本改 `#[cfg(test)]` / `mod tests` / `tests/` 下的文件后，立即跑
+   `cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets -p taskboard -- -D warnings`**。
+   插入点替换若只锚定 `fn xxx() {`，原函数的 `#[test]` 会丢失并变成 dead code ——
+   **而 `cargo test` 仍然通过**，只有 clippy 暴露。
+
 ---
 
 ## 6. Git / 分支、PR、提交
