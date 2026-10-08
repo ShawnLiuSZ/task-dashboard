@@ -6,6 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 断言强度审计（四）：Rust 侧第三批 —— URL 白名单子域边界无守护（#382）**
+
+  - **`common::validate_browser_url` 是 `open_in_browser` 命令的唯一闸门**，而 URL 来自 issue 正文 / PR 链接 / agent session 工作目录等**外部数据**（#370 确认 `SessionsPanel` 走这条路）。实测 **4 个变异存活，其中 2 个是真实的白名单逃逸**。
+  - **逃逸形态（当前实现正确拒绝，但无守护）**：`ends_with(".ghe.com")` → `ends_with("ghe.com")` 会放行 `evilghe.com` / `notghe.com`（任何人可注册的域）；→ `contains("ghe.com")` 还会放行 `ghe.com.attacker.net` / `a.ghe.com.evil.net`。
+  - **这是本轮最危险的变异形态**：去掉那个点看起来只是「去掉多余的点」的无害简化 —— Linter 不报，code review 极易放过（读者自动脑补「当然是指子域」），却把安全边界从「ghe.com 的子域」放宽成「任何以 ghe.com 结尾/包含 ghe.com 的域」，**且没有任何观测信号表明白名单已失效**。
+  - 另 2 个存活是大小写方向（属**失败关闭**，合法大写 URL 被拒而非放进危险域），仍锁定：URL 大小写不受控，且**若有人为「修大写被拒」而把判据改成 `contains`，会一并放宽域匹配 —— 从功能修复变成安全逃逸**。
+  - **修复**：补 2 例 —— 9 条伪装域（兄弟域 / 前后缀拼接 / userinfo 混淆 / 分隔符混用）+ 大小写与 trim 契约。额外验证 userinfo 逃逸向量：host 提取改取 `@` **前段**会放行 `https://github.com@attacker.net/o/r`，新用例成功捕获。
+  - **反向验证 4/4 + userinfo 全捕获**；lib 测试 166 → 168，clippy / fmt 干净。
+  - **变异方向教训**：userinfo 变异我第一次取了 `@` **后段**（存活），差点误判成「测试仍弱」—— 实际是**变异方向反了**，`@` 后段才是真实 host，取它本就是正确行为。与 #380 轮「把『只跑一次』写成无限循环」同类：**变异必须表达真实缺陷方向，否则存活不代表测试弱**。
+  - 详见 [`issue-382-browser-url-whitelist-boundary.md`](./issue-382-browser-url-whitelist-boundary.md)
+
 - **Unreleased — 断言强度审计（三）：Rust 侧第二批 —— Project Status 映射表 33/45 条目无测试守护（#380）**
 
   - **`sync.rs::map_project_status` / `map_project_status_en` 逐条 mutation 后只有 7 个条目被用例点名**（`done`/`completed`/`closed`/`released`/`ready for release`/`in review`/`in testing`），**实测 33 个条目删掉后无任何测试失败**。这两张表是 **#335 修复的核心产出**，函数注释逐字点名了「按整值精确匹配，不做子串匹配」「不认识的选项仍返回 `None`，绝不臆造」这份**显式契约**。

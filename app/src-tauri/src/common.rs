@@ -545,6 +545,82 @@ mod tests {
         assert!(validate_browser_url("").is_err());
     }
 
+    /// #381：`validate_browser_url` 白名单的**子域边界**契约（安全边界）。
+    ///
+    /// **为什么必须补**：这是 `open_in_browser` 命令的唯一闸门，而 URL 会来自
+    /// **issue 正文 / PR / session 等外部数据**（#370 已确认 `SessionsPanel` 走这条路）。
+    /// 审计实测：把 `ends_with(".ghe.com")` 改成 `ends_with("ghe.com")` 或
+    /// `contains("ghe.com")`，**现有测试全部通过** —— 而这两种改法都会让白名单
+    /// 逃逸到任意注册域。
+    ///
+    /// **这正是最危险的变异形态**：看起来只是「去掉多余的点」的无害简化，实际上把
+    /// 安全边界从「ghe.com 的子域」放宽成「任何以 ghe.com 结尾/包含 ghe.com 的域」。
+    ///
+    /// 当前实现**正确**，问题是无守护 —— 任何人「顺手简化」都会静默开出逃逸。
+    #[test]
+    fn validate_browser_url_rejects_ghe_lookalike_domains() {
+        // 这些域当前实现全部拒绝，但**没有任何用例覆盖**。
+        // 每一条在去掉 `.` 前缀（`ends_with("ghe.com")`）或退化为 `contains` 后都会被放行。
+        for evil in [
+            "https://evilghe.com/o/r",          // ends_with 变体可绕过
+            "https://notghe.com/o/r",           // 同上
+            "https://ghe.com.attacker.net/o/r", // contains 变体可绕过（前缀拼接）
+            "https://a.ghe.com.evil.net/o/r",   // 同上（尾部拼接）
+            "https://ghe.com.evil.net/o/r",     // 同上
+            // userinfo 混淆：真实 host 是 attacker.net，但前缀像 github.com
+            "https://github.com@attacker.net/o/r",
+            // 端口 / 查询串 / 片段都不该被当成 host
+            "https://github.com:8443@attacker.net/o/r",
+            "https://attacker.net/?github.com",
+            "https://attacker.net/#github.com",
+        ] {
+            assert!(
+                validate_browser_url(evil).is_err(),
+                "{evil:?} 必须被拒绝 —— 白名单只放行 github.com 与 *.ghe.com"
+            );
+        }
+    }
+
+    /// #381：`validate_browser_url` 的**大小写不敏感**契约。
+    ///
+    /// 实测：把 `eq_ignore_ascii_case` 写成 `==`、把 `to_lowercase()` 去掉，
+    /// 现有测试**全部通过**（用例全是小写）。
+    ///
+    /// 这两处属**失败关闭**方向（合法大写 URL 被拒，不会放进危险域），不是逃逸，
+    /// 但 URL 来自外部数据、大小写不受控，故仍需锁定 —— 否则「修正大小写」
+    /// 的改动可能反向引入逃逸（例：有人为修大写而改成 `contains`，一并放宽了域匹配）。
+    #[test]
+    fn validate_browser_url_is_case_insensitive_and_trims() {
+        // 主域大小写混合（host 比较必须不敏感）
+        for url in [
+            "https://GitHub.com/o/r",
+            "https://GITHUB.COM/o/r",
+            "https://gItHuB.cOm/o/r",
+        ] {
+            assert_eq!(
+                validate_browser_url(url).unwrap(),
+                url,
+                "{url:?} 大小写混合应放行"
+            );
+        }
+        // 企业版同理
+        for url in ["https://ACME.GHE.COM/o/r", "https://Acme.Ghe.Com/o/r"] {
+            assert!(
+                validate_browser_url(url).is_ok(),
+                "{url:?} 大小写混合应放行"
+            );
+        }
+        // 首尾空白容忍，且**返回 trim 后的 URL**（函数注释承诺）
+        assert_eq!(
+            validate_browser_url("  https://github.com/o/r  ").unwrap(),
+            "https://github.com/o/r"
+        );
+        assert_eq!(
+            validate_browser_url("\thttps://acme.ghe.com/o/r\n").unwrap(),
+            "https://acme.ghe.com/o/r"
+        );
+    }
+
     /// #328：`require_affected` 是 GUI / MCP 写路径共用的「0 行 ⇒ 任务不存在」守卫。
     /// 反向验证：把 `n == 0` 判断删掉（恒 `Ok`）时本用例失败。
     #[test]
