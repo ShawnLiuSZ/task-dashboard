@@ -6,6 +6,14 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **断言强度审计续篇：`match_close_keyword` 手写扫描器的后词边界与文本末尾（#413）**
+
+  - 审 `parse_issue_refs` 的核心 —— 逐字节走 `text.as_bytes()` 的**手写扫描器**，从 **PR 正文**提取关闭关键词。实测 7 个变异**2 个真实缺口存活**：①**后词边界检查被删** ⇒ `fixedX` / `closed_foo` 被当成关闭标记（可能**误关闭**无关 issue）；②**文本末尾 `return Some(end)` 改成 `None`** ⇒ 关键词位于正文最末时匹配不到（末行就是「Fixed」是极常见形态）。
+  - 💡 **等价变异判别清单第二次命中**：中文分支 `==` 改成 `eq_ignore_ascii_case` **存活**但等价（只影响 ASCII），**正确结论是「存活但不计数」**。
+  - ⚠️ **反向契约陷阱**：`Fix` 本身就是完整关键词（大小写不敏感），**不是截断**；反向契约必须用真正的截断输入（`Fi` / `fixe`）。
+  - 修复为 1 例三层，含反向契约。**lib 176 → 177**，clippy 0 error，fmt 干净。
+  - 详见 [`issue-413-close-keyword-boundary.md`](./issue-413-close-keyword-boundary.md)
+
 - **断言强度审计续篇：#215 写回路径的 mutation 形状断言过弱（#411）**
 
   - 审 `project_status_mutation` —— **TaskBoard 唯一向 GitHub 写入**的地方。现有断言是 `contains("updateProjectV2ItemFieldValue")`，改成 `...FieldValues`（拼写错误）**断言仍通过**。
