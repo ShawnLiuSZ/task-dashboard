@@ -103,7 +103,8 @@ fn run_migrations(conn: &Connection, fresh: bool) -> Result<bool, String> {
 
 **因此我既不能断言该守卫必要，也不能断言它多余。** 已确认的只是：**对真实的 pre-#155 全量 legacy 表，它是冗余的**。
 
-若要彻底定论，需要构造「部分 ALTER 后的 legacy 表」—— 建议作为后续独立任务，不在本轮范围内。
+> ✅ **该悬空项已收尾 —— 见 [`issue-404`](./issue-404-schema-is-current-legacy-undecidable.md)**。
+> 结论：经可构造性分析证明，对**任何通过迁移流程可达的状态**，该判据都不是决定性因素 ⇒ 变异为**强等价变异**。**无代码变更，且不建议删掉它**（廉价纵深防御）。
 
 ## 代码变更
 

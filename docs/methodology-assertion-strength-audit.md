@@ -169,7 +169,27 @@ mutation 存活有三种原因，**必须逐一排除后才能判定测试弱**�
 | `updateCheck` 不 `clearTimeout` | 定时器残留不影响正确性，且检查一天跑一次 |
 | `escLayer` release 用 `indexOf` | token 唯一 ⇒ 与 `lastIndexOf` 等价 |
 | Rust `resolveBoardView` 取 `@` 前段 → 那是**真实逃逸**（反向对照） | 用来确认守卫方向没搞反 |
-| `schema_is_current` 去掉 `!tasks_uses_legacy_key` | **同一条件在 `run_migrations` 里被独立检查第二次** —— 冗余纵深防御，删掉不改变行为（详见 [`issue-402`](./issue-402-schema-is-current-legacy-check-redundant.md)） |
+| `schema_is_current` 去掉 `!tasks_uses_legacy_key` | **同一条件在 `run_migrations` 里被独立检查第二次** —— 冗余纵深防御，删掉不改变行为（详见 [`issue-402`](./issue-402-schema-is-current-legacy-check-redundant.md) / [`issue-404`](./issue-404-schema-is-current-legacy-undecidable.md)） |
+
+### 等价变异也有强弱之分（别把「试不出来」当成「等价」）
+
+| 强度 | 判据 | 够不够下结论 |
+|---|---|---|
+| **弱等价** | 「我试了几个状态都没差异」 | ❌ **不足以下结论** |
+| **强等价** | 「给出代码路径分析 + **可达性论证**，任何**可达**状态都等价」 | ✅ 可下结论 |
+
+**排查存活变异的完整路径**：
+
+```
+mutation 存活
+  ├─ 变异方向对吗？（纪律 2）          ← 排除「方向错」
+  ├─ 能构造出差异状态吗？（探针自验）   ← 排除「探针无效」
+  ├─ 有第二个等价守卫吗？（代码分析）    ← 找到冗余检查
+  └─ 该状态可达吗？（可构造性证明）      ← 定性为强等价
+```
+
+> **连续 N 次换构造仍无差异时，别再换构造 —— 该问「这个状态可达吗？」**
+> （实例：`schema_is_current` 的 legacy 判据，探针迭代 4 次后转向可达性分析才收敛，见 [`issue-404`](./issue-404-schema-is-current-legacy-undecidable.md)）
 
 **反例警示**：`assertRaises(ValueError)` 单独使用**判别力不足** —— `rpartition` 改 `split`、删空引用守卫，两种写法**都仍抛 ValueError**。必须断言**具体错误消息**（#386）。
 
