@@ -6,6 +6,14 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **断言强度审计续篇：GraphQL 链接查询的顶层字段选集无人断言（#407）**
+
+  - 选 `build_links_query` / `repo_level_failure` 是因为 #278 抽它们时注释就写明「GraphQL 语法错只在真实请求时才暴露，**代价高**」。14 个变异：**10 捕获**（含 #342 缺陷本体与它注释里警告的「错用顶层 data 判据」）、**1 等价变异**（`is_null() || !is_object()` ≡ `!is_object()`，因 `Null.is_object()` 恒 `false`）、**2 真实存活**。
+  - **根因：只断言了参数、没断言字段选集** —— 原有断言只有 `q.contains("a0: issue(number: 278)")`，那是 issue 的**参数**，从未断言节点**选了什么字段**。`parent` 与 `subIssues` **内部**的 `number title url` 都有断言，唯独**顶层**漏了 —— 而顶层恰是 `parse_links_from_graphql` **建键的依据**。
+  - **后果是静默降级而非语法错**：去掉 `number` ⇒ 父子关系**整体丢失且无任何报错**；去掉 `title`/`url` ⇒ 子 issue 卡片与父链接渲染成**空白文案**。与 #376 的「字段组断言」同族：**断言了容器，没断言被取用的字段**。
+  - 修复用**前缀断言**（`starts_with("number title url parent")`）而非解析嵌套花括号 —— 第一版 `split_once("}")` 把 `parent { ... }` 的嵌套内容一起吃进来了。本仓无 GraphQL 解析器且 §2.5 不引入新依赖，故只校验前缀顺序。**反向验证 6/6**；lib 174 全绿，clippy 0 error，fmt 干净。
+  - 详见 [`issue-407-link-fragment-fields.md`](./issue-407-link-fragment-fields.md)
+
 - **断言强度审计续篇：`Board.tsx` 列顺序零覆盖，回落分支 `orderMap` 是死代码（#405）**
 
   - 选它是因为 `projectKeys` 决定**看板列顺序**、且其回落路径正是 #372 的「看板列静默错序」点。实测 5 个变异**全部存活**，两个原因都需记录：①测试只传 **1 个** status 且 `tasks={[]}`，没有「两列以上 + 需重排」的输入；②**更根本** —— 全仓唯一调用点 `Board.tsx:145` **不传第二个参数** `projectStatuses`，而 `orderMap` 分支**只在传了该参数时可达**，主路径压根不经过这个函数 ⇒ **对 `orderIndex` 的 4 个变异天然无效**。
