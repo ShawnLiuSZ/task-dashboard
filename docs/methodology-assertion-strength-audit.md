@@ -169,6 +169,7 @@ mutation 存活有三种原因，**必须逐一排除后才能判定测试弱**�
 | `updateCheck` 不 `clearTimeout` | 定时器残留不影响正确性，且检查一天跑一次 |
 | `escLayer` release 用 `indexOf` | token 唯一 ⇒ 与 `lastIndexOf` 等价 |
 | Rust `resolveBoardView` 取 `@` 前段 → 那是**真实逃逸**（反向对照） | 用来确认守卫方向没搞反 |
+| `schema_is_current` 去掉 `!tasks_uses_legacy_key` | **同一条件在 `run_migrations` 里被独立检查第二次** —— 冗余纵深防御，删掉不改变行为（详见 [`issue-402`](./issue-402-schema-is-current-legacy-check-redundant.md)） |
 
 **反例警示**：`assertRaises(ValueError)` 单独使用**判别力不足** —— `rpartition` 改 `split`、删空引用守卫，两种写法**都仍抛 ValueError**。必须断言**具体错误消息**（#386）。
 
@@ -235,6 +236,7 @@ cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets -p taskboard
 | [#396](./issue-396-tasks-new-fingerprint-untested.md) | #340 恢复探测 | D（只守正向） | ✅ |
 | [#399](./issue-399-theme-moduleload-untestable.md) | `theme.ts` 模块加载期 | 代码路径从未执行 | ❌ |
 | [#400](./issue-400-agent-groups-helper-coupling.md) | `agent-groups` 测试辅助函数 | **E（辅助函数补上不变量）** | ❌ |
+| [#402](./issue-402-schema-is-current-legacy-check-redundant.md) | `db.rs` legacy 判据 | 结论：**等价变异**（守卫冗余），无代码变更 | — |
 
 （本表 11 行对应 issue #376–#396 中与审计相关的 11 篇 KB 文档；期间 PR 号与 issue 号交错，具体以 GitHub 为准。）
 
