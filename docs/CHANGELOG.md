@@ -6,6 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 断言强度审计（三）：Rust 侧第二批 —— Project Status 映射表 33/45 条目无测试守护（#380）**
+
+  - **`sync.rs::map_project_status` / `map_project_status_en` 逐条 mutation 后只有 7 个条目被用例点名**（`done`/`completed`/`closed`/`released`/`ready for release`/`in review`/`in testing`），**实测 33 个条目删掉后无任何测试失败**。这两张表是 **#335 修复的核心产出**，函数注释逐字点名了「按整值精确匹配，不做子串匹配」「不认识的选项仍返回 `None`，绝不臆造」这份**显式契约**。
+  - **缺陷形态是静默降级而非报错**（比 #378 更难发现）：删掉一个英文条目后落 `_ => None` ⇒「保持本地手动态」，而这**本就是许多 Project Status 的正确表现** ⇒ 不报错、不告警、UI 完全正常。删中文判据词同理会落到下一个 `contains` 或英文表。
+  - **中文表尤其脆弱**：现有用例 `map_project_status("🎉完成/上线")` **一个字符串同时含「完成」和「上线」两个判据词**，删掉任一个另一个仍命中 ⇒ 断言通过。这与 #376 `taskSig` 的「字段组断言」**完全同型**（一次覆盖多个 ⇒ 单独删除测不出来）。
+  - **修复**：表驱动测试 —— 39 个英文条目 + 9 个中文判据词逐条锁定，**中文用例每个只命中一个判据词**；另加反向契约断言表外值须返回 `None`，样本含注释承诺的陷阱（`release notes` 含 `release` 但≠`ready for release`、`in review needed` 多余后缀），锁定「不做子串匹配」。
+  - **表驱动的额外价值**：把表本身搬进测试后，**增删条目时漏更新测试即编译失败** ⇒ 从根上消除「改了表没改测试」这个盲区本身。
+  - **反向验证 0/33 → 33/33 全捕获**；lib 测试 163 → 166，clippy 干净。
+  - **附记本轮自身的一次失误**：用脚本做字符串插入点替换时 anchor 只取 `fn xxx() {` 一行，上方 `#[test]` 与 doc 留在原地 ⇒ 叠加成 `duplicated attribute` 且**原函数丢失 `#[test]` 变成 dead code**。值得记录的是 **`cargo test` 当时仍然通过（166 passed）**，只有 `clippy --all-targets` 才暴露 —— 若只跑 `cargo test` 就提交，等于把「原测试静默失效」合进 `main`，**与本 issue 修的正是同一类问题**。
+  - 详见 [`issue-380-status-map-table-contract.md`](./issue-380-status-map-table-contract.md)
+
 - **Unreleased — 断言强度审计（二）：Rust 侧第一批 —— `iso8601_to_secs` 零测试覆盖（#378）**
 
   - **`common::iso8601_to_secs` 没有任何测试**，却被 `sync.rs` / `on_demand.rs` / `github.rs` **三个生产模块调用**；它含 Gregorian 闰年算术（`month_adjust` + 世纪年规则）与 6 项输入范围校验。唯一间接覆盖是 `sync.rs` 里一处 `> 0` 断言 —— 它无法区分「解析正确」与「解析出一个荒谬但为正的值」。

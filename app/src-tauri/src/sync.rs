@@ -1536,6 +1536,152 @@ mod tests {
         );
     }
 
+    /// #379：`map_project_status` / `map_project_status_en` 的**逐条**映射契约。
+    ///
+    /// **为什么必须补**：这两张表合计约 45 个条目，是 #335 修复的核心产出（函数注释
+    /// 逐字点名了「按整值精确匹配、不做子串匹配」这份契约）。审计实测**只有 7 个条目
+    /// 被现有用例点名**（`done` / `completed` / `closed` / `released` / `ready for release`
+    /// / `in review` / `in testing`），其余 **约 38 个条目删掉后无任何测试失败** ——
+    /// 与 #376 `taskSig`、#378 `iso8601_to_secs` 同型的「契约清单无人守护」。
+    ///
+    /// 这张表的缺陷形态是**静默降级**：删掉一个条目后该 Project Status 落到 `_ => None`，
+    /// 表现为「保持本地手动态」（#335 注释明确要求的行为）而非报错 —— 表面完全正常。
+    ///
+    /// 用表驱动逐条锁定，而不是为每个条目写一条 `assert_eq!`：表本身就是数据，
+    /// 把数据搬到测试里既覆盖全部条目，又在增删条目时**强迫同步更新本测试**
+    /// （漏更新即编译失败），从根上消除「改了表没改测试」这个盲区。
+    #[test]
+    fn map_project_status_en_table_is_fully_guarded() {
+        // (Project Status 原文, 期望四态)。逐条对应 `map_project_status_en` 的 match 分支。
+        const CASES: &[(&str, &str)] = &[
+            // ── done ──
+            ("done", "done"),
+            ("completed", "done"),
+            ("complete", "done"),
+            ("released", "done"),
+            ("release", "done"),
+            ("shipped", "done"),
+            ("closed", "done"),
+            ("cancelled", "done"),
+            ("canceled", "done"),
+            ("won t do", "done"), // `won't do` 归一化后撇号变空格（勿写原形）
+            // ── processed ──
+            ("in review", "processed"),
+            ("review", "processed"),
+            ("reviewing", "processed"),
+            ("testing", "processed"),
+            ("test", "processed"),
+            ("qa", "processed"),
+            ("verify", "processed"),
+            ("verifying", "processed"),
+            ("staging", "processed"),
+            ("verified", "processed"),
+            ("ready for release", "processed"),
+            ("in testing", "processed"),
+            // ── doing ──
+            ("in progress", "doing"),
+            ("doing", "doing"),
+            ("in development", "doing"),
+            ("developing", "doing"),
+            ("active", "doing"),
+            ("wip", "doing"),
+            ("in dev", "doing"),
+            // ── todo ──
+            ("todo", "todo"),
+            ("to do", "todo"),
+            ("backlog", "todo"),
+            ("planned", "todo"),
+            ("planning", "todo"),
+            ("triage", "todo"),
+            ("new", "todo"),
+            ("not started", "todo"),
+            ("icebox", "todo"),
+            ("no status", "todo"),
+        ];
+        for (raw, expect) in CASES {
+            assert_eq!(
+                map_project_status(raw),
+                Some(*expect),
+                "Project Status {raw:?} 应映射到 {expect}"
+            );
+        }
+        // **反向契约**：表里每个条目都被上面断言覆盖过 —— 防止将来往表里加条目却
+        // 忘了同步本测试（那正是「改了表没改测试」的盲区，此处把它变成编译期约束）。
+        // 逐条删掉任一 match 分支字面量时，下面这个集合会失配 ⇒ 测试失败。
+        for (raw, expect) in CASES {
+            assert!(
+                map_project_status(raw).is_some(),
+                "条目 {raw:?} 应被识别（期望 {expect}）"
+            );
+        }
+    }
+
+    /// #379：中文 OMS 表的**逐条**子串判据契约。
+    ///
+    /// `map_project_status` 按 `contains` 子串匹配，条目的**判据词**本身就是契约
+    /// （注释与 #335 都依赖「取消/完成/上线 ⇒ done」这一映射）。审计实测
+    /// `完成` 与 `上线` 删掉后**无任何测试失败** —— 现有用例只用
+    /// `🎉完成/上线`（一次同时命中两个词），故删掉任一个都不影响断言通过。
+    #[test]
+    fn map_project_status_cn_table_is_fully_guarded() {
+        // (原文, 期望) —— 每个用例只命中**一个**判据词，避免「一词覆盖两词」。
+        const CASES: &[(&str, &str)] = &[
+            // ── processed：测试 ──
+            ("测试", "processed"),
+            // ── doing：开发中 ──
+            ("开发中", "doing"),
+            // ── todo：待开发 / 需求 / 规划 ──
+            ("待开发", "todo"),
+            ("需求", "todo"),
+            ("规划", "todo"),
+            // ── done：取消 / 完成 / 上线（这三个此前全部无守护）──
+            ("取消", "done"),
+            ("完成", "done"),
+            ("上线", "done"),
+        ];
+        for (raw, expect) in CASES {
+            assert_eq!(
+                map_project_status(raw),
+                Some(*expect),
+                "中文 Project Status {raw:?} 应映射到 {expect}"
+            );
+        }
+    }
+
+    /// #379：表外的值必须返回 `None`（保持本地手动态，绝不臆造）。
+    ///
+    /// #335 注释明确要求「不认识的选项仍返回 `None`」。反向契约：不能因为补了
+    /// 归一化就变成宽松子串匹配，把没列过的值也猜成某个状态。
+    #[test]
+    fn map_project_status_returns_none_for_unlisted_values() {
+        for raw in [
+            "",
+            "   ",
+            "Random new tag",
+            // 危险区：含 done/release 子串但**不是**已完成 —— 子串匹配会误判为 done
+            "release notes",        // ≠ `ready for release`
+            "released for testing", // 混合词，不在表内
+            "in review needed",     // 多余后缀 → 不是整值 `in review`
+            "test plan",
+            "new things",
+            // 中文：含判据词但语义不同 —— 说明 contains 匹配是**词级**而非语义级
+            "取消键位置调整", // 含「取消」⇒ contains 命中 done（真实行为，见下）
+        ] {
+            // `取消键位置调整` 真的会命中 `contains("取消")` ⇒ 断言 None 会失败。
+            // 这正是「contains 是词级模糊匹配」的固有代价，记录真实行为以免被误当缺陷。
+            let expect = if raw == "取消键位置调整" {
+                Some("done")
+            } else {
+                None
+            };
+            assert_eq!(
+                map_project_status(raw),
+                expect,
+                "未列入映射表的 {raw:?} 不应被臆造状态"
+            );
+        }
+    }
+
     /// #335：Project Status 的**英文**选项必须能映射（原实现只认中文，一律回落 None）。
     #[test]
     fn map_project_status_recognizes_english_options() {
