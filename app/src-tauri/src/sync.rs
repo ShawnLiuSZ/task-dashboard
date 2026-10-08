@@ -1360,6 +1360,66 @@ mod tests {
         );
     }
 
+    /// #412：`match_close_keyword` 的**后词边界**与**文本末尾**两条分支。
+    ///
+    /// **为什么必须补**：这是一个手写扫描器（逐字节走 `text.as_bytes()`），
+    /// 从 **PR 正文**里提取关闭关键词。审计实测 7 个变异中**这两个存活**：
+    ///
+    /// | 变异 | 后果 |
+    /// |---|---|
+    /// | 后词边界检查被删 | `fixedX` / `closed_foo` 这类**并非该关键词**的词也被当成关闭标记 |
+    /// | 文本末尾直接返回改成 `None` | 关键词**位于正文最末**时（很常见：末行就是「Fixed」）匹配不到 |
+    ///
+    /// 前词边界、char boundary 守卫、大小写不敏感三项**已有覆盖**（本轮实测均被捕获）。
+    ///
+    /// 另记 1 个**等价变异**（不计入缺口）：中文关键词分支把 `candidate == kw`
+    /// 改成 `eq_ignore_ascii_case(kw)` **存活** —— 后者只影响 ASCII 大小写，
+    /// 对非 ASCII 字符串等价 ⇒ 两种写法同值。
+    #[test]
+    fn match_close_keyword_respects_trailing_word_boundary() {
+        // ① 后词边界：关键词后紧跟字母数字/下划线 ⇒ **不是**该关键词
+        for (text, should_match) in [
+            ("Fixed", true),        // 关键词独占
+            ("fixed.", true),       // 后跟标点 ⇒ 仍匹配
+            ("fixed：", true),      // 后跟全角冒号 ⇒ 仍匹配
+            ("fixedX", false),      // 后跟字母 ⇒ **不得**匹配
+            ("fixed_more", false),  // 后跟下划线 ⇒ **不得**匹配
+            ("fixed2", false),      // 后跟数字 ⇒ **不得**匹配
+            ("prefixfixed", false), // 前词边界（前缀粘连）
+        ] {
+            let got = match_close_keyword(text, 0).is_some();
+            assert_eq!(
+                got, should_match,
+                "{text:?} 的关闭关键词匹配应为 {should_match}（后词边界 / 前词边界）"
+            );
+        }
+
+        // ② 关键词位于**文本最末**：必须匹配（末行就是「Fixed」是极常见的正文形态）
+        assert!(
+            match_close_keyword("Fixed", 0).is_some(),
+            "关键词独占整个文本时应匹配"
+        );
+        assert!(
+            match_close_keyword("修复", 0).is_some(),
+            "中文关键词独占整个文本时应匹配"
+        );
+        // 前置上下文 + 关键词收尾
+        assert!(
+            match_close_keyword("some text Fixed", 10).is_some(),
+            "关键词紧邻文本末尾时应匹配"
+        );
+        // 反向契约：**被截断**的关键词不得被当作匹配。
+        // （注意 "Fix" 本身**就是**完整关键词 —— 大小写不敏感匹配成功，不是截断。）
+        assert!(
+            match_close_keyword("Fi", 0).is_none(),
+            "截断的关键词（Fi / fixe）不得匹配"
+        );
+        assert!(
+            match_close_keyword("fixe", 0).is_none(),
+            "fixe 不是完整关键词（fix 才是）"
+        );
+    }
+
     #[test]
     fn parse_issue_refs_handles_basic_patterns() {
         // `#123` 无前缀：归属 PR 所在仓库
