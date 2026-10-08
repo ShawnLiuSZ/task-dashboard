@@ -67,6 +67,41 @@ function stubEnv() {
   return { addEventListener: addSpy, removeEventListener: removeSpy, matchMedia };
 }
 
+/**
+ * #397：`stubEnv` 的可配置变体 —— 指定 localStorage 里预存的模式。
+ *
+ * 模块加载期的行为取决于 `localStorage` 在**模块体执行那一刻**的取值，
+ * 所以必须能在打桩时就设定它（原 `stubEnv` 恒返回 'auto'，只适合测 setMode 路径）。
+ */
+function stubEnvWithStored(stored: string | null) {
+  instances = [];
+  addSpy = vi.fn(function (this: FakeMql, _type: string, fn: unknown) {
+    this.listeners.add(String(fn));
+  }) as unknown as ListenerSpy;
+  removeSpy = vi.fn(function (this: FakeMql, _type: string, fn: unknown) {
+    this.listeners.delete(String(fn));
+  }) as unknown as ListenerSpy;
+  const matchMedia = (query: string): FakeMql => {
+    const mql: FakeMql = {
+      query,
+      matches: false,
+      listeners: new Set<string>(),
+      addEventListener: addSpy,
+      removeEventListener: removeSpy,
+    };
+    instances.push(mql);
+    return mql;
+  };
+  vi.stubGlobal('window', { matchMedia });
+  vi.stubGlobal('localStorage', {
+    getItem: () => stored,
+    setItem: () => {},
+    removeItem: () => {},
+  });
+  vi.stubGlobal('document', { documentElement: { setAttribute: () => {} } });
+  return { addEventListener: addSpy, removeEventListener: removeSpy, matchMedia };
+}
+
 let add: ReturnType<typeof vi.fn>;
 let remove: ReturnType<typeof vi.fn>;
 
@@ -96,6 +131,89 @@ function liveListeners(): number {
 function instancesHolding(fn: string): number[] {
   return instances.map((m, i) => (m.listeners.has(fn) ? i : -1)).filter((i) => i >= 0);
 }
+
+/**
+ * #397：模块**加载期**的绑定逻辑此前完全无测试。
+ *
+ * 顶层 `import ... from './theme'` 让模块体在第一次 import 时就跑一次，而那一刻
+ * `beforeEach` 的 `stubEnv()` 还没执行 ⇒ `window` / `localStorage` 都不存在 ⇒
+ * 模块尾部的 `if (storedTheme === 'auto') bindSystemThemeListener()` 被 try/catch
+ * 静默吞掉。
+ *
+ * 后果实测：把该行整段删掉，**theme.test.ts 全绿** —— 即「首屏 auto 模式下系统主题
+ * 变化不再跟随应用」这个用户可见缺陷，当前无任何测试能发现。
+ *
+ * 解法：`vi.resetModules()` + 动态 `import()`，让打桩**先于**模块体建立。
+ * 这是 vitest 内置能力，不需要新依赖（§2.5）。
+ */
+describe('模块加载期的主题应用与监听绑定（#397）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  /** 打桩后再动态导入，确保模块体跑在完整环境里。 */
+  async function importFresh(stored: string | null) {
+    vi.resetModules();
+    stubEnvWithStored(stored);
+    return await import('./theme');
+  }
+
+  it('stored=auto ⇒ 模块加载即绑定系统主题监听（首屏跟随系统）', async () => {
+    const mod = await importFresh('auto');
+    expect(mod.systemThemeListenerBound(), 'auto 模式下模块加载应已绑定监听').toBe(true);
+    expect(instances.length, '模块加载应已 matchMedia 取过 MediaQueryList').toBeGreaterThan(0);
+    const active = instances.reduce((n, m) => n + m.listeners.size, 0);
+    expect(active, '应恰好注册 1 个 change 监听（不多不少）').toBe(1);
+  });
+
+  it('stored=light / dark ⇒ 模块加载**不**绑定监听（显式选择不被系统覆盖）', async () => {
+    // 这是 #329 的核心不变量：显式选择必须赢过系统主题。
+    for (const mode of ['light', 'dark'] as const) {
+      const mod = await importFresh(mode);
+      expect(
+        mod.systemThemeListenerBound(),
+        `stored=${mode} 时不得绑定系统监听，否则系统主题一变化就覆盖用户显式选择`,
+      ).toBe(false);
+      const active = instances.reduce((n, m) => n + m.listeners.size, 0);
+      expect(active).toBe(0);
+      // 解绑模块的残留（resetModules 会清 module registry，但 FakeMql 实例我们自管）
+      instances = [];
+    }
+  });
+
+  it('stored 缺失 / localStorage 不可用 ⇒ 回落到 auto 并按 auto 处理', async () => {
+    // 回落到 'auto' 而非硬编码某个具体值 —— 回落值本身就是契约。
+    const mod = await importFresh(null);
+    expect(mod.themeManager.getMode()).toBe('auto');
+    expect(mod.systemThemeListenerBound(), '回落到 auto 就应按 auto 绑定').toBe(true);
+
+    // localStorage 读取抛错时同样回落 auto
+    vi.resetModules();
+    stubEnvWithStored(null);
+    vi.stubGlobal('localStorage', {
+      getItem: () => {
+        throw new Error('storage disabled');
+      },
+      setItem: () => {},
+      removeItem: () => {},
+    });
+    const mod2 = await import('./theme');
+    expect(mod2.themeManager.getMode(), 'localStorage 不可用时须回落 auto').toBe('auto');
+  });
+
+  it('模块加载期把 stored 主题写进 data-theme（避免 FOUC 的核心动作）', async () => {
+    const setAttribute = vi.fn();
+    vi.resetModules();
+    stubEnvWithStored('dark');
+    vi.stubGlobal('document', { documentElement: { setAttribute } });
+    await import('./theme');
+    expect(setAttribute, '模块加载必须立即写 data-theme（防 FOUC）').toHaveBeenCalledWith(
+      'data-theme',
+      'dark',
+    );
+  });
+});
 
 describe('theme 系统主题监听（#329 / #343）', () => {
   beforeEach(() => {

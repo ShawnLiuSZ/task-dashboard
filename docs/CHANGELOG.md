@@ -6,6 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **断言强度审计续篇：`theme.ts` 模块加载期逻辑结构上不可测（#399）**
+
+  - 按方法论文档流程续审，选 `theme.ts` 的理由是**缺陷史** —— #343 在这里找到过真实 bug。审计 8 个目标，**#343 / #329 本体均被捕获**（回归良好），但发现一处结构性缺口。
+  - **问题**：`theme.test.ts` 顶层 `import './theme'` 让**模块体在 `beforeEach` 的 `stubEnv()` 之前执行一次** ⇒ `window` / `localStorage` 不存在 ⇒ 模块尾部的 `applyTheme(storedTheme)`（防 FOUC）与 `if (storedTheme === 'auto') bindSystemThemeListener()`（首屏跟随系统）被 `try/catch` **静默吞掉**。
+  - **后果实测：把后一行整段删掉，`theme.test.ts` 全绿** —— 即「首屏 auto 模式下系统主题变化不再跟随应用」这个用户可见缺陷**当前无任何测试能发现**，而它正落在 #329 / #343 这条反复出问题的时间线上。
+  - **「有测试」不等于「测到了」**：该文件有 7 例 29 行断言、覆盖 `setMode` / `bind` / `unbind` / `resolveTheme` 都很好，但那段代码**在测试环境里从未执行过**。测试量与覆盖范围是两回事。
+  - **修复**：`vi.resetModules()` + **动态 `import()`**，让打桩**先于**模块体建立（vitest 内置，§2.5 不引入新依赖）。补 4 例：`stored=auto` 须恰好注册 **1** 个监听（不多不少）/ `stored=light/dark` **不绑定**（#329 核心不变量）/ 缺失与抛错**回落 auto**（回落值本身即契约）/ 模块加载期写 `data-theme`（防 FOUC）。配套加 `stubEnvWithStored(stored)`。
+  - **反向验证 5/5**：2 个存活变异全部捕获；**反向对照**「恒绑定」（显式模式也绑 ⇒ #329 被改坏）亦被捕获 —— 双向都验才知道断言方向没反；#343 本体回归仍被捕获。
+  - **方法论定位**：纪律 4「信号覆盖被测对象」的**新形态** —— #384 是「过滤条件不含用例名」，本项是「**模块根本没在测试环境里跑**」。共同点：**信号（测试通过）覆盖了对象，但没覆盖对象在该环境下的实际行为**；检测手段同为纪律 1 的「删掉整段看是否全绿」。
+  - 详见 [`issue-399-theme-moduleload-untestable.md`](./issue-399-theme-moduleload-untestable.md)
+
 - **断言强度审计方法论沉淀（11 项审计的总结）**
 
   - 新增 [`methodology-assertion-strength-audit.md`](./methodology-assertion-strength-audit.md)，并在 **AGENTS.md 新增 §5.6** 作为评估断言强度时的强制入口。
