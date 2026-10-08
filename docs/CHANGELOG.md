@@ -6,6 +6,14 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **断言强度审计续篇：Project 条目查询的字段选集几乎全无守护（#409）**
+
+  - 审 `project_items_query`（#356 抽成纯函数）。**关键背景是这个函数已被同类缺陷咬过一次** —— 注释写着「⚠️ issue 分支的 `updatedAt` **不可删**…**该缺陷已真实发生过一次**」，但 #356 当时**只补了 `updatedAt` 一条断言**，其余字段选集全部无人守护。
+  - 实测 **9 个变异全部存活**：漏 `pageInfo`/`hasNextPage`/`endCursor` ⇒ **分页在第 50 条停住、之后的 issue 永不出现**；`items/fieldValues/assignees/labels(first:N)` 改成 `first:0` ⇒ 各自功能静默失效；`comments{totalCount:0}`、`author{login:""}` ⇒ 评论数恒 0、作者列空白。**全部不报语法错** —— `first:0` 与 `totalCount: 0` 都是**合法 GraphQL**，请求成功、字段为空、客户端回落默认值，**无任何错误信号**。
+  - **修复**：1 例四层断言 —— 分页驱动 / 7 条 `(字段, 支撑什么功能)` 表驱动 / **反向契约「任何 `first:0` 都不得出现」**（语法层面唯一能拦它的手段）/ 分支结构（`updatedAt` 不得进 PullRequest 分支，**多选字段的代价是查询直接报错**而非静默降级）。**反向验证 9/9**。
+  - ⚠️ **纪律 2 补上「位置也要断言」**：`s.replace(old, new, 1)` 命中的是**第一处**同名片段 —— `pageInfo {{...}}` 在 1083 行与 1154 行各出现一次、**前者属于另一个函数** ⇒ 目标函数毫发无损 ⇒ 5 个变异「存活」。改为 `s.index(old, FUNC)` 后 9/9 全捕获。这比纪律 1「注入须确认生效」**更隐蔽**：注入确实生效了，只是生效在错误位置。**本系列已三次犯「变异落到错误位置」**。
+  - 详见 [`issue-409-project-items-fields.md`](./issue-409-project-items-fields.md)
+
 - **断言强度审计续篇：GraphQL 链接查询的顶层字段选集无人断言（#407）**
 
   - 选 `build_links_query` / `repo_level_failure` 是因为 #278 抽它们时注释就写明「GraphQL 语法错只在真实请求时才暴露，**代价高**」。14 个变异：**10 捕获**（含 #342 缺陷本体与它注释里警告的「错用顶层 data 判据」）、**1 等价变异**（`is_null() || !is_object()` ≡ `!is_object()`，因 `Null.is_object()` 恒 `false`）、**2 真实存活**。
