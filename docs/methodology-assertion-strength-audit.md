@@ -112,7 +112,7 @@
 
 ---
 
-## 3. 四类盲区（11 项的归纳）
+## 3. 五类盲区（12 项的归纳）
 
 审计发现的缺口可归为四类。**每一类的修复都是扩大覆盖面，而非增加断言数量。**
 
@@ -122,6 +122,17 @@
 | **B. 匹配形式单一** | 只匹配问题的一个**写法** | #392 正则只认 `}, [onClose])`，不认 `}, [onClose, t])` |
 | **C. 解析语法子集太窄** | 解析器只认一种语法形态 | #394 `decls()` 看不见 `@media` 内规则、后代与合并选择器 |
 | **D. 只守正向不守反向** | 契约的正例被守住，**反例没有** | #376 字段组断言 · #386 只测 `/issues/` 不测 `/pull/` · **#396 #340 指纹保护完全没测** |
+| **E. 测试辅助函数补上了生产代码没有的不变性** | 辅助函数让某个分支在测试数据里**不可构造** | **#400** `host()` 把 `present` 由 `kind` 推导 ⇒ `present=false ∧ kind≠none` 构造不出来 ⇒ `!info.present` 守卫永不执行 |
+
+### E 类值得单独记一笔
+
+它与 #399（模块根本没在测试环境跑）同属「代码路径没被走到」，但**根因不同**：
+
+- **#399**：环境缺打桩 —— 顶层 import 早于 `beforeEach`
+- **#400**：**测试数据的构造方式**把分支排除掉了 —— 生产代码里 `present` 与 `kind` 是独立字段、类型系统不强制一致，而测试辅助函数 `host()` 把 `present: kind !== 'none'` 写死，**替生产代码补上了这个不变量**
+
+> **辅助函数越「方便」，它替生产代码做的假设就越多。**
+> 写 `host(agent, kind)` 这类糖时，要问一句：**它有没有把两个本应独立的字段绑在一起？**
 
 ### 归纳成一句话
 
@@ -222,6 +233,8 @@ cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets -p taskboard
 | [#392](./issue-392-esc-deps-regex-too-narrow.md) | #344 Esc 守卫 | B（匹配形式） | ✅ 结构 |
 | [#394](./issue-394-css-decls-selector-shape.md) | CSS `decls()` | C（语法子集） | ✅ 结构 |
 | [#396](./issue-396-tasks-new-fingerprint-untested.md) | #340 恢复探测 | D（只守正向） | ✅ |
+| [#399](./issue-399-theme-moduleload-untestable.md) | `theme.ts` 模块加载期 | 代码路径从未执行 | ❌ |
+| [#400](./issue-400-agent-groups-helper-coupling.md) | `agent-groups` 测试辅助函数 | **E（辅助函数补上不变量）** | ❌ |
 
 （本表 11 行对应 issue #376–#396 中与审计相关的 11 篇 KB 文档；期间 PR 号与 issue 号交错，具体以 GitHub 为准。）
 
