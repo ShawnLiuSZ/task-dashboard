@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 断言强度审计（五）：Rust 侧第四批 —— GraphQL 链接解析别名守卫「空洞为真」（#384）**
+
+  - **审计前 `parse_links_from_graphql` 只有 2 条平凡断言**（`{}` 与 `{"data": {}}` → 空），整条父子链接解析路径几无直接覆盖。
+  - **发现真实漏洞（空洞为真）**：别名守卫 `!key.starts_with('a') || !key.chars().skip(1).all(is_ascii_digit)` 中，Rust 的 `Iterator::all` 对**空迭代器返回 `true`** ⇒ 光秃秃的 `"a"` 被当成合法别名放行，与紧邻注释声明的「别名固定为 `a<序号>`」相悖。实测 `{"a":{"number":994},"a1":{"number":101}}` 解析出 `[994, 101]`。
+  - **严重性如实标注：当前不可达** —— `build_links_query` 生成的别名永远是 `a1..aN`，故这是**潜在缺陷**而非线上 bug。但它出现在一段**专门用于防御 `repo` 非别名字段**的守卫里，恰好在最该生效的场景失效；且 `name` 是字符串、`as_object()` 恰好返 `None` 挡住 ⇒ **连报错都没有**。修复：加 `key.len() < 2`。
+  - 另发现缺失 `title` / `url` 的默认值（`unwrap_or("")` 改成 `unwrap_or("X")`）**无任何测试守护**，而该默认值直接进 UI（子 issue 标题、链接文案）。
+  - **修复**：补 4 例 —— 真实响应形状（含 `name`/`owner` 仓库字段须被跳过）/ 逐个点名守卫判据（含裸 `"a"`）/ 9 种脏形状不 panic / 默认值回落空串（含类型不符）。外加生产代码一处加固。
+  - **反向验证 3/3 全捕获**；lib 测试 168 → 172，clippy / fmt 干净。
+  - **记录两个「存活但不该捕获」的变异**：删掉 `.filter(|p| !p.is_null())` 是等价变异（`link_from_node` 对 null 本就返 `None`）；host 提取取 `@` 后段（#382）是正确行为。避免后人重复排查。
+  - **本轮第四次「测量手段本身出错」**：`cargo test --lib parse_links` 的过滤条件**不含新用例名**，用例**根本没跑**就报「存活」；改跑全量后 3/3 全捕获。至此形成四条纪律 —— ①注入须确认生效 ②变异方向须表达真实缺陷 ③期望值须外部来源 ④**过滤条件须覆盖被测用例**，共同点是**先验证测量手段本身，再采信结论**。
+  - 详见 [`issue-384-parse-links-alias-guard.md`](./issue-384-parse-links-alias-guard.md)
+
 - **Unreleased — 断言强度审计（四）：Rust 侧第三批 —— URL 白名单子域边界无守护（#382）**
 
   - **`common::validate_browser_url` 是 `open_in_browser` 命令的唯一闸门**，而 URL 来自 issue 正文 / PR 链接 / agent session 工作目录等**外部数据**（#370 确认 `SessionsPanel` 走这条路）。实测 **4 个变异存活，其中 2 个是真实的白名单逃逸**。

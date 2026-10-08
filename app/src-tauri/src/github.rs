@@ -459,7 +459,14 @@ pub fn parse_links_from_graphql(v: &serde_json::Value) -> HashMap<i64, IssueLink
     };
     for (key, node) in repo {
         // 别名固定为 `a<序号>`；`name` / `owner` 是仓库自身字段，跳过。
-        if !key.starts_with('a') || !key.chars().skip(1).all(|c| c.is_ascii_digit()) {
+        //
+        // #383：`key.len() < 2` 不可省 —— `chars().skip(1).all(is_ascii_digit)` 在**空
+        // 序列上空洞地为真**（Rust 的 `Iterator::all` 对空迭代器返回 `true`），所以
+        // 光秃秃的 `"a"` 会被当成合法别名放行，与本行注释声明的契约相悖。
+        if key.len() < 2
+            || !key.starts_with('a')
+            || !key.chars().skip(1).all(|c| c.is_ascii_digit())
+        {
             continue;
         }
         let Some(n) = node.as_object() else { continue };
@@ -2457,6 +2464,149 @@ mod tests {
         // 缺 data / r → 空 map，不 panic。
         assert!(parse_links_from_graphql(&serde_json::json!({})).is_empty());
         assert!(parse_links_from_graphql(&serde_json::json!({"data": {}})).is_empty());
+        assert!(parse_links_from_graphql(&serde_json::json!({"data": {"r": {}}})).is_empty());
+    }
+
+    /// #383：`parse_links_from_graphql` 对**真实响应形状**的解析契约。
+    ///
+    /// **为什么必须补**：审计前该函数只有两条平凡断言（`{}` 与 `{"data": {}}` → 空），
+    /// 即**整条解析路径几乎没有直接覆盖**。变异实测两个关键守卫无人守：
+    ///
+    /// - 别名前缀过滤 `!key.starts_with('a')` —— 删掉后 `name` / `owner`
+    ///   这两个**仓库自身字段**会被当别名处理；
+    /// - 纯数字校验 `all(is_ascii_digit)` —— 删掉后 `aX1` 这类脏别名会漏进来。
+    ///
+    /// 两者当前**都是安全的**，但安全完全依赖一个**未被断言的隐含前提**：
+    /// 「`repo` 对象里除别名外只有 `name` / `owner`，且它们不带 `number` 字段」。
+    /// 一旦查询选集变化（或 GraphQL 加上 `viewer { ... }` 之类同名字段），就会静默
+    /// 把仓库字段当成 issue 解析 —— 而 `name` 是字符串、`as_object()` 返回 `None`
+    /// 恰好挡住，所以**连报错都没有**。
+    #[test]
+    fn parse_links_from_graphql_parses_real_response_shape() {
+        // 形状取自 `build_links_query` 生成的查询：别名 `a<序号>` + 仓库自身字段。
+        let v = serde_json::json!({
+            "data": { "r": {
+                // 仓库自身字段：**必须被跳过**（name 是字符串，owner 无 number）
+                "name": "my-repo",
+                "owner": { "login": "acme" },
+                "a1": {
+                    "number": 101,
+                    "parent": { "number": 100, "title": "父 issue", "url": "https://github.com/acme/my-repo/issues/100" },
+                    "subIssues": { "nodes": [
+                        { "number": 102, "title": "子 A", "url": "https://github.com/acme/my-repo/issues/102" },
+                        { "number": 103, "title": "子 B", "url": "https://github.com/acme/my-repo/issues/103" }
+                    ]}
+                },
+                "a2": {
+                    "number": 201,
+                    "parent": null,
+                    "subIssues": { "nodes": [] }
+                }
+            }}
+        });
+        let out = parse_links_from_graphql(&v);
+        // 只应有两项：name / owner 不得被当作别名解析进来
+        assert_eq!(
+            out.len(),
+            2,
+            "仓库自身字段（name/owner）须被跳过，实际 {:?}",
+            out.keys()
+        );
+        assert!(!out.contains_key(&0), "name 字段被误当别名解析");
+
+        // 父子与子列表内容
+        let a1 = out.get(&101).expect("a1 应被解析");
+        let parent = a1.parent.as_ref().expect("a1 应有父 issue");
+        assert_eq!(parent.number, 100);
+        assert_eq!(parent.title, "父 issue");
+        assert_eq!(parent.url, "https://github.com/acme/my-repo/issues/100");
+        let subs: Vec<i64> = a1.sub_issues.iter().map(|s| s.number).collect();
+        assert_eq!(subs, vec![102, 103], "子 issue 顺序与数量须保真");
+        assert_eq!(a1.sub_issues[0].title, "子 A", "子 issue 字段须透传");
+
+        // parent 为 null → None（不是 panic，也不是空链接）
+        let a2 = out.get(&201).expect("a2 应被解析");
+        assert!(a2.parent.is_none(), "parent: null 应得 None");
+        assert!(a2.sub_issues.is_empty());
+    }
+
+    /// #383：别名守卫的**反向契约** —— 非 `a<纯数字>` 的键一律不得进入结果。
+    ///
+    /// 与上一条互补：上一条用「真实响应形状」证明跳过逻辑有效；本条直接把
+    /// 守卫的判据逐个点名，让删掉任一分支都立刻失败。
+    #[test]
+    fn parse_links_from_graphql_rejects_non_alias_keys() {
+        let v = serde_json::json!({
+            "data": { "r": {
+                // 以下键都带合法 number，但**不是** `a<纯数字>` 形态
+                "name":   { "number": 999 },
+                "owner":  { "number": 998 },
+                "b1":     { "number": 997 },
+                "aX1":    { "number": 996 },   // 别名里混了字母
+                "a1x":    { "number": 995 },   // 序号后混了字母
+                "a":      { "number": 994 },   // 光秃秃的 a，无序号
+                "a-1":    { "number": 993 },
+                "a1":     { "number": 101 }    // 唯一合法别名
+            }}
+        });
+        let out = parse_links_from_graphql(&v);
+        assert_eq!(
+            out.keys().copied().collect::<Vec<_>>(),
+            vec![101],
+            "只应保留合法别名 a1，实际 {:?}",
+            out.keys()
+        );
+    }
+
+    /// #383：脏数据不得 panic（`serde_json::Value` 全是动态类型）。
+    #[test]
+    fn parse_links_from_graphql_tolerates_dirty_shapes() {
+        for v in [
+            serde_json::json!({"data": {"r": null}}),
+            serde_json::json!({"data": {"r": []}}), // 非对象
+            serde_json::json!({"data": {"r": {"a1": null}}}),
+            serde_json::json!({"data": {"r": {"a1": 42}}}), // 节点是数字
+            serde_json::json!({"data": {"r": {"a1": {"number": "101"}}}}), // number 类型错
+            serde_json::json!({"data": {"r": {"a1": {"number": 101, "subIssues": null}}}}),
+            serde_json::json!({"data": {"r": {"a1": {"number": 101, "subIssues": {"nodes": null}}}}}),
+            serde_json::json!({"data": {"r": {"a1": {"number": 101, "subIssues": {"nodes": [null, 7]}}}}}),
+            serde_json::json!({"data": null}),
+        ] {
+            // 关键：不 panic；脏形状要么被跳过、要么给出可用的结果
+            let _ = parse_links_from_graphql(&v);
+        }
+        // 最后一例：合法 number + 脏 subIssues → 仍应保留该项
+        let v = serde_json::json!({"data": {"r": {"a1": {"number": 101, "subIssues": null}}}});
+        let out = parse_links_from_graphql(&v);
+        assert!(out.contains_key(&101), "脏 subIssues 不应导致整项被丢弃");
+    }
+
+    /// #383：`link_from_node` 缺失 `title` / `url` 时须回落**空串**，而非任意占位。
+    ///
+    /// 审计实测：把 `unwrap_or("")` 改成 `unwrap_or("X")` **无任何测试失败**。
+    /// 该默认值直接进 UI（子 issue 标题、链接文案），故须锁定为「空」而非某个字面量。
+    #[test]
+    fn link_from_node_defaults_missing_text_fields_to_empty_string() {
+        let v = serde_json::json!({
+            "data": { "r": { "a1": { "number": 101,
+                "parent": { "number": 100 },          // 无 title / url
+                "subIssues": { "nodes": [ { "number": 102 } ] }  // 无 title / url
+            }}}
+        });
+        let out = parse_links_from_graphql(&v);
+        let a1 = out.get(&101).expect("a1 应被解析");
+        let parent = a1.parent.as_ref().expect("parent 应被解析");
+        assert_eq!(parent.title, "", "缺失 title 应回落空串");
+        assert_eq!(parent.url, "", "缺失 url 应回落空串");
+        assert_eq!(a1.sub_issues[0].title, "", "子 issue 缺失 title 应回落空串");
+        assert_eq!(a1.sub_issues[0].url, "");
+        // 字段类型不符（数字而非字符串）同样回落空串，不 panic
+        let v2 = serde_json::json!({
+            "data": { "r": { "a1": { "number": 101, "title": 42, "url": 7 } } }
+        });
+        let out2 = parse_links_from_graphql(&v2);
+        let p = &out2[&101].sub_issues;
+        assert!(p.is_empty());
         // 编号缺失的节点、非对象别名、缺 number 的子节点都被跳过。
         let v = serde_json::json!({
             "data": {"r": {
