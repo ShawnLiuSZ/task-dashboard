@@ -218,6 +218,58 @@ class OnDemandTest(unittest.TestCase):
         self.assertEqual(S._iso_to_secs(""), 0)
         self.assertEqual(S._iso_to_secs("not-a-date"), 0)
 
+    # ── 双实现对照（#387）────────────────────────────────────────────────
+    def test_iso_to_secs_matches_rust_on_agreed_domain(self):
+        """读**共享 fixture**，与 Rust 侧读同一份表（`fixtures/iso_parity.json`）。
+
+        #387：`server.py::_iso_to_secs` 的 docstring 声称「对齐 Rust
+        `iso8601_to_secs`」，但实测 4 处不一致 —— 其中 `1969-01-01` 曾让 Python
+        返回**负数** `-31536000` 而 Rust 返回 `0`（已修）。
+
+        为什么不各写一份表：#155（`tasks.key` → `issue_key` 改名只改一侧）说明
+        两侧副本必然漂移，且 CI 兜不住（`server.py` 不参与 Tauri 构建）。
+        共享 fixture 让漂移在**任一侧测试**里立刻暴露。
+        """
+        with open(os.path.join(os.path.dirname(__file__), "fixtures", "iso_parity.json"),
+                  encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertGreaterEqual(len(data["must_agree"]), 20, "对照表过小，可能被误删")
+        for row in data["must_agree"]:
+            self.assertEqual(
+                S._iso_to_secs(row["input"]), row["secs"],
+                f"{row['input']!r}：两侧应一致",
+            )
+
+    def test_iso_to_secs_known_divergence_locked(self):
+        """锁定 3 处**已知分歧**，避免有人只改一侧而不自知。
+
+        三处都是 Python 侧更严格、且严格方向都是「无时间 = 0」（失败关闭），
+        故保持现状；若将来两侧对齐，这三条必须同步更新。
+        """
+        with open(os.path.join(os.path.dirname(__file__), "fixtures", "iso_parity.json"),
+                  encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertGreaterEqual(len(data["known_divergence"]), 1)
+        for row in data["known_divergence"]:
+            self.assertEqual(
+                S._iso_to_secs(row["input"]), row["python"],
+                f"{row['input']!r}：Python 侧行为已变更，须确认是有意为之"
+                      f"（原分歧原因：{row['note']}）",
+            )
+
+    def test_iso_to_secs_never_returns_negative(self):
+        """1970 前必须折成 0（#387 的真实缺陷）。
+
+        原实现直接返回 `calendar.timegm(...)`，`1969-01-01` 得到 `-31536000`，
+        会作为 `created_at` / `updated_at` 落库 —— 同一 issue 被两条路径先后写入
+        时值取决于谁最后动手，且下游「相对时间」展示遇到负值会显示荒谬文案。
+        """
+        for raw in ["1969-01-01T00:00:00Z", "1900-06-15T12:00:00Z", "0001-01-01T00:00:00Z"]:
+            self.assertEqual(S._iso_to_secs(raw), 0, f"{raw!r} 应折成 0")
+        # 更广的不变式：任何输入都不得产出负数
+        for raw in ["1969-01-01T00:00:00Z", "1960-02-29T00:00:00Z", "1-01-01T00:00:00Z"]:
+            self.assertGreaterEqual(S._iso_to_secs(raw), 0)
+
     def test_classify(self):
         self.assertEqual(S._classify([], "alice"), "notassignee")
         self.assertEqual(S._classify(["alice", "bob"], "alice"), "assigned")

@@ -6,6 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **Unreleased — 断言强度审计（七）：双实现一致性 —— 日期转换两侧 5 处分歧（#388）**
+
+  - **`server.py::_iso_to_secs` 与 Rust `iso8601_to_secs` 是两份完全独立的实现**（一个手写闭式公式、一个调 `strptime`），而 Python docstring 明确声称「对齐 Rust」。实测 **5 处不一致**。
+  - **真实缺陷**：Python 直接返回 `calendar.timegm(...)`，`1969-01-01` 得到**负数** `-31536000`，而 Rust 有显式 `y < 1970` 守卫返回 `0` ⇒ 同一 issue 被两条路径先后写入时 `created_at` / `updated_at` **取决于谁最后动手**，下游「相对时间」遇到负值显示荒谬文案。修复：`return secs if secs >= 0 else 0`。
+  - 另 4 处（`2024-02-30` / `2024-1-01` / `2024-01-01T0:00:00Z` / `sec=60`）Python 一侧都更严格或更宽松，但**除 `sec=60` 外严格方向都是「返回 0」= 失败关闭**，故保持现状并显式记录，不为对齐而改行为。
+  - **⚠️ `2024-01-01T00:00:60Z` 带跨平台性质（本项最值得记录）**：实测（macOS arm64 / glibc / Python 3.14.8）**`%S` 接受 60 与 61（闰秒）**，`timegm` 再进位到下一分钟；而 **musl（Alpine）与 Windows 的 C 库未必接受** ⇒ 同一份 `server.py` 在 Linux/macOS 与 Windows 上结果**可能不同**。而 `server.py` 正是 Windows / Linux 的**兜底实现**，故该值不能当稳定契约。GitHub 从不发闰秒故当前不可达，但将来若要支持闰秒语义，**必须两侧同时改且不能依赖 `strptime` 的平台行为**。
+  - **方案：共享 fixture `mcp_server/fixtures/iso_parity.json`**（`must_agree` 27 条 + `known_divergence` 4 条附 `note`），**两侧测试各读同一个文件**。**不各写一份表的理由**：#155 已证明双实现副本必然漂移，且 **`server.py` 不参与 Tauri 构建**，Rust CI 完全跑不到 Python 侧测试。
+  - **反向验证双向生效**：Python 退回 `return secs` → failures=2；改坏 fixture 中 `2100-03-01` 期望值 → **Python failures=1 且 Rust 1 failed 同时报警**（各自维护副本做不到这点）。
+  - **插曲**：第一版 fixture 我照 Rust 抄了 `sec=60` 的期望值，测试当场报 `1704067260 != 0` —— 共享表的第一道价值生效。这是「期望值必须外部来源、必须实测」纪律的**第三次**生效（#378 手算 `2024-02-30` 出错是第一次）。
+  - 详见 [`issue-388-iso-parity-two-implementations.md`](./issue-388-iso-parity-two-implementations.md)
+
 - **Unreleased — 断言强度审计（六）：Python 侧第一批 —— MCP 引用解析形态覆盖缺口（#386）**
 
   - **`mcp_server/server.py::parse_issue_ref_parts` 是 agent 每次调用 MCP 工具的入口**（`update_task_status(issue, ...)` / `record_session` 等全部走它），而 AGENTS.md §8.6 要求它与 Rust `on_demand.rs` 行为等价。实测 **4 个变异存活**。
