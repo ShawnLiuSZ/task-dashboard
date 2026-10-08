@@ -2174,6 +2174,91 @@ mod tests {
         assert!(page2.contains(r#", after:"CUR""#), "分页游标必须注入查询");
     }
 
+    /// #407：`project_items_query` 的**完整字段选集**逐条锁定。
+    ///
+    /// **为什么必须补**：该函数的注释里写着
+    /// 「⚠️ issue 分支里的 `updatedAt` **不可删** … **该缺陷已真实发生过一次**」——
+    /// 即这个文件**已经被「漏选字段 ⇒ 静默降级」咬过一次**。但当时只补了
+    /// `updatedAt` 一条断言，**其余 9 处字段选集全部无人守护**。
+    ///
+    /// 实测 9 个变异**全部存活**（漏 `pageInfo` / `hasNextPage` / `endCursor` /
+    /// `fieldValues` / `assignees` / `labels` / `comments` / `author` /
+    /// 把 `first:50` 改成 `first:1`）。后果**全部是静默降级**，不报语法错：
+    ///
+    /// | 漏选 | 后果 |
+    /// |---|---|
+    /// | `pageInfo { hasNextPage endCursor }` | **分页在第 50 条停住**，之后的 issue 永不出现 |
+    /// | `items(first:50)` | 同上（每次只取 1 条） |
+    /// | `fieldValues` | Project Status 列映射丢失 ⇒ 卡片落进 unclassified |
+    /// | `assignees` | 归属判定失准（assigned / notassignee 算错） |
+    /// | `labels` | label → 状态映射失效 |
+    /// | `comments { totalCount }` | 评论数恒 0 |
+    /// | `author { login }` | 作者列空白 |
+    ///
+    /// 与 #407（顶层字段选集）同族：**断言了「构造出的串」，没逐条断言「选了哪些字段」**。
+    #[test]
+    fn project_items_query_field_selection_is_fully_guarded() {
+        let q = GitHubClient::project_items_query("PVT_1", "");
+
+        // ── 分页驱动：漏任一个都会让「第 50 条之后」的 issue 静默消失
+        assert!(
+            q.contains("pageInfo"),
+            "必须选 pageInfo，否则无法判断是否还有下一页"
+        );
+        assert!(
+            q.contains("hasNextPage") && q.contains("endCursor"),
+            "pageInfo 必须含 hasNextPage 与 endCursor —— 缺前者无法续拉，缺后者无法定位"
+        );
+        assert!(
+            q.contains("items(first:50"),
+            "items 必须取 50 条 —— 改小会静默截断（分页能续拉但代价高，改 0 则完全取不到）"
+        );
+
+        // ── 内容字段：逐条列出，每条都对应一个用户可见功能
+        for (field, why) in [
+            ("fieldValues(first:20)", "Project Status 列映射"),
+            ("assignees(first:10)", "归属判定（assigned / notassignee）"),
+            ("labels(first:20)", "label → 状态映射"),
+            ("comments { totalCount }", "评论数"),
+            ("author { login }", "issue 作者"),
+            ("repository { name owner { login } }", "仓库归属与颜色映射"),
+            ("__typename", "content 的 Issue / PullRequest 分派"),
+        ] {
+            assert!(q.contains(field), "字段选集缺少 {field} —— 会导致{why}失效");
+        }
+
+        // ── 反向契约：`first:N` 的 N 不得被改成 0（0 = 什么都不返回）
+        for n in [50, 20, 10] {
+            assert!(
+                q.contains(&format!("first:{n}")),
+                "first:{n} 不得缺失或被改成 0"
+            );
+        }
+        assert!(
+            !q.contains("first:0"),
+            "任何 first:0 都会让对应字段静默返回空 —— 这是最隐蔽的一种退化"
+        );
+
+        // ── 分支结构：updatedAt 属Issue 分支，PullRequest 分支不需要（#356 的既有约定）
+        let issue_part = q
+            .split("... on Issue")
+            .nth(1)
+            .and_then(|s| s.split("... on PullRequest").next())
+            .expect("应能切出 Issue 分支");
+        assert!(
+            issue_part.contains("updatedAt"),
+            "updatedAt 必须属于 Issue 分支"
+        );
+        let pr_part = q
+            .split("... on PullRequest")
+            .nth(1)
+            .expect("应能切出 PullRequest 分支");
+        assert!(
+            !pr_part.contains("updatedAt"),
+            "PullRequest 分支不含 updatedAt（GraphQL 会因字段不存在而报错）"
+        );
+    }
+
     /// #356：`updatedAt` 缺失 / 为 null 时回落空串，不得 panic。
     #[test]
     fn project_item_updated_at_tolerates_missing_and_null() {
