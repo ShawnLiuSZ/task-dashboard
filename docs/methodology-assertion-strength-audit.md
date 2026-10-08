@@ -169,6 +169,7 @@ mutation 存活有三种原因，**必须逐一排除后才能判定测试弱**�
 | `updateCheck` 不 `clearTimeout` | 定时器残留不影响正确性，且检查一天跑一次 |
 | `escLayer` release 用 `indexOf` | token 唯一 ⇒ 与 `lastIndexOf` 等价 |
 | Rust `resolveBoardView` 取 `@` 前段 → 那是**真实逃逸**（反向对照） | 用来确认守卫方向没搞反 |
+| `repo_level_failure` 的 `r.is_null() \|\| !r.is_object()` → `!r.is_object()` | `serde_json::Value::Null.is_object()` 恒 `false` ⇒ `!is_object()` 已涵盖 null ⇒ 同值（#407） |
 | `schema_is_current` 去掉 `!tasks_uses_legacy_key` | **同一条件在 `run_migrations` 里被独立检查第二次** —— 冗余纵深防御，删掉不改变行为（详见 [`issue-402`](./issue-402-schema-is-current-legacy-check-redundant.md) / [`issue-404`](./issue-404-schema-is-current-legacy-undecidable.md)） |
 
 ### 等价变异也有强弱之分（别把「试不出来」当成「等价」）

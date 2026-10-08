@@ -2395,6 +2395,30 @@ mod tests {
         // 别名按序号递增，编号原样嵌入。
         assert!(q.contains("a0: issue(number: 278)"));
         assert!(q.contains("a1: issue(number: 279)"));
+        // #406：**顶层字段选集**必须显式断言。
+        // 原有断言只查了 `issue(number: N)` 这个**参数**，没查节点**选了什么字段** ——
+        // 审计实测把 LINK_FRAGMENT 顶层的 `number title url` 去掉（改成 `"title url` 或
+        // `"number `），**全部测试仍然通过**。
+        //
+        // 后果不是语法错而是**静默降级**：
+        // · 去掉 `number` ⇒ `parse_links_from_graphql` 的 `n.get("number")` 拿不到值 ⇒
+        //   `continue` ⇒ **父子关系整体丢失**，且无任何报错；
+        // · 去掉 `title` / `url` ⇒ `link_from_node` 回落到空串 ⇒ 子 issue 卡片与
+        //   父链接渲染成空白文案。
+        assert!(
+            q.contains("a0: issue(number: 278) { number title url"),
+            "顶层字段选集必须含 number title url（去掉任一个都会静默降级）"
+        );
+        // 反向契约：顶层选集**紧接别名之后**就是 number title url，再跟 parent/subIssues。
+        // （不能用 `split_once("}")` 切 —— 片段里有嵌套花括号，会把 parent 的内容一起吃进来。）
+        let frag = q
+            .split_once("a0: issue(number: 278) { ")
+            .map(|(_, rest)| rest)
+            .expect("应能切出 a0 之后的选集");
+        assert!(
+            frag.starts_with("number title url parent"),
+            "顶层选集应紧接 number title url 再 parent，实际开头：{frag:.60}"
+        );
         // 字段选集：parent 必须走 `... on Issue` 内联片段（父节点是 union 类型）。
         assert!(q.contains("parent { ... on Issue { number title url } }"));
         assert!(q.contains("subIssues(first: 50) { nodes { number title url } }"));
