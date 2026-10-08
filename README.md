@@ -174,7 +174,7 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — 设计要点（多源拉取、归属三分、四态维护、PR 关联）与 GitHub Actions 在线打包说明
 
-- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.6.5）
+- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.6.6）
 
 - [`docs/issue-327-p0-functional-defects.md`](./docs/issue-327-p0-functional-defects.md) — **code review P0 批次**：About 小窗「确定」按钮因 capability 未覆盖 `about` 窗口 + `core:window:default` 不含 `allow-close` 而静默失效；设置面板「界面语言」切换器被误复制成重复的主题选择器；记事重复内容暴露原始 `UNIQUE constraint` 报错；`projects.number_of_items` 误取项目编号（而非 `items.totalCount`），使多 Project 时写错写回目标
 
@@ -343,5 +343,5 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 软件按「原样」提供，不作任何明示或默示的保证；作者与版权持有者不对使用本软件所引发的任何主张、损害或责任负责。详见 `LICENSE` 中的免责条款。
 
-> 版本 v0.6.5 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-29
+> 版本 v0.6.6 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-29
 
