@@ -2,6 +2,17 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.6.8 (unreleased) — Task Sessions meta rows fully display: branch name / directory no longer truncated (#420)**
+
+  - The Task Sessions card meta rows (**branch name / working directory / session id / agent / time**) all carried `text-overflow: ellipsis` + `white-space: nowrap`, so long branch names and paths were cut to `…` — and these nodes have **no `title` attribute**, so even hovering reveals nothing: the information was unrecoverable.
+  - Changed to `white-space: normal` + `overflow-wrap: anywhere` so **branch names and directories display in full**, wrapping when too wide. `anywhere` rather than `break-word` because session ids / agent names can be **long unbroken strings** with no break opportunity, which `break-word` cannot split.
+  - Also: `.session-meta-row` switched from `align-items: center` to `flex-start` so a wrapped value's first line aligns with the label's top (`center` makes multi-line values sit visually low).
+  - `font-family: var(--font-mono)` is preserved — branch names / paths are code-like text, monospace carries meaning.
+  - ⚠️ **Deliberately unchanged**: `.session-row .session code` in the assignee session row of the task detail panel is also truncated, but that is #197's intended design (truncate when narrow, full value in `title`), which does have a fallback.
+  - No schema / MCP tool / i18n changes (no new keys).
+  - **Verification**: `vitest run src/styles.test.ts` 24 passed ✅, `npm test -- --run` 261 passed ✅, `npm run lint` 0 warnings ✅, `npx tsc --noEmit` ✅, `npx prettier --check` ✅; **reverse verification**: reverting to the buggy form yields `MUTATION_TEST_EXIT=1` ✅.
+  - See [issue-420-sessions-meta-ellipsis.md](./issue-420-sessions-meta-ellipsis.md)
+
 - **v0.6.7 (2026-10-09) — Task Sessions multi-select batch delete + card title full display (#417)**
 
   - The Task Sessions panel (#287) only supported clearing one session at a time; cleaning up many sessions forced one confirm per card. Added **multi-select delete**: the backend `clear_sessions(keys: Vec<String>)` clears and accumulates affected rows (succeeds if at least one hits, errors via `require_affected` if none exist) and emits `TASKS_CHANGED_EVENT` per key for multi-window sync; the frontend `SessionsPanel` gains a **select mode** (toolbar entry → per-card checkbox + whole-card click toggle → select-all / clear-selection + selected-count + "Delete selected" + exit), and the batch delete goes through a confirm dialog calling `api.clearSessions(keys)`. The per-card delete button is hidden in select mode to avoid a duplicate entry point.
