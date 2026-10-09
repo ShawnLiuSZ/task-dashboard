@@ -327,6 +327,18 @@ pub fn clear_task_session(conn: &Connection, key: &str) -> Result<usize, String>
     Ok(n)
 }
 
+/// #391：批量清空多个 session（任务会话多选删除）。逐个调用 `clear_task_session`
+/// 并累加受影响行数；返回总 affected，调用方据此判断「是否至少有一个成功」。
+/// 单个不存在的 key 不阻断其余（与单条 `require_affected` 语义不同：批量场景下
+/// 部分陈旧 key 不应让整批失败）。
+pub fn clear_task_sessions(conn: &Connection, keys: &[String]) -> Result<usize, String> {
+    let mut total = 0usize;
+    for key in keys {
+        total += clear_task_session(conn, key)?;
+    }
+    Ok(total)
+}
+
 /// 写入交接任务详情。返回实际更新行数。
 pub fn record_task_handoff(conn: &Connection, key: &str, text: &str) -> Result<usize, String> {
     let n = conn

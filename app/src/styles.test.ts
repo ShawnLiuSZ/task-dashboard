@@ -142,6 +142,28 @@ describe('会话卡片彩色边框 #304', () => {
 });
 
 /**
+ * 会话卡片标题换行完整显示回归测试。
+ *
+ * 背景：任务会话卡片标题原用 `white-space: nowrap` + `text-overflow: ellipsis`
+ * 单行截断，导致长标题被省略为 "..."，用户无法在不进入详情的情况下完整阅读。
+ * 改为 `white-space: normal` + `word-break: break-word` 自动换行完整显示。
+ */
+describe('会话卡片标题完整显示', () => {
+  it('.session-card-title 不再使用省略截断', () => {
+    const d = decls('.session-card-title');
+    expect(d).not.toMatch(/text-overflow\s*:\s*ellipsis/);
+    expect(d).not.toMatch(/white-space\s*:\s*nowrap/);
+    expect(d).not.toMatch(/overflow\s*:\s*hidden/);
+  });
+
+  it('.session-card-title 允许自动换行', () => {
+    const d = decls('.session-card-title');
+    expect(d).toMatch(/white-space\s*:\s*normal|white-space\s*:\s*pre-wrap/);
+    expect(d).toMatch(/word-break\s*:\s*break-word|overflow-wrap\s*:\s*break-word/);
+  });
+});
+
+/**
  * CSS 变量引用完整性（#329）回归测试。
  *
  * 背景：`.session-meta-label` 引用了从未定义的 `--text-secondary`、
@@ -177,5 +199,28 @@ describe('CSS 变量引用完整性（#329）', () => {
   it('笔记面板后台刷新用 aria-busy 降透明，不再整块替换占位（#329）', () => {
     const d = decls('.notes-card-cols[aria-busy]');
     expect(d).toMatch(/opacity/);
+  });
+});
+
+/**
+ * 任务会话多选选中态高亮（#391）回归测试。
+ *
+ * 选中卡片须有明显视觉反馈（边框强调 + 浅色底），否则用户无法确定哪些已选。
+ * 纯 CSS，沿用 `?raw` 静态断言。
+ */
+describe('会话卡片选中态高亮 #391', () => {
+  it('.session-card.selected 强调边框与主色浅底', () => {
+    const d = decls('.session-card.selected');
+    expect(d).toMatch(/border-color\s*:\s*var\(--accent\)/);
+    expect(d).toMatch(/background/);
+  });
+
+  it('.session-card.selectable 提示可点击', () => {
+    expect(decls('.session-card.selectable')).toMatch(/cursor\s*:\s*pointer/);
+  });
+
+  it('.sessions-toolbar 作为选择工具栏布局', () => {
+    const d = decls('.sessions-toolbar');
+    expect(d).toMatch(/display\s*:\s*flex/);
   });
 });

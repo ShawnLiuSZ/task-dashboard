@@ -420,6 +420,8 @@ pub fn run() {
             commands::update_task_status,
             commands::record_session,
             commands::clear_session,
+            // #391：任务会话多选删除（批量清空 session）。
+            commands::clear_sessions,
             commands::record_handoff,
             // #279：创建 / 切换 issue 分支后纠正 work_branch（agent 显式调用）。
             commands::set_work_branch,

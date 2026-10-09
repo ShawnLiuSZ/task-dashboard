@@ -366,6 +366,26 @@ pub fn clear_session(
     Ok(())
 }
 
+/// #391：批量清空多个 session（任务会话多选删除）。
+/// 复用 `clear_task_sessions` 累计 affected；至少一个成功才返回 `Ok`，
+/// 全部不存在（`total == 0`）按 `require_affected` 报错。
+/// 对每个受影响 key 各发一次 `TASKS_CHANGED_EVENT`，保证多窗口同步。
+#[tauri::command]
+pub fn clear_sessions(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    keys: Vec<String>,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let total = crate::common::clear_task_sessions(&conn, &keys)?;
+    crate::common::require_affected(total, "批量会话删除")?;
+    // #181：对每个 key 发出变更事件（即使其中部分本就不存在也无妨，前端重查会自愈）。
+    for key in &keys {
+        let _ = app.emit(crate::TASKS_CHANGED_EVENT, key.clone());
+    }
+    Ok(())
+}
+
 /// #279：单独设置任务的工作分支（agent 在**创建 / 切换分支之后**调用，纠正「开始任务」时
 /// 录到的基线分支 main）。只写本地 `tasks.work_branch` 列，不碰同步的 PR `branch` 列。
 #[tauri::command]
@@ -2480,9 +2500,9 @@ mod tests {
             .filter(|l| l.contains(&needle))
             .count();
         assert_eq!(
-            guarded, 5,
-            "五条 GUI 写路径（update_task_status / record_session / set_work_branch / \
-             clear_session / record_handoff）都应恰好有一处 require_affected，实测 {guarded} 处"
+            guarded, 6,
+            "六条 GUI 写路径（update_task_status / record_session / set_work_branch / \
+             clear_session / clear_sessions / record_handoff）都应恰好有一处 require_affected，实测 {guarded} 处"
         );
     }
 
@@ -2532,5 +2552,60 @@ mod tests {
                 "错误文案应说明任务不存在，实际 {err}"
             );
         }
+    }
+
+    /// #391 行为回归：`clear_task_sessions` 批量累加 affected，且**部分不存在的 key
+    /// 不阻断其余**（区别于单条 `clear_session` 对不存在 key 必报错）。
+    ///
+    /// 与 `clear_session_and_record_handoff_reject_missing_key` 互补：那条覆盖单条守卫，
+    /// 这条覆盖批量语义——`clear_sessions` 命令对「总计 affected > 0」应放行，
+    /// 只有全部不存在（total == 0）才报错。
+    #[test]
+    fn clear_task_sessions_batch_accumulates_and_ignores_missing() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tasks (
+               issue_key   TEXT PRIMARY KEY,
+               session_id  TEXT,
+               session_agent TEXT,
+               session_at  INTEGER,
+               handoff     TEXT NOT NULL DEFAULT ''
+             );
+             INSERT INTO tasks (issue_key, session_id, session_agent, session_at, handoff)
+               VALUES ('o/r#1', 'sess-1', 'a', 1000, ''),
+                      ('o/r#2', 'sess-2', 'b', 2000, '');",
+        )
+        .unwrap();
+
+        // 全部存在：affected == 2，且确实清空了 session_id。
+        let total =
+            crate::common::clear_task_sessions(&conn, &["o/r#1".to_string(), "o/r#2".to_string()])
+                .unwrap();
+        assert_eq!(total, 2);
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE session_id IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0);
+
+        // 恢复两条的 session，再测「部分存在」：o/r#1 命中、o/r#3 不存在。
+        conn.execute(
+            "UPDATE tasks SET session_id='x' WHERE issue_key IN ('o/r#1','o/r#2')",
+            [],
+        )
+        .unwrap();
+        let total =
+            crate::common::clear_task_sessions(&conn, &["o/r#1".to_string(), "o/r#3".to_string()])
+                .unwrap();
+        assert_eq!(total, 1, "只有 o/r#1 命中，total 应为 1");
+        // 批量语义：total > 0 ⇒ require_affected 不报错（区别于单条对不存在 key 报错）。
+        crate::common::require_affected(total, "批量会话删除").expect("部分成功 total>0 不应报错");
+
+        // 全部不存在：total == 0（common 层不报错，由 commands 层 require_affected 兜底）。
+        let total = crate::common::clear_task_sessions(&conn, &["nope#1".to_string()]).unwrap();
+        assert_eq!(total, 0);
     }
 }

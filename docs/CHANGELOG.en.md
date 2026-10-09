@@ -2,6 +2,14 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.6.6 (2026-10-09) — Task Sessions multi-select batch delete + card title full display (#417)**
+
+  - The Task Sessions panel (#287) only supported clearing one session at a time; cleaning up many sessions forced one confirm per card. Added **multi-select delete**: the backend `clear_sessions(keys: Vec<String>)` clears and accumulates affected rows (succeeds if at least one hits, errors via `require_affected` if none exist) and emits `TASKS_CHANGED_EVENT` per key for multi-window sync; the frontend `SessionsPanel` gains a **select mode** (toolbar entry → per-card checkbox + whole-card click toggle → select-all / clear-selection + selected-count + "Delete selected" + exit), and the batch delete goes through a confirm dialog calling `api.clearSessions(keys)`. The per-card delete button is hidden in select mode to avoid a duplicate entry point.
+  - Also: the session card title used `text-overflow: ellipsis` (single-line truncation); changed to `white-space: normal; word-break: break-word` for full wrapped display.
+  - No schema / MCP tool / breaking i18n changes (9 bilingual i18n keys added; existing columns reused).
+  - **Verification**: `cargo test --lib` 178 passed ✅, `vitest run` 257 passed ✅, `npm run lint` 0 warnings ✅, `npm run i18n:check` 397 keys ✅, `npx tsc --noEmit` ✅, `npx prettier --check` ✅.
+  - See [docs/issue-417-sessions-multi-delete.md](./issue-417-sessions-multi-delete.md)
+
 - **v0.6.6 (2026-10-08) — CI gate blind spot / `develop` drift in operational docs / stale repo-name spelling (#336)**
 
   - **#336 `quality-check.yml`'s `push` trigger only listed `develop`, a branch that no longer exists** ⇒ **pushing straight to `main` skipped every heavyweight gate** (clippy, `cargo fmt --check`, `vite build`, `check-versions.py`, the `scripts` unit tests); only PRs with base `main` ran them. This was the gap left behind right after #330 hardened those gates. **Fix**: added `main` to `push.branches`. See [docs/issue-336-docs-ci-reality-alignment.md](./issue-336-docs-ci-reality-alignment.md).

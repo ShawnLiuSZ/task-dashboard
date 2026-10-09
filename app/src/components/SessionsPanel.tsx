@@ -57,6 +57,10 @@ export default function SessionsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [clearKey, setClearKey] = useState<string | null>(null);
+  // #391：多选删除——选择模式 + 已选 issueKey 集合 + 批量确认框。
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [confirmMulti, setConfirmMulti] = useState(false);
   const [columns, setColumns] = useState(3);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -144,6 +148,45 @@ export default function SessionsPanel() {
     [loadSessions],
   );
 
+  // #391：进入 / 退出选择模式（退出时清空已选，避免残留选中态）。
+  const exitSelectMode = useCallback(() => {
+    setSelectMode(false);
+    setSelectedKeys(new Set());
+  }, []);
+
+  // #391：点击卡片切换选中（仅选择模式生效）。
+  const toggleSelect = useCallback((key: string) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  // #391：全选 / 取消全选。
+  const toggleSelectAll = useCallback(() => {
+    setSelectedKeys((prev) =>
+      prev.size === sessions.length ? new Set() : new Set(sessions.map((s) => s.issueKey)),
+    );
+  }, [sessions]);
+
+  // #391：批量清除选中会话（确认后调用）。
+  const handleClearMulti = useCallback(async () => {
+    const keys = [...selectedKeys];
+    try {
+      await api.clearSessions(keys);
+      setConfirmMulti(false);
+      exitSelectMode();
+      void loadSessions();
+    } catch (e) {
+      console.error('批量清除会话失败:', e);
+      setConfirmMulti(false);
+    }
+  }, [selectedKeys, exitSelectMode, loadSessions]);
+
+  const allSelected = selectedKeys.size === sessions.length && sessions.length > 0;
+
   return (
     <div className="panel-page">
       <div className="panel-content sessions-content">
@@ -156,131 +199,205 @@ export default function SessionsPanel() {
         ) : sessions.length === 0 ? (
           <div className="notes-placeholder">{t('sessions.empty')}</div>
         ) : (
-          <div className="sessions-list" ref={listRef}>
-            {sessions.map((task, index) => {
-              const row = Math.floor(index / columns);
-              const col = index % columns;
-              const colorIdx = (row + col) % 4;
-              const borderColor = `var(--session-card-border-${colorIdx + 1})`;
-              return (
-                <div key={taskIdentity(task)} className="session-card" style={{ borderColor }}>
-                  <div className="session-card-header">
-                    <span className="session-card-title">
-                      {t('sessions.title_format', {
-                        num: task.number,
-                        title: task.title,
-                      })}
-                    </span>
-                    <button
-                      type="button"
-                      className="note-tool danger"
-                      title={t('sessions.clear')}
-                      onClick={() => setClearKey(task.issueKey)}
-                    >
-                      <Icon d={ICON.trash} />
-                    </button>
-                    <button
-                      type="button"
-                      className="note-tool"
-                      title={t('sessions.openTask')}
-                      onClick={() => handleOpenTask(task)}
-                    >
-                      <Icon d={ICON.expand} />
-                    </button>
+          <>
+            {/* #391：选择工具栏——非选择模式只显示「选择」入口；选择模式显示全选/计数/删除/取消。 */}
+            <div className="sessions-toolbar">
+              {selectMode ? (
+                <>
+                  <button type="button" className="btn small" onClick={toggleSelectAll}>
+                    {allSelected ? t('sessions.cancelSelectAll') : t('sessions.selectAll')}
+                  </button>
+                  <span className="sessions-sel-count">
+                    {t('sessions.selectedCount', { n: selectedKeys.size })}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn small danger"
+                    disabled={selectedKeys.size === 0}
+                    onClick={() => setConfirmMulti(true)}
+                  >
+                    {t('sessions.deleteSelected')}
+                  </button>
+                  <button type="button" className="btn small ghost" onClick={exitSelectMode}>
+                    {t('sessions.cancelSelect')}
+                  </button>
+                </>
+              ) : (
+                <button type="button" className="btn small" onClick={() => setSelectMode(true)}>
+                  {t('sessions.select')}
+                </button>
+              )}
+            </div>
+
+            <div className="sessions-list" ref={listRef}>
+              {sessions.map((task, index) => {
+                const row = Math.floor(index / columns);
+                const col = index % columns;
+                const colorIdx = (row + col) % 4;
+                const borderColor = `var(--session-card-border-${colorIdx + 1})`;
+                const isSelected = selectMode && selectedKeys.has(task.issueKey);
+                return (
+                  <div
+                    key={taskIdentity(task)}
+                    className={`session-card${selectMode ? ' selectable' : ''}${
+                      isSelected ? ' selected' : ''
+                    }`}
+                    style={{ borderColor }}
+                    onClick={selectMode ? () => toggleSelect(task.issueKey) : undefined}
+                  >
+                    {/* #391：选择模式下卡片左侧复选框；点击 label 仅触发 checkbox 自身，
+                        不冒泡到卡片（否则会触发两次 toggle）。 */}
+                    {selectMode && (
+                      <label className="session-card-check" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedKeys.has(task.issueKey)}
+                          onChange={() => toggleSelect(task.issueKey)}
+                          aria-label={t('sessions.toggleSelect', { num: task.number })}
+                        />
+                      </label>
+                    )}
+                    <div className="session-card-header">
+                      <span className="session-card-title">
+                        {t('sessions.title_format', {
+                          num: task.number,
+                          title: task.title,
+                        })}
+                      </span>
+                      {/* #391：选择模式下隐藏单卡删除，统一走批量删除入口。 */}
+                      {!selectMode && (
+                        <button
+                          type="button"
+                          className="note-tool danger"
+                          title={t('sessions.clear')}
+                          onClick={() => setClearKey(task.issueKey)}
+                        >
+                          <Icon d={ICON.trash} />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="note-tool"
+                        title={t('sessions.openTask')}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenTask(task);
+                        }}
+                      >
+                        <Icon d={ICON.expand} />
+                      </button>
+                    </div>
+                    <div className="session-card-meta">
+                      {task.createdAt > 0 && (
+                        <div className="session-meta-row">
+                          <span className="session-meta-label">{t('sessions.createdAt')}</span>
+                          <span className="session-meta-value">
+                            {new Date(task.createdAt * 1000).toLocaleString(undefined, {
+                              year: 'numeric',
+                              month: '2-digit',
+                              day: '2-digit',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              hour12: false,
+                            })}
+                          </span>
+                        </div>
+                      )}
+                      {task.workBranch && (
+                        <div className="session-meta-row">
+                          <span className="session-meta-label">{t('sessions.branch')}</span>
+                          <code className="session-meta-value">{task.workBranch}</code>
+                          <button
+                            type="button"
+                            className="note-tool"
+                            title={t('sessions.copyBranch')}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleCopy(task.workBranch, `branch-${task.issueKey}`);
+                            }}
+                          >
+                            {copiedKey === `branch-${task.issueKey}` ? (
+                              <Icon d={ICON.check} />
+                            ) : (
+                              <Icon d={ICON.copy} />
+                            )}
+                          </button>
+                        </div>
+                      )}
+                      {task.workDir && (
+                        <div className="session-meta-row">
+                          <span className="session-meta-label">{t('sessions.workDir')}</span>
+                          <code className="session-meta-value">{task.workDir}</code>
+                          <button
+                            type="button"
+                            className="note-tool"
+                            title={t('sessions.copyDir')}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleCopy(task.workDir, `dir-${task.issueKey}`);
+                            }}
+                          >
+                            {copiedKey === `dir-${task.issueKey}` ? (
+                              <Icon d={ICON.check} />
+                            ) : (
+                              <Icon d={ICON.copy} />
+                            )}
+                          </button>
+                        </div>
+                      )}
+                      {task.sessionId && (
+                        <div className="session-meta-row">
+                          <span className="session-meta-label">{t('sessions.sessionId')}</span>
+                          <code className="session-meta-value">{task.sessionId}</code>
+                          <button
+                            type="button"
+                            className="note-tool"
+                            title={t('sessions.copySession')}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleCopy(task.sessionId!, `session-${task.issueKey}`);
+                            }}
+                          >
+                            {copiedKey === `session-${task.issueKey}` ? (
+                              <Icon d={ICON.check} />
+                            ) : (
+                              <Icon d={ICON.copy} />
+                            )}
+                          </button>
+                        </div>
+                      )}
+                      {task.sessionAgent && (
+                        <div className="session-meta-row">
+                          <span className="session-meta-label">{t('sessions.agent')}</span>
+                          <span className="session-meta-value">{task.sessionAgent}</span>
+                        </div>
+                      )}
+                      {task.sessionAt && (
+                        <div className="session-meta-row">
+                          <span className="session-meta-label">{t('sessions.time')}</span>
+                          <span className="session-meta-value">{relTime(task.sessionAt, t)}</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <div className="session-card-meta">
-                    {task.createdAt > 0 && (
-                      <div className="session-meta-row">
-                        <span className="session-meta-label">{t('sessions.createdAt')}</span>
-                        <span className="session-meta-value">
-                          {new Date(task.createdAt * 1000).toLocaleString(undefined, {
-                            year: 'numeric',
-                            month: '2-digit',
-                            day: '2-digit',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            hour12: false,
-                          })}
-                        </span>
-                      </div>
-                    )}
-                    {task.workBranch && (
-                      <div className="session-meta-row">
-                        <span className="session-meta-label">{t('sessions.branch')}</span>
-                        <code className="session-meta-value">{task.workBranch}</code>
-                        <button
-                          type="button"
-                          className="note-tool"
-                          title={t('sessions.copyBranch')}
-                          onClick={() => handleCopy(task.workBranch, `branch-${task.issueKey}`)}
-                        >
-                          {copiedKey === `branch-${task.issueKey}` ? (
-                            <Icon d={ICON.check} />
-                          ) : (
-                            <Icon d={ICON.copy} />
-                          )}
-                        </button>
-                      </div>
-                    )}
-                    {task.workDir && (
-                      <div className="session-meta-row">
-                        <span className="session-meta-label">{t('sessions.workDir')}</span>
-                        <code className="session-meta-value">{task.workDir}</code>
-                        <button
-                          type="button"
-                          className="note-tool"
-                          title={t('sessions.copyDir')}
-                          onClick={() => handleCopy(task.workDir, `dir-${task.issueKey}`)}
-                        >
-                          {copiedKey === `dir-${task.issueKey}` ? (
-                            <Icon d={ICON.check} />
-                          ) : (
-                            <Icon d={ICON.copy} />
-                          )}
-                        </button>
-                      </div>
-                    )}
-                    {task.sessionId && (
-                      <div className="session-meta-row">
-                        <span className="session-meta-label">{t('sessions.sessionId')}</span>
-                        <code className="session-meta-value">{task.sessionId}</code>
-                        <button
-                          type="button"
-                          className="note-tool"
-                          title={t('sessions.copySession')}
-                          onClick={() => handleCopy(task.sessionId!, `session-${task.issueKey}`)}
-                        >
-                          {copiedKey === `session-${task.issueKey}` ? (
-                            <Icon d={ICON.check} />
-                          ) : (
-                            <Icon d={ICON.copy} />
-                          )}
-                        </button>
-                      </div>
-                    )}
-                    {task.sessionAgent && (
-                      <div className="session-meta-row">
-                        <span className="session-meta-label">{t('sessions.agent')}</span>
-                        <span className="session-meta-value">{task.sessionAgent}</span>
-                      </div>
-                    )}
-                    {task.sessionAt && (
-                      <div className="session-meta-row">
-                        <span className="session-meta-label">{t('sessions.time')}</span>
-                        <span className="session-meta-value">{relTime(task.sessionAt, t)}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          </>
         )}
         {clearKey && (
           <ConfirmDialog
             message={t('sessions.clearConfirm')}
             onConfirm={() => void handleClear(clearKey)}
             onCancel={() => setClearKey(null)}
+          />
+        )}
+        {/* #391：批量删除确认框。 */}
+        {confirmMulti && (
+          <ConfirmDialog
+            message={t('sessions.clearMultiConfirm', { n: selectedKeys.size })}
+            onConfirm={() => void handleClearMulti()}
+            onCancel={() => setConfirmMulti(false)}
           />
         )}
       </div>

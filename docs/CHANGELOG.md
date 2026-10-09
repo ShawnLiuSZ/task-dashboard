@@ -6,6 +6,14 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.6.6（2026-10-09）— 任务会话多选批量删除与卡片标题完整显示（#417）**
+
+  - 任务会话面板（#287）原仅支持单卡片逐条「清除会话」，清理多个会话须逐个确认。新增**多选删除**：后端 `clear_sessions(keys: Vec<String>)` 批量清空并累加 affected（至少一个命中才成功，全部不存在按 `require_affected` 报错），对每个 key 发 `TASKS_CHANGED_EVENT` 保持多窗口同步；前端 `SessionsPanel` 加**选择模式**（工具栏入口 → 卡片复选框 + 整卡可点切换 → 全选/取消全选 + 已选计数 + 「删除选中」+ 退出），批量删除走确认框后调 `api.clearSessions(keys)`，选择模式下隐藏单卡删除按钮避免重复入口。
+  - 附：会话卡片标题此前 `text-overflow: ellipsis` 单行截断，改为 `white-space: normal; word-break: break-word` 自动换行完整显示。
+  - 无 schema / MCP tool / i18n 破坏性变更（i18n 新增 9 个双语键，复用既有列）。
+  - **验证**：`cargo test --lib` 178 passed ✅，`vitest run` 257 passed ✅，`npm run lint` 0 警告 ✅，`npm run i18n:check` 397 key ✅，`npx tsc --noEmit` ✅，`npx prettier --check` ✅。
+  - 详见 [`issue-417-sessions-multi-delete.md`](./issue-417-sessions-multi-delete.md)
+
 - **v0.6.6（2026-10-08）— 断言强度审计续篇：`match_close_keyword` 手写扫描器的后词边界与文本末尾（#413）**
 
   - 审 `parse_issue_refs` 的核心 —— 逐字节走 `text.as_bytes()` 的**手写扫描器**，从 **PR 正文**提取关闭关键词。实测 7 个变异**2 个真实缺口存活**：①**后词边界检查被删** ⇒ `fixedX` / `closed_foo` 被当成关闭标记（可能**误关闭**无关 issue）；②**文本末尾 `return Some(end)` 改成 `None`** ⇒ 关键词位于正文最末时匹配不到（末行就是「Fixed」是极常见形态）。
