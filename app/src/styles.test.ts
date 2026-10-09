@@ -164,6 +164,43 @@ describe('会话卡片标题完整显示', () => {
 });
 
 /**
+ * 任务会话的meta 行完整显示（#418）。
+ *
+ * 背景：`.session-meta-value` 承载**分支名 / 目录名 / session id / agent / 时间**
+ * （见 `SessionsPanel.tsx`），原声明为 `white-space: nowrap` + `text-overflow: ellipsis`
+ * + `overflow: hidden` ⇒ 长分支名（如 `feature/lsz/418-fix-x@main261009`）与长工作目录
+ * 被单行截断，且这些值**没有 `title` 属性兜底**，悬停也看不到全值 ⇒ 信息彻底丢失。
+ *
+ * `overflow-wrap: anywhere` 而非 `break-word`：分支名/路径虽含 `/` 但 session id、
+ * agent 名等可能是无空格长串，`break-word` 只在合适断点断，这类串仍会顶出卡片。
+ *
+ * vitest 无布局引擎，沿用 `?raw` 静态断言。
+ */
+describe('任务会话 meta 行完整显示', () => {
+  it('.session-meta-value 不再使用省略截断', () => {
+    const d = decls('.session-meta-value');
+    expect(d).not.toMatch(/text-overflow\s*:\s*ellipsis/);
+    expect(d).not.toMatch(/white-space\s*:\s*nowrap/);
+    expect(d).not.toMatch(/overflow\s*:\s*hidden/);
+  });
+
+  it('.session-meta-value 允许换行且无空格长串可断', () => {
+    const d = decls('.session-meta-value');
+    expect(d).toMatch(/white-space\s*:\s*normal|white-space\s*:\s*pre-wrap/);
+    expect(d).toMatch(/overflow-wrap\s*:\s*anywhere|word-break\s*:\s*break-all/);
+  });
+
+  it('.session-meta-row 顶对齐，长值换行时不与标签错位', () => {
+    // 换行后首行应与标签顶部对齐；`center` 会让多行值视觉下沉。
+    expect(decls('.session-meta-row')).toMatch(/align-items\s*:\s*flex-start/);
+  });
+
+  it('保留等宽字体（改换行不应把分支名改成比例字体）', () => {
+    expect(decls('.session-meta-value')).toMatch(/font-family\s*:\s*var\(--font-mono\)/);
+  });
+});
+
+/**
  * CSS 变量引用完整性（#329）回归测试。
  *
  * 背景：`.session-meta-label` 引用了从未定义的 `--text-secondary`、
