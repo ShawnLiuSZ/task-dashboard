@@ -2578,16 +2578,16 @@ mod tests {
         .unwrap();
 
         // 全部存在：affected == 2，且确实清空了 session_id。
-        let total = crate::common::clear_task_sessions(
-            &conn,
-            &["o/r#1".to_string(), "o/r#2".to_string()],
-        )
-        .unwrap();
+        let total =
+            crate::common::clear_task_sessions(&conn, &["o/r#1".to_string(), "o/r#2".to_string()])
+                .unwrap();
         assert_eq!(total, 2);
-        let remaining: i64 =
-            conn.query_row("SELECT COUNT(*) FROM tasks WHERE session_id IS NOT NULL", [], |r| {
-                r.get(0)
-            })
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE session_id IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(remaining, 0);
 
@@ -2597,19 +2597,15 @@ mod tests {
             [],
         )
         .unwrap();
-        let total = crate::common::clear_task_sessions(
-            &conn,
-            &["o/r#1".to_string(), "o/r#3".to_string()],
-        )
-        .unwrap();
+        let total =
+            crate::common::clear_task_sessions(&conn, &["o/r#1".to_string(), "o/r#3".to_string()])
+                .unwrap();
         assert_eq!(total, 1, "只有 o/r#1 命中，total 应为 1");
         // 批量语义：total > 0 ⇒ require_affected 不报错（区别于单条对不存在 key 报错）。
-        crate::common::require_affected(total, "批量会话删除")
-            .expect("部分成功 total>0 不应报错");
+        crate::common::require_affected(total, "批量会话删除").expect("部分成功 total>0 不应报错");
 
         // 全部不存在：total == 0（common 层不报错，由 commands 层 require_affected 兜底）。
-        let total =
-            crate::common::clear_task_sessions(&conn, &["nope#1".to_string()]).unwrap();
+        let total = crate::common::clear_task_sessions(&conn, &["nope#1".to_string()]).unwrap();
         assert_eq!(total, 0);
     }
 }
