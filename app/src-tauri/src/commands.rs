@@ -403,9 +403,20 @@ pub fn set_work_branch(
 }
 
 /// #287：列出所有活跃会话（session_id 非空的任务），供前端「任务会话」Tab 显示。
+/// #422：原先 `WHERE session_id IS NOT NULL` 无任何 account_id 条件 ⇒ 会话面板
+/// 恒列出**所有账号**的会话，与任务列表的账号视图不一致。改为遵守与 `list_tasks`
+/// 相同的账号语义（Some(0)⇒聚合全部 / Some(n)⇒该账号 / None⇒读 meta）。
 #[tauri::command]
-pub fn list_active_sessions(state: State<'_, AppState>) -> Result<Vec<Task>, String> {
+pub fn list_active_sessions(
+    state: State<'_, AppState>,
+    account_id: Option<i64>,
+) -> Result<Vec<Task>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
+    // 与 rows_to_tasks 同口径：Some(0) ⇒ None（聚合，不过滤）。
+    let account_filter = match account_id {
+        Some(0) => None,
+        other => other,
+    };
     let mut stmt = conn
         .prepare(&format!(
             "SELECT {} FROM tasks WHERE session_id IS NOT NULL ORDER BY session_at DESC",
@@ -415,7 +426,15 @@ pub fn list_active_sessions(state: State<'_, AppState>) -> Result<Vec<Task>, Str
     let rows = stmt.query_map([], task_mapper).map_err(|e| e.to_string())?;
     let mut result = Vec::new();
     for row in rows {
-        result.push(row.map_err(|e| e.to_string())?);
+        let t = row.map_err(|e| e.to_string())?;
+        // None ⇒ 聚合（不过滤）；Some(id>0) ⇒ 严格按 account_id 匹配。
+        let keep = match account_filter {
+            None => true,
+            Some(id) => t.account_id == id,
+        };
+        if keep {
+            result.push(t);
+        }
     }
     Ok(result)
 }

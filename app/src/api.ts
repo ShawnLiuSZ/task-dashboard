@@ -139,7 +139,9 @@ export const api = {
   // v0.3.24+：记事本管理。
   listNotes: () => invoke<Note[]>('list_notes'),
   // #287：列出活跃会话（session_id 非空的任务）。
-  listActiveSessions: () => invoke<Task[]>('list_active_sessions'),
+  // #422：传 accountId 以按账号过滤会话（Some(0)⇒聚合全部 / None⇒后端读 meta）。
+  listActiveSessions: (accountId?: number | null) =>
+    invoke<Task[]>('list_active_sessions', { accountId: accountId ?? null }),
   addNote: (content: string, label?: string) =>
     invoke<Note>('add_note', { content, label: label ?? null }),
   updateNote: (id: number, content: string) => invoke<Note>('update_note', { id, content }),

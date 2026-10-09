@@ -133,9 +133,14 @@ function BoardApp() {
   // v0.3.16+：根据当前 viewMode + activeAccountId 计算 listTasks 用的 accountId 参数。
   // - 'single' → activeAccountId（单账号视图）
   // - 'all'    → 0（聚合全部账号）
+  //
+  // #422：`activeAccountId <= 0` 时**不能**回传 0 —— 后端把 `Some(0)` 当「聚合全部账号」
+  // （commands.rs::rows_to_tasks），会让单账号视图静默退化成全量。此处回传 null，
+  // 让后端走 `None` 分支读 meta.active_account_id；仍无账号时返回空列表而非全量。
   const accountFilter = useMemo<number | null>(() => {
     if (!settings) return null;
-    return settings.viewMode === 'all' ? 0 : settings.activeAccountId;
+    if (settings.viewMode === 'all') return 0;
+    return settings.activeAccountId > 0 ? settings.activeAccountId : null;
   }, [settings]);
 
   // #181：无变化跳过 setState。本地写入不更新 updated_at，
@@ -456,6 +461,10 @@ function BoardApp() {
 
   // v0.3.16+：切换激活账号（单账号视图）。#259：同时切回看板视图。
   // #286：切换账号时重置搜索与仓库筛选——搜索词在新账号下无匹配会导致看板为空。
+  // #422：必须同时把 view_mode 切回 'single'——`accountFilter` 由 viewMode 决定，
+  // 若停留在 'all'，filterRef.current.accountId 会停在 0，20s 定时刷新 / onSynced
+  // 再触发 `load()` 时后端 `Some(0)` 解析为「聚合全部账号」⇒ 列表又变回所有账号的任务，
+  // project.status 也跨账号合并（App.tsx:197-221）。原实现只写active_account_id。
   const handleSwitchAccount = async (id: number) => {
     setError(null);
     setNav('board');
@@ -464,6 +473,9 @@ function BoardApp() {
     setHiddenAfterSync(0);
     try {
       await api.setActiveAccount(id);
+      // #422：点账号的语义就是「只看这个账号」，故显式脱离聚合视图。
+      // 幂等：已是 'single' 时重复写入无副作用。
+      if (settings?.viewMode !== 'single') await api.setViewMode('single');
       await loadSettings();
       // #221：显式传新账号 id——闭包里的 accountFilter 还是旧值，靠它会查出旧账号。
       await loadWith(ownership, id);
@@ -482,7 +494,14 @@ function BoardApp() {
       await loadSettings();
       // M3：显式传新 accountFilter——filterRef 由被动 effect 刷新，
       // await loadSettings() 后仍可能读到旧值（与 handleSwitchAccount 同款修复）。
-      const accountId = mode === 'all' ? 0 : (settings?.activeAccountId ?? 0);
+      // #422：切回 'single' 时 activeAccountId 可能 <= 0（无账号），此时传 null
+      // 让后端读 meta，而不是传 0 把单账号视图变成聚合视图。
+      const accountId =
+        mode === 'all'
+          ? 0
+          : settings?.activeAccountId && settings.activeAccountId > 0
+            ? settings.activeAccountId
+            : null;
       await loadWith(ownership, accountId);
     } catch (e) {
       setError(String(e));
@@ -576,6 +595,8 @@ function BoardApp() {
         <Sidebar
           accounts={settings?.accounts ?? []}
           activeAccountId={settings?.activeAccountId ?? null}
+          // #422：聚合视图下不高亮单个账号，避免误导。
+          viewMode={settings?.viewMode}
           nav={nav}
           collapsed={sidebarCollapsed}
           onNavigate={setNav}
@@ -652,7 +673,7 @@ function BoardApp() {
               <NotesPanel />
             </div>
           )}
-          {nav === 'sessions' && <SessionsPanel />}
+          {nav === 'sessions' && <SessionsPanel accountId={accountFilter} />}
           {nav === 'settings' && settings && (
             <div className="panel-page">
               <SettingsPanel
