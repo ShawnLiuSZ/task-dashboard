@@ -47,6 +47,8 @@ export const api = {
   recordSession: (key: string, sessionId: string, agent?: string) =>
     invoke<void>('record_session', { key, sessionId, agent: agent ?? null }),
   clearSession: (key: string) => invoke<void>('clear_session', { key }),
+  // #391：任务会话多选删除（批量清空 session）。
+  clearSessions: (keys: string[]) => invoke<void>('clear_sessions', { keys }),
   recordHandoff: (key: string, text: string) => invoke<void>('record_handoff', { key, text }),
   // #214：认领任务（首个 GitHub 写回：调 API 设自己为 assignee，用户确认后调用）。
   claimIssue: (key: string) => invoke<void>('claim_issue', { key }),
