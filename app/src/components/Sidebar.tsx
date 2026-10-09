@@ -8,6 +8,9 @@ export type NavKey =
 interface Props {
   accounts: Account[];
   activeAccountId: number | null;
+  /** #422：当前展示视图模式。聚合（'all'）时不高亮任何单个账号，
+   *  否则用户会以为处于单账号视图、实际看到全部账号的任务。 */
+  viewMode?: 'single' | 'all';
   /** 当前视图：board 时高亮激活账号项，其余高亮对应导航项。 */
   nav: NavKey;
   /** #265：窗口过窄（< 900px）时纯图标收起态，由 App 按窗口宽度自动驱动。 */
@@ -86,6 +89,7 @@ function NavItem({
 export default function Sidebar({
   accounts,
   activeAccountId,
+  viewMode = 'single',
   nav,
   collapsed = false,
   onNavigate,
@@ -118,7 +122,10 @@ export default function Sidebar({
           <div className="sidebar-empty muted small">{t('sidebar.noAccounts')}</div>
         )}
         {accounts.map((a) => {
-          const active = nav === 'board' && a.id === activeAccountId;
+          // #422：聚合视图（viewMode='all'）下不高亮任何单个账号 —— 此时列表显示的是
+          // 所有账号的任务，高亮某一个会让用户误以为处于该账号的单账号视图。
+          const showAccountActive = nav === 'board' && viewMode !== 'all';
+          const active = showAccountActive && a.id === activeAccountId;
           const label = `@${a.login}${a.org ? ` (${a.org})` : ''}`;
           return (
             <NavItem

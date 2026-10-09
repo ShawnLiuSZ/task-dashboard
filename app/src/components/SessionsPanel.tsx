@@ -50,7 +50,9 @@ function errText(e: unknown): string {
 }
 
 /** #287：任务会话总览面板——列出所有活跃 session，快速一览「同时在做哪几个任务、各自在哪个分支」。 */
-export default function SessionsPanel() {
+/** #422：accountId 与任务列表用同一套账号语义（Some(0)⇒聚合全部 / None⇒后端读 meta），
+ *  避免会话面板与任务列表显示范围不一致。 */
+export default function SessionsPanel({ accountId }: { accountId?: number | null }) {
   const t = useT();
   const [sessions, setSessions] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -86,7 +88,7 @@ export default function SessionsPanel() {
   const loadSessions = useCallback(async () => {
     setLoading(true);
     try {
-      setSessions(await api.listActiveSessions());
+      setSessions(await api.listActiveSessions(accountId));
       setError(null);
     } catch (e) {
       console.error('加载会话失败:', e);
@@ -94,7 +96,7 @@ export default function SessionsPanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [accountId]);
 
   useEffect(() => {
     void loadSessions();

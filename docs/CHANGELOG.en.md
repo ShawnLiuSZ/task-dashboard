@@ -2,6 +2,16 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.6.8 (unreleased) — Task list still showed every account after switching; project.status mixed across accounts (#422)**
+
+  - **Root cause (primary)**: `handleSwitchAccount` only wrote `active_account_id` and **never reset `view_mode`**. Since `accountFilter` is derived from `viewMode` (`viewMode==='all' ? 0 : activeAccountId`), after switching `filterRef.current.accountId` was left at `0`, so the **20s timed refresh / window focus / `onSynced`** triggered `load()` → the backend resolved `Some(0)` as "aggregate all accounts" ⇒ the list reverted to every account's tasks. **This explains "correct right after switching, then back to everything"**. Measured on the live DB: `view_mode='all'` while `active_account_id='5'` — the two fields disagreed, so the UI highlighted account 5 while listing 699 rows (account 4=213 / account 5=486).
+  - **Why status mixed too**: status **values** are filtered with their task row as normal, but the **column list** comes from a separate `listProjectStatuses(accountId)` query whose aggregate branch fetches per account and de-duplicates across accounts ⇒ another account's `Backlog`/`In review` leaked into this account's board.
+  - **Four fixes**: ① clicking a sidebar account now explicitly sets `setViewMode('single')` (idempotent short-circuit); ② the `accountFilter` single-account branch validates `activeAccountId > 0` and returns `null` rather than `0` (the backend already uses `Some(0)` for "aggregate", so colliding would silently degrade the single-account view); ③ Sidebar takes `viewMode` and **highlights no individual account** while aggregating (previously the UI actively misled); ④ `handleSwitchView` likewise stops passing `<= 0` as `0`.
+  - Also: `list_active_sessions` had `WHERE session_id IS NOT NULL` with **no account_id filter at all** ⇒ the Task Sessions panel always listed every account. It now filters using the same semantics as `list_tasks`. The Tauri command gains `account_id: Option<i64>`; omitting it behaves as before, so compatibility is intact.
+  - No schema / MCP tool / i18n changes (no new keys).
+  - **Verification**: new `app/src/account-filter.test.ts` with 15 cases ✅, `npm test -- --run` **276 passed** ✅ (was 261), `cargo test --lib` 178 passed ✅, `npm run lint` 0 warnings ✅, `npx tsc --noEmit` ✅, `npx prettier --check` ✅, `cargo fmt --check` clean ✅, `clippy --all-targets -D warnings` 0 warnings ✅. **Reverse verification**: injecting 5 mutations (dropping `setViewMode`, `> 0 ? : null` → `?? 0`, removing Sidebar's aggregate check, not passing `accountId`, backend `Some(_) => true`) ⇒ `MUTATION_TEST_EXIT=1` (6 failed | 9 passed).
+  - See [issue-422-account-filter-view-mode.md](./issue-422-account-filter-view-mode.md)
+
 - **v0.6.8 (unreleased) — Task Sessions meta rows fully display: branch name / directory no longer truncated (#420)**
 
   - The Task Sessions card meta rows (**branch name / working directory / session id / agent / time**) all carried `text-overflow: ellipsis` + `white-space: nowrap`, so long branch names and paths were cut to `…` — and these nodes have **no `title` attribute**, so even hovering reveals nothing: the information was unrecoverable.

@@ -6,6 +6,16 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.6.8（未发布）— 切换账号后任务列表仍显示全部账号，project.status 跨账号混合（#422）**
+
+  - **根因（主因）**：`handleSwitchAccount` 只写 `active_account_id`，**从不重置 `view_mode`**。而 `accountFilter` 由 `viewMode` 决定（`viewMode==='all' ? 0 : activeAccountId`）⇒ 切换后 `filterRef.current.accountId` 被刷成 `0`，**20s定时刷新 / 窗口聚焦 / `onSynced`** 触发 `load()` → 后端把 `Some(0)` 解析为「聚合全部账号」⇒ 列表变回全部任务。**这解释了「切换后短暂正确、随后变回全量」**。实测本机库 `view_mode='all'` + `active_account_id='5'`，两字段各说各话，界面高亮账号 5 却显示 699 条（账号 4=213/ 账号 5=486）。
+  - **status 为何也混合**：status 的**值**随任务行正常过滤，但**列清单**是另一次独立查询 `listProjectStatuses(accountId)`，聚合分支逐账号拉取后 `Map` 跨账号去重合并 ⇒ 其他账号的 `Backlog`/`In review` 混进本账号看板。
+  - **四处修复**：①点侧边栏账号 ⇒ 显式 `setViewMode('single')`（幂等短路）；②`accountFilter` 单账号分支校验 `activeAccountId > 0`，非法值回传 `null` 而非 `0`（后端 `Some(0)` 已占用为聚合语义，撞车会让单账号视图静默退化）；③Sidebar 接收 `viewMode`，聚合模式下**不高亮任何单个账号**（此前 UI 在主动误导）；④`handleSwitchView` 同样不把 `<= 0` 传成 `0`。
+  - 附：`list_active_sessions` 原本 `WHERE session_id IS NOT NULL` **完全没有 account_id 过滤** ⇒ 任务会话面板恒列所有账号，已补过滤并遵守与 `list_tasks` 同口径。Tauri command 新增 `account_id: Option<i64>`，缺参数时行为等同旧版，不破坏兼容。
+  - 无 schema / MCP tool / i18n 变更（无新增 key）。
+  - **验证**：新增 `app/src/account-filter.test.ts` 15 例 ✅，`npm test -- --run` **276 passed** ✅（原 261），`cargo test --lib` 178 passed ✅，`npm run lint` 0 警告 ✅，`npx tsc --noEmit` ✅，`npx prettier --check` ✅，`cargo fmt --check` 干净 ✅，`clippy --all-targets -D warnings` 0 警告 ✅。**反向验证**：注入 5 处变异（删 `setViewMode` / `> 0 ? : null` 改回 `?? 0` / 去掉 Sidebar 聚合判断 / 不传 `accountId` / 后端改 `Some(_) => true`）⇒ `MUTATION_TEST_EXIT=1`（6 failed | 9 passed）。
+  - 详见 [`issue-422-account-filter-view-mode.md`](./issue-422-account-filter-view-mode.md)
+
 - **v0.6.8（未发布）— 任务会话 meta 行完整显示：分支名 / 目录名不再被截断（#420）**
 
   - 任务会话卡片的meta 行（**分支名 / 工作目录 / session id / agent / 时间**）此前统一带 `text-overflow: ellipsis` + `white-space: nowrap`，长分支名与长路径被单行截断成 `…`，且这些节点**没有 `title` 属性** ⇒ 悬停也看不到全值，信息彻底不可恢复。
