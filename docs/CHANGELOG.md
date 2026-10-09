@@ -6,6 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.6.8（未发布）— 任务会话 meta 行完整显示：分支名 / 目录名不再被截断（#420）**
+
+  - 任务会话卡片的meta 行（**分支名 / 工作目录 / session id / agent / 时间**）此前统一带 `text-overflow: ellipsis` + `white-space: nowrap`，长分支名与长路径被单行截断成 `…`，且这些节点**没有 `title` 属性** ⇒ 悬停也看不到全值，信息彻底不可恢复。
+  - 改为 `white-space: normal` + `overflow-wrap: anywhere`：**分支名、目录名一律完整显示**，超宽自动换行。用 `anywhere` 而非 `break-word`，是因为 session id / agent 名可能是**完全无空格的长串**，`break-word` 对这类串没有断点可断、仍会顶出卡片。
+  - 附：`.session-meta-row` 由 `align-items: center` 改 `flex-start`，多行值换行后首行与标签顶对齐（`center` 会让多行值视觉下沉）。
+  - 保留 `font-family: var(--font-mono)` —— 分支名 / 路径是代码类文本，等宽是语义需求。
+  - ⚠️ **有意不动**：任务详情里分配人下方的 `.session-row .session code` 同样是省略号，但那是 #197 的设计（列窄时省略 + `title` 放全值），有兜底，缺陷性质不同。
+  - 无 schema / MCP tool / i18n 变更（无新增 key）。
+  - **验证**：`vitest run src/styles.test.ts` 24 passed ✅，`npm test -- --run` 261 passed ✅，`npm run lint` 0 警告 ✅，`npx tsc --noEmit` ✅，`npx prettier --check` ✅；**反向验证**：改回缺陷写法 `MUTATION_TEST_EXIT=1` ✅。
+  - 详见 [`issue-420-sessions-meta-ellipsis.md`](./issue-420-sessions-meta-ellipsis.md)
+
 - **v0.6.7（2026-10-09）— 任务会话多选批量删除与卡片标题完整显示（#417）**
 
   - 任务会话面板（#287）原仅支持单卡片逐条「清除会话」，清理多个会话须逐个确认。新增**多选删除**：后端 `clear_sessions(keys: Vec<String>)` 批量清空并累加 affected（至少一个命中才成功，全部不存在按 `require_affected` 报错），对每个 key 发 `TASKS_CHANGED_EVENT` 保持多窗口同步；前端 `SessionsPanel` 加**选择模式**（工具栏入口 → 卡片复选框 + 整卡可点切换 → 全选/取消全选 + 已选计数 + 「删除选中」+ 退出），批量删除走确认框后调 `api.clearSessions(keys)`，选择模式下隐藏单卡删除按钮避免重复入口。

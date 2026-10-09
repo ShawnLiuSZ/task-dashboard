@@ -2227,7 +2227,7 @@ button.unassigned-tag:disabled {
 }
 .session-meta-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   font-size: 12px;
 }
@@ -2239,9 +2239,12 @@ button.unassigned-tag:disabled {
 .session-meta-value {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* #418：分支名 / 目录名 / session id / agent / 时间一律完整显示。
+   * 原为 `white-space: nowrap` + `text-overflow: ellipsis` + `overflow: hidden`，
+   * 长分支名与长路径被单行截断；改为自动换行。`overflow-wrap: anywhere` 兜底
+   * 无空格的长串（session id、路径片段），否则其overflow 仍会顶出卡片。 */
+  white-space: normal;
+  overflow-wrap: anywhere;
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text);
