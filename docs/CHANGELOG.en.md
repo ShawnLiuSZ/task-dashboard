@@ -2,7 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **v0.6.9 (unreleased) — Session data split out of `tasks` into a dedicated `sessions` table, preserving multi-run history (#427)**
+- **v0.6.9 (2026-10-10) — Session data split out of `tasks` into a dedicated `sessions` table, preserving multi-run history (#427)**
 
   - **Motivation (measured, not assumed)**: sessions previously lived in `tasks.session_id` / `session_agent` / `session_at` and were overwritten on every touch ⇒ the production DB has **0** rows where one `issue_key` carries multiple distinct `session_id` — multi-run history never existed by design; `session_id` had no index so the session panel's main query full-scanned; agent session writes and GitHub sync both UPDATE the same `tasks` table.
   - **New table**: `sessions` (8 columns + 2 indexes) holds full history with `is_active` / `ended_at`. `SCHEMA_VERSION` 4 → 5; the one-off backfill lives in `MIGRATE_DATA_FIXES` (`INSERT OR IGNORE` for idempotency, with dirty-value fallbacks so a `NOT NULL` failure can't be **silently swallowed** by the best-effort semantics).
