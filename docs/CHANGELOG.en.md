@@ -2,7 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **v0.6.8 (unreleased) — Integration-test temp SQLite directories were never cleaned up, accumulating 958 dirs / 146 MB (#424)**
+- **v0.6.8 (2026-10-10) — Integration-test temp SQLite directories were never cleaned up, accumulating 958 dirs / 146 MB (#424)**
 
   - **Not related to App updates or uninstalls**: these leftovers come from running `cargo test` during development, producing ~**26** directories each time. The App's real data is still a single `~/Library/Application Support/com.shawnliu.taskboard/taskboard.db` (3.3 MB); deleting the test leftovers does not affect it (verified with `PRAGMA integrity_check` = `ok`).
   - Root cause: `tests/db_test.rs::tempdir()` only calls `create_dir_all` and **never cleans up**. All 27 integration tests each open their own isolated SQLite (to avoid polluting the production DB), and after the run every directory is left behind in the macOS temp dir `/var/folders/.../T/` — where uninstall/disk-cleanup tools will scan them.
@@ -13,7 +13,7 @@
   - **Verification**: `cargo test` 178 + 27 passed with **0 leftovers** ✅, `cargo fmt --check` clean ✅, `cargo clippy --all-targets -p taskboard -- -D warnings` 0 warnings ✅ (required by §5.6 after touching `tests/`), `npm test -- --run` 276 passed ✅. **Reverse verification**: no-op `Drop` ⇒ 26 leftovers; restored ⇒ 0.
   - See [issue-424-test-tmpdir-cleanup.md](./issue-424-test-tmpdir-cleanup.md)
 
-- **v0.6.8 (unreleased) — Task list still showed every account after switching; project.status mixed across accounts (#422)**
+- **v0.6.8 (2026-10-10) — Task list still showed every account after switching; project.status mixed across accounts (#422)**
 
   - **Root cause (primary)**: `handleSwitchAccount` only wrote `active_account_id` and **never reset `view_mode`**. Since `accountFilter` is derived from `viewMode` (`viewMode==='all' ? 0 : activeAccountId`), after switching `filterRef.current.accountId` was left at `0`, so the **20s timed refresh / window focus / `onSynced`** triggered `load()` → the backend resolved `Some(0)` as "aggregate all accounts" ⇒ the list reverted to every account's tasks. **This explains "correct right after switching, then back to everything"**. Measured on the live DB: `view_mode='all'` while `active_account_id='5'` — the two fields disagreed, so the UI highlighted account 5 while listing 699 rows (account 4=213 / account 5=486).
   - **Why status mixed too**: status **values** are filtered with their task row as normal, but the **column list** comes from a separate `listProjectStatuses(accountId)` query whose aggregate branch fetches per account and de-duplicates across accounts ⇒ another account's `Backlog`/`In review` leaked into this account's board.
@@ -23,7 +23,7 @@
   - **Verification**: new `app/src/account-filter.test.ts` with 15 cases ✅, `npm test -- --run` **276 passed** ✅ (was 261), `cargo test --lib` 178 passed ✅, `npm run lint` 0 warnings ✅, `npx tsc --noEmit` ✅, `npx prettier --check` ✅, `cargo fmt --check` clean ✅, `clippy --all-targets -D warnings` 0 warnings ✅. **Reverse verification**: injecting 5 mutations (dropping `setViewMode`, `> 0 ? : null` → `?? 0`, removing Sidebar's aggregate check, not passing `accountId`, backend `Some(_) => true`) ⇒ `MUTATION_TEST_EXIT=1` (6 failed | 9 passed).
   - See [issue-422-account-filter-view-mode.md](./issue-422-account-filter-view-mode.md)
 
-- **v0.6.8 (unreleased) — Task Sessions meta rows fully display: branch name / directory no longer truncated (#420)**
+- **v0.6.8 (2026-10-10) — Task Sessions meta rows fully display: branch name / directory no longer truncated (#420)**
 
   - The Task Sessions card meta rows (**branch name / working directory / session id / agent / time**) all carried `text-overflow: ellipsis` + `white-space: nowrap`, so long branch names and paths were cut to `…` — and these nodes have **no `title` attribute**, so even hovering reveals nothing: the information was unrecoverable.
   - Changed to `white-space: normal` + `overflow-wrap: anywhere` so **branch names and directories display in full**, wrapping when too wide. `anywhere` rather than `break-word` because session ids / agent names can be **long unbroken strings** with no break opportunity, which `break-word` cannot split.
