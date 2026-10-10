@@ -6,6 +6,21 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.6.9（未发布）— 会话数据从 `tasks` 拆出到独立 `sessions` 表，保留多次执行历史（#427）**
+
+  - **动机（实测证据，非推测）**：会话此前挤在 `tasks` 的`session_id`/`session_agent`/`session_at` 三列里，覆盖式写入 ⇒ 生产库「同 `issue_key` 多个不同 `session_id`」= **0 条**，多次开工的历史在设计层面就不存在；`session_id` 无索引致会话面板主查询走全表扫描；agent 写会话与 GitHub 同步两个写入方混同一张表。
+  - **新表**：`sessions`（8 列 + 2 索引），存全量历史并带 `is_active` / `ended_at`。`SCHEMA_VERSION` 4 → 5；一次性搬迁走 `MIGRATE_DATA_FIXES`（`INSERT OR IGNORE` 幂等，脏值兜底避免 `NOT NULL` 失败被 best-effort **静默吞掉**）。
+  - ⚠️ **唯一键是 `(account_id, issue_key, session_id)` 三元组，不是 `session_id` 单列**：实测一个 claude-code 会话可同时挂多个 issue（`ea1a0b6a-…` 跨 `fad-backend#1447` + `#1454`），且 `issue_key` 在 `tasks` 里跨账号重复（733 行 / 729 distinct）⇒ 按单列唯一会丢数据或建表失败。模型是**会话与 issue 多对多**。
+  - `work_branch` / `work_dir` **留在 `tasks`**：它们是「任务属性」而非「会话属性」，且原本与 session 三列混在同一条 UPDATE 的 4 个分支里，一并搬走会**静默丢失**分支/目录信息。
+  - **「删除会话」语义变更**：改为**结束**活跃会话（`is_active=0` + `ended_at`），**历史行保留**。tasks 三列照旧置 NULL（保持 `WHERE session_id IS NOT NULL` 语义与 MCP 契约不变）。写入端 `clear_sessions` 不变。
+  - 写入端**双写**：先 `UPDATE tasks` 确认 `affected>0`（保持 `require_affected` 契约），再写 `sessions` —— **反序会产生孤儿会话**。同会话重复上报走 `ON CONFLICT DO UPDATE` 复用行、只刷新 `session_at`（agent 改分支/换目录是常态）。
+  - `list_active_sessions` 改`sessions.is_active=1 JOIN tasks`，sessions 为权威源；**保持 `Vec<Task>` 返回形状 ⇒ 前端零改动**。
+  - **MCP 双实现同步**：Rust侧薄包装自动生效；Python 侧 `server.py` 是独立 SQL，已手改并在 `ensure_schema` 自建表 + 幂等搬迁（它是独立进程，不走 Rust 的 `open_db`）。
+  - 附带修复：#424 只给 `tests/db_test.rs` 的 `tempdir()` 加了清理，`db.rs` 单元测试的 `tmp_db()` 同样从不删除 ⇒ 实测残留 **1881 → 9**（剩余 9 个是 `mem_conn()` 独立文件，属既有已知 flake）。
+  - 无破坏性变更：Tauri command / MCP 工具签名、`types.ts`、前端组件均不变；`check-mcp-columns.py` 28 列通过。
+  - **验证**：`cargo test --lib` **187 passed**（原 178）、`db_test` 27 passed ✅，`cargo fmt --check` 干净 ✅，`clippy --all-targets -D warnings` 0 警告 ✅，`check-mcp-columns.py` 28 列 ✅，`vitest` 276 passed ✅，`tsc` / `lint` 0 警告 ✅。**反向验证**：把 `clear` 改成真 `DELETE`、把 `touch` 去掉 `affected` 检查 ⇒ 2 处均被精确捕获（`MUTATION_EXIT=101`）。**生产库副本演练**：`user_version` 4→5、16 条会话零丢失、跨 issue 的 session 未丢、二次开库幂等。
+  - 详见 [`issue-427-sessions-table.md`](./issue-427-sessions-table.md)
+
 - **v0.6.8（2026-10-10）— 集成测试临时 SQLite 目录从不清理，累积 958 个 / 146 MB（#424）**
 
   - **与App 更新/卸载无关**：残留来自开发期跑 `cargo test`，每次约产生 **26 个**目录。App 真实数据仍只有一个 `~/Library/Application Support/com.shawnliu.taskboard/taskboard.db`（3.3 MB），删除测试残留不影响它（已用 `PRAGMA integrity_check` = `ok` 核对）。

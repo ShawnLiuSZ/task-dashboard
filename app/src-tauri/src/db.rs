@@ -10,6 +10,85 @@ pub const APP_IDENTIFIER: &str = "com.shawnliu.taskboard";
 // v0.3.49 (#149)：详细日志门控已迁移至 `crate::common::verbose_enabled`，
 // 诊断输出一律走 `crate::tlog!`；此处不再保留私有版本。
 
+// #427：sessions 表 DDL（会话执行记录）。抽成独立常量，便于：
+//   ① `SCHEMA` 用 `concat!` 编译期拼入；
+//   ② 单测 fixture 通过 `sessions_ddl()` 复用同一份定义（不手写副本，避免漂移）。
+// Python MCP 侧 `server.py::ensure_schema` 也需自建同一张表（它是独立进程，
+// 不走 Rust 的 `open_db`），那里的定义靠本注释保持同步。
+//
+// ⚠️ 唯一键是 (account_id, issue_key, session_id) 三元组，**不是** session_id 单列：
+// 实测一个 claude-code 会话可同时挂在多个 issue 上
+// （ea1a0b6a-…-4b587b79f738 → fad-backend#1447 + #1454），且 issue_key 在 tasks 里
+// 也跨账号重复（733 行 / 729 distinct）。按单列唯一会丢数据或建表失败。
+//
+// work_branch / work_dir **故意不存这里** —— 它们是「任务属性」（agent 在哪个分支
+// 干活）而非「会话属性」，留在 tasks 以免 SessionsPanel 4 处 UI 改数据源
+// （见 #427 决策 B）。
+const SESSIONS_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS sessions (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id       INTEGER NOT NULL,
+  issue_key        TEXT NOT NULL,
+  session_id       TEXT NOT NULL,
+  session_agent    TEXT NOT NULL DEFAULT '',
+  -- 会话**开始**时间（沿用 tasks.session_at 的原语义：每次 touch 覆盖为 now）。
+  session_at       INTEGER NOT NULL,
+  -- 1=进行中，0=已结束（clear_task_session 只置 0，不删行 ⇒ 历史保留）。
+  is_active        INTEGER NOT NULL DEFAULT 1,
+  -- 结束时间；is_active=1 时为 NULL。
+  ended_at         INTEGER,
+  UNIQUE(account_id, issue_key, session_id)
+);
+-- 会话面板主查询：WHERE is_active=1 ORDER BY session_at DESC（避免全表扫描）。
+CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions(is_active, session_at DESC);
+-- 按 issue 查历史（详情页「历次会话」用）。
+CREATE INDEX IF NOT EXISTS idx_sessions_issue ON sessions(account_id, issue_key);
+"#;
+
+/// 供测试（与未来其他调用方）引用同一份 sessions DDL。
+///
+/// ⚠️ #427：`SCHEMA` 字面量内还有一份**内联副本**（Rust 的 `concat!` 只接受字面量，
+/// 无法引用 `const`，故无法真正共享单一份）。两份若漂移，后果是「新库建不出sessions 表」
+/// 而测试 fixture 仍通过 —— 最隐蔽的失败模式。故 `tests` 里有断言强制两者一致。
+pub fn sessions_ddl() -> &'static str {
+    SESSIONS_DDL
+}
+
+/// #427 防漂移：`SCHEMA` 内联的 sessions DDL 与 `SESSIONS_DDL` 常量必须逐字一致。
+/// 返回不一致的片段（供断言给出可读信息）。
+#[cfg(test)]
+pub(crate) fn sessions_ddl_drift() -> Option<String> {
+    let inline = SCHEMA
+        .split("CREATE TABLE IF NOT EXISTS sessions (")
+        .nth(1)
+        .map(|rest| {
+            format!(
+                "CREATE TABLE IF NOT EXISTS sessions ({})",
+                rest.split("idx_sessions_issue").next().unwrap_or("")
+            )
+        });
+    let standalone = SESSIONS_DDL
+        .split("CREATE TABLE IF NOT EXISTS sessions (")
+        .nth(1)
+        .map(|rest| {
+            format!(
+                "CREATE TABLE IF NOT EXISTS sessions ({})",
+                rest.split("idx_sessions_issue").next().unwrap_or("")
+            )
+        });
+    match (inline, standalone) {
+        (Some(a), Some(b)) if a == b => None,
+        (a, b) => Some(format!(
+            "inline={:?}\nstandalone={:?}",
+            a.map(|x| x.len()),
+            b.map(|x| x.len())
+        )),
+    }
+}
+
+// #427：sessions 表 DDL 抽成独立常量，由 `SCHEMA` 用 `concat!` 在**编译期**拼进来。
+// 这样单测 fixture 与 Python MCP 侧都能引用同一份定义，不会在三方拷贝间漂移
+// （`concat!` 是编译期展开，无运行时开销）。
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS accounts (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,6 +210,43 @@ CREATE TABLE IF NOT EXISTS project_items (
 );
 CREATE INDEX IF NOT EXISTS idx_project_items_issue ON project_items(account_id, issue_key);
 
+-- #427：会话执行记录（agent 每次开工写一行）。定义与 `SESSIONS_DDL` 一致
+-- （此处为 SCHEMA 字面量内的内联副本，两处需同步修改；`sessions_ddl()`
+-- 提供同一份定义给测试 fixture 使用）。
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id       INTEGER NOT NULL,
+  issue_key        TEXT NOT NULL,
+  session_id       TEXT NOT NULL,
+  session_agent    TEXT NOT NULL DEFAULT '',
+  -- 会话**开始**时间（沿用 tasks.session_at 的原语义：每次 touch 覆盖为 now）。
+  session_at       INTEGER NOT NULL,
+  -- 1=进行中，0=已结束（clear_task_session 只置 0，不删行 ⇒ 历史保留）。
+  is_active        INTEGER NOT NULL DEFAULT 1,
+  -- 结束时间；is_active=1 时为 NULL。
+  ended_at         INTEGER,
+  UNIQUE(account_id, issue_key, session_id)
+);
+-- 会话面板主查询：WHERE is_active=1 ORDER BY session_at DESC（避免全表扫描）。
+CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions(is_active, session_at DESC);
+-- 按 issue 查历史（详情页「历次会话」用）。
+CREATE INDEX IF NOT EXISTS idx_sessions_issue ON sessions(account_id, issue_key);
+
+-- #427：会话执行记录（agent 每次开工写一行）。此前会话数据挤在 tasks 的
+-- session_id/session_agent/session_at 三列里，覆盖式写入 ⇒ 同一任务多次开工的
+-- 历史在设计层面就不存在。拆表后 sessions 保留全量历史，tasks 三列退化为
+-- 「当前活跃会话」缓存（MCP 契约不变，见 issue #427 决策 C）。
+--
+-- ⚠️ 唯一键是 (account_id, issue_key, session_id) 三元组，**不是** session_id 单列：
+-- 实测一个 claude-code 会话可同时挂在多个 issue 上
+-- （ea1a0b6a-…-4b587b79f738 → fad-backend#1447 + #1454），且 issue_key 在 tasks 里
+-- 也跨账号重复（733 行 / 729 distinct）。按单列唯一会丢数据或建表失败。
+--
+-- work_branch / work_dir **故意不存这里** —— 它们是「任务属性」（agent 在哪个分支
+-- 干活）而非「会话属性」，留在 tasks 以免 SessionsPanel 4 处 UI 改数据源
+-- （见 #427 决策 B）。
+-- #427：sessions 表（会话执行记录）定义见 `SESSIONS_DDL` 的注释块。
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -257,6 +373,9 @@ pub fn db_path_default() -> Result<PathBuf, String> {
 /// **硬约束**：`SCHEMA` 或 `MIGRATION_DDL` 每次做结构性变更（新增列 / 表 / 索引）都必须 +1，
 /// 否则已升到旧版本号的库会走热路径、永久跳过新迁移。
 ///
+/// 版本 5（#427）：新增 `sessions` 表（会话执行记录）+ 两个索引（结构性变更 ⇒ +1）。
+/// 一次性数据搬迁见 `MIGRATE_DATA_FIXES` 第 3 条（tasks 三列 → sessions 行）。
+///
 /// 版本 4（#335）：无结构变更，但带一次性**数据修复**（`MIGRATE_DATA_FIXES`）——
 /// 归一化 `tasks.issue_state` 大小写并修正其连带的滞留状态。数据修复同样必须靠版本号
 /// 门控（只跑一次），所以照例 +1。
@@ -264,7 +383,7 @@ pub fn db_path_default() -> Result<PathBuf, String> {
 /// `open_db` 以「版本号落后 **或** 只读自愈探测发现缺口」为迁移门控：版本号是快路径，
 /// 探测是兜底——历史教训（#175 / #237 / #278：版本号丢值、被物理重建覆盖、新列没进
 /// 重建的写死白名单）表明仅靠版本号会漏列，故两者缺一不可。
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// 必须存在的列（表 → 列）。热路径**只读**探测，缺任何一列都触发迁移。
 /// 新增必填列时必须同步追加 `MIGRATION_DDL` 里的补齐语句（有单测守卫）。
@@ -344,6 +463,24 @@ const MIGRATE_DATA_FIXES: &[&str] = &[
     //    必须在上一条之后执行（此处依赖归一化后的 `closed`）。
     "UPDATE tasks SET status = 'done'
        WHERE issue_state = 'closed' AND status <> 'done'",
+    // 3) #427：把 tasks 三列里的活跃会话搬进 sessions 表。
+    //    `INSERT OR IGNORE` 保证**幂等**（UNIQUE(account_id, issue_key, session_id) 冲突即跳过），
+    //    与本常量的「全部幂等、可安全重跑」语义一致。
+    //    - 只搬 is_active=1 的行（tasks 里存在 session_id 即代表当前活跃）。
+    //    - session_agent / session_at 的脏值（NULL / 0）在 SELECT 里兜底：COALESCE + NULLIF，
+    //      避免 NOT NULL 列插入失败导致整条迁移被best-effort 吞掉（那样就静默丢数据了）。
+    //    - 不动tasks 三列：它们保留为「当前活跃会话」缓存，MCP 契约依赖（#427 决策 C）。
+    "INSERT OR IGNORE INTO sessions
+         (account_id, issue_key, session_id, session_agent, session_at, is_active)
+       SELECT account_id,
+              issue_key,
+              session_id,
+              COALESCE(NULLIF(trim(session_agent), ''), 'unknown'),
+              CASE WHEN COALESCE(session_at, 0) > 0 THEN session_at ELSE 0 END,
+              1
+       FROM tasks
+       WHERE session_id IS NOT NULL
+         AND trim(session_id) <> ''",
 ];
 
 /// #215：Project 写回所需的条目表（新库由 `SCHEMA` 建，旧库在此补建）。
@@ -2582,8 +2719,165 @@ pub fn import_note(
 
 #[cfg(test)]
 mod tests {
+
+    /// #427 迁移端到端：旧库（v0.6.7 布局）打开后应建 sessions 表并搬迁存量会话。
+    ///
+    /// 放在 `db.rs` 单元测试而非 `tests/db_test.rs` 集成测试的原因：
+    /// `SCHEMA` / `common` 都是**私有**模块（`mod common;` / `const SCHEMA`），
+    /// 集成测试（外部 crate）拿不到它们，无法构造「真实旧库」——
+    /// 而迁移恰恰是最需要端到端验证的部分。
+    #[test]
+    fn migration_from_v4_builds_sessions_and_backfills() {
+        // ① 造一个 v0.6.7 布局的库：跑 SCHEMA 后删掉 sessions 表 + 版本号回落 4。
+        let path = tmp_db_guarded("sessions-migration");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(SCHEMA).unwrap();
+            conn.execute_batch(
+                "DROP TABLE sessions;
+                 DROP INDEX IF EXISTS idx_sessions_active;
+                 DROP INDEX IF EXISTS idx_sessions_issue;",
+            )
+            .unwrap();
+            // 插入任务行并附存量会话：同一 session_id 跨两个 issue
+            // （生产库实测形态：ea1a0b6a-… 跨 fad-backend#1447 + #1454）。
+            // ⚠️ 必须先 INSERT 再 UPDATE —— SCHEMA 建出的是**空** tasks 表，
+            // 只 UPDATE 会匹配 0 行，搬迁自然也是 0 行（第一版就踩了这个）。
+            let now = 1_700_000_000i64;
+            for (i, key) in ["o/r#1", "o/r#2", "o/r#3", "o/r#4"].iter().enumerate() {
+                conn.execute(
+                    "INSERT INTO tasks (issue_key, owner, repo, number, title, url,
+                                        issue_state, ownership, status, synced_at, account_id,
+                                        session_id, session_agent, session_at, updated_at)
+                     VALUES (?1,'o','r',?2,'t','u','open','assigned','todo',1,1,NULL,NULL,NULL,?3)",
+                    rusqlite::params![key, (i + 1) as i64, now],
+                )
+                .unwrap();
+            }
+            conn.execute_batch(
+                "UPDATE tasks SET session_id='sess-A', session_agent='claude', session_at=1000
+                  WHERE issue_key='o/r#1';
+                 UPDATE tasks SET session_id='sess-A', session_agent='claude', session_at=2000
+                  WHERE issue_key='o/r#2';
+                 UPDATE tasks SET session_id='sess-B', session_agent='codex', session_at=3000
+                  WHERE issue_key='o/r#3';
+                 -- 脏值行：agent 空 + session_at=0，用于验证搬迁的兜底
+                 UPDATE tasks SET session_id='sess-C', session_agent='', session_at=0
+                  WHERE issue_key='o/r#4';
+                 PRAGMA user_version = 4;",
+            )
+            .unwrap();
+        }
+
+        // ② 首次打开：应推进版本号、建表、搬迁 3 行。
+        {
+            let conn = open_db(&path).expect("open_db 应成功");
+            let v: i64 = conn
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(v, SCHEMA_VERSION, "user_version 应推进到最新");
+
+            let n: i64 = conn
+                .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 4, "4 行存量会话（含agent 空的脏值行）应全部搬入");
+
+            let a: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sessions WHERE session_id='sess-A'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                a, 2,
+                "一个 session 跨两个 issue 应存 2 行，未被单列唯一丢弃"
+            );
+        }
+
+        // ③ 二次打开：幂等，不重复搬迁。
+        {
+            let _ = open_db(&path).expect("二次 open_db 应成功");
+            let conn = Connection::open(&path).unwrap();
+            let n: i64 = conn
+                .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 4, "重复打开不得重复搬迁（幂等）");
+        }
+
+        // ④ 脏值行能搬进来（agent 空 ⇒ 'unknown'，session_at=0 保留）。
+        {
+            let conn = Connection::open(&path).unwrap();
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sessions WHERE session_id='sess-C' AND session_agent='unknown'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "session_agent 为空的行也应搬入并兜底为 'unknown'");
+        }
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #427：sessions 表 DDL 两份定义（SCHEMA 内联 + SESSIONS_DDL 常量）必须一致。
+    /// 漂移的后果：新库建不出 sessions 表而测试 fixture 仍通过（最隐蔽的失败模式）。
+    #[test]
+    fn sessions_ddl_inline_matches_constant() {
+        assert_eq!(
+            crate::db::sessions_ddl_drift(),
+            None,
+            "SCHEMA 内联的 sessions DDL 与 SESSIONS_DDL 常量已漂移"
+        );
+    }
+
+    /// #427：`open_db` 必须在**新库**里建出 sessions 表 + 两个索引。
+    /// （若 SCHEMA 内联副本丢失或漏索引，此处会no such table。）
+    #[test]
+    fn fresh_db_has_sessions_table_and_indexes() {
+        let conn = open_db(std::path::Path::new(":memory:")).expect("open_db");
+        for col in [
+            "id",
+            "account_id",
+            "issue_key",
+            "session_id",
+            "session_agent",
+            "session_at",
+            "is_active",
+            "ended_at",
+        ] {
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = ?1",
+                    [col],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(exists, 1, "sessions 表缺少列 {col}");
+        }
+        let idx: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='sessions'")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert!(
+            idx.iter().any(|n| n == "idx_sessions_active"),
+            "缺 idx_sessions_active"
+        );
+        assert!(
+            idx.iter().any(|n| n == "idx_sessions_issue"),
+            "缺 idx_sessions_issue"
+        );
+    }
     use super::*;
 
+    /// 临时库路径（每次调用唯一，避免并行测试互删 —— #266）。
+    ///
+    /// ⚠️ 返回裸 `PathBuf` **不自动清理** —— 因为 `steady_db` 依赖「路径活过
+    /// `tmp_db` 之后」继续复用同一库。需要自动清理的用例请用 `tmp_db_guarded`。
     fn tmp_db(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "taskboard_db_test_{}_{}",
@@ -2597,10 +2891,51 @@ mod tests {
         dir.join("taskboard.db")
     }
 
+    /// #427：返回 RAII guard 的临时库路径 —— `Drop` 时删除父目录。
+    /// #424 只给 `tests/db_test.rs` 修了，`db.rs` 单元测试的 `tmp_db` 仍会
+    /// 每次跑测试累积一批（实测单次 lib 测试留下 ~190 个）。
+    fn tmp_db_guarded(name: &str) -> TempDbPath {
+        let dir = std::env::temp_dir().join(format!(
+            "taskboard_db_test_{}_{}",
+            name,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        TempDbPath(dir.join("taskboard.db"))
+    }
+
+    /// #427：RAII 临时库路径（`Drop` 时删除整个父目录）—— 修 #424 的同类缺口。
+    struct TempDbPath(std::path::PathBuf);
+
+    impl std::ops::Deref for TempDbPath {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    // rusqlite 的 `Connection::open` 收 `impl AsRef<Path>`，故两个 trait 都要。
+    impl AsRef<std::path::Path> for TempDbPath {
+        fn as_ref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDbPath {
+        fn drop(&mut self) {
+            if let Some(dir) = self.0.parent() {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+
     /// #327：重复内容的记事应返回可读提示，而不是原始的 UNIQUE 约束报错。
     #[test]
     fn note_unique_content_conflict_is_readable() {
-        let path = tmp_db("note-unique");
+        let path = tmp_db_guarded("note-unique");
         let conn = open_db(&path).unwrap();
         let now = 1_700_000_000;
 
@@ -2625,7 +2960,7 @@ mod tests {
     /// #215：写回三件套落库与解析（主项目优先、缺 ID 报错、选项名查 id）。
     #[test]
     fn project_write_target_resolves_main_project() {
-        let path = tmp_db("write-target");
+        let path = tmp_db_guarded("write-target");
         let conn = open_db(&path).unwrap();
         // 新库 schema 自带新列/新表。
         for (table, col) in [
@@ -2714,7 +3049,7 @@ mod tests {
     /// #146：热查询索引必须存在（新库建出、老库幂等补齐）。
     #[test]
     fn perf_indexes_exist_after_open() {
-        let path = tmp_db("indexes");
+        let path = tmp_db_guarded("indexes");
         let conn = open_db(&path).unwrap();
         for idx in [
             "idx_label_mappings_org_repo_label",
@@ -2746,7 +3081,7 @@ mod tests {
     #[test]
     fn db_file_permissions_are_owner_only() {
         use std::os::unix::fs::PermissionsExt;
-        let path = tmp_db("perms");
+        let path = tmp_db_guarded("perms");
         let _ = open_db(&path).unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "库文件应为 0600，实际 {mode:o}");
@@ -2756,7 +3091,7 @@ mod tests {
     /// #146：老库 notes 有重复 content 时 open_db 不炸，且去重保留最早 id。
     #[test]
     fn notes_dedup_before_unique_index() {
-        let path = tmp_db("dedup");
+        let path = tmp_db_guarded("dedup");
         {
             let conn = open_db(&path).unwrap();
             conn.execute(
@@ -2909,7 +3244,7 @@ mod tests {
     /// #216：仅剩一个账号时允许删除默认账号；多账号时仍拒绝；不存在的 id 报错。
     #[test]
     fn delete_last_account_allowed() {
-        let path = tmp_db("del-last");
+        let path = tmp_db_guarded("del-last");
         let conn = open_db(&path).unwrap();
         // 首个账号自动为默认。
         let id = insert_account(&conn, "主", "me", "", "pat123").unwrap();
@@ -2933,7 +3268,7 @@ mod tests {
     /// #235：API 明细写入/读取往返（含 kind / ok / 关联字段）。
     #[test]
     fn api_logs_insert_and_list_roundtrip() {
-        let path = tmp_db("api-logs");
+        let path = tmp_db_guarded("api-logs");
         let conn = open_db(&path).unwrap();
         let entries = vec![
             ApiLogEntry::new(
@@ -2986,7 +3321,7 @@ mod tests {
     /// #235：新库读不到明细时返回空列表，而不是报错。
     #[test]
     fn api_logs_empty_on_fresh_db() {
-        let path = tmp_db("api-logs-empty");
+        let path = tmp_db_guarded("api-logs-empty");
         let conn = open_db(&path).unwrap();
         assert!(list_api_logs(&conn, 50).unwrap().is_empty());
         assert_eq!(clear_api_logs(&conn).unwrap(), 0);
@@ -2997,7 +3332,7 @@ mod tests {
     /// #235：条数上限裁剪只保留最新行；超期按保留期淘汰。
     #[test]
     fn api_logs_prune_trims_to_max_rows() {
-        let path = tmp_db("api-logs-prune");
+        let path = tmp_db_guarded("api-logs-prune");
         let conn = open_db(&path).unwrap();
         for i in 0..5 {
             let e = vec![ApiLogEntry::new("GET", "/x", 200, true, 1, "req", "resp")];
@@ -3212,7 +3547,7 @@ mod tests {
     /// #329：新建库与迁移完成后 `user_version` 应落在 `SCHEMA_VERSION`，且重开不漂移。
     #[test]
     fn open_db_records_schema_version() {
-        let path = tmp_db("schema-ver");
+        let path = tmp_db_guarded("schema-ver");
         let conn = open_db(&path).unwrap();
         assert_eq!(
             schema_version(&conn),
@@ -3261,7 +3596,7 @@ mod tests {
     /// 反向验证：从 `schema_is_current` 去掉 `missing_columns` 后本用例失败。
     #[test]
     fn open_db_self_heals_missing_column_despite_newer_version() {
-        let path = tmp_db("self-heal-col");
+        let path = tmp_db_guarded("self-heal-col");
         {
             let conn = Connection::open(&path).unwrap();
             // 老布局：tasks 缺 author / parent_issue / sub_issues / work_dir / created_at，
@@ -3281,7 +3616,7 @@ mod tests {
     /// 只读探测每次判定「不达标」，稳态零写入直接失效。
     #[test]
     fn fresh_db_gets_post_schema_indexes() {
-        let path = tmp_db("fresh-indexes");
+        let path = tmp_db_guarded("fresh-indexes");
         let conn = open_db(&path).unwrap();
         let missing = missing_indexes(&conn);
         assert!(
@@ -3327,7 +3662,7 @@ mod tests {
     /// 反向验证：把 `run_migrations` 的 `fresh` 短路去掉后本用例失败。
     #[test]
     fn fresh_db_has_no_legacy_gh_status_column() {
-        let path = tmp_db("fresh-no-legacy");
+        let path = tmp_db_guarded("fresh-no-legacy");
         let conn = open_db(&path).unwrap();
         let n: i64 = conn
             .query_row(
@@ -3344,7 +3679,7 @@ mod tests {
     /// #329：默认设置只在缺失时补写——用户改过的值不被覆盖，被删掉的键会补回。
     #[test]
     fn defaults_preserve_user_value_and_restore_deleted_key() {
-        let path = tmp_db("defaults");
+        let path = tmp_db_guarded("defaults");
         {
             let conn = open_db(&path).unwrap();
             set_setting(&conn, "view_mode", "all").unwrap();

@@ -254,6 +254,46 @@ def ensure_schema(c):
         except sqlite3.OperationalError:
             pass  # 列已存在则忽略
 
+    # #427：sessions 表（会话历史）。Python MCP 是**独立进程**、不走 Rust 的
+    # `db::open_db`，故必须自建表—— 与 Rust `db.rs::SCHEMA` 的定义保持一致。
+    # 唯一键是 (account_id, issue_key, session_id) 三元组：实测一个会话可同时挂多个
+    # issue，且 issue_key 在 tasks 里跨账号重复，按单列唯一会丢数据。
+    # work_branch / work_dir 故意不在此表（是「任务属性」，留在 tasks）。
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sessions (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          account_id    INTEGER NOT NULL,
+          issue_key     TEXT NOT NULL,
+          session_id    TEXT NOT NULL,
+          session_agent TEXT NOT NULL DEFAULT '',
+          session_at    INTEGER NOT NULL,
+          is_active     INTEGER NOT NULL DEFAULT 1,
+          ended_at      INTEGER,
+          UNIQUE(account_id, issue_key, session_id)
+        )
+        """
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_active "
+        "ON sessions(is_active, session_at DESC)"
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_issue "
+        "ON sessions(account_id, issue_key)"
+    )
+    # #427：把 tasks 三列里的活跃会话搬进 sessions（与 Rust MIGRATE_DATA_FIXES
+    # 第 3 条同语义）。INSERT OR IGNORE 保证幂等。
+    c.execute(
+        "INSERT OR IGNORE INTO sessions "
+        "(account_id, issue_key, session_id, session_agent, session_at, is_active) "
+        "SELECT account_id, issue_key, session_id, "
+        "       COALESCE(NULLIF(trim(session_agent), ''), 'unknown'), "
+        "       CASE WHEN COALESCE(session_at, 0) > 0 THEN session_at ELSE 0 END, 1 "
+        "FROM tasks WHERE session_id IS NOT NULL AND trim(session_id) <> ''"
+    )
+    c.commit()
+
 
 def conn():
     global _conn
@@ -736,28 +776,44 @@ def tool_record_session(issue, session_id, agent=None, branch=None, work_dir=Non
     pulled = _ensure_before_write(key, issue)
     br = (branch or "").strip()
     wd = (work_dir or "").strip()
+    now = int(time.time())
+    ag = (agent or "").strip()
+    # #427：tasks 三列（活跃会话缓存 + work_branch/work_dir）的 UPDATE 与 Rust 侧
+    # `common.rs::touch_session` 逐字一致 —— branch/dir 是「任务属性」，留在 tasks。
     if br and wd:
         cur = conn().execute(
             "UPDATE tasks SET session_id=?, session_agent=?, session_at=?, work_branch=?, work_dir=? WHERE issue_key=?",
-            (sid, (agent or "").strip(), int(time.time()), br, wd, key),
+            (sid, ag, now, br, wd, key),
         )
     elif br:
         cur = conn().execute(
             "UPDATE tasks SET session_id=?, session_agent=?, session_at=?, work_branch=? WHERE issue_key=?",
-            (sid, (agent or "").strip(), int(time.time()), br, key),
+            (sid, ag, now, br, key),
         )
     elif wd:
         cur = conn().execute(
             "UPDATE tasks SET session_id=?, session_agent=?, session_at=?, work_dir=? WHERE issue_key=?",
-            (sid, (agent or "").strip(), int(time.time()), wd, key),
+            (sid, ag, now, wd, key),
         )
     else:
         cur = conn().execute(
             "UPDATE tasks SET session_id=?, session_agent=?, session_at=? WHERE issue_key=?",
-            (sid, (agent or "").strip(), int(time.time()), key),
+            (sid, ag, now, key),
         )
+    # ⚠️ 顺序与 Rust 侧一致：任务不存在时**不写 sessions**，否则插入孤儿会话。
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
+    # #427：双写 sessions 历史行。ON CONFLICT 复用三元组已有行（一个会话内agent
+    # 多次上报是常态），把 is_active 重新置 1、ended_at 复位 NULL。
+    conn().execute(
+        "INSERT INTO sessions "
+        "(account_id, issue_key, session_id, session_agent, session_at, is_active, ended_at) "
+        "VALUES ((SELECT account_id FROM tasks WHERE issue_key=? LIMIT 1), ?, ?, ?, ?, 1, NULL) "
+        "ON CONFLICT(account_id, issue_key, session_id) DO UPDATE SET "
+        "session_agent=excluded.session_agent, session_at=excluded.session_at, "
+        "is_active=1, ended_at=NULL",
+        (key, key, sid, ag, now),
+    )
     return {"ok": True, "issue_key": key, "pulled": pulled}
 
 
@@ -781,8 +837,16 @@ def tool_clear_session(issue):
     cur = conn().execute(
         "UPDATE tasks SET session_id=NULL, session_agent=NULL WHERE issue_key=?", (key,)
     )
+    # #427：任务不存在时**不结束** sessions 的历史行（顺序与 Rust 侧一致）。
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
+    # #427：「删除会话」= 结束活跃会话，**历史行保留**（is_active=0 + ended_at）。
+    # 精确按 issue_key + is_active 定位 —— 多个 issue 可共享同一 session_id，
+    # 不能按 session_id 批量结束。已结束的行不重复改写 ended_at。
+    conn().execute(
+        "UPDATE sessions SET is_active=0, ended_at=? WHERE issue_key=? AND is_active=1",
+        (int(time.time()), key),
+    )
     return {"ok": True, "issue_key": key, "pulled": pulled}
 
 
