@@ -6,7 +6,7 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **v0.6.9（未发布）— 会话数据从 `tasks` 拆出到独立 `sessions` 表，保留多次执行历史（#427）**
+- **v0.6.9（2026-10-10）— 会话数据从 `tasks` 拆出到独立 `sessions` 表，保留多次执行历史（#427）**
 
   - **动机（实测证据，非推测）**：会话此前挤在 `tasks` 的`session_id`/`session_agent`/`session_at` 三列里，覆盖式写入 ⇒ 生产库「同 `issue_key` 多个不同 `session_id`」= **0 条**，多次开工的历史在设计层面就不存在；`session_id` 无索引致会话面板主查询走全表扫描；agent 写会话与 GitHub 同步两个写入方混同一张表。
   - **新表**：`sessions`（8 列 + 2 索引），存全量历史并带 `is_active` / `ended_at`。`SCHEMA_VERSION` 4 → 5；一次性搬迁走 `MIGRATE_DATA_FIXES`（`INSERT OR IGNORE` 幂等，脏值兜底避免 `NOT NULL` 失败被 best-effort **静默吞掉**）。
