@@ -6,6 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.6.8（未发布）— 集成测试临时 SQLite 目录从不清理，累积 958 个 / 146 MB（#424）**
+
+  - **与App 更新/卸载无关**：残留来自开发期跑 `cargo test`，每次约产生 **26 个**目录。App 真实数据仍只有一个 `~/Library/Application Support/com.shawnliu.taskboard/taskboard.db`（3.3 MB），删除测试残留不影响它（已用 `PRAGMA integrity_check` = `ok` 核对）。
+  - 根因：`tests/db_test.rs::tempdir()` 只 `create_dir_all` **从不清理**，27 个集成测试用例各自开一份独立 SQLite（避免污染生产库），测试结束后目录全部留在 macOS 临时目录 `/var/folders/.../T/`，且会被卸载/磁盘清理工具扫到。
+  - 修复：改为 **RAII guard** —— `TempDir` 实现 `Deref<Target=Path>`（+ `AsRef<Path>`），`Drop` 时 `remove_dir_all`，**16 处 `tempdir()` 调用点零改动**；不引入 `tempfile` crate（§2.5）。
+  - ⚠️ **连带修一个「加清理」自身会引入的缺陷**：直接把 `tempdir()` 改为返回 guard 会让 `fresh_db() -> Connection` 变成**悬垂连接**（`dir` 局部变量在函数返回时即 drop，连接指向已删路径）。解法：新增 `TempDbGuard { conn, _dir }` 持有二者，靠 **Rust 字段声明逆序 drop** 保证「先关连接、后删目录」；字段顺序有语义意义，注释已写明。
+  - 清理失败（如文件仍被占用）**静默忽略** —— 清理是卫生措施，不应让真实的测试断言被掩盖。故反向验证的判据是**跑完后临时目录残留数**，不是 `cargo test` 退出码（变异前后均 `exit=0`）。
+  - 无产品代码 / schema / MCP / i18n 变更。
+  - **验证**：`cargo test` 178 + 27 passed 且**跑完残留 0 个** ✅，`cargo fmt --check` 干净 ✅，`cargo clippy --all-targets -p taskboard -- -D warnings` 0 警告 ✅（§5.6 要求：改 `tests/` 后必跑），`npm test -- --run` 276 passed ✅。**反向验证**：`Drop` 改空操作 ⇒ 残留 26 个，恢复 ⇒ 0 个。
+  - 详见 [`issue-424-test-tmpdir-cleanup.md`](./issue-424-test-tmpdir-cleanup.md)
+
 - **v0.6.8（未发布）— 切换账号后任务列表仍显示全部账号，project.status 跨账号混合（#422）**
 
   - **根因（主因）**：`handleSwitchAccount` 只写 `active_account_id`，**从不重置 `view_mode`**。而 `accountFilter` 由 `viewMode` 决定（`viewMode==='all' ? 0 : activeAccountId`）⇒ 切换后 `filterRef.current.accountId` 被刷成 `0`，**20s定时刷新 / 窗口聚焦 / `onSynced`** 触发 `load()` → 后端把 `Some(0)` 解析为「聚合全部账号」⇒ 列表变回全部任务。**这解释了「切换后短暂正确、随后变回全量」**。实测本机库 `view_mode='all'` + `active_account_id='5'`，两字段各说各话，界面高亮账号 5 却显示 699 条（账号 4=213/ 账号 5=486）。
