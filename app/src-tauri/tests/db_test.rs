@@ -5,6 +5,8 @@
 //! 避免污染 `~/Library/Application Support/com.liushizhao.taskboard/taskboard.db`。
 
 use rusqlite::Connection;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use taskboard_lib::db;
 
@@ -12,14 +14,69 @@ use taskboard_lib::db;
 /// 之前用纯 nanos 在多线程并行时被撞到，导致 accounts 表被前一个测试写过。
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn fresh_db() -> Connection {
-    let dir = tempdir();
-    let path = dir.join("taskboard.db");
-    db::open_db(&path).expect("open_db 必须成功")
+/// #424：临时库持有者。字段顺序即 drop 顺序的依据——
+/// Rust 按声明**逆序** drop，故 `conn`（先声明）后于 `_dir`（后声明）被 drop，
+/// 目录一定在连接关闭之后才删除。
+///
+/// 之前 `fresh_db()` 只返回 `Connection`，`dir` 是局部变量、在函数返回时即被 drop ——
+/// 若那时目录已开始清理，连接就是悬空的。
+struct TempDbGuard {
+    conn: Connection,
+    _dir: TempDir,
 }
 
-/// 临时目录（不依赖 tempfile crate，零外部依赖）。
-fn tempdir() -> std::path::PathBuf {
+impl Deref for TempDbGuard {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        &self.conn
+    }
+}
+
+fn fresh_db() -> TempDbGuard {
+    let dir = tempdir();
+    let path = dir.join("taskboard.db");
+    let conn = db::open_db(&path).expect("open_db 必须成功");
+    TempDbGuard { conn, _dir: dir }
+}
+
+/// RAII 临时目录：#424。测试结束时（`Drop`）删除整个目录。
+///
+/// #424：此前 `tempdir()` 只 `create_dir_all` **从不清理**，而集成测试每个用例都开
+/// 一份独立 SQLite（避免污染生产库）⇒ `cargo test` 一次产生 ~26 个目录，测试结束后
+/// 全部留在 macOS 临时目录 `/var/folders/.../T/`。实测累积 **958 个 / 146 MB**，
+/// 且会被卸载/清理工具扫到，误让人以为是 App 更新产生的数据库。
+///
+/// 实现要点：
+/// - `Deref<Target = Path>` ⇒ 现有 `dir.join(...)` 调用点**零改动**（16 处）。
+/// - `Drop` 里 `remove_dir_all` **静默忽略失败**（如文件仍被占用）：清理是卫生措施，
+///   不是被测行为，让它失败会掩盖真实的测试断言结果。
+/// - 不引入 `tempfile` crate（AGENTS.md §2.5不引入新依赖）。
+struct TempDir(PathBuf);
+
+impl Deref for TempDir {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+// #424：部分测试手动提前删目录（如验证重建后不留残file），需要 `AsRef<Path>`。
+impl AsRef<Path> for TempDir {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        // 连接可能已随 `Connection` 析构关闭，但仍可能有 `-wal` / `-shm` 残留；
+        // remove_dir_all 对不存在/无权限一律忽略。
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// 临时目录（不依赖 tempfile crate，零外部依赖）。#424 起返回 RAII guard，测试结束自动清理。
+fn tempdir() -> TempDir {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -28,7 +85,7 @@ fn tempdir() -> std::path::PathBuf {
     let n = COUNTER.fetch_add(1, Ordering::SeqCst);
     let dir = std::env::temp_dir().join(format!("taskboard_test_{}_{}_{}", pid, nanos, n));
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    TempDir(dir)
 }
 
 // ===== Schema / 基础读写 ============================================

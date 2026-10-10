@@ -2,6 +2,17 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.6.8 (unreleased) — Integration-test temp SQLite directories were never cleaned up, accumulating 958 dirs / 146 MB (#424)**
+
+  - **Not related to App updates or uninstalls**: these leftovers come from running `cargo test` during development, producing ~**26** directories each time. The App's real data is still a single `~/Library/Application Support/com.shawnliu.taskboard/taskboard.db` (3.3 MB); deleting the test leftovers does not affect it (verified with `PRAGMA integrity_check` = `ok`).
+  - Root cause: `tests/db_test.rs::tempdir()` only calls `create_dir_all` and **never cleans up**. All 27 integration tests each open their own isolated SQLite (to avoid polluting the production DB), and after the run every directory is left behind in the macOS temp dir `/var/folders/.../T/` — where uninstall/disk-cleanup tools will scan them.
+  - Fix: an **RAII guard** — `TempDir` implements `Deref<Target=Path>` (plus `AsRef<Path>`) and calls `remove_dir_all` in `Drop`, leaving all **16 `tempdir()` call sites unchanged**; no `tempfile` crate added (§2.5).
+  - ⚠️ **Also fixes a defect that the cleanup itself would have introduced**: naively changing `tempdir()` to return the guard turns `fresh_db() -> Connection` into a **dangling connection** (`dir` is a local dropped on return, so the connection points at a deleted path). Solution: a new `TempDbGuard { conn, _dir }` holds both, relying on **Rust's reverse field declaration order for `Drop`** to guarantee "close the connection, then delete the directory". The field order is semantically meaningful and documented so nobody reorders it later.
+  - Cleanup failures (e.g. file still busy) are **silently ignored** — cleanup is hygiene and must not mask real assertion failures. Hence the reverse-verification signal is the **number of leftover temp directories after the run**, not `cargo test`'s exit code (it is `exit=0` both before and after mutation).
+  - No product code / schema / MCP / i18n changes.
+  - **Verification**: `cargo test` 178 + 27 passed with **0 leftovers** ✅, `cargo fmt --check` clean ✅, `cargo clippy --all-targets -p taskboard -- -D warnings` 0 warnings ✅ (required by §5.6 after touching `tests/`), `npm test -- --run` 276 passed ✅. **Reverse verification**: no-op `Drop` ⇒ 26 leftovers; restored ⇒ 0.
+  - See [issue-424-test-tmpdir-cleanup.md](./issue-424-test-tmpdir-cleanup.md)
+
 - **v0.6.8 (unreleased) — Task list still showed every account after switching; project.status mixed across accounts (#422)**
 
   - **Root cause (primary)**: `handleSwitchAccount` only wrote `active_account_id` and **never reset `view_mode`**. Since `accountFilter` is derived from `viewMode` (`viewMode==='all' ? 0 : activeAccountId`), after switching `filterRef.current.accountId` was left at `0`, so the **20s timed refresh / window focus / `onSynced`** triggered `load()` → the backend resolved `Some(0)` as "aggregate all accounts" ⇒ the list reverted to every account's tasks. **This explains "correct right after switching, then back to everything"**. Measured on the live DB: `view_mode='all'` while `active_account_id='5'` — the two fields disagreed, so the UI highlighted account 5 while listing 699 rows (account 4=213 / account 5=486).
