@@ -6,7 +6,7 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **v0.6.8（未发布）— 集成测试临时 SQLite 目录从不清理，累积 958 个 / 146 MB（#424）**
+- **v0.6.8（2026-10-10）— 集成测试临时 SQLite 目录从不清理，累积 958 个 / 146 MB（#424）**
 
   - **与App 更新/卸载无关**：残留来自开发期跑 `cargo test`，每次约产生 **26 个**目录。App 真实数据仍只有一个 `~/Library/Application Support/com.shawnliu.taskboard/taskboard.db`（3.3 MB），删除测试残留不影响它（已用 `PRAGMA integrity_check` = `ok` 核对）。
   - 根因：`tests/db_test.rs::tempdir()` 只 `create_dir_all` **从不清理**，27 个集成测试用例各自开一份独立 SQLite（避免污染生产库），测试结束后目录全部留在 macOS 临时目录 `/var/folders/.../T/`，且会被卸载/磁盘清理工具扫到。
@@ -17,7 +17,7 @@
   - **验证**：`cargo test` 178 + 27 passed 且**跑完残留 0 个** ✅，`cargo fmt --check` 干净 ✅，`cargo clippy --all-targets -p taskboard -- -D warnings` 0 警告 ✅（§5.6 要求：改 `tests/` 后必跑），`npm test -- --run` 276 passed ✅。**反向验证**：`Drop` 改空操作 ⇒ 残留 26 个，恢复 ⇒ 0 个。
   - 详见 [`issue-424-test-tmpdir-cleanup.md`](./issue-424-test-tmpdir-cleanup.md)
 
-- **v0.6.8（未发布）— 切换账号后任务列表仍显示全部账号，project.status 跨账号混合（#422）**
+- **v0.6.8（2026-10-10）— 切换账号后任务列表仍显示全部账号，project.status 跨账号混合（#422）**
 
   - **根因（主因）**：`handleSwitchAccount` 只写 `active_account_id`，**从不重置 `view_mode`**。而 `accountFilter` 由 `viewMode` 决定（`viewMode==='all' ? 0 : activeAccountId`）⇒ 切换后 `filterRef.current.accountId` 被刷成 `0`，**20s定时刷新 / 窗口聚焦 / `onSynced`** 触发 `load()` → 后端把 `Some(0)` 解析为「聚合全部账号」⇒ 列表变回全部任务。**这解释了「切换后短暂正确、随后变回全量」**。实测本机库 `view_mode='all'` + `active_account_id='5'`，两字段各说各话，界面高亮账号 5 却显示 699 条（账号 4=213/ 账号 5=486）。
   - **status 为何也混合**：status 的**值**随任务行正常过滤，但**列清单**是另一次独立查询 `listProjectStatuses(accountId)`，聚合分支逐账号拉取后 `Map` 跨账号去重合并 ⇒ 其他账号的 `Backlog`/`In review` 混进本账号看板。
@@ -27,7 +27,7 @@
   - **验证**：新增 `app/src/account-filter.test.ts` 15 例 ✅，`npm test -- --run` **276 passed** ✅（原 261），`cargo test --lib` 178 passed ✅，`npm run lint` 0 警告 ✅，`npx tsc --noEmit` ✅，`npx prettier --check` ✅，`cargo fmt --check` 干净 ✅，`clippy --all-targets -D warnings` 0 警告 ✅。**反向验证**：注入 5 处变异（删 `setViewMode` / `> 0 ? : null` 改回 `?? 0` / 去掉 Sidebar 聚合判断 / 不传 `accountId` / 后端改 `Some(_) => true`）⇒ `MUTATION_TEST_EXIT=1`（6 failed | 9 passed）。
   - 详见 [`issue-422-account-filter-view-mode.md`](./issue-422-account-filter-view-mode.md)
 
-- **v0.6.8（未发布）— 任务会话 meta 行完整显示：分支名 / 目录名不再被截断（#420）**
+- **v0.6.8（2026-10-10）— 任务会话 meta 行完整显示：分支名 / 目录名不再被截断（#420）**
 
   - 任务会话卡片的meta 行（**分支名 / 工作目录 / session id / agent / 时间**）此前统一带 `text-overflow: ellipsis` + `white-space: nowrap`，长分支名与长路径被单行截断成 `…`，且这些节点**没有 `title` 属性** ⇒ 悬停也看不到全值，信息彻底不可恢复。
   - 改为 `white-space: normal` + `overflow-wrap: anywhere`：**分支名、目录名一律完整显示**，超宽自动换行。用 `anywhere` 而非 `break-word`，是因为 session id / agent 名可能是**完全无空格的长串**，`break-word` 对这类串没有断点可断、仍会顶出卡片。
