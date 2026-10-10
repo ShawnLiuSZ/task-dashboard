@@ -131,6 +131,38 @@ CREATE TABLE IF NOT EXISTS project_items (
 );
 CREATE INDEX IF NOT EXISTS idx_project_items_issue ON project_items(account_id, issue_key);
 
+-- #427：会话执行记录（agent 每次开工写一行）。此前会话数据挤在 tasks 的
+-- session_id/session_agent/session_at 三列里，覆盖式写入 ⇒ 同一任务多次开工的
+-- 历史在设计层面就不存在。拆表后 sessions 保留全量历史，tasks 三列退化为
+-- 「当前活跃会话」缓存（MCP 契约不变，见 issue #427 决策 C）。
+--
+-- ⚠️ 唯一键是 (account_id, issue_key, session_id) 三元组，**不是** session_id 单列：
+-- 实测一个 claude-code 会话可同时挂在多个 issue 上
+-- （ea1a0b6a-…-4b587b79f738 → fad-backend#1447 + #1454），且 issue_key 在 tasks 里
+-- 也跨账号重复（733 行 / 729 distinct）。按单列唯一会丢数据或建表失败。
+--
+-- work_branch / work_dir **故意不存这里** —— 它们是「任务属性」（agent 在哪个分支
+-- 干活）而非「会话属性」，留在 tasks 以免 SessionsPanel 4 处 UI 改数据源
+-- （见 #427 决策 B）。
+CREATE TABLE IF NOT EXISTS sessions (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id       INTEGER NOT NULL,
+  issue_key        TEXT NOT NULL,
+  session_id       TEXT NOT NULL,
+  session_agent    TEXT NOT NULL DEFAULT '',
+  -- 会话**开始**时间（沿用 tasks.session_at 的原语义：每次 touch 覆盖为 now）。
+  session_at       INTEGER NOT NULL,
+  -- 1=进行中，0=已结束（clear_task_session 只置 0，不删行 ⇒ 历史保留）。
+  is_active        INTEGER NOT NULL DEFAULT 1,
+  -- 结束时间；is_active=1 时为 NULL。
+  ended_at         INTEGER,
+  UNIQUE(account_id, issue_key, session_id)
+);
+-- 会话面板主查询：WHERE is_active=1 ORDER BY session_at DESC（避免全表扫描）。
+CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions(is_active, session_at DESC);
+-- 按 issue 查历史（详情页「历次会话」用）。
+CREATE INDEX IF NOT EXISTS idx_sessions_issue ON sessions(account_id, issue_key);
+
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -257,6 +289,9 @@ pub fn db_path_default() -> Result<PathBuf, String> {
 /// **硬约束**：`SCHEMA` 或 `MIGRATION_DDL` 每次做结构性变更（新增列 / 表 / 索引）都必须 +1，
 /// 否则已升到旧版本号的库会走热路径、永久跳过新迁移。
 ///
+/// 版本 5（#427）：新增 `sessions` 表（会话执行记录）+ 两个索引（结构性变更 ⇒ +1）。
+/// 一次性数据搬迁见 `MIGRATE_DATA_FIXES` 第 3 条（tasks 三列 → sessions 行）。
+///
 /// 版本 4（#335）：无结构变更，但带一次性**数据修复**（`MIGRATE_DATA_FIXES`）——
 /// 归一化 `tasks.issue_state` 大小写并修正其连带的滞留状态。数据修复同样必须靠版本号
 /// 门控（只跑一次），所以照例 +1。
@@ -264,7 +299,7 @@ pub fn db_path_default() -> Result<PathBuf, String> {
 /// `open_db` 以「版本号落后 **或** 只读自愈探测发现缺口」为迁移门控：版本号是快路径，
 /// 探测是兜底——历史教训（#175 / #237 / #278：版本号丢值、被物理重建覆盖、新列没进
 /// 重建的写死白名单）表明仅靠版本号会漏列，故两者缺一不可。
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// 必须存在的列（表 → 列）。热路径**只读**探测，缺任何一列都触发迁移。
 /// 新增必填列时必须同步追加 `MIGRATION_DDL` 里的补齐语句（有单测守卫）。
@@ -344,6 +379,24 @@ const MIGRATE_DATA_FIXES: &[&str] = &[
     //    必须在上一条之后执行（此处依赖归一化后的 `closed`）。
     "UPDATE tasks SET status = 'done'
        WHERE issue_state = 'closed' AND status <> 'done'",
+    // 3) #427：把 tasks 三列里的活跃会话搬进 sessions 表。
+    //    `INSERT OR IGNORE` 保证**幂等**（UNIQUE(account_id, issue_key, session_id) 冲突即跳过），
+    //    与本常量的「全部幂等、可安全重跑」语义一致。
+    //    - 只搬 is_active=1 的行（tasks 里存在 session_id 即代表当前活跃）。
+    //    - session_agent / session_at 的脏值（NULL / 0）在 SELECT 里兜底：COALESCE + NULLIF，
+    //      避免 NOT NULL 列插入失败导致整条迁移被best-effort 吞掉（那样就静默丢数据了）。
+    //    - 不动tasks 三列：它们保留为「当前活跃会话」缓存，MCP 契约依赖（#427 决策 C）。
+    "INSERT OR IGNORE INTO sessions
+         (account_id, issue_key, session_id, session_agent, session_at, is_active)
+       SELECT account_id,
+              issue_key,
+              session_id,
+              COALESCE(NULLIF(trim(session_agent), ''), 'unknown'),
+              CASE WHEN COALESCE(session_at, 0) > 0 THEN session_at ELSE 0 END,
+              1
+       FROM tasks
+       WHERE session_id IS NOT NULL
+         AND trim(session_id) <> ''",
 ];
 
 /// #215：Project 写回所需的条目表（新库由 `SCHEMA` 建，旧库在此补建）。
