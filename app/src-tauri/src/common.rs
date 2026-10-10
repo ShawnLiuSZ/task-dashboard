@@ -254,10 +254,23 @@ pub fn set_task_status(conn: &Connection, key: &str, status: &str) -> Result<usi
     Ok(n)
 }
 
-/// 写入 session 记录。`branch` 非空才同时写入 `work_branch` 列（agent 工作分支，
-/// 与同步自动拉的 PR `branch` 列分离，同步不碰 work_branch）。空则不写。
-/// `work_dir` 非空才同时写入 `work_dir` 列（agent 工作目录）。空则不写。
-/// 返回实际更新行数（调用方自定"任务不存在"策略）。
+/// 写入 session 记录（#427：sessions 表落地后**双写**）。
+///
+/// 职责拆分（原实现把两件事塞进一条 UPDATE，这里分成两个表）：
+/// - `session_id` / `session_agent` / `session_at` / `is_active` → **`sessions` 表**
+///   （新会话追加一行历史；同一`(account_id, issue_key, session_id)` 再次上报时
+///   复用该行并把 `is_active` 置 1 —— agent 一个会话内多次 touch 是常态）
+/// - `work_branch` / `work_dir` → **仍在 `tasks` 表**（#427 决策 B：它们是「任务属性」
+///   而非「会话属性」，留在 tasks 让 SessionsPanel 4 处 UI 与 TaskCard / DetailPanel
+///   零改动；且它们与 session 三列原本就混在同一条 UPDATE 的 4 个分支里，
+///   一并搬走会**静默丢失**分支/目录信息）
+///
+/// 返回值语义**不变**：受影响 tasks 行数，`0` = `issue_key` 不存在
+/// （`require_affected` 契约，GUI 与 MCP 两侧都依赖它判「任务不存在」）。
+///
+/// ⚠️ 顺序至关重要：必须**先 UPDATE tasks 并确认 affected>0**，再 INSERT sessions。
+/// 若反序，任务不存在时会静默插入一条指向不存在 issue 的孤儿会话
+/// （#427 风险点 1）。
 pub fn touch_session(
     conn: &Connection,
     key: &str,
@@ -269,6 +282,11 @@ pub fn touch_session(
 ) -> Result<usize, String> {
     let br = branch.map(str::trim).unwrap_or("").to_string();
     let wd = work_dir.map(str::trim).unwrap_or("").to_string();
+    let sid = session_id.trim();
+    let ag = agent.unwrap_or_default().trim();
+
+    // ① 先写 tasks（branch / dir + 活跃会话缓存三列）—— 复用原有 4 分支 UPDATE，
+    //    保持 SQL 与迁移前逐字一致，避免语义漂移。
     let n = if br.is_empty() && wd.is_empty() {
         conn.execute(
             "UPDATE tasks SET session_id = ?1, session_agent = ?2, session_at = ?3 WHERE issue_key = ?4",
@@ -294,6 +312,34 @@ pub fn touch_session(
         )
         .map_err(|e| e.to_string())?
     };
+
+    // ② 任务不存在（affected=0）⇒ 直接返回 0，**不写 sessions**
+    //    （否则产生孤儿会话，见上方⚠️）。
+    if n == 0 {
+        return Ok(0);
+    }
+
+    // ③ 写 sessions 历史行。`ON CONFLICT DO UPDATE` 而非 INSERT：
+    //    一个会话内agent 会多次上报（改分支/换目录都要 touch），三元组已存在时
+    //    复用原行并把is_active 重新置 1、`session_at` 刷新为最新一次上报时间。
+    //    ⚠️ 不用 `ended_at = NULL`复位：只有重新开工才置 1，而 `is_active=1`
+    //    的行 `ended_at` 本就为 NULL（clear 时才写），故显式写出以防历史脏值。
+    conn.execute(
+        "INSERT INTO sessions
+             (account_id, issue_key, session_id, session_agent, session_at, is_active, ended_at)
+         VALUES (
+             (SELECT account_id FROM tasks WHERE issue_key = ?1 LIMIT 1),
+             ?1, ?2, ?3, ?4, 1, NULL
+         )
+         ON CONFLICT(account_id, issue_key, session_id) DO UPDATE SET
+             session_agent = excluded.session_agent,
+             session_at    = excluded.session_at,
+             is_active     = 1,
+             ended_at      = NULL",
+        rusqlite::params![key, sid, ag, now],
+    )
+    .map_err(|e| e.to_string())?;
+
     Ok(n)
 }
 
@@ -316,7 +362,19 @@ pub fn set_work_branch(conn: &Connection, key: &str, branch: &str) -> Result<usi
     Ok(n)
 }
 
-/// 清空 session（保留 `session_at` 审计）。返回实际更新行数。
+/// 清空 session（#427：**结束活跃会话，历史行保留**）。
+///
+/// 语义（#427 决策 D）：「删除会话」= 把当前活跃会话标记为已结束，**不删sessions 行**
+/// —— 这样同一任务多次开工的历史得以保留（`is_active=0` + `ended_at`）。
+///
+/// 双写（#427 决策 C）：sessions 表标记结束的同时，tasks 三列照旧置 NULL，保持
+/// `WHERE session_id IS NOT NULL` 的「活跃会话」语义与 MCP 契约不变。
+///
+/// 返回值语义**不变**：受影响 tasks 行数，`0` = `issue_key` 不存在
+/// （`require_affected` 依赖它）。
+///
+/// ⚠️ 顺序：先UPDATE tasks 确认任务存在（affected>0），再结束 sessions 行。
+/// 反序会在任务不存在时误结束其他任务的历史。
 pub fn clear_task_session(conn: &Connection, key: &str) -> Result<usize, String> {
     let n = conn
         .execute(
@@ -324,6 +382,18 @@ pub fn clear_task_session(conn: &Connection, key: &str) -> Result<usize, String>
             [key],
         )
         .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Ok(0);
+    }
+    // 结束该任务**当前活跃**的会话（可能有多个 issue 共享同一 session_id，
+    // 故按 issue_key + is_active 精确定位，不按 session_id 批量结束）。
+    // 已结束的行（is_active=0）不重复改写ended_at，避免「二次清除」刷新掉真实结束时间。
+    conn.execute(
+        "UPDATE sessions SET is_active = 0, ended_at = ?2
+           WHERE issue_key = ?1 AND is_active = 1",
+        rusqlite::params![key, crate::sync::now_secs()],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(n)
 }
 
@@ -369,6 +439,188 @@ pub fn normalize_note_label(label: Option<&str>) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+
+    /// #427 测试夹具：最小 tasks 表 + 与生产一致的 sessions 表。
+    /// sessions DDL 直接取 `db::sessions_ddl()`，避免手写副本与生产漂移。
+    fn session_fixture() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tasks (
+               issue_key   TEXT PRIMARY KEY,
+               account_id  INTEGER NOT NULL DEFAULT 1,
+               session_id  TEXT,
+               session_agent TEXT,
+               session_at  INTEGER,
+               work_branch TEXT,
+               work_dir    TEXT
+             );
+             INSERT INTO tasks (issue_key) VALUES ('o/r#1'), ('o/r#2');",
+        )
+        .unwrap();
+        conn.execute_batch(crate::db::sessions_ddl()).unwrap();
+        conn
+    }
+
+    fn count_sessions(conn: &Connection, issue_key: &str) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE issue_key = ?1",
+            [issue_key],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// #427：`touch_session` 双写 —— tasks 三列（活跃缓存 + branch/dir）与 sessions 行。
+    #[test]
+    fn touch_session_writes_both_tasks_and_sessions() {
+        let conn = session_fixture();
+        let n = touch_session(
+            &conn,
+            "o/r#1",
+            "sess-A",
+            Some("claude"),
+            1000,
+            Some("br/x"),
+            Some("/tmp/x"),
+        )
+        .unwrap();
+        assert_eq!(n, 1, "存在的 key 应affected=1");
+        assert_eq!(count_sessions(&conn, "o/r#1"), 1, "sessions 应新增 1 行");
+        let (sid, br): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT session_id, work_branch FROM tasks WHERE issue_key='o/r#1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            sid.as_deref(),
+            Some("sess-A"),
+            "tasks.session_id 应作为活跃缓存"
+        );
+        assert_eq!(br.as_deref(), Some("br/x"), "work_branch 留在 tasks");
+    }
+
+    /// #427：同一会话内agent 多次 touch（改分支/换目录）应**复用同一行**，
+    /// 只刷新 session_at —— 不能每次新增一行（否则历史被噪音淹没）。
+    #[test]
+    fn touch_session_reuses_row_for_same_session() {
+        let conn = session_fixture();
+        touch_session(
+            &conn,
+            "o/r#1",
+            "sess-A",
+            Some("claude"),
+            1000,
+            Some("br/x"),
+            None,
+        )
+        .unwrap();
+        touch_session(
+            &conn,
+            "o/r#1",
+            "sess-A",
+            Some("claude"),
+            2000,
+            Some("br/y"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            count_sessions(&conn, "o/r#1"),
+            1,
+            "同一 (issue, session) 不应新增行"
+        );
+        let at: i64 = conn
+            .query_row(
+                "SELECT session_at FROM sessions WHERE issue_key='o/r#1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(at, 2000, "session_at 应刷新为最新一次上报时间");
+    }
+
+    /// #427：同一 session_id 可挂多个 issue（**多对多**）—— 生产库实测存在此形态
+    /// （ea1a0b6a-… 跨 fad-backend#1447 + #1454）。唯一键必须容忍，不能丢行。
+    #[test]
+    fn one_session_can_span_multiple_issues() {
+        let conn = session_fixture();
+        touch_session(&conn, "o/r#1", "sess-A", Some("claude"), 1000, None, None).unwrap();
+        touch_session(&conn, "o/r#2", "sess-A", Some("claude"), 2000, None, None).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE session_id='sess-A'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 2, "一个会话跨两个 issue 应存2 行，不因单列唯一而丢数据");
+    }
+
+    /// #427：`clear_task_session` = **结束**会话（is_active=0 + ended_at），
+    /// 历史行保留 —— 这是「保留多次执行历史」的核心保证。
+    #[test]
+    fn clear_task_session_ends_but_keeps_history() {
+        let conn = session_fixture();
+        touch_session(&conn, "o/r#1", "sess-A", Some("claude"), 1000, None, None).unwrap();
+        let n = clear_task_session(&conn, "o/r#1").unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(
+            count_sessions(&conn, "o/r#1"),
+            1,
+            "**历史行必须保留**，不得 DELETE"
+        );
+        let (active, ended): (i64, Option<i64>) = conn
+            .query_row(
+                "SELECT is_active, ended_at FROM sessions WHERE issue_key='o/r#1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(active, 0, "应标记为已结束");
+        assert!(ended.is_some(), "ended_at 应被写入");
+        // tasks 三列照旧置 NULL（活跃缓存语义不变，MCP 契约依赖）
+        let sid: Option<String> = conn
+            .query_row(
+                "SELECT session_id FROM tasks WHERE issue_key='o/r#1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(sid.is_none(), "tasks.session_id 应置 NULL");
+    }
+
+    /// #427（风险点 1）：任务不存在时**不得**写 sessions —— 否则产生孤儿会话行。
+    /// `UPDATE tasks ... WHERE issue_key=?` 的 affected=0 是「任务不存在」的既有契约。
+    #[test]
+    fn touch_session_does_not_write_sessions_for_missing_key() {
+        let conn = session_fixture();
+        let before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
+            .unwrap();
+        let n = touch_session(&conn, "o/r#999", "sess-Z", Some("x"), 1000, None, None).unwrap();
+        assert_eq!(n, 0, "不存在的 key 应返回 0");
+        let after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(after, before, "**绝不能插入孤儿会话**");
+    }
+
+    /// #427：`clear_task_session` 对不存在的 key 同样不得碰sessions 历史。
+    #[test]
+    fn clear_task_session_ignores_sessions_for_missing_key() {
+        let conn = session_fixture();
+        touch_session(&conn, "o/r#1", "sess-A", Some("claude"), 1000, None, None).unwrap();
+        let n = clear_task_session(&conn, "o/r#999").unwrap();
+        assert_eq!(n, 0);
+        let active: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions WHERE is_active=1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(active, 1, "别人的活跃会话不应被误结束");
+    }
     use super::*;
 
     /// #377：`iso8601_to_secs` 的完整行为锁定。

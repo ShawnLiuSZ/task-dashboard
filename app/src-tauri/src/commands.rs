@@ -402,10 +402,17 @@ pub fn set_work_branch(
     Ok(())
 }
 
-/// #287：列出所有活跃会话（session_id 非空的任务），供前端「任务会话」Tab 显示。
-/// #422：原先 `WHERE session_id IS NOT NULL` 无任何 account_id 条件 ⇒ 会话面板
-/// 恒列出**所有账号**的会话，与任务列表的账号视图不一致。改为遵守与 `list_tasks`
-/// 相同的账号语义（Some(0)⇒聚合全部 / Some(n)⇒该账号 / None⇒读 meta）。
+/// #287：列出所有活跃会话，供前端「任务会话」Tab 显示。
+/// #422：原先无任何account_id 条件 ⇒ 会话面板恒列出**所有账号**的会话，
+/// 与任务列表的账号视图不一致。改为遵守与 `list_tasks` 相同的账号语义
+/// （Some(0)⇒聚合全部 / Some(n)⇒该账号 / None⇒读 meta）。
+/// #427：数据源从 `tasks.session_id IS NOT NULL` 改为 **`sessions.is_active = 1`
+/// JOIN tasks** —— sessions 表是活跃会话的**权威源**，tasks 三列退化为
+/// 「当前活跃会话」缓存（供 MCP `get_task_status` 用）。用 JOIN 而非只查tasks 是为了
+/// 两者一旦不一致（迁移前遗留、其它写入路径）时以 sessions 为准。
+///
+/// 仍返回 `Vec<Task>`（#427 决策：保持返回形状 ⇒ SessionsPanel / TaskCard /
+/// DetailPanel **零改动**）。会话按 `session_at DESC` 排序。
 #[tauri::command]
 pub fn list_active_sessions(
     state: State<'_, AppState>,
@@ -417,10 +424,15 @@ pub fn list_active_sessions(
         Some(0) => None,
         other => other,
     };
+    // JOIN tasks 取任务本体字段（title / work_branch / work_dir / url …），
+    // SELECT 列表仍用 `tasks.` 前缀的 TASK_SELECT_COLUMNS ⇒ task_mapper 零改动。
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT {} FROM tasks WHERE session_id IS NOT NULL ORDER BY session_at DESC",
-            TASK_SELECT_COLUMNS
+            "SELECT {} FROM sessions s \
+             JOIN tasks t ON t.issue_key = s.issue_key AND t.account_id = s.account_id \
+             WHERE s.is_active = 1 \
+             ORDER BY s.session_at DESC",
+            prefixed_task_select_columns()
         ))
         .map_err(|e| e.to_string())?;
     let rows = stmt.query_map([], task_mapper).map_err(|e| e.to_string())?;
@@ -437,6 +449,15 @@ pub fn list_active_sessions(
         }
     }
     Ok(result)
+}
+
+/// `TASK_SELECT_COLUMNS` 加 `tasks.` 前缀，供 JOIN 场景复用（避免列名歧义）。
+fn prefixed_task_select_columns() -> String {
+    TASK_SELECT_COLUMNS
+        .split(", ")
+        .map(|c| format!("tasks.{}", c))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// 记录「交接任务」详情：由接入的 agent（claude / codex 等）在识别到用户「生成交接任务」类意图时调用，
@@ -2182,6 +2203,16 @@ pub async fn scan_agent_hosts(app: AppHandle) -> Result<crate::hooks::AgentScanR
 mod tests {
     use rusqlite::Connection;
 
+    /// #427：把待测 SQL 拼在**与生产完全一致**的 `sessions` 建表语句之后。
+    ///
+    /// 为什么不各测试自己写一遍 `CREATE TABLE sessions`：
+    /// 手写副本会与 `db.rs::SCHEMA` 漂移 —— 改了 schema 但测试 fixture 没跟上时，
+    /// 测试仍在旧结构上通过，掩盖真实缺陷。这里直接复用 `db::sessions_ddl()`，
+    /// 使「生产 schema」成为唯一事实源。
+    fn session_test_schema(tasks_sql: &str) -> String {
+        format!("{}\n{}", tasks_sql, crate::db::sessions_ddl())
+    }
+
     /// 打开内存库临时文件的连接，并初始化 schema。
     ///
     /// #266：临时库路径必须**每次调用都唯一**——旧写法只按 `process::id()` 命名，
@@ -2534,9 +2565,12 @@ mod tests {
     fn clear_session_and_record_handoff_reject_missing_key() {
         let conn = Connection::open_in_memory().unwrap();
         // 缺列会污染断言（先报 no such column），故先建一张最小的 tasks 表。
-        conn.execute_batch(
+        // #427：session 写入/清除已改为双写 `sessions` 表，故fixture 还需
+        // `account_id` 列（sessions 行的 account_id 由此派生）与 sessions 表本身。
+        conn.execute_batch(&session_test_schema(
             "CREATE TABLE tasks (
                issue_key   TEXT PRIMARY KEY,
+               account_id  INTEGER NOT NULL DEFAULT 1,
                session_id  TEXT,
                session_agent TEXT,
                session_at  INTEGER,
@@ -2544,7 +2578,7 @@ mod tests {
              );
              INSERT INTO tasks (issue_key, session_id, session_agent, session_at, handoff)
                VALUES ('o/r#1', 'sess-1', 'claude-code', 1000, 'hi');",
-        )
+        ))
         .unwrap();
 
         // — 存在的 key：正常写入，0 行守卫不应误伤
@@ -2582,9 +2616,10 @@ mod tests {
     #[test]
     fn clear_task_sessions_batch_accumulates_and_ignores_missing() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        conn.execute_batch(&session_test_schema(
             "CREATE TABLE tasks (
                issue_key   TEXT PRIMARY KEY,
+               account_id  INTEGER NOT NULL DEFAULT 1,
                session_id  TEXT,
                session_agent TEXT,
                session_at  INTEGER,
@@ -2593,7 +2628,7 @@ mod tests {
              INSERT INTO tasks (issue_key, session_id, session_agent, session_at, handoff)
                VALUES ('o/r#1', 'sess-1', 'a', 1000, ''),
                       ('o/r#2', 'sess-2', 'b', 2000, '');",
-        )
+        ))
         .unwrap();
 
         // 全部存在：affected == 2，且确实清空了 session_id。

@@ -10,6 +10,85 @@ pub const APP_IDENTIFIER: &str = "com.shawnliu.taskboard";
 // v0.3.49 (#149)：详细日志门控已迁移至 `crate::common::verbose_enabled`，
 // 诊断输出一律走 `crate::tlog!`；此处不再保留私有版本。
 
+// #427：sessions 表 DDL（会话执行记录）。抽成独立常量，便于：
+//   ① `SCHEMA` 用 `concat!` 编译期拼入；
+//   ② 单测 fixture 通过 `sessions_ddl()` 复用同一份定义（不手写副本，避免漂移）。
+// Python MCP 侧 `server.py::ensure_schema` 也需自建同一张表（它是独立进程，
+// 不走 Rust 的 `open_db`），那里的定义靠本注释保持同步。
+//
+// ⚠️ 唯一键是 (account_id, issue_key, session_id) 三元组，**不是** session_id 单列：
+// 实测一个 claude-code 会话可同时挂在多个 issue 上
+// （ea1a0b6a-…-4b587b79f738 → fad-backend#1447 + #1454），且 issue_key 在 tasks 里
+// 也跨账号重复（733 行 / 729 distinct）。按单列唯一会丢数据或建表失败。
+//
+// work_branch / work_dir **故意不存这里** —— 它们是「任务属性」（agent 在哪个分支
+// 干活）而非「会话属性」，留在 tasks 以免 SessionsPanel 4 处 UI 改数据源
+// （见 #427 决策 B）。
+const SESSIONS_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS sessions (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id       INTEGER NOT NULL,
+  issue_key        TEXT NOT NULL,
+  session_id       TEXT NOT NULL,
+  session_agent    TEXT NOT NULL DEFAULT '',
+  -- 会话**开始**时间（沿用 tasks.session_at 的原语义：每次 touch 覆盖为 now）。
+  session_at       INTEGER NOT NULL,
+  -- 1=进行中，0=已结束（clear_task_session 只置 0，不删行 ⇒ 历史保留）。
+  is_active        INTEGER NOT NULL DEFAULT 1,
+  -- 结束时间；is_active=1 时为 NULL。
+  ended_at         INTEGER,
+  UNIQUE(account_id, issue_key, session_id)
+);
+-- 会话面板主查询：WHERE is_active=1 ORDER BY session_at DESC（避免全表扫描）。
+CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions(is_active, session_at DESC);
+-- 按 issue 查历史（详情页「历次会话」用）。
+CREATE INDEX IF NOT EXISTS idx_sessions_issue ON sessions(account_id, issue_key);
+"#;
+
+/// 供测试（与未来其他调用方）引用同一份 sessions DDL。
+///
+/// ⚠️ #427：`SCHEMA` 字面量内还有一份**内联副本**（Rust 的 `concat!` 只接受字面量，
+/// 无法引用 `const`，故无法真正共享单一份）。两份若漂移，后果是「新库建不出sessions 表」
+/// 而测试 fixture 仍通过 —— 最隐蔽的失败模式。故 `tests` 里有断言强制两者一致。
+pub fn sessions_ddl() -> &'static str {
+    SESSIONS_DDL
+}
+
+/// #427 防漂移：`SCHEMA` 内联的 sessions DDL 与 `SESSIONS_DDL` 常量必须逐字一致。
+/// 返回不一致的片段（供断言给出可读信息）。
+#[cfg(test)]
+pub(crate) fn sessions_ddl_drift() -> Option<String> {
+    let inline = SCHEMA
+        .split("CREATE TABLE IF NOT EXISTS sessions (")
+        .nth(1)
+        .map(|rest| {
+            format!(
+                "CREATE TABLE IF NOT EXISTS sessions ({})",
+                rest.split("idx_sessions_issue").next().unwrap_or("")
+            )
+        });
+    let standalone = SESSIONS_DDL
+        .split("CREATE TABLE IF NOT EXISTS sessions (")
+        .nth(1)
+        .map(|rest| {
+            format!(
+                "CREATE TABLE IF NOT EXISTS sessions ({})",
+                rest.split("idx_sessions_issue").next().unwrap_or("")
+            )
+        });
+    match (inline, standalone) {
+        (Some(a), Some(b)) if a == b => None,
+        (a, b) => Some(format!(
+            "inline={:?}\nstandalone={:?}",
+            a.map(|x| x.len()),
+            b.map(|x| x.len())
+        )),
+    }
+}
+
+// #427：sessions 表 DDL 抽成独立常量，由 `SCHEMA` 用 `concat!` 在**编译期**拼进来。
+// 这样单测 fixture 与 Python MCP 侧都能引用同一份定义，不会在三方拷贝间漂移
+// （`concat!` 是编译期展开，无运行时开销）。
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS accounts (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,19 +210,10 @@ CREATE TABLE IF NOT EXISTS project_items (
 );
 CREATE INDEX IF NOT EXISTS idx_project_items_issue ON project_items(account_id, issue_key);
 
--- #427：会话执行记录（agent 每次开工写一行）。此前会话数据挤在 tasks 的
--- session_id/session_agent/session_at 三列里，覆盖式写入 ⇒ 同一任务多次开工的
--- 历史在设计层面就不存在。拆表后 sessions 保留全量历史，tasks 三列退化为
--- 「当前活跃会话」缓存（MCP 契约不变，见 issue #427 决策 C）。
---
--- ⚠️ 唯一键是 (account_id, issue_key, session_id) 三元组，**不是** session_id 单列：
--- 实测一个 claude-code 会话可同时挂在多个 issue 上
--- （ea1a0b6a-…-4b587b79f738 → fad-backend#1447 + #1454），且 issue_key 在 tasks 里
--- 也跨账号重复（733 行 / 729 distinct）。按单列唯一会丢数据或建表失败。
---
--- work_branch / work_dir **故意不存这里** —— 它们是「任务属性」（agent 在哪个分支
--- 干活）而非「会话属性」，留在 tasks 以免 SessionsPanel 4 处 UI 改数据源
--- （见 #427 决策 B）。
+-- #427：会话执行记录（agent 每次开工写一行）。定义与 `SESSIONS_DDL` 一致
+-- （此处为 SCHEMA 字面量内的内联副本，两处需同步修改；`sessions_ddl()`
+-- 提供同一份定义给测试 fixture 使用）。
+
 CREATE TABLE IF NOT EXISTS sessions (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id       INTEGER NOT NULL,
@@ -163,6 +233,20 @@ CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions(is_active, session_at
 -- 按 issue 查历史（详情页「历次会话」用）。
 CREATE INDEX IF NOT EXISTS idx_sessions_issue ON sessions(account_id, issue_key);
 
+-- #427：会话执行记录（agent 每次开工写一行）。此前会话数据挤在 tasks 的
+-- session_id/session_agent/session_at 三列里，覆盖式写入 ⇒ 同一任务多次开工的
+-- 历史在设计层面就不存在。拆表后 sessions 保留全量历史，tasks 三列退化为
+-- 「当前活跃会话」缓存（MCP 契约不变，见 issue #427 决策 C）。
+--
+-- ⚠️ 唯一键是 (account_id, issue_key, session_id) 三元组，**不是** session_id 单列：
+-- 实测一个 claude-code 会话可同时挂在多个 issue 上
+-- （ea1a0b6a-…-4b587b79f738 → fad-backend#1447 + #1454），且 issue_key 在 tasks 里
+-- 也跨账号重复（733 行 / 729 distinct）。按单列唯一会丢数据或建表失败。
+--
+-- work_branch / work_dir **故意不存这里** —— 它们是「任务属性」（agent 在哪个分支
+-- 干活）而非「会话属性」，留在 tasks 以免 SessionsPanel 4 处 UI 改数据源
+-- （见 #427 决策 B）。
+-- #427：sessions 表（会话执行记录）定义见 `SESSIONS_DDL` 的注释块。
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -2635,6 +2719,58 @@ pub fn import_note(
 
 #[cfg(test)]
 mod tests {
+
+    /// #427：sessions 表 DDL 两份定义（SCHEMA 内联 + SESSIONS_DDL 常量）必须一致。
+    /// 漂移的后果：新库建不出 sessions 表而测试 fixture 仍通过（最隐蔽的失败模式）。
+    #[test]
+    fn sessions_ddl_inline_matches_constant() {
+        assert_eq!(
+            crate::db::sessions_ddl_drift(),
+            None,
+            "SCHEMA 内联的 sessions DDL 与 SESSIONS_DDL 常量已漂移"
+        );
+    }
+
+    /// #427：`open_db` 必须在**新库**里建出 sessions 表 + 两个索引。
+    /// （若 SCHEMA 内联副本丢失或漏索引，此处会no such table。）
+    #[test]
+    fn fresh_db_has_sessions_table_and_indexes() {
+        let conn = open_db(std::path::Path::new(":memory:")).expect("open_db");
+        for col in [
+            "id",
+            "account_id",
+            "issue_key",
+            "session_id",
+            "session_agent",
+            "session_at",
+            "is_active",
+            "ended_at",
+        ] {
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = ?1",
+                    [col],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(exists, 1, "sessions 表缺少列 {col}");
+        }
+        let idx: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='sessions'")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert!(
+            idx.iter().any(|n| n == "idx_sessions_active"),
+            "缺 idx_sessions_active"
+        );
+        assert!(
+            idx.iter().any(|n| n == "idx_sessions_issue"),
+            "缺 idx_sessions_issue"
+        );
+    }
     use super::*;
 
     fn tmp_db(name: &str) -> std::path::PathBuf {
