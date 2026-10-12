@@ -2,6 +2,26 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.6.10 (2026-10-12) — Hotfix: session panel and tray "Show board" unusable (#430 / #432)**
+
+  - This release fixes **two user-visible failures introduced in v0.6.9**, each of which made the corresponding feature completely unusable.
+
+  - **#430 Session panel fails with `no such column: tasks.issue_key` (app unusable)**
+
+    - Root cause: SQLite semantics — "once a table is aliased in `FROM`, the original table name is no longer visible". `list_active_sessions` wrote `JOIN tasks t` in `FROM` (aliasing `tasks` to `t`), while the SELECT prefix helper **hard-coded `tasks.`** — two independent pieces that must match; when they drift the query fails at runtime.
+    - **No data loss** (measured on the live DB: `user_version=5`, `integrity_check = ok`, 17 active sessions intact) ⇒ purely a query-authoring bug.
+    - Fix: collapse "alias + column prefixes + FROM" into **one function** `active_sessions_sql()` that both the caller and the tests obtain it from — structurally eliminating the possibility of the two drifting apart.
+
+  - **#432 Tray "Show board" does nothing (needs several clicks or an app restart)**
+
+    - The menu item is a **native Tauri tray menu** entry (`lib.rs`), not frontend. Defect A: it shared `toggle_window` with the tray's left-click action (hide-if-visible), but on macOS **a minimized window still reports `is_visible() == true`** (minimize is not `orderOut:`) ⇒ clicking the menu on a minimized window hid it outright.
+    - Defect B: with no `on_window_event` / `prevent_close` anywhere, Tauri v2 **destroys** the window when `CloseRequested` isn't intercepted ⇒ `get_webview_window("main")` returns `None` and the `if let` silently skips ⇒ the menu item becomes a permanently dead button, fixable only by restarting the app.
+    - Fix: add `show_window()` (**`unminimize()` before `show()`** — the latter is indispensable, since a minimized window stays in the Dock after `show()`); point the menu item at it, leaving `toggle_window` for left-click only with an added `!minimized` condition; add `close_to_hide_guard` so closing the main window hides it instead of destroying it (standard for tray-resident apps; the about window is not guarded); add `else` branches to both `if let Some(w)` so failures are logged instead of silent.
+
+  - **Tests & assertion strength**: lib 187 → **193**. #430's regression assertion took **three reverse-verification rounds** to become effective (final form: tests and production share the same SQL builder); #432's "guard is mounted" assertion initially let a "comment out the call" mutation escape (text matching hit the comment line) and was fixed by **filtering `//`-prefixed lines**.
+  - No schema / MCP tool / i18n changes.
+  - **Verification**: `cargo test --lib` **193 passed** ✅, `cargo test --test db_test` 27 passed ✅, `cargo fmt --check` clean ✅, `cargo clippy --all-targets -p taskboard -- -D warnings` 0 warnings ✅, CI 8 checks green ✅. **Reverse verification**: 2 mutations for #430 and 4 for #432 all caught precisely.
+
 - **v0.6.9 (2026-10-10) — Session data split out of `tasks` into a dedicated `sessions` table, preserving multi-run history (#427)**
 
   - **Motivation (measured, not assumed)**: sessions previously lived in `tasks.session_id` / `session_agent` / `session_at` and were overwritten on every touch ⇒ the production DB has **0** rows where one `issue_key` carries multiple distinct `session_id` — multi-run history never existed by design; `session_id` had no index so the session panel's main query full-scanned; agent session writes and GitHub sync both UPDATE the same `tasks` table.
