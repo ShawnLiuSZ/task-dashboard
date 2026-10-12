@@ -2,6 +2,19 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.6.11 (unreleased) — Show PR merge status on cards; move the PR line below the assignee (#435)**
+
+  - **PR line position**: moved out of the bottom meta row (where it shared a line with "new comments") to its **own row directly below the assignee**, following the existing session-row (#197) pattern.
+  - **Merge status badge**: merged (green) / open (blue) / closed (grey). **An empty state (unknown) renders no badge** — only the link.
+  - ⚠️ **An empty state is normal, not an error**: (1) existing rows have no value before this change; (2) PRs are fetched with `state=all` but only 3 pages (300-item cap) are read, so older PRs in large repos aren't reachable.
+  - **Cheaper than expected**: PRs come from REST `pulls?state=all`, and the response **already carries `merged_at` / `state`** — they were simply being discarded ⇒ **zero extra HTTP requests**. Incidentally, PR collection does **not** go through GraphQL, and the issue↔PR link is inferred by **regex-scanning each PR body for `Closes #123`** — GitHub has no structured association API.
+  - `merged_at != null` is what marks "merged": looking at `state` alone would merge "merged" and "closed without merging" into one value, which are very different signals to a user.
+  - New `tasks.pr_state TEXT` column (`SCHEMA_VERSION` 5 → 6). `MIGRATE_DATA_FIXES`, `migrate_tasks_v2_rebuild`, and `REQUIRED_INDEXES` are all **unchanged** (existing rows are naturally empty; the rebuild whitelist is intentionally stale; a single column has no query need).
+  - ⚠️ Position indices are **always appended at the end** (`task_mapper` index 29, `mcp.rs` index 28 — the **two SELECT column orders differ**, so count each on its own). Inserting in the middle shifts every later index; missing one overruns the row ⇒ `list_tasks` errors out entirely ⇒ an empty board in the UI (the #285 incident).
+  - On the sync side, `pr_state` follows the existing convention: when the PR list fetch fails, the **previous value is kept**, so a known "merged" isn't downgraded to unknown by a network blip.
+  - **Verification**: `cargo test --lib` **194 passed**, `db_test` 27 passed ✅, `fmt` clean ✅, `clippy --all-targets -D warnings` 0 warnings ✅, `check-mcp-columns.py` **29 columns** ✅, `vitest` **281 passed** ✅, `tsc` / `lint` 0 warnings / `i18n` 401 keys ✅. **Reverse verification**: removing the `merged_at` check ⇒ caught (merged wrongly classified as closed); moving the PR line above the creator row ⇒ caught (4 tests failed). **Migration rehearsal**: production-DB copy went `user_version` 5→6 with **all 736 rows intact**.
+  - See [issue-435-pr-state.md](./issue-435-pr-state.md)
+
 - **v0.6.10 (2026-10-12) — Hotfix: session panel and tray "Show board" unusable (#430 / #432)**
 
   - This release fixes **two user-visible failures introduced in v0.6.9**, each of which made the corresponding feature completely unusable.
