@@ -141,13 +141,63 @@ fn schedule_minutes(app: &AppHandle) -> u64 {
     mins
 }
 
+/// 托盘左键单击：**切换**窗口显隐（左键语义就是 toggle）。
 fn toggle_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
-        if w.is_visible().unwrap_or(false) {
+        // ⚠️ #431：macOS 上**最小化的窗口 `is_visible()` 仍返回 true**（最小化不是
+        // `orderOut:`）。原实现只看 `is_visible()` ⇒ 点托盘图标「最小化后」会走
+        // `hide()` 分支把窗口彻底隐藏，用户看到「点了没反应」，得再点一次才出来。
+        // 判定改为「可见**且**未最小化」。
+        let visible = w.is_visible().unwrap_or(false);
+        let minimized = w.is_minimized().unwrap_or(false);
+        if visible && !minimized {
             let _ = w.hide();
         } else {
             let _ = w.show();
             let _ = w.set_focus();
+        }
+    } else {
+        crate::tlog!("[tray] toggle_window: main 窗口不存在（可能已被销毁）");
+    }
+}
+
+/// 托盘右键菜单「显示看板」：**确保窗口可见并聚焦**（不是切换）。
+///
+/// #431：菜单文案是「显示」，语义就必须是「让它出现」而非「切换」。
+/// 原实现菜单项与左键共用 `toggle_window`，导致：
+/// - 窗口最小化时点菜单 → 反而被 `hide()`（要点两次）；
+/// - 窗口已被关闭（无 `prevent_close`，见 `on_main_window_event`）时
+///   `get_webview_window("main")` 返回 `None` ⇒ `if let` 静默跳过 ⇒ 菜单项变死按钮，
+///   只能退出重开 App（`tauri.conf.json` 的窗口只在启动时建一次，代码里无重建逻辑）。
+///
+/// `unminimize()` 不可省：最小化的窗口 `show()` 后仍是 Dock 状态。
+fn show_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        if w.is_minimized().unwrap_or(false) {
+            let _ = w.unminimize();
+        }
+        let _ = w.show();
+        let _ = w.set_focus();
+    } else {
+        crate::tlog!("[tray] show_window: main 窗口不存在（应已被 prevent_close 保护，此为异常）");
+    }
+}
+
+/// #431：把主窗口的「关闭」改为「隐藏」。
+///
+/// 返回一个可直接挂到 `main_win.on_window_event(..)` 的闭包。托盘常驻应用的
+/// 标准做法。不加此保护时，用户点红色关闭按钮会让窗口被**销毁**，而
+/// `tauri.conf.json` 的 `app.windows` 只在启动时创建一次、代码里也没有
+/// `WebviewWindowBuilder` 重建逻辑 ⇒ 托盘「显示看板」永久失效，只能退出重开。
+///
+/// 只挂在 main 上，about 窗口仍可正常关闭（不拦截其 CloseRequested）。
+///
+/// `CloseRequestApi` 自身没有 `hide()`，故需捕获 `WebviewWindow` 句柄来隐藏。
+fn close_to_hide_guard(w: tauri::WebviewWindow) -> impl Fn(&tauri::WindowEvent) + Send + 'static {
+    move |e: &tauri::WindowEvent| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = e {
+            api.prevent_close();
+            let _ = w.hide();
         }
     }
 }
@@ -366,7 +416,8 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
-                    "show" => toggle_window(app),
+                    // #431：菜单项语义是「显示」⇒ 走 show_window，不是 toggle。
+                    "show" => show_window(app),
                     "sync" => {
                         let h = app.clone();
                         thread::spawn(move || {
@@ -391,6 +442,16 @@ pub fn run() {
                 builder = builder.icon(icon);
             }
             builder.build(app)?;
+
+            // #431：主窗口关闭改为隐藏（托盘常驻应用的标准做法）。
+            // 不加此保护，点红色关闭按钮会销毁窗口，而 `tauri.conf.json` 的
+            // `app.windows` 只在启动时建一次、代码里也无 `WebviewWindowBuilder`
+            // 重建逻辑 ⇒ 托盘「显示看板」永久失效，只能退出重开 App。
+            if let Some(main_win) = app.get_webview_window("main") {
+                main_win.on_window_event(close_to_hide_guard(main_win.clone()));
+            } else {
+                crate::tlog!("[tray] setup: 取不到 main 窗口，关闭保护未挂载");
+            }
 
             let h_startup = handle.clone();
             thread::spawn(move || {
@@ -517,6 +578,114 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+
+    /// #431 回归：托盘「显示看板」菜单项必须走 `show_window`（显示语义），
+    /// **不能**走 `toggle_window`（切换语义）。
+    ///
+    /// 缺陷：菜单文案是「显示」，但原实现与左键共用 `toggle_window`：
+    /// - 窗口最小化时点菜单 → `is_visible()` 仍为 true（macOS 最小化不是 `orderOut:`）
+    ///   → 走 `hide()` 分支把窗口彻底隐藏 ⇒ 「点了没反应，得再点一次」；
+    /// - 窗口已被关闭（无 `prevent_close`）时 `get_webview_window` 返回 `None`
+    ///   → `if let` 静默跳过 ⇒ 菜单项变死按钮，只能退出重开。
+    ///
+    /// 断言走**源码静态检查**：这些函数需要真实 `AppHandle`/窗口，单测无法构造，
+    /// 而本缺陷的本质是「哪个函数被绑定到菜单项」—— 文本契约正是合适粒度。
+    #[test]
+    fn tray_show_menu_item_uses_show_window() {
+        let src = include_str!("lib.rs");
+        let handler = src
+            .split("\"show\" =>")
+            .nth(1)
+            .expect("应存在 show 菜单项绑定");
+        let line = handler.lines().next().unwrap_or_default();
+        assert!(
+            line.contains("show_window(app)"),
+            "「显示看板」菜单项必须调用 show_window（显示语义），实际: {line}"
+        );
+        assert!(
+            !line.contains("toggle_window"),
+            "「显示看板」菜单项不得调用 toggle_window（切换语义）—— #431 缺陷"
+        );
+    }
+
+    /// #431 回归：`show_window` 必须先 `unminimize()` 再 `show()`。
+    ///
+    /// 最小化的窗口仅调 `show()` 仍处于 Dock 状态（用户仍看不到窗口），
+    /// 这正是「要点几次 / 重开才行」的另一半成因。
+    #[test]
+    fn show_window_unminimizes_before_show() {
+        let src = include_str!("lib.rs");
+        let body = src
+            .split("fn show_window(app: &AppHandle) {")
+            .nth(1)
+            .expect("应存在 show_window");
+        let body = &body[..body.find("\n}").unwrap_or(body.len())];
+        let unmin = body
+            .find("unminimize()")
+            .expect("show_window 必须调 unminimize()");
+        let show = body.find("w.show()").expect("show_window 必须调 show()");
+        assert!(
+            unmin < show,
+            "必须**先** unminimize 再 show —— 否则最小化的窗口 show() 后仍在 Dock（#431）"
+        );
+        assert!(
+            body.contains("set_focus()"),
+            "show_window 还应 set_focus() 把窗口置前"
+        );
+    }
+
+    /// #431 回归：`toggle_window`（托盘左键）判定可见时必须**同时排除最小化**。
+    ///
+    /// 只看 `is_visible()` 时，macOS 上最小化的窗口也返回 true ⇒ 点左键会把它
+    /// 彻底 `hide()`，越点越不见。
+    #[test]
+    fn toggle_window_treats_minimized_as_not_togglable() {
+        let src = include_str!("lib.rs");
+        let body = src
+            .split("fn toggle_window(app: &AppHandle) {")
+            .nth(1)
+            .expect("应存在 toggle_window");
+        let body = &body[..body.find("\n}\n").unwrap_or(body.len())];
+        assert!(
+            body.contains("is_minimized()"),
+            "toggle_window 必须检查 is_minimized() —— macOS 最小化时 is_visible() 仍为 true"
+        );
+        assert!(
+            body.contains("visible && !minimized"),
+            "隐藏条件应为「可见**且**未最小化」，否则点左键会把最小化窗口彻底隐藏（#431）"
+        );
+    }
+
+    /// #431 回归：主窗口必须挂上「关闭改为隐藏」的守卫。
+    ///
+    /// 无此守卫时，点红色关闭按钮会销毁窗口，而 `tauri.conf.json` 的
+    /// `app.windows` 只在启动时建一次、代码里也无重建逻辑 ⇒ 托盘永久失效。
+    #[test]
+    fn main_window_close_is_intercepted_to_hide() {
+        let src = include_str!("lib.rs");
+        let guard = src
+            .split("fn close_to_hide_guard(")
+            .nth(1)
+            .expect("应存在 close_to_hide_guard");
+        let gbody = &guard[..guard.find("\n}\n").unwrap_or(guard.len())];
+        assert!(
+            gbody.contains("api.prevent_close()"),
+            "守卫必须调 prevent_close()，否则窗口仍被销毁"
+        );
+        assert!(gbody.contains("w.hide()"), "守卫应把窗口隐藏而非销毁");
+
+        // ⚠️ 只断言「函数定义存在」不够 —— 变异把**调用**摘掉/注释掉、定义留着，
+        // 断言仍会通过（首次反向验证确实被骗过）。故按行找**未被注释**的调用。
+        let needle = "main_win.on_window_event(close_to_hide_guard(";
+        let live = src
+            .lines()
+            .filter(|l| l.contains(needle) && !l.trim_start().starts_with("//"))
+            .count();
+        assert!(
+            live > 0,
+            "setup 里必须真的给 main 窗口挂 close_to_hide_guard（#431）：生效调用数为 0"
+        );
+    }
     use super::*;
 
     #[test]
