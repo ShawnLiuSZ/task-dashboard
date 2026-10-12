@@ -6,6 +6,19 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.6.11（未发布）— 卡片显示 PR 合并状态，PR 行移到「分配人」下方（#435）**
+
+  - **PR 行位置**：从底部 meta 行（与「新评论」挤在一行）移到**「分配人」正下方独立成行**，照抄 session 行（#197）的现成范式。
+  - **合并状态徽章**：已合并（绿）/ 进行中（蓝）/ 已关闭（灰）；**空串（未知）不渲染徽章**、只留链接。
+  - ⚠️ **空串是常态而非异常**：① 存量行在本次之前没有该值；② PR 拉取是 `state=all` 但只取 3 页（300 个上限），超大仓库的老 PR 拉不到。
+  - **成本低于预期**：PR 走 REST `pulls?state=all`，**响应里本就带 `merged_at` / `state`**，此前只是被丢弃 ⇒ **零 HTTP 请求增量**。⚠️ 顺带纠正：PR 采集**不走 GraphQL**；issue↔PR 的关联靠**正则扫 PR 正文的 `Closes #123`** 反推，GitHub 并无结构化关联 API。
+  - `merged_at` 非 null 才判「已合并」—— 只看 `state` 会把「已合并」与「已关闭未合并」混成 `closed`，对用户是完全不同的信号。
+  - `tasks` 新增 `pr_state TEXT`（`SCHEMA_VERSION` 5 → 6）；`MIGRATE_DATA_FIXES` / `migrate_tasks_v2_rebuild` / `REQUIRED_INDEXES` 均**不改**（存量行天然为空串；重建白名单故意是旧的；单列无查询需求）。
+  - ⚠️ 位置索引**一律末尾追加**（`task_mapper` 索引 29、`mcp.rs` 索引 28 —— **两套 SELECT 列序完全不同，须各自数**）。中间插入会让后续索引全部 +1，漏改即越界 ⇒ `list_tasks` 整体报错 ⇒ 前端空看板（#285 事故）。
+  - 同步侧 `pr_state` 遵守既有语义：PR 列表拉取失败时**保留既有值**，不把已知的「已合并」误降级为未知。
+  - **验证**：`cargo test --lib` **194 passed**、`db_test` 27 passed ✅，`fmt` 干净 ✅，`clippy --all-targets -D warnings` 0 警告 ✅，`check-mcp-columns.py` **29 列** ✅，`vitest` **281 passed** ✅，`tsc` / `lint` 0 警告 / `i18n` 401 key ✅。**反向验证**：移除 `merged_at` 判定 ⇒ 捕获（已合并被误判成 closed）；PR 行移到创建人上方 ⇒ 捕获（4 例失败）。**迁移演练**：生产库副本 `user_version` 5→6、**736 行零丢失**。
+  - 详见 [`issue-435-pr-state.md`](./issue-435-pr-state.md)
+
 - **v0.6.10（2026-10-12）— 热修复：会话面板与托盘「显示看板」不可用（#430 / #432）**
 
   -本版修复 **v0.6.9 引入的两个用户可感知故障**，两者均使对应功能完全不可用。

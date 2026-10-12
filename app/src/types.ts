@@ -64,6 +64,8 @@ export interface Task {
   latestCommentUrl: string;
   prNumber: number;
   prUrl: string;
+  /** #435：PR 合并状态 `'merged'` / `'open'` / `'closed'`；空串 = 未知（不显示徽章）。 */
+  prState: string;
   branch: string;
   /** #193：agent 工作分支（record_session 写入，与同步的 PR branch 分离）。 */
   workBranch: string;

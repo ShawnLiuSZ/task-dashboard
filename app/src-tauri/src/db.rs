@@ -136,6 +136,12 @@ CREATE TABLE IF NOT EXISTS tasks (
   latest_comment_url TEXT NOT NULL DEFAULT '',
   pr_number      INTEGER NOT NULL DEFAULT 0,
   pr_url         TEXT NOT NULL DEFAULT '',
+  -- #435：PR 合并状态。'' /'open' / 'merged' / 'closed'；'' = 未知。
+  -- 来源：REST pulls 响应本就带 merged_at / state（`state=all`），
+  -- 此前只是被 RawPr::from_item 丢弃 ⇒ 取它**零 HTTP 请求增量**。
+  -- 空串是**常态**而非异常：`state=all` 只拉 3 页（300 个上限），
+  -- 超大仓库的老 PR 拉不到；存量行在本次升级前也没有该值。
+  pr_state       TEXT NOT NULL DEFAULT '',
   -- 关联 PR 的分支（head.ref），由同步自动拉取；无关联 PR 时会被清空（PR 专用）。
   branch         TEXT NOT NULL DEFAULT '',
   -- agent 通过 record_session 写入的工作分支；同步不碰（#171）。
@@ -383,11 +389,13 @@ pub fn db_path_default() -> Result<PathBuf, String> {
 /// `open_db` 以「版本号落后 **或** 只读自愈探测发现缺口」为迁移门控：版本号是快路径，
 /// 探测是兜底——历史教训（#175 / #237 / #278：版本号丢值、被物理重建覆盖、新列没进
 /// 重建的写死白名单）表明仅靠版本号会漏列，故两者缺一不可。
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// 必须存在的列（表 → 列）。热路径**只读**探测，缺任何一列都触发迁移。
 /// 新增必填列时必须同步追加 `MIGRATION_DDL` 里的补齐语句（有单测守卫）。
 const REQUIRED_COLUMNS: &[(&str, &str)] = &[
+    // #435：PR 合并状态。
+    ("tasks", "pr_state"),
     ("tasks", "work_branch"),
     ("tasks", "author"),
     ("tasks", "parent_issue"),
@@ -418,6 +426,10 @@ const REQUIRED_INDEXES: &[&str] = &[
 /// **之后**；**不能**只写进 `migrate_legacy_alters`（后者仅 `user_version < 1` 触发，
 /// 且执行在重建之前，重建的写死列白名单会把新列丢掉）。详见 docs/issue-175-*.md。
 const MIGRATION_DDL: &[&str] = &[
+    // #435：PR 合并状态（见 `SCHEMA` 内的列注释）。
+    // 必须写在这里而非 migrate_legacy_alters —— 后者仅 `user_version < 1` 触发，
+    // 且执行在 migrate_tasks_v2_rebuild 之前，会被重建的写死列白名单丢掉。
+    "ALTER TABLE tasks ADD COLUMN pr_state TEXT NOT NULL DEFAULT '' ",
     // v0.3.20：label_mappings 表迁移（表由 SCHEMA 建，这里只补旧库缺的索引）。
     "CREATE INDEX IF NOT EXISTS idx_label_mappings_org ON label_mappings(org)",
     "CREATE INDEX IF NOT EXISTS idx_label_mappings_repo ON label_mappings(repo)",
@@ -1925,6 +1937,8 @@ pub struct ExistingTask {
     /// #278：既有父子关系（关系拉取失败时保留，避免误清空）。
     pub parent_issue: String,
     pub sub_issues: String,
+    /// #435：既有 PR 合并状态（PR 拉取失败时保留，避免把「已合并」误降为未知）。
+    pub pr_state: String,
 }
 
 /// 一次加载某账号下全部任务的既有快照，key 为 `repo#number`。
@@ -1935,7 +1949,7 @@ pub fn load_existing_tasks(
     let mut stmt = conn
         .prepare(
             "SELECT issue_key, status, comments_count, mentioned, pr_number, pr_url,
-                    latest_comment_url, branch, parent_issue, sub_issues
+                    latest_comment_url, branch, parent_issue, sub_issues, pr_state
              FROM tasks WHERE account_id = ?1",
         )
         .map_err(|e| format!("预加载既有任务失败: {e}"))?;
@@ -1953,6 +1967,7 @@ pub fn load_existing_tasks(
                     branch: r.get(7)?,
                     parent_issue: r.get(8)?,
                     sub_issues: r.get(9)?,
+                    pr_state: r.get(10)?,
                 },
             ))
         })
@@ -1999,6 +2014,8 @@ pub struct TaskUpsert {
     pub latest_comment_url: String,
     pub pr_number: i64,
     pub pr_url: String,
+    /// #435：PR 合并状态（`merged`/`open`/`closed`/空串=未知）。
+    pub pr_state: String,
     pub branch: String,
     /// #278：父 issue（JSON 对象串 `{"number","title","url"}`），无父为空串。
     pub parent_issue: String,
@@ -2020,8 +2037,8 @@ const TASK_INSERT_HEAD: &str = "INSERT INTO tasks
    (issue_key, owner, repo, number, title, url, issue_state, ownership,
     status, project_status, assignees, labels, done_at, mentioned, comments_count,
     latest_comment_url, pr_number, pr_url, branch, candidate_done, stale, updated_at, synced_at,
-    account_id, author, parent_issue, sub_issues, created_at)
-  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 0, 0, ?20, ?21, ?22, ?23, ?24, ?25, ?26)";
+    account_id, author, parent_issue, sub_issues, created_at, pr_state)
+  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 0, 0, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)";
 
 /// 冲突时**覆盖**：同步路径用（该账号的数据是刚拉取的权威值）。
 const TASK_CONFLICT_UPDATE: &str = "ON CONFLICT(repo, number, account_id) DO UPDATE SET
@@ -2052,7 +2069,9 @@ const TASK_CONFLICT_UPDATE: &str = "ON CONFLICT(repo, number, account_id) DO UPD
     author = excluded.author,
     parent_issue = excluded.parent_issue,
     sub_issues = excluded.sub_issues,
-    created_at = excluded.created_at";
+    created_at = excluded.created_at,
+    -- #435：PR 合并状态随同步覆盖。
+    pr_state = excluded.pr_state";
 
 /// 冲突时**不动**：按需拉取路径用。
 ///
@@ -2115,6 +2134,9 @@ pub fn write_task(
             t.parent_issue,
             t.sub_issues,
             t.created_at,
+            // #435：对应 TASK_INSERT_HEAD 末尾的 `?27`（pr_state）——
+            // 顺序必须与 INSERT 列清单严格对齐，错位会静默写入别的列的值。
+            t.pr_state,
         ],
     )
     .map_err(|e| format!("写入任务失败: {e}"))

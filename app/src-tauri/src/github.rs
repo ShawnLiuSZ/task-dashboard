@@ -242,9 +242,34 @@ pub struct RawPr {
     /// PR 所在分支（head.ref）；issue 没有分支字段，只能从关联 PR 反向取。
     #[serde(default)]
     pub head_ref: String,
+    /// #435：合并状态 —— `merged` / `open` / `closed`；空串 = 未知。
+    ///
+    /// 来源：REST pulls 响应**本就带** `merged_at` 与 `state`（拉的是 `state=all`），
+    /// 此前只是被丢弃 ⇒ 取它**零 HTTP 请求增量**。
+    /// `merged` 优先看 `merged_at`（非 null 即已合并，最权威）；否则退到 `state`。
+    /// 空串是**常态**：① 存量行在 #435 之前没有该值；② `state=all` 只拉 3 页
+    /// （`fetch_prs_for_repo`的 300 个上限），超大仓库的老 PR 拉不到。
+    #[serde(default)]
+    pub state: String,
 }
 
 impl RawPr {
+    /// #435：从 REST pulls item 提取合并状态。
+    ///
+    /// `merged_at` 非 null ⇒ `merged`（GitHub 的权威字段，能区分
+    /// 「已合并」与「已关闭但未合并」）；否则按 `state`（`open`/`closed`）。
+    /// 两个字段都缺失（老API / 测试 fixture 不完整）⇒ 空串（未知），前端优雅降级。
+    fn extract_state(v: &serde_json::Value) -> String {
+        if v.get("merged_at").map(|x| !x.is_null()).unwrap_or(false) {
+            return "merged".to_string();
+        }
+        match v.get("state").and_then(|x| x.as_str()) {
+            Some("open") => "open".to_string(),
+            Some("closed") => "closed".to_string(),
+            _ => String::new(),
+        }
+    }
+
     /// 从 REST pulls 原始 item 手动构造（**不要**直接 serde 反序列化）。
     ///
     /// 与 RawTask 同理：`url` 是 API URL（网页链接在 `html_url`）；
@@ -267,6 +292,7 @@ impl RawPr {
                 .and_then(|x| x.as_str())
                 .unwrap_or_default()
                 .to_string(),
+            state: RawPr::extract_state(v),
             head_ref: v
                 .get("head")
                 .and_then(|h| h.get("ref"))
@@ -2509,6 +2535,46 @@ mod tests {
         assert_eq!(t.comments, 0);
         // #237：缺 user 字段不报错，创建人为空串（卡片不渲染该行）。
         assert_eq!(t.author, "");
+    }
+
+    /// #435：`RawPr::from_item` 必须从 REST pulls item 正确提取三种合并状态。
+    ///
+    /// 关键区分：`merged_at` 非 null ⇒ merged（能区分「已合并」与
+    /// 「已关闭但未合并」—— 只看 `state` 会把两者混成 closed）。
+    #[test]
+    fn raw_pr_extracts_merge_state() {
+        let mk = |state: &str, merged: bool| -> RawPr {
+            let v: serde_json::Value = serde_json::json!({
+                "number": 321,
+                "html_url": "https://github.com/o/r/pull/321",
+                "body": "Closes #1",
+                "head": {"ref": "feature/x"},
+                "state": state,
+                "merged_at": if merged { serde_json::json!("2026-10-12T00:00:00Z") } else { serde_json::Value::Null },
+            });
+            RawPr::from_item(&v).expect("应能解析")
+        };
+
+        // merged：merged_at 非 null
+        assert_eq!(mk("closed", true).state, "merged");
+        // open：未合并且 state=open
+        assert_eq!(mk("open", false).state, "open");
+        // closed 未合并
+        assert_eq!(mk("closed", false).state, "closed");
+        // ⚠️ 老 API / 不完整 fixture ⇒ 空串（未知），前端据此**不显示徽章**
+        let v: serde_json::Value = serde_json::json!({
+            "number": 1, "html_url": "u", "body": "", "head": {"ref": "b"},
+            "state": "open",
+        });
+        assert_eq!(RawPr::from_item(&v).unwrap().state, "open");
+        let v2: serde_json::Value = serde_json::json!({
+            "number": 1, "html_url": "u", "body": "", "head": {"ref": "b"},
+        });
+        assert_eq!(
+            RawPr::from_item(&v2).unwrap().state,
+            "",
+            "两字段缺失应为空串"
+        );
     }
 
     /// 回归：REST pulls 原始 item —— url 应取 html_url（网页链接），

@@ -877,6 +877,7 @@ fn base_task_upsert(parent_issue: String, sub_issues: String, exists: bool) -> d
         latest_comment_url: String::new(),
         pr_number: 0,
         pr_url: String::new(),
+        pr_state: String::new(), // #435
         branch: String::new(),
         parent_issue,
         sub_issues,
