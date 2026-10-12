@@ -20,6 +20,7 @@ function mkTask(projectStatus: string): Task {
     latestCommentUrl: '',
     prNumber: 0,
     prUrl: '',
+    prState: '', // #435
     branch: '',
     workBranch: '',
     workDir: '',

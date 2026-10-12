@@ -36,6 +36,7 @@ function mkTask(partial: Partial<Task> & { issueKey: string }): Task {
     latestCommentUrl: '',
     prNumber: 0,
     prUrl: '',
+    prState: '', // #435
     branch: '',
     workBranch: '',
     workDir: '',
@@ -358,6 +359,71 @@ describe('TaskCard session 行（#197）', () => {
     );
     expect(html).not.toContain('session-row');
     expect(html).toContain('2024-09-10');
+  });
+});
+
+describe('TaskCard PR 行与合并状态（#435）', () => {
+  const prCard = (prState: string, extra = {}) =>
+    renderToStaticMarkup(
+      <I18nProvider>
+        <TaskCard
+          task={mkTask({
+            issueKey: 'a',
+            prNumber: 321,
+            prUrl: 'https://github.com/o/r/pull/321',
+            prState,
+            assignees: 'alice',
+            ...extra,
+          })}
+          active={false}
+          onSelectKey={noop}
+        />
+      </I18nProvider>,
+    );
+
+  it('PR 行位于「分配人」下方独立成行（不在底部时间行里）', () => {
+    const html = prCard('merged');
+    // 独立行
+    expect(html).toContain('pr-row');
+    // 位置契约：PR 行在分配人**之后**（用户明确要求的布局）
+    const iAssignee = html.indexOf('分配人');
+    const iPr = html.indexOf('pr-row');
+    expect(iAssignee).toBeGreaterThanOrEqual(0);
+    expect(iPr).toBeGreaterThan(iAssignee);
+    // 且不再出现在底部 card-bottom 行里
+    const iBottom = html.indexOf('card-bottom');
+    expect(iBottom).toBeGreaterThan(iPr);
+  });
+
+  it('已合并显示绿色徽章', () => {
+    const html = prCard('merged');
+    expect(html).toContain('pr-state-merged');
+    expect(html).toContain('已合并');
+  });
+
+  it('进行中 / 已关闭各显示对应徽章', () => {
+    expect(prCard('open')).toContain('pr-state-open');
+    expect(prCard('open')).toContain('进行中');
+    expect(prCard('closed')).toContain('pr-state-closed');
+    expect(prCard('closed')).toContain('已关闭');
+  });
+
+  it('状态未知（空串）时仍渲染 PR 链接，但不显示徽章', () => {
+    // ⚠️ 空串是**常态**而非异常：存量行在 #435 之前没有该值，
+    // 且 `state=all` 只拉 3 页 ⇒ 超大仓库的老 PR 拉不到。
+    const html = prCard('');
+    expect(html).toContain('pr-row');
+    expect(html).toContain('PR #321');
+    expect(html).not.toContain('pr-state-');
+  });
+
+  it('无 PR（prNumber=0）时不渲染 PR 行', () => {
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <TaskCard task={mkTask({ issueKey: 'a' })} active={false} onSelectKey={noop} />
+      </I18nProvider>,
+    );
+    expect(html).not.toContain('pr-row');
   });
 });
 

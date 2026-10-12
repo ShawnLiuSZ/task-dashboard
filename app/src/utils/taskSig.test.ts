@@ -19,6 +19,7 @@ function mkTask(partial: Partial<Task> & { issueKey: string }): Task {
     latestCommentUrl: '',
     prNumber: 0,
     prUrl: '',
+    prState: '', // #435
     branch: '',
     workBranch: '',
     workDir: '',

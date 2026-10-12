@@ -1141,6 +1141,33 @@ button.unassigned-tag:disabled {
   white-space: nowrap;
 }
 
+/* #435：PR 独立行（分配人下方）+ 合并状态徽章。 */
+.pr-row {
+  margin-top: 4px;
+  align-items: center;
+  gap: 6px;
+}
+.pr-state {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+/* 已合并 = 绿（正向信号）；进行中 = 蓝（中性）；已关闭 = 灰（未合并的关闭）。 */
+.pr-state-merged {
+  background: #e3f5e9;
+  color: #1a7f37;
+}
+.pr-state-open {
+  background: #e4eefb;
+  color: #1f5fa9;
+}
+.pr-state-closed {
+  background: #ececee;
+  color: var(--text-2);
+}
+
 .candidate-tag {
   font-size: 10px;
   background: #ececee;

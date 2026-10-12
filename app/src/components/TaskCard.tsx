@@ -170,6 +170,31 @@ function TaskCard({ task, active, onSelectKey, repoIndex, showGhStatus }: Props)
         </div>
       )}
 
+      {/* #435：PR 与其合并状态，在「分配人」下方独立成行（原先挤在底部时间行里，
+          位置靠下不易发现，且与「新评论」混在一行）。状态未知（prState 为空串）
+          时只渲染链接、不渲染徽章 —— 空串是常态（存量行 + 超过 3 页的老 PR 拉不到）。*/}
+      {task.prNumber > 0 && task.prUrl && (
+        <div className="meta-row pr-row">
+          <a
+            className="pr-link"
+            title={t('card.prTitle')}
+            href={task.prUrl}
+            onClick={(e) => openLink(task.prUrl, e)}
+          >
+            🔗 PR #{task.prNumber}
+          </a>
+          {task.prState !== '' && (
+            <span className={`pr-state pr-state-${task.prState}`} title={t('card.prStateTitle')}>
+              {task.prState === 'merged'
+                ? t('card.prStateMerged')
+                : task.prState === 'open'
+                  ? t('card.prStateOpen')
+                  : t('card.prStateClosed')}
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="card-bottom">
         <span className="muted small">
           {task.updatedAt ? new Date(task.updatedAt * 1000).toISOString().slice(0, 10) : ''}
@@ -182,16 +207,6 @@ function TaskCard({ task, active, onSelectKey, repoIndex, showGhStatus }: Props)
             onClick={(e) => openLink(task.latestCommentUrl, e)}
           >
             {t('card.newComments')}
-          </a>
-        )}
-        {task.prNumber > 0 && task.prUrl && (
-          <a
-            className="pr-link"
-            title={t('card.prTitle')}
-            href={task.prUrl}
-            onClick={(e) => openLink(task.prUrl, e)}
-          >
-            🔗 PR #{task.prNumber}
           </a>
         )}
         {task.candidateDone && <span className="candidate-tag">{t('card.candidateTag')}</span>}
