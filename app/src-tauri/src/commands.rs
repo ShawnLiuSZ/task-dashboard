@@ -28,6 +28,8 @@ pub struct Task {
     pub latest_comment_url: String,
     pub pr_number: i64,
     pub pr_url: String,
+    /// #435：PR 合并状态（`merged`/`open`/`closed`/空串=未知）。
+    pub pr_state: String,
     pub branch: String,
     /// #193：agent 工作分支（record_session 写入，与同步的 PR branch 分离）。
     pub work_branch: String,
@@ -89,7 +91,10 @@ const TASK_SELECT_COLUMNS: &str = concat!(
     "issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status, ",
     "assignees, mentioned, latest_comment_url, pr_number, pr_url, branch, ",
     "session_id, session_agent, session_at, candidate_done, handoff, updated_at, account_id, work_branch, work_dir, author, ",
-    "parent_issue, sub_issues, created_at"
+    // #435：`pr_state` **必须追加在末尾**（索引 29）—— 中间插入会让后续全部
+    // `task_mapper` 的位置索引 +1，漏改任一处即越界 ⇒ `list_tasks` 整体报错
+    // ⇒ 前端空看板（#285 的真实事故）。
+    "parent_issue, sub_issues, created_at, pr_state"
 );
 
 /// 单行 → `Task`。列顺序由 [`TASK_SELECT_COLUMNS`] 固定，位置索引不可调整。
@@ -125,6 +130,8 @@ fn task_mapper(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         parent_issue: crate::common::parse_parent_link(r.get::<_, String>(26)?),
         sub_issues: crate::common::parse_sub_links(r.get::<_, String>(27)?),
         created_at: r.get(28)?,
+        // #435：追加末尾列，对应 `TASK_SELECT_COLUMNS` 的第 30 项（索引 29）。
+        pr_state: r.get(29)?,
     })
 }
 

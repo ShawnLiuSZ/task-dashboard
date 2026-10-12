@@ -74,8 +74,11 @@ SELECT_COLS = (
     "status, project_status, assignees, mentioned, latest_comment_url, "
     "pr_number, pr_url, branch, work_branch, work_dir, session_id, session_agent, "
     "session_at, handoff, candidate_done, account_id, updated_at, "
-    "parent_issue, sub_issues, created_at"
+    "parent_issue, sub_issues, created_at, pr_state"
 )
+# #435：`pr_state` 追加在末尾 —— 必须与 `mcp.rs::SELECT_COLS` **逐列同序**
+# （`scripts/check-mcp-columns.py` 断言 2），否则两侧返回给 agent 的字段会错位。
+# ⚠️ 注释必须写在括号**外**：解析脚本会把括号内的 `#` 行当成列名。
 
 
 # --------------------------------------------------------------------------- #
@@ -188,6 +191,8 @@ ENSURE_COLUMNS = (
     ("session_id", "TEXT"),
     ("session_agent", "TEXT"),
     ("session_at", "INTEGER"),
+    # #435：PR 合并状态（`merged`/`open`/`closed`/空串=未知）。
+    ("pr_state", "TEXT NOT NULL DEFAULT ''"),
     ("handoff", "TEXT NOT NULL DEFAULT ''"),
     ("candidate_done", "INTEGER NOT NULL DEFAULT 0"),
     ("account_id", "INTEGER NOT NULL DEFAULT 0"),

@@ -38,7 +38,7 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 /// #171：`work_branch` 为 agent 记录的工作分支，与同步的 PR `branch` 分离。
 /// #278：`parent_issue` / `sub_issues` 为 GitHub 父子关系（与 DB 一致，存 JSON 串；
 /// 空串表示无关联）。MCP 不做二次解析——agent 直接读 JSON，两个 MCP 实现语义一致。
-const SELECT_COLS: &str = "issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status, assignees, mentioned, latest_comment_url, pr_number, pr_url, branch, work_branch, work_dir, session_id, session_agent, session_at, handoff, candidate_done, account_id, updated_at, parent_issue, sub_issues, created_at";
+const SELECT_COLS: &str = "issue_key, owner, repo, number, title, url, issue_state, ownership, status, project_status, assignees, mentioned, latest_comment_url, pr_number, pr_url, branch, work_branch, work_dir, session_id, session_agent, session_at, handoff, candidate_done, account_id, updated_at, parent_issue, sub_issues, created_at, pr_state";
 
 fn db_path_for_mcp() -> Result<std::path::PathBuf, String> {
     if let Ok(p) = std::env::var("TASKBOARD_DB") {
@@ -148,6 +148,9 @@ fn row_to_value(r: &rusqlite::Row) -> rusqlite::Result<Value> {
         "created_at".into(),
         Value::Number(r.get::<_, i64>(27)?.into()), // 27
     );
+    // #435：追加末尾列（索引 28）—— 注意 `SELECT_COLS` 的列序与
+    // `TASK_SELECT_COLUMNS` **完全不同**，这里必须按本文件自己的顺序数。
+    m.insert("pr_state".into(), Value::String(r.get::<_, String>(28)?)); // 28
     Ok(Value::Object(m))
 }
 
@@ -1002,7 +1005,8 @@ mod tests {
                 assignees TEXT, mentioned INTEGER, latest_comment_url TEXT, pr_number INTEGER,
                 pr_url TEXT, branch TEXT, work_branch TEXT, work_dir TEXT, session_id TEXT, session_agent TEXT,
                 session_at INTEGER, handoff TEXT, candidate_done INTEGER, account_id INTEGER,
-                updated_at INTEGER, parent_issue TEXT, sub_issues TEXT, created_at INTEGER
+                updated_at INTEGER, parent_issue TEXT, sub_issues TEXT, created_at INTEGER,
+                pr_state TEXT
             );",
         )
         .unwrap();
@@ -1016,7 +1020,8 @@ mod tests {
                 issue_key, owner, repo, number, title, url, issue_state, ownership, status,
                 project_status, assignees, mentioned, latest_comment_url, pr_number, pr_url,
                 branch, work_branch, work_dir, session_id, session_agent, session_at, handoff,
-                candidate_done, account_id, updated_at, parent_issue, sub_issues, created_at
+                candidate_done, account_id, updated_at, parent_issue, sub_issues, created_at,
+                pr_state
             ) VALUES (
                 'fad-backend#1247', 'FoodsUp-Inc', 'fad-backend', 1247, '修复支付回调',
                 'https://github.com/FoodsUp-Inc/fad-backend/issues/1247', 'open', 'notassignee',
@@ -1025,7 +1030,8 @@ mod tests {
                 0, 1, 1700000100,
                 '{\"number\":900,\"title\":\"支付重构\",\"url\":\"https://github.com/FoodsUp-Inc/fad-backend/issues/900\"}',
                 '[{\"number\":1300,\"title\":\"支付回调子任务\",\"url\":\"https://github.com/FoodsUp-Inc/fad-backend/issues/1300\"}]',
-                1690000000
+                1690000000,
+                'merged'
             );",
             [],
         )
@@ -1042,6 +1048,11 @@ mod tests {
         let obj = arr[0].as_object().expect("元素应为 object");
 
         assert_eq!(obj["issue_key"].as_str(), Some("fad-backend#1247"));
+        // #435：PR 合并状态必须取自 `pr_state` 列（索引 28）。
+        // ⚠️ `check-mcp-columns.py` 只比字符串、**管不了位置映射** —— #173 事故
+        // （列序大变但 `row_to_value` 仍按老序取值，导致返回字段几乎全部错位）
+        // 正是在没有任何位置断言的情况下逃过的。故这条断言是必须的。
+        assert_eq!(obj["pr_state"].as_str(), Some("merged"));
         assert_eq!(obj["owner"].as_str(), Some("FoodsUp-Inc"));
         assert_eq!(obj["repo"].as_str(), Some("fad-backend"));
         assert_eq!(obj["number"].as_i64(), Some(1247));

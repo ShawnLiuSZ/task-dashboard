@@ -324,6 +324,8 @@ fn build_task_row(
         // 单 issue REST 给不了，留空；下次全量同步补。
         latest_comment_url: String::new(),
         pr_number: 0,
+        // #435：按需拉取只拿单个 issue 的 REST 数据，无关联 PR ⇒ 状态未知。
+        pr_state: String::new(),
         pr_url: String::new(),
         branch: String::new(),
         parent_issue: String::new(),

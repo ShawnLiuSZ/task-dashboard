@@ -592,13 +592,17 @@ fn sync_account_inner(
             (Vec::new(), false)
         }
     };
-    let mut pr_map: std::collections::HashMap<String, (i64, String, String)> =
+    // #435：元组扩到 4 位，末位为 PR 合并状态（`merged`/`open`/`closed`/空串=未知）。
+    let mut pr_map: std::collections::HashMap<String, (i64, String, String, String)> =
         std::collections::HashMap::new();
     for pr in &prs {
         for rk in parse_issue_refs(&pr.body, &pr.repo) {
-            pr_map
-                .entry(rk)
-                .or_insert((pr.number, pr.url.clone(), pr.head_ref.clone()));
+            pr_map.entry(rk).or_insert((
+                pr.number,
+                pr.url.clone(),
+                pr.head_ref.clone(),
+                pr.state.clone(),
+            ));
         }
     }
 
@@ -692,6 +696,8 @@ fn sync_account_inner(
         let existing_mentioned = existing.map(|e| e.mentioned).unwrap_or(0);
         let existing_pr_number = existing.map(|e| e.pr_number).unwrap_or(0);
         let existing_pr_url = existing.map(|e| e.pr_url.as_str()).unwrap_or("");
+        // #435：PR 合并状态同样参与「拉取失败保留既有值」的保护。
+        let existing_pr_state = existing.map(|e| e.pr_state.as_str()).unwrap_or("");
         let existing_comment_url = existing.map(|e| e.comment_url.as_str()).unwrap_or("");
         let existing_branch = existing.map(|e| e.branch.as_str()).unwrap_or("");
         let existing_parent_issue = existing.map(|e| e.parent_issue.clone()).unwrap_or_default();
@@ -743,16 +749,19 @@ fn sync_account_inner(
         // PR 关联：仅在 PR 列表拉取成功时更新（失败则保留既有值，避免误清空）。
         // `branch` 为 PR 专用（head.ref），无关联 PR 时清空（#171 起 agent 工作分支
         // 单独存 `work_branch`，同步完全不碰 work_branch）。
-        let (pr_number, pr_url, branch): (i64, String, String) = if pr_fetch_ok {
+        // #435：新增 `pr_state`，同样遵守「拉取失败保留既有值」的既有语义 ——
+        // 网络抖动不该把已知的「已合并」误降级成未知。
+        let (pr_number, pr_url, branch, pr_state): (i64, String, String, String) = if pr_fetch_ok {
             match pr_map.get(&key) {
-                Some((n, u, b)) => (*n, u.clone(), b.clone()),
-                None => (0, String::new(), String::new()),
+                Some((n, u, b, st)) => (*n, u.clone(), b.clone(), st.clone()),
+                None => (0, String::new(), String::new(), String::new()),
             }
         } else {
             (
                 existing_pr_number,
                 existing_pr_url.to_string(),
                 existing_branch.to_string(),
+                existing_pr_state.to_string(),
             )
         };
 
@@ -812,6 +821,8 @@ fn sync_account_inner(
             latest_comment_url,
             pr_number,
             pr_url,
+            // #435：PR 合并状态（`merged`/`open`/`closed`/空串=未知）。
+            pr_state,
             branch,
             parent_issue,
             sub_issues,
