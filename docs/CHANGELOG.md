@@ -6,6 +6,26 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.6.10（2026-10-12）— 热修复：会话面板与托盘「显示看板」不可用（#430 / #432）**
+
+  -本版修复 **v0.6.9 引入的两个用户可感知故障**，两者均使对应功能完全不可用。
+
+  - **#430 任务会话面板报错 `no such column: tasks.issue_key`（App 完全不可用）**
+
+    - 根因：SQLite 语义「表一旦在 FROM 里被别名，原表名不再可见」。`list_active_sessions` 的 FROM 写 `JOIN tasks t`（`tasks` 被别名成 `t`），而 SELECT 的前缀函数**写死了 `tasks.`** —— 两处独立配合，失配即运行时报错。
+    - 数据**未受影响**（实测生产库 `user_version=5`、`integrity_check = ok`、17 条活跃会话完好）⇒ 纯查询写法问题。
+    - 修复：把「别名 + 列前缀 + FROM」收进**同一个函数** `active_sessions_sql()`，调用方与测试都只能取它 —— 结构上杜绝两处各自改动而失配。
+
+  - **#432 托盘「显示看板」不生效（需多点几次或退出重开 App）**
+
+    - 该菜单项是 **Tauri 原生托盘菜单**（`lib.rs`），不在前端。缺陷 A：菜单项与托盘左键共用 `toggle_window`（可见就隐藏），而 **macOS 上最小化的窗口 `is_visible()` 仍返回 `true`**（最小化不是 `orderOut:`）⇒ 最小化后点菜单反而把窗口彻底隐藏。
+    - 缺陷 B：全仓无 `on_window_event` / `prevent_close`，Tauri v2 默认在 `CloseRequested` 未被阻止时**销毁**窗口 ⇒ `get_webview_window("main")` 返回 `None`、`if let` 静默跳过 ⇒ 菜单项变永久死按钮，只能退出重开。
+    - 修复：新增 `show_window()`（**先 `unminimize()` 再 `show()`**，后者不可省 —— 最小化的窗口 `show()` 后仍在 Dock）；菜单项改走它，`toggle_window` 只留给左键并加 `!minimized`；新增 `close_to_hide_guard` 把主窗口关闭改为隐藏（托盘常驻应用标准做法，about 窗口不挂）；`if let` 补 `else` 日志消除静默失败。
+
+  - **测试与断言强度**：lib 187 → **193**。#430 的回归断言经**三轮反向验证**才写出有效版本（最终形态：测试与生产共用同一SQL 构造函数）；#432 的「守卫挂载」断言首轮被「把调用注释掉」的变异逃过（文本匹配命中注释行），改为**按行过滤 `//` 前缀**后捕获。
+  - 无 schema / MCP tool / i18n 变更。
+  - **验证**：`cargo test --lib` **193 passed** ✅，`cargo test --test db_test` 27 passed ✅，`cargo fmt --check` 干净 ✅，`cargo clippy --all-targets -p taskboard -- -D warnings` 0 警告 ✅，CI 8 项全绿 ✅。**反向验证**：#430 两类变异、#432 四类变异均被精确捕获。
+
 - **v0.6.9（2026-10-10）— 会话数据从 `tasks` 拆出到独立 `sessions` 表，保留多次执行历史（#427）**
 
   - **动机（实测证据，非推测）**：会话此前挤在 `tasks` 的`session_id`/`session_agent`/`session_at` 三列里，覆盖式写入 ⇒ 生产库「同 `issue_key` 多个不同 `session_id`」= **0 条**，多次开工的历史在设计层面就不存在；`session_id` 无索引致会话面板主查询走全表扫描；agent 写会话与 GitHub 同步两个写入方混同一张表。
