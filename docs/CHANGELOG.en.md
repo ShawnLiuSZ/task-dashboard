@@ -2,7 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **v0.6.11 (unreleased) — Show PR merge status on cards; move the PR line below the assignee (#435)**
+- **v0.6.11 (2026-10-12) — Show PR merge status on cards; move the PR line below the assignee (#435)**
 
   - **PR line position**: moved out of the bottom meta row (where it shared a line with "new comments") to its **own row directly below the assignee**, following the existing session-row (#197) pattern.
   - **Merge status badge**: merged (green) / open (blue) / closed (grey). **An empty state (unknown) renders no badge** — only the link.
