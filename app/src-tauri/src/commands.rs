@@ -425,15 +425,11 @@ pub fn list_active_sessions(
         other => other,
     };
     // JOIN tasks 取任务本体字段（title / work_branch / work_dir / url …），
-    // SELECT 列表仍用 `tasks.` 前缀的 TASK_SELECT_COLUMNS ⇒ task_mapper 零改动。
+    // ⚠️ #429：SELECT 列前缀必须与 FROM 里的表别名**逐字一致** —— 表一旦被别名成 `t`，
+    // `tasks` 这个名字对 SQLite 不可见 ⇒ 报 `no such column: tasks.issue_key`。
+    // 别名 + 前缀 + FROM 全部收进 `active_sessions_sql()`，杜绝两处各自改动而失配。
     let mut stmt = conn
-        .prepare(&format!(
-            "SELECT {} FROM sessions s \
-             JOIN tasks t ON t.issue_key = s.issue_key AND t.account_id = s.account_id \
-             WHERE s.is_active = 1 \
-             ORDER BY s.session_at DESC",
-            prefixed_task_select_columns()
-        ))
+        .prepare(&active_sessions_sql())
         .map_err(|e| e.to_string())?;
     let rows = stmt.query_map([], task_mapper).map_err(|e| e.to_string())?;
     let mut result = Vec::new();
@@ -451,13 +447,29 @@ pub fn list_active_sessions(
     Ok(result)
 }
 
-/// `TASK_SELECT_COLUMNS` 加 `tasks.` 前缀，供 JOIN 场景复用（避免列名歧义）。
-fn prefixed_task_select_columns() -> String {
-    TASK_SELECT_COLUMNS
-        .split(", ")
-        .map(|c| format!("tasks.{}", c))
-        .collect::<Vec<_>>()
-        .join(", ")
+/// `list_active_sessions` 的**完整 SQL**（#429）。
+///
+/// ⚠️ **表别名与列前缀必须逐字一致** —— 这是 #429 的全部教训。
+/// 表在 FROM 里一旦被别名成 `t`，`tasks` 这个名字对 SQLite **不再可见**，
+/// 任何 `tasks.issue_key` 形式的引用都会报 `no such column: tasks.issue_key`
+/// （用户可见的运行时故障）。
+///
+/// #429 成因：原实现是「调用点内联拼 SQL（`JOIN tasks t`）」+「前缀函数写死
+/// `tasks.`」两处配合，且**两处可各自独立修改而测试察觉不到**。现在把
+/// 「别名 + 前缀 + FROM」收进**同一个函数**，调用方与测试都只能取它 ——
+/// 结构上杜绝「改了 FROM 忘了改前缀」。
+fn active_sessions_sql() -> String {
+    format!(
+        "SELECT {} FROM sessions s \
+         JOIN tasks t ON t.issue_key = s.issue_key AND t.account_id = s.account_id \
+         WHERE s.is_active = 1 \
+         ORDER BY s.session_at DESC",
+        TASK_SELECT_COLUMNS
+            .split(", ")
+            .map(|c| format!("t.{}", c))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 /// 记录「交接任务」详情：由接入的 agent（claude / codex 等）在识别到用户「生成交接任务」类意图时调用，
@@ -2201,6 +2213,66 @@ pub async fn scan_agent_hosts(app: AppHandle) -> Result<crate::hooks::AgentScanR
 
 #[cfg(test)]
 mod tests {
+
+    /// #429 回归：**执行生产代码 `active_sessions_sql()` 返回的那条 SQL**。
+    ///
+    /// ⚠️ 本断言经过三次收紧，每次都是反向验证逼出来的：
+    /// 1. 初版只测「前缀函数」自身 ⇒ 把**调用点**改回缺陷写法时测试**仍通过**。
+    ///    「被测函数正确」≠「调用方用对了」。
+    /// 2. 二版改为源码文本匹配 `FROM ... JOIN tasks t` ⇒ 被注释里的 `tasks.`
+    ///    字样干扰，变异 2（FROM 去掉别名）逃过。
+    /// 3. 三版在测试里自己拼 SQL ⇒ 同样感知不到生产调用点的变化。
+    ///
+    /// 最终形态：测试与生产**共用同一个 `active_sessions_sql()`**，因此
+    /// 「改前缀 / 改 FROM 别名 / 改 JOIN 形式」三类变异都会让 `prepare` 失败。
+    #[test]
+    fn active_sessions_sql_is_executable_and_maps_task_fields() {
+        let conn = crate::db::open_db(std::path::Path::new(":memory:")).unwrap();
+        conn.execute(
+            "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
+                                ownership, status, synced_at, account_id)
+             VALUES ('o/r#1','o','r',1,'t','u','open','assigned','todo',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (account_id, issue_key, session_id, session_agent,
+                                   session_at, is_active)
+             VALUES (1,'o/r#1','sess-1','claude',1000,1)",
+            [],
+        )
+        .unwrap();
+        let sql = super::active_sessions_sql();
+        let mut stmt = conn
+            .prepare(&sql)
+            .unwrap_or_else(|e| panic!("生产 SQL 必须可prepare：{e}"));
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(3)?)))
+            .unwrap();
+        let got: Vec<(String, i64)> = rows.map(|r| r.unwrap()).collect();
+        assert_eq!(got.len(), 1, "应取回 1 行活跃会话");
+        assert_eq!(got[0].0, "o/r#1", "应取回 issue_key（验证列位置映射）");
+        assert_eq!(got[0].1, 1, "应取回 number（验证列位置映射 + 类型）");
+    }
+
+    /// #429 回归：`tasks.` 前缀在被别名成 `t` 后**必须不可用**。
+    /// 锁住「表别名会让原表名对 SQLite 失效」这一事实 —— 即 #429 的成因本身。
+    #[test]
+    fn wrong_prefix_alias_is_rejected_by_sqlite() {
+        let conn = crate::db::open_db(std::path::Path::new(":memory:")).unwrap();
+        let bad = format!(
+            "SELECT {} FROM tasks t WHERE t.issue_key = 'o/r#1'",
+            super::TASK_SELECT_COLUMNS
+                .split(", ")
+                .map(|c| format!("tasks.{}", c))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        assert!(
+            conn.prepare(&bad).is_err(),
+            "表被别名成 t 后，tasks. 前缀必须不可用（SQLite 报错）—— 这正是 #429 的成因"
+        );
+    }
     use rusqlite::Connection;
 
     /// #427：把待测 SQL 拼在**与生产完全一致**的 `sessions` 建表语句之后。
