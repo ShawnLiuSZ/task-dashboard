@@ -6,6 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.6.12（2026-10-12）— 全量隐藏 Bug 审查与修复（#438）**
+
+  - 一次覆盖 Rust 后端 / React 前端 / Python MCP 的**结构化静态审查**，按功能模块排查隐藏逻辑缺陷（修复此前报障式响应留下的同类隐患）。
+  - **聚合视图首屏范围错误**：挂载时 `settings=null` ⇒ `accountFilter=null`，后端按激活账号返回单账号数据却被伪装成聚合视图，最长约 20s（focus/轮询）才纠正。修复：`settings` 到达后补一次 `load()`。
+  - **自定义列分组永不命中**（潜伏）：原按 `task.status`（四态）匹配不透明串 `colKey`，取值域不同恒 false ⇒ 命名列恒空。改按 `task.projectStatus` 命中列 `matchRules`；`parseMatchRules` 抽到共享模块防双实现漂移。
+  - **sync stale 竞态**：stale 标记原按 `account_id` 全量，会把同步期间并发按需拉取的新 issue 误标 closed/done。收窄为「同步前已存在」的 key 集合。
+  - **Python MCP 漏写 `created_at`**：`TASK_INSERT_COLS` 缺该列 ⇒ 经 Python 拉的 issue 落库恒为 0，与 Rust 双实现漂移（`check-mcp-columns.py` 不交叉比对写路径，CI 兜不住）。已补列+ 填值 + 新增回归测试。
+  - 低危：`syncHint`/`SessionsPanel` 跨账号同 issueKey 键统一为 `taskIdentity`、切账号两次写解耦、注释更正。
+  - **验证**：`cargo test` **194+27 passed**、`clippy --all-targets -D warnings` 0 警告、`fmt` 干净、`vitest` **282 passed**、`tsc`/`lint`/`prettier`/`i18n`(401) 全绿、`server.py` **59 passed**、`check-mcp-columns` **29 列**、`check-doc-links`、`scripts` 单测全绿。
+  - 详见 [`issue-438-hidden-bug-audit.md`](./issue-438-hidden-bug-audit.md)
+
 - **v0.6.11（2026-10-12）— 卡片显示 PR 合并状态，PR 行移到「分配人」下方（#435）**
 
   - **PR 行位置**：从底部 meta 行（与「新评论」挤在一行）移到**「分配人」正下方独立成行**，照抄 session 行（#197）的现成范式。

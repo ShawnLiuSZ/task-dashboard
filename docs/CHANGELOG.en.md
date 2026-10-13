@@ -2,6 +2,17 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.6.12 (2026-10-12) — Full hidden-bug audit and fixes (#438)**
+
+  - A structured static audit across the Rust backend, React frontend, and Python MCP, hunting for hidden logic defects by feature module (closing gaps left by the previous reactive, report-driven fixes).
+  - **First-screen scope error in aggregate view**: at mount `settings` is `null` ⇒ `accountFilter` is `null`, so the backend returns single-account data disguised as the aggregate view; only corrected after ~20s (focus/poll). Fixed by issuing one extra `load()` once settings arrive.
+  - **Custom-column grouping never matched** (latent): it matched four-state `task.status` against the opaque `colKey`, so the comparison was always false and named columns stayed empty. Now matches `task.projectStatus` against each column's `matchRules`; `parseMatchRules` extracted to a shared module to prevent dual-implementation drift.
+  - **sync stale race**: stale was flagged for the whole `account_id`, so an issue inserted concurrently by on-demand pull during sync could be wrongly forced to closed/done. Narrowed to the set of keys that already existed before the sync.
+  - **Python MCP omitted `created_at`**: missing from `TASK_INSERT_COLS` ⇒ issues pulled via Python landed with `0`, drifting from the Rust implementation (`check-mcp-columns.py` doesn't cross-check the write path, so CI missed it). Column + value added, with a regression test.
+  - Low severity: `syncHint`/`SessionsPanel` keys unified to `taskIdentity` for cross-account duplicate issueKeys, account-switch writes decoupled, comments corrected.
+  - **Verification**: `cargo test` **194+27 passed**, `clippy --all-targets -D warnings` clean, `fmt` clean, `vitest` **282 passed**, `tsc`/`lint`/`prettier`/`i18n`(401) green, `server.py` **59 passed**, `check-mcp-columns` **29 columns**, `check-doc-links`, `scripts` unit tests all green.
+  - See [`issue-438-hidden-bug-audit.md`](./issue-438-hidden-bug-audit.md) for details.
+
 - **v0.6.11 (2026-10-12) — Show PR merge status on cards; move the PR line below the assignee (#435)**
 
   - **PR line position**: moved out of the bottom meta row (where it shared a line with "new comments") to its **own row directly below the assignee**, following the existing session-row (#197) pattern.

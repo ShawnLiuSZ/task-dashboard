@@ -3,6 +3,7 @@ import { api, reportError } from '../api';
 import { useI18n, type LangMode } from '../i18n';
 import type { Account, AccountColumn, BoardMode, Project, Settings } from '../types';
 import { themeManager, type ThemeMode } from '../theme';
+import { parseMatchRules } from '../utils/matchRules';
 import { useEscLayer } from '../utils/useEscLayer';
 
 interface Props {
@@ -17,33 +18,7 @@ const PRESETS = [15, 30, 60, 120, 240];
 function genColKey(): string {
   return `col_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 }
-
-// 解析列的 matchRules
-function parseMatchRules(matchRules: string): string[] {
-  try {
-    const arr = JSON.parse(matchRules);
-    if (Array.isArray(arr)) {
-      return [
-        ...new Set(
-          arr
-            .filter((s): s is string => typeof s === 'string')
-            .map((s) => s.trim())
-            .filter((s) => s.length > 0),
-        ),
-      ];
-    }
-  } catch {
-    // 兼容旧数据：逗号分隔
-  }
-  return [
-    ...new Set(
-      matchRules
-        .split(/[,，]/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0),
-    ),
-  ];
-}
+// parseMatchRules 已抽至 ../utils/matchRules 共享（#438，避免双实现漂移）。
 
 type SettingsTab = 'base' | 'columns' | 'diagnose';
 

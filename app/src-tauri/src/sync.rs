@@ -841,11 +841,18 @@ fn sync_account_inner(
             .unchecked_transaction()
             .map_err(|e| format!("开启同步写入事务失败: {e}"))?;
         // 仅本账号的任务标记陈旧（避免「全部账号视图」下另一账号的同步误标本账号任务为陈旧）。
-        tx.execute(
-            "UPDATE tasks SET stale = 1 WHERE account_id = ?1",
-            [account.id],
-        )
-        .map_err(|e| format!("标记陈旧任务失败: {e}"))?;
+        // #438：仅标记「同步前已存在」（existing_map 快照）的行为陈旧，而非按
+        // account_id 全量。否则同步事务进行期间，并发的按需拉取（on_demand InsertIfAbsent）
+        // 新插入的本账号行会被一并标 stale，又因不在 pending 而不被复位 ⇒ 被下方
+        // 「stale ⇒ closed/done」误判为已完成。existing_map 在本函数入口预加载，
+        // 其 key 即 issue_key（repo#number）。
+        for key in existing_map.keys() {
+            tx.execute(
+                "UPDATE tasks SET stale = 1 WHERE account_id = ?1 AND issue_key = ?2",
+                rusqlite::params![account.id, key.as_str()],
+            )
+            .map_err(|e| format!("标记陈旧任务失败: {e}"))?;
+        }
         for row in &pending {
             // v0.4.1 (#250)：写入走 db::write_task（与「按需拉取单个 issue」共用同一份
             // 列清单与参数绑定）。同步路径是权威数据 → Upsert（冲突则覆盖）。

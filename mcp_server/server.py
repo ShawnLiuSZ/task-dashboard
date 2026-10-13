@@ -388,6 +388,9 @@ TASK_INSERT_COLS = (
     "status", "project_status", "assignees", "labels", "done_at", "mentioned",
     "comments_count", "latest_comment_url", "pr_number", "pr_url", "branch",
     "candidate_done", "stale", "updated_at", "synced_at", "account_id", "author",
+    # #438：与 Rust db::TASK_INSERT_HEAD 对齐补 created_at（此前漏写 ⇒ 经 Python MCP
+    # 按需拉取的 issue 落默认值 0，与 Rust on_demand::build_task_row 双实现漂移）。
+    "created_at",
 )
 # `ON CONFLICT` 目标列（tasks 的唯一键）；缺失即说明本地库过旧。
 TASK_CONFLICT_COLS = ("repo", "number", "account_id")
@@ -612,6 +615,9 @@ def _row_from_issue(payload, repo, key, account, now):
         "candidate_done": 0,
         "stale": 0,
         "updated_at": _iso_to_secs(payload.get("updated_at")),
+        # #438：与 Rust on_demand::build_task_row 对齐写 created_at
+        # （_iso_to_secs 对缺失/None 安全返回 0）。
+        "created_at": _iso_to_secs(payload.get("created_at")),
         "synced_at": now,
         "account_id": account["id"],
     }

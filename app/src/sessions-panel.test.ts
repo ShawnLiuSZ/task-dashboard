@@ -53,7 +53,7 @@ describe('SessionsPanel 多选 UI 接线（#391）', () => {
       )?.[0] ?? '';
     expect(fn, '应能取到 toggleSelectAll 函数体').not.toBe('');
     expect(fn).toMatch(
-      /prev\.size === sessions\.length \? new Set\(\) : new Set\(sessions\.map\(\(s\) => s\.issueKey\)\)/,
+      /prev\.size === sessions\.length \? new Set\(\) : new Set\(sessions\.map\(\(s\) => taskIdentity\(s\)\)\)/,
     );
   });
 
@@ -73,7 +73,11 @@ describe('SessionsPanel 多选 UI 接线（#391）', () => {
         /const handleClearMulti = useCallback\(async \(\) => \{[\s\S]*?\n {2}\}, \[[^\]]*\]\);/,
       )?.[0] ?? '';
     expect(fn, '应能取到 handleClearMulti 函数体').not.toBe('');
-    expect(fn).toMatch(/const keys = \[\.\.\.selectedKeys\]/);
+    // #438：selectedKeys 存 taskIdentity，但传给后端的必须是 issue_key
+    // （后端 clear_sessions 按 issue_key 定位）⇒ 删除前映射并去重。
+    expect(fn).toMatch(
+      /sessions\.filter\(\(s\) => selectedKeys\.has\(taskIdentity\(s\)\)\)\.map\(\(s\) => s\.issueKey\)/,
+    );
     expect(fn).toMatch(/await api\.clearSessions\(keys\)/);
   });
 
@@ -94,15 +98,15 @@ describe('SessionsPanel 多选 UI 接线（#391）', () => {
   it('选择模式下卡片可点切换选中，并渲染受控复选框', () => {
     // 卡片整卡 onClick 调 toggleSelect（仅 selectMode）
     expect(sessionsRaw).toMatch(
-      /onClick=\{\s*selectMode \? \(\) => toggleSelect\(task\.issueKey\) : undefined\s*\}/,
+      /onClick=\{\s*selectMode \? \(\) => toggleSelect\(taskIdentity\(task\)\) : undefined\s*\}/,
     );
     // selectable / selected class
     expect(sessionsRaw).toMatch(/session-card\$\{selectMode \? ' selectable' : ''\}/);
     expect(sessionsRaw).toMatch(/isSelected \? ' selected' : ''/);
     // 复选框受控
     expect(sessionsRaw).toMatch(/type="checkbox"/);
-    expect(sessionsRaw).toMatch(/checked=\{selectedKeys\.has\(task\.issueKey\)\}/);
-    expect(sessionsRaw).toMatch(/onChange=\{\(\) => toggleSelect\(task\.issueKey\)\}/);
+    expect(sessionsRaw).toMatch(/checked=\{selectedKeys\.has\(taskIdentity\(task\)\)\}/);
+    expect(sessionsRaw).toMatch(/onChange=\{\(\) => toggleSelect\(taskIdentity\(task\)\)\}/);
   });
 
   it('卡片内功能按钮（打开/复制）阻止事件冒泡，避免误触卡片选中切换', () => {

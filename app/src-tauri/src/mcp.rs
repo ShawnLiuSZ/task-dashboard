@@ -995,7 +995,7 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
 
-    /// 建一张覆盖 SELECT_COLS 全部 26 列的最小 tasks 表（内存库）。
+    /// 建一张覆盖 SELECT_COLS 全部 29 列的最小 tasks 表（内存库）。
     fn test_conn() -> Connection {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch(

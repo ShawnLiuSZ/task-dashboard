@@ -2032,7 +2032,8 @@ pub struct TaskUpsert {
 ///
 /// 两种写入模式共用本常量做前缀，**列清单只有这一份**——新增/改名列时不可能只改一边。
 /// 占位符编号：`?1`–`?19` 为行内容，`?20` 为 `updated_at`，`?21` 为 `synced_at`(now)，
-/// `?22` 为 `account_id`，`?23` 为 `author`，`?24`/`?25` 为 #278 的父子关系两列。
+/// `?22` 为 `account_id`，`?23` 为 `author`，`?24`/`?25` 为 #278 的父子关系两列，
+/// `?26` 为 #280 的 `created_at`，`?27` 为 #435 的 `pr_state`。
 const TASK_INSERT_HEAD: &str = "INSERT INTO tasks
    (issue_key, owner, repo, number, title, url, issue_state, ownership,
     status, project_status, assignees, labels, done_at, mentioned, comments_count,

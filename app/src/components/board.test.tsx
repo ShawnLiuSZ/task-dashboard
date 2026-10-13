@@ -86,12 +86,14 @@ describe('resolveBoardView (#159)', () => {
   });
 });
 
-describe('groupTasksByCustomColumns (#159)', () => {
-  it('status 命中列 colKey 的任务归入对应组，未命中进 unmatched', () => {
+describe('groupTasksByCustomColumns (#438)', () => {
+  it('projectStatus 命中列 matchRules 的任务归入对应组，未命中进 unmatched', () => {
+    // #438：分组依据是 projectStatus 命中列的 matchRules（project status 原文），
+    // 而非 task.status（四态）。cols[0].matchRules=["待办"]、cols[1].matchRules=["进行中"]。
     const tasks = [
-      mkTask({ issueKey: 'a', status: 'Todo' as Task['status'] }),
-      mkTask({ issueKey: 'b', status: 'In Progress' as Task['status'] }),
-      mkTask({ issueKey: 'c', status: 'done' }),
+      mkTask({ issueKey: 'a', projectStatus: '待办' }),
+      mkTask({ issueKey: 'b', projectStatus: '进行中' }),
+      mkTask({ issueKey: 'c', projectStatus: 'Done' }),
     ];
     const { groups, unmatched } = groupTasksByCustomColumns(tasks, cols);
     expect(groups.get('Todo')).toEqual([tasks[0]]);
