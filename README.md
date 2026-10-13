@@ -174,7 +174,7 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — 设计要点（多源拉取、归属三分、四态维护、PR 关联）与 GitHub Actions 在线打包说明
 
-- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.6.11）
+- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.6.12）
 
 - [`docs/issue-327-p0-functional-defects.md`](./docs/issue-327-p0-functional-defects.md) — **code review P0 批次**：About 小窗「确定」按钮因 capability 未覆盖 `about` 窗口 + `core:window:default` 不含 `allow-close` 而静默失效；设置面板「界面语言」切换器被误复制成重复的主题选择器；记事重复内容暴露原始 `UNIQUE constraint` 报错；`projects.number_of_items` 误取项目编号（而非 `items.totalCount`），使多 Project 时写错写回目标
 
@@ -336,6 +336,7 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 - [`docs/issue-258-sync-warn-banner.md`](./docs/issue-258-sync-warn-banner.md) — **部分失败仍显示绿色成功 banner**：`warning` 非空时改为琥珀色警告 banner，与成功 banner 互斥展示
 - [`docs/issue-276-auto-update-check.md`](./docs/issue-276-auto-update-check.md) — **每日自动检查更新 + 「仅显示我创建」筛选**：免手动点「检查更新」；并区分「自己创建的」与「分配给自己的」issue
 - [`docs/v0.3.16-multi-account.md`](./docs/v0.3.16-multi-account.md) — **v0.3.16 多 GitHub 账号支持设计文档**：在 v0.3.15 PAT 认证基础上扩展为「账号池」，任务按 `account_id` 归属，支持单账号 / 全部账号两种视图
+- [`docs/issue-438-hidden-bug-audit.md`](./docs/issue-438-hidden-bug-audit.md) — **全量隐藏 Bug 审查与修复**：聚合视图首屏范围错误、自定义列分组永不命中、sync stale 并发竞态、Python MCP 漏写 `created_at`（双实现漂移）等中危 4 项 + 低危 6 项
 
 ## 协议（License）
 
@@ -343,5 +344,5 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 软件按「原样」提供，不作任何明示或默示的保证；作者与版权持有者不对使用本软件所引发的任何主张、损害或责任负责。详见 `LICENSE` 中的免责条款。
 
-> 版本 v0.6.11 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-29
+> 版本 v0.6.12 · 本地跨平台桌面 App（Windows / macOS / Linux），2026-09-29
 
