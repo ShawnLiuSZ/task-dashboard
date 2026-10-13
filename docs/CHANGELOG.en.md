@@ -2,26 +2,35 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **v0.6.13 (2026-10-13) — Fix stale candidates wrongly marked done (#438)**
+- **v0.7.0 (2026-10-13) — Full hidden-bug audit and fixes (#438): 4 medium + 6 low severity, all resolved**
 
-  - **Root cause**: the 5 search sources (`assignee:`/`author:`/`mentions:`/`commenter:`/`involves:`) cover "the issue relates to me in some way" and return open issues only, so "absent from the results" has **two causes**: genuinely closed, **or** still open but no longer assigned to me and with no other relation. The old code unconditionally wrote `issue_state='closed', status='done'` for every stale row ⇒ the latter was mislabelled as completed.
+  A **structured full static audit** spanning the Rust backend, React frontend, and Python MCP — closing same-class latent defects proactively instead of waiting for users to hit them. Findings: **0 high severity** (no data-corruption/security defects) / 4 medium / 6 low — **all fixed**.
+
+  **Medium (4)**
+
+  - **First-screen scope error in aggregate view**: at mount `settings` is `null` ⇒ `accountFilter` is `null`, so the backend returns **single-account** data disguised as the aggregate view; only corrected after ~20s (focus/poll). Fixed by issuing one extra `load()` once settings arrive (`load` reads `filterRef.current`, whose effect runs before the settings effect, so it picks up the new `accountFilter`).
+  - **Custom-column grouping never matched** (latent hard bug): it matched four-state `task.status` against the opaque `colKey` (`col_xxx`), so the comparison was **always false** and named columns stayed empty. Now matches `task.projectStatus` against each column's `matchRules`; `parseMatchRules` extracted to a shared `utils/matchRules.ts` module used by both `SettingsPanel` and `Board` to prevent dual-implementation drift.
+  - **sync stale race**: stale was flagged for the whole `account_id`, so an issue inserted concurrently by on-demand pull during sync could be wrongly forced to closed/done. Narrowed to the set of keys that already existed before the sync (`existing_map` snapshot).
+  - **Python MCP omitted `created_at`**: missing from `TASK_INSERT_COLS` ⇒ issues pulled via Python MCP landed with `0`, drifting from Rust `build_task_row`. ⚠️ `check-mcp-columns.py` only validates the read path (`ENSURE_COLUMNS ⊇ SELECT_COLS`) and **does not cross-check the write path**, so CI could not catch it.
+
+  **Stale-candidate re-verification (highlight of this release)**
+
+  - **Root cause**: the 5 search sources (`assignee:`/`author:`/`mentions:`/`commenter:`/`involves:`) cover "the issue relates to me in some way", and Search API returns open issues only — so "absent from the results" has **two causes**: genuinely closed, **or** still open but no longer assigned to me and with no other relation. The old code unconditionally wrote `issue_state='closed', status='done'` for every stale row ⇒ the latter was mislabelled as completed.
   - **Fix (two phases)**: ① batch-mark `candidate_done=1` (**soft-fold** semantics — the card stays visible with a "pending confirmation" tag); ② confirm each candidate via the single-issue REST endpoint (reusing #250's `fetch_issue`) — only a confirmed `closed` writes `closed/done`; a still-`open` issue **only has the candidate flag cleared**, keeping its real state and local manual status; deleted/unreachable issues are **never guessed** and stay folded for the next sync to re-evaluate.
-  - **Product semantics unchanged**: "remote closed means done, remote is authoritative over local manual state" — genuinely closed issues still auto-move to Completed, and `done_at` is still protected by `CASE WHEN done_at = 0`. The only change is that an **open issue that merely lost its assignee is no longer mislabelled**; it returns to its original board column with its original state.
-  - **Cost is bounded**: the extra API calls happen only on stale/candidate rows, against the **core REST quota** (5000/h) rather than Search API's stricter 30/min.
-  - **Testability**: `GitHubClient` hardcodes `api.github.com` (no injectable test endpoint) and the project forbids new dependencies ⇒ the pure decision is extracted into `candidate_decision()` / `remote_state_of()` for offline unit tests, so production and tests share one single source of truth for the predicate.
-  - **Tests**: 3 new cases (lib 194 → **197**), including **real-SQLite integration** assertions (the decision and the SQL can drift apart too). **Reverse verification 2/2 caught**: reverting `Open` to unconditional `closed/done`, and mis-mapping `Ok(None)` to `Unreachable`, are both caught.
-  - **Verification**: `cargo fmt --check` and `clippy --all-targets -D warnings` clean, `cargo test` **197 + 27 passed**.
-  - See [`issue-438-hidden-bug-audit.md`](./issue-438-hidden-bug-audit.md) for details.
+  - **Product semantics unchanged**: "remote closed means done, remote is authoritative over local manual state" — genuinely closed issues still auto-move to Completed, and `done_at` is still protected by `CASE WHEN done_at = 0`. The **only behaviour change**: an open issue that merely lost its assignee is no longer mislabelled; it returns to its original board column with its original state.
+  - **Cost is bounded**: the extra API calls happen only on stale/candidate rows, against the **core REST quota** (5000/h) rather than Search API's stricter 30/min. `fetch_issue` is reused rather than reviving the deleted `fetch_state` (#137/#212), avoiding dead-code rot.
+  - **Testability**: `GitHubClient` hardcodes `api.github.com` (no injectable test endpoint) and the project forbids new dependencies ⇒ the pure decision is extracted into `candidate_decision()` / `remote_state_of()` for offline unit tests, so **production and tests share one single source of truth**.
 
-- **v0.6.12 (2026-10-12) — Full hidden-bug audit and fixes (#438)**
+  **Low severity (6)**
+  - `syncHint` / `SessionsPanel` keys unified to `taskIdentity` for cross-account duplicate issueKeys (SessionsPanel maps back to `issue_key` before batch deletion — the backend still locates by `issue_key`).
+  - `handleSwitchAccount` writes decoupled (a `setViewMode` failure no longer blocks the subsequent refresh).
+  - Two comment corrections (account semantics; `SELECT_COLS` column count and placeholders).
 
-  - A structured static audit across the Rust backend, React frontend, and Python MCP, hunting for hidden logic defects by feature module (closing gaps left by the previous reactive, report-driven fixes).
-  - **First-screen scope error in aggregate view**: at mount `settings` is `null` ⇒ `accountFilter` is `null`, so the backend returns single-account data disguised as the aggregate view; only corrected after ~20s (focus/poll). Fixed by issuing one extra `load()` once settings arrive.
-  - **Custom-column grouping never matched** (latent): it matched four-state `task.status` against the opaque `colKey`, so the comparison was always false and named columns stayed empty. Now matches `task.projectStatus` against each column's `matchRules`; `parseMatchRules` extracted to a shared module to prevent dual-implementation drift.
-  - **sync stale race**: stale was flagged for the whole `account_id`, so an issue inserted concurrently by on-demand pull during sync could be wrongly forced to closed/done. Narrowed to the set of keys that already existed before the sync.
-  - **Python MCP omitted `created_at`**: missing from `TASK_INSERT_COLS` ⇒ issues pulled via Python landed with `0`, drifting from the Rust implementation (`check-mcp-columns.py` doesn't cross-check the write path, so CI missed it). Column + value added, with a regression test.
-  - Low severity: `syncHint`/`SessionsPanel` keys unified to `taskIdentity` for cross-account duplicate issueKeys, account-switch writes decoupled, comments corrected.
-  - **Verification**: `cargo test` **194+27 passed**, `clippy --all-targets -D warnings` clean, `fmt` clean, `vitest` **282 passed**, `tsc`/`lint`/`prettier`/`i18n`(401) green, `server.py` **59 passed**, `check-mcp-columns` **29 columns**, `check-doc-links`, `scripts` unit tests all green.
+  **Verification (all green)**
+  - `cargo test` **197 + 27 passed** · `clippy --all-targets -D warnings` 0 warnings · `fmt` clean
+  - `vitest` **282 passed** · `tsc` / `lint` 0 warnings / `prettier` / `i18n`(401) all green · `npm run build`
+  - `server.py` **59 passed** · `check-mcp-columns` **29 columns** · `check-doc-links` **215 files** · `check-versions` · `scripts` unit tests **117 passed**
+  - **Reverse verification 5/5 caught**: `snapshotTasks` key reverted to `issueKey`, `TASK_INSERT_COLS` dropping `created_at`, custom-column grouping reverted to `status` matching `colKey`, `RemoteState::Open` reverted to unconditional `closed/done`, and `Ok(None)` mis-mapped to `Unreachable`.
   - See [`issue-438-hidden-bug-audit.md`](./issue-438-hidden-bug-audit.md) for details.
 
 - **v0.6.11 (2026-10-12) — Show PR merge status on cards; move the PR line below the assignee (#435)**
