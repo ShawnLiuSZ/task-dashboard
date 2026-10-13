@@ -385,6 +385,59 @@ fn sync_account(
     result
 }
 
+/// #438：stale 候选行的**回源确认决策** —— 给定一次单 issue REST 回源结果，
+/// 决定该行落成什么状态。抽成独立函数以便**离线单测**（`GitHubClient` 硬编码
+/// `api.github.com`、无法注入测试端点，故网络调用留在调用方薄层）。
+///
+/// 语义（`design-and-release.md`：远程已关闭即视为做完，以远程为权威覆盖本地手动态）：
+/// - [`RemoteState::Closed`] → 写 `closed` + `done`（真关闭进已完成列）；
+/// - [`RemoteState::Open`] → **仅解除候选**，保留真实 `issue_state` / 本地手动态
+///   （#438 修复核心：此前无条件写 closed/done，会把「仅被移出 assignee、仍 open」
+///   的任务误标成已完成）；
+/// - [`RemoteState::Missing`] / [`RemoteState::Unreachable`] → **不猜**，保持候选软折叠，
+///   等下一轮同步复判（按 closed 会误标、按 open 会漏标）。
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum RemoteState {
+    Closed,
+    Open,
+    /// 远端已无此 issue（404 /被删）。
+    Missing,
+    /// 请求失败（网络 / 401 / 限流耗尽）。
+    Unreachable,
+}
+
+/// 候选行 + 其回源结果，产出应执行的 UPDATE 参数：
+/// `(candidate_done, closed_done, done_at)`。
+///
+/// - `RemoteState::Closed` → `(1, true, now)`：写 `closed` + `done`（真关闭进已完成列），
+///   `candidate_done` 保持 1（软折叠仍显示「待确认」）。
+/// - `RemoteState::Open` → `(0, false, 0)`：**仅解除候选**，保留真实 `issue_state` /
+///   本地手动态（#438 修复核心）。
+/// - `Missing` / `Unreachable` → `(1, false, 0)`：**不猜**，保持候选软折叠等下一轮复判。
+fn candidate_decision(remote: RemoteState, now: i64) -> (bool, bool, i64) {
+    match remote {
+        // #335：字面量须小写，与 `normalize_issue_state` 落库口径一致。
+        RemoteState::Closed => (true, true, now),
+        RemoteState::Open => (false, false, 0),
+        RemoteState::Missing | RemoteState::Unreachable => (true, false, 0),
+    }
+}
+
+/// 把 [`RemoteState`] 从 `fetch_issue` 的返回值映射出来（`Ok(None)` ⇒Missing）。
+fn remote_state_of(res: &Result<Option<crate::github::RawTask>, String>) -> RemoteState {
+    match res {
+        Ok(None) => RemoteState::Missing,
+        Ok(Some(t)) => {
+            if crate::common::is_closed_state(&t.state) {
+                RemoteState::Closed
+            } else {
+                RemoteState::Open
+            }
+        }
+        Err(_) => RemoteState::Unreachable,
+    }
+}
+
 fn sync_account_inner(
     conn: &Connection,
     account: &crate::db::Account,
@@ -868,10 +921,11 @@ fn sync_account_inner(
             .map_err(|e| format!("提交同步写入事务失败: {e}"))?;
     }
 
-    // v0.3.49+: 处理本账号下的陈旧任务：搜索未返回的任务必然已不再 open。
-    // GitHub Search API 只返回 open issue，因此 stale = 搜索没返回 = 已关闭或 assignee 变更。
-    // 优化：直接批量标记 candidate_done，省掉逐条 fetch_state 的 API 调用。
-    let mut candidate_done = 0usize;
+    // #438：处理本账号下的陈旧任务。搜索源只覆盖「与我相关」（assignee/author/
+    // mentions/commenter/involves）且默认只返回 open，故「不在结果里」有两种成因：
+    // 已关闭，**或** 已不再与我相关（被移出 assignee 且无其他关联）——**不能仅凭
+    // stale 判定为已关闭**。搜索源完整时走下方两阶段确认；不完整则只解除 stale。
+    let candidate_done;
     let removed = 0usize;
     // v0.3.29：任一搜索源失败说明同步数据源不完整，stale 判定不可信。
     // 此时仅解除 stale 保留本地记录，绝不删（避免误删真实关联任务）。
@@ -887,21 +941,107 @@ fn sync_account_inner(
         if n > 0 {
             crate::tlog!("[sync] 搜索源不完整，保留 {} 个任务不过删", n);
         }
+        // 搜索源不完整 ⇒ 不做任何完成判定（stale 不可信），候选计数为 0。
+        candidate_done = 0;
     } else {
-        // 搜索源完整：stale 任务 = 已关闭或 assignee 变更，直接标记 candidate_done
+        // 搜索源完整：stale 任务 = 已关闭 **或** 已不再与我相关（被移出 assignee 且
+        // 无 author/mention/comment/involves 等其他关联）。GitHub Search API 只返回
+        // open issue，故「不在结果里」本身**无法**区分这两种成因。
+        //
+        // #438：原实现对全部 stale 行无条件写 `issue_state='closed', status='done'`，
+        // 于是「仅被移出 assignee、issue 仍 open」的任务被误标成已完成。
+        // 改为两阶段：① 批量标 `candidate_done=1`（软折叠，TaskCard 渲染「待确认」）；
+        // ② 逐条回源（单 issue REST）确认 —— 真 closed 才写 closed/done，
+        // 仍 open 则仅解除 `candidate_done`，保留其真实 `issue_state` / 本地手动态。
+        //
+        // 成本可控：API 调用只发生在 stale 行上（通常个位数~几十），且走**核心 REST 配额**
+        // （5000/h）而非 Search API 的 30/min 严限（#250 的 `fetch_issue` 同款端点）。
+        // 确认失败（Err：网络/401/限流）**不猜**：按 closed 处理会误标、保持 open 会漏标，
+        // 故一律保留 `candidate_done` 软折叠，等下一轮同步复判。
+        //
+        // ⚠️ 「真关闭仍自动进已完成列」是产品语义（`design-and-release.md`：
+        // 远程已关闭即视为做完，以远程为权威覆盖本地手动态），故保持不变。
         let n = conn
             .execute(
-                // #335：此处字面量必须保持小写——与 `normalize_issue_state` 的落库口径一致，
-                // 否则每列又会长出第二套大小写（本次修复的原始成因）。
-                "UPDATE tasks SET candidate_done = 1, issue_state = 'closed', status = 'done', stale = 0,
-                 done_at = CASE WHEN done_at = 0 THEN ?2 ELSE done_at END
+                "UPDATE tasks SET candidate_done = 1, stale = 0
                  WHERE account_id = ?1 AND stale = 1",
-                rusqlite::params![account.id, now],
+                [account.id],
             )
-            .map_err(|e| format!("标记候选已完成失败: {}", e))?;
+            .map_err(|e| format!("标记候选待确认失败: {}", e))?;
         candidate_done = n;
+
+        // 取出本账号全部候选行（`candidate_done=1`），逐条回源确认。
+        // 用 `candidate_done=1` 而非 stale 作筛选条件：既涵盖本轮新标的，
+        // 也覆盖历史遗留的候选行（下一轮同步一并复判）。
+        let candidates: Vec<(String, String, i64)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT issue_key, repo, number FROM tasks
+                     WHERE account_id = ?1 AND candidate_done = 1",
+                )
+                .map_err(|e| format!("读取候选任务失败: {}", e))?;
+            let rows = stmt
+                .query_map([account.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .map_err(|e| format!("读取候选任务失败: {}", e))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("读取候选任务失败: {}", e))?
+        };
+
+        let (mut still_open, mut unconfirmed) = (0usize, 0usize);
+        for (issue_key, repo, number) in candidates {
+            // REST 端点要求 `owner/repo`；本仓库 owner 存 `tasks.owner`（可能空串，
+            // 此时退回账号 login —— 个人命名空间仓库的org 就是空串，见 #250）。
+            let owner: String = conn
+                .query_row(
+                    "SELECT owner FROM tasks WHERE issue_key = ?1 LIMIT 1",
+                    [&issue_key],
+                    |r| r.get(0),
+                )
+                .unwrap_or_default();
+            let api_owner = if owner.trim().is_empty() {
+                account.login.clone()
+            } else {
+                owner
+            };
+            let res = client.fetch_issue(&api_owner, &repo, number);
+            if let Err(e) = &res {
+                crate::tlog!("[sync] 候选回源确认失败（保留待确认）: {issue_key} | {e}");
+            }
+            let decision = candidate_decision(remote_state_of(&res), now);
+            match decision {
+                // 真closed：写 closed/done，`candidate_done` 保持 1（软折叠仍显示「待确认」）。
+                // #335：字面量须小写，与 `normalize_issue_state` 落库口径一致。
+                (true, true, _) => {
+                    conn.execute(
+                        "UPDATE tasks SET candidate_done = 1, issue_state = 'closed', status = 'done', stale = 0,
+                         done_at = CASE WHEN done_at = 0 THEN ?2 ELSE done_at END
+                         WHERE issue_key = ?1",
+                        rusqlite::params![issue_key, decision.2],
+                    )
+                    .map_err(|e| format!("标记已关闭失败: {}", e))?;
+                }
+                // 仍 open（被移出 assignee 等）⇒ **解除候选**，保留真实状态与手动态。
+                (false, _, _) => {
+                    conn.execute(
+                        "UPDATE tasks SET candidate_done = 0, stale = 0 WHERE issue_key = ?1",
+                        [&issue_key],
+                    )
+                    .map_err(|e| format!("解除候选标记失败: {}", e))?;
+                    still_open += 1;
+                }
+                // 远端已无此 issue（被删）或确认失败 ⇒ 保持候选软折叠，不臆断状态。
+                (true, false, _) => {
+                    unconfirmed += 1;
+                }
+            }
+        }
         if candidate_done > 0 {
-            crate::tlog!("[sync] 标记 {} 个任务为候选已完成", candidate_done);
+            crate::tlog!(
+                "[sync] 标记 {} 个任务为候选待确认（其中 {} 个回源确认仍 open 已解除、{} 个未确认）",
+                candidate_done,
+                still_open,
+                unconfirmed
+            );
         }
     }
 
@@ -1800,5 +1940,155 @@ mod tests {
         assert_eq!(map_project_status("↩️取消"), Some("done"));
         // 中文分支必须优先于英文解析（「测试」不因归一化丢字）
         assert_eq!(map_project_status("测试"), Some("processed"));
+    }
+
+    // ==========================================================================
+    // #438：stale 候选回源确认（低危-6 的正式修复）
+    // ==========================================================================
+
+    /// 决策函数四态全覆盖 —— 这是「真关闭仍进已完成 / 被移出 assignee 不误标」的语义核心。
+    ///
+    /// **反向验证**：把 `RemoteState::Open` 的返回改成 `(true, true, now)`
+    /// （即旧实现的无条件closed/done）时，本用例必然失败。
+    #[test]
+    fn candidate_decision_covers_all_four_remote_states() {
+        // 真关闭 ⇒ 写 closed/done，且保留 candidate_done=1（软折叠仍显示「待确认」）。
+        assert_eq!(
+            candidate_decision(RemoteState::Closed, 111),
+            (true, true, 111)
+        );
+        // 仍 open（被移出 assignee 等）⇒ **仅解除候选**、不写状态。
+        // 这是 #438 的核心：旧实现此处会写 closed/done ⇒ 误标已完成。
+        assert_eq!(
+            candidate_decision(RemoteState::Open, 111),
+            (false, false, 0)
+        );
+        // 远端已无此 issue / 确认失败 ⇒ **不猜**，保持候选软折叠等下一轮复判。
+        assert_eq!(
+            candidate_decision(RemoteState::Missing, 111),
+            (true, false, 0)
+        );
+        assert_eq!(
+            candidate_decision(RemoteState::Unreachable, 111),
+            (true, false, 0),
+            "网络/401/限流时不得臆断状态"
+        );
+    }
+
+    /// `fetch_issue` 返回值 → `RemoteState` 的映射。
+    ///
+    /// 特别锁定 `Ok(None)`（远端确实没有，与「请求失败」`Err` 语义不同，#250 的契约）
+    /// 必须映射为 `Missing` 而**不是** `Unreachable`，以及 closed 判定大小写不敏感（#335）。
+    #[test]
+    fn remote_state_of_distinguishes_missing_from_unreachable() {
+        // 请求失败 ⇒ Unreachable（不猜，保持候选）
+        assert_eq!(
+            remote_state_of(&Err("boom".to_string())),
+            RemoteState::Unreachable
+        );
+        let mk = |state: &str| {
+            Ok(Some(crate::github::RawTask {
+                number: 1,
+                title: "t".into(),
+                url: String::new(),
+                state: state.into(),
+                updated_at: String::new(),
+                repo: "r".into(),
+                repo_owner: "o".into(),
+                assignees: vec![],
+                labels: vec![],
+                author: String::new(),
+                comments: 0,
+                is_pr: false,
+                created_at: String::new(),
+            }))
+        };
+        assert_eq!(remote_state_of(&mk("closed")), RemoteState::Closed);
+        // GraphQL 口径的大写 CLOSED 同样判为关闭（#335 的大小写不敏感口径）
+        assert_eq!(remote_state_of(&mk("CLOSED")), RemoteState::Closed);
+        assert_eq!(remote_state_of(&mk("open")), RemoteState::Open);
+        assert_eq!(remote_state_of(&mk("OPEN")), RemoteState::Open);
+        // 远端无此 issue ⇒ Missing（**不是** Unreachable）
+        assert_eq!(remote_state_of(&Ok(None)), RemoteState::Missing);
+    }
+
+    /// 落库行为集成验证：把决策应用到真实 SQLite 行，断言两种路径的**最终列状态**。
+    ///
+    /// 覆盖真实 SQL（含 `done_at` 的 `CASE WHEN done_at = 0` 保护），
+    /// 而非只测决策函数返回值 —— 决策与 SQL 之间同样可能失配（#430教训）。
+    #[test]
+    fn candidate_decision_applied_to_db_keeps_open_issue_undone() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tasks (
+                 issue_key TEXT PRIMARY KEY, issue_state TEXT NOT NULL, status TEXT NOT NULL,
+                 candidate_done INTEGER NOT NULL DEFAULT 0, stale INTEGER NOT NULL DEFAULT 0,
+                 done_at INTEGER NOT NULL DEFAULT 0
+               );
+               -- 行a：本地手动态为 doing（未关闭），仅被移出 assignee
+               INSERT INTO tasks (issue_key, issue_state, status, candidate_done, stale)
+                 VALUES ('o/r#1', 'open', 'doing', 1, 0);
+               -- 行b：真已关闭
+               INSERT INTO tasks (issue_key, issue_state, status, candidate_done, stale)
+                 VALUES ('o/r#2', 'closed', 'done', 1, 0);
+               -- 行c：真已关闭但 done_at 已有真实时间戳（不得被覆盖）
+               INSERT INTO tasks (issue_key, issue_state, status, candidate_done, stale, done_at)
+                 VALUES ('o/r#3', 'closed', 'done', 1, 0, 555);",
+        )
+        .unwrap();
+
+        let now = 9000i64;
+        let cases = [
+            ("o/r#1", RemoteState::Open),
+            ("o/r#2", RemoteState::Closed),
+            ("o/r#3", RemoteState::Closed),
+        ];
+        for (key, remote) in cases {
+            let decision = candidate_decision(remote, now);
+            if decision.1 {
+                conn.execute(
+                    "UPDATE tasks SET candidate_done = 1, issue_state = 'closed', status = 'done', stale = 0,
+                     done_at = CASE WHEN done_at = 0 THEN ?2 ELSE done_at END
+                     WHERE issue_key = ?1",
+                    rusqlite::params![key, decision.2],
+                )
+                .unwrap();
+            } else {
+                conn.execute(
+                    "UPDATE tasks SET candidate_done = 0, stale = 0 WHERE issue_key = ?1",
+                    [key],
+                )
+                .unwrap();
+            }
+        }
+
+        let get = |k: &str| -> (String, String, i64, i64) {
+            conn.query_row(
+                "SELECT issue_state, status, candidate_done, done_at FROM tasks WHERE issue_key = ?1",
+                [k],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap()
+        };
+
+        // 仍 open 且仅被移出 assignee ⇒ **不得**被写成 closed/done，
+        // 保留真实状态与本地手动态，候选已解除。（#438 核心断言）
+        assert_eq!(
+            get("o/r#1"),
+            ("open".into(), "doing".into(), 0, 0),
+            "被移出 assignee 的open issue 不得被误标为已完成"
+        );
+        // 真关闭 ⇒ closed/done，且 done_at 补写为 now。
+        assert_eq!(
+            get("o/r#2"),
+            ("closed".into(), "done".into(), 1, now),
+            "真关闭的 issue 应自动进已完成列"
+        );
+        // 真关闭且已有 done_at ⇒ 保护原值不被覆盖。
+        assert_eq!(
+            get("o/r#3"),
+            ("closed".into(), "done".into(), 1, 555),
+            "done_at 应保留首次写入的真实时间戳"
+        );
     }
 }

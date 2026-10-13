@@ -2,6 +2,17 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.6.13 (2026-10-13) — Fix stale candidates wrongly marked done (#438)**
+
+  - **Root cause**: the 5 search sources (`assignee:`/`author:`/`mentions:`/`commenter:`/`involves:`) cover "the issue relates to me in some way" and return open issues only, so "absent from the results" has **two causes**: genuinely closed, **or** still open but no longer assigned to me and with no other relation. The old code unconditionally wrote `issue_state='closed', status='done'` for every stale row ⇒ the latter was mislabelled as completed.
+  - **Fix (two phases)**: ① batch-mark `candidate_done=1` (**soft-fold** semantics — the card stays visible with a "pending confirmation" tag); ② confirm each candidate via the single-issue REST endpoint (reusing #250's `fetch_issue`) — only a confirmed `closed` writes `closed/done`; a still-`open` issue **only has the candidate flag cleared**, keeping its real state and local manual status; deleted/unreachable issues are **never guessed** and stay folded for the next sync to re-evaluate.
+  - **Product semantics unchanged**: "remote closed means done, remote is authoritative over local manual state" — genuinely closed issues still auto-move to Completed, and `done_at` is still protected by `CASE WHEN done_at = 0`. The only change is that an **open issue that merely lost its assignee is no longer mislabelled**; it returns to its original board column with its original state.
+  - **Cost is bounded**: the extra API calls happen only on stale/candidate rows, against the **core REST quota** (5000/h) rather than Search API's stricter 30/min.
+  - **Testability**: `GitHubClient` hardcodes `api.github.com` (no injectable test endpoint) and the project forbids new dependencies ⇒ the pure decision is extracted into `candidate_decision()` / `remote_state_of()` for offline unit tests, so production and tests share one single source of truth for the predicate.
+  - **Tests**: 3 new cases (lib 194 → **197**), including **real-SQLite integration** assertions (the decision and the SQL can drift apart too). **Reverse verification 2/2 caught**: reverting `Open` to unconditional `closed/done`, and mis-mapping `Ok(None)` to `Unreachable`, are both caught.
+  - **Verification**: `cargo fmt --check` and `clippy --all-targets -D warnings` clean, `cargo test` **197 + 27 passed**.
+  - See [`issue-438-hidden-bug-audit.md`](./issue-438-hidden-bug-audit.md) for details.
+
 - **v0.6.12 (2026-10-12) — Full hidden-bug audit and fixes (#438)**
 
   - A structured static audit across the Rust backend, React frontend, and Python MCP, hunting for hidden logic defects by feature module (closing gaps left by the previous reactive, report-driven fixes).

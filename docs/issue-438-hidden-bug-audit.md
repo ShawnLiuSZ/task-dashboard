@@ -18,7 +18,7 @@
 | 严重程度 | 数量 | 说明 |
 |---|---|---|
 | 中危 | 4 | 首屏聚合视图范围错误、自定义列分组永不命中、sync stale 竞态、Python 写路径 `created_at` 漂移 |
-| 低危 | 6 | 跨账号键不一致 ×2、非原子切账号、注释误导 ×2、stale 启发式（提示） |
+| 低危 | 6 | 跨账号键不一致 ×2、非原子切账号、注释误导 ×2、stale 强制 closed/done（已按「真关闭仍自动完成」语义修复） |
 | 高危 | 0 | 未发现数据损坏/安全类硬伤 |
 | 已正确（无回归） | 多项 | 见文末「已核对无回归项」 |
 
@@ -81,7 +81,75 @@
 | 低危-3 | `app/src/App.tsx` `handleSwitchAccount` | `setActiveAccount` 成功但 `setViewMode('single')` 抛错时，不再跳过 `loadSettings`/`loadWith`（解耦，失败只上错误横幅） |
 | 低危-4 | `app/src/App.tsx` 注释 | 更正「无账号返回空列表」的错误描述（后端 `rows_to_tasks` 对 None+active<=0 实际不加 WHERE，返回全部账号任务） |
 | 低危-5 | `mcp.rs` / `db.rs` 注释 | 更正「26 列」→「29 列」；补全 `TASK_INSERT_HEAD` 占位符注释（?26=created_at、?27=pr_state） |
-| 低危-6 | `sync.rs` stale→closed/done | **仅记录为优化提示，本次不改**：issue 仅因被移出 assignee 也会被写 closed/done（既有设计取舍，candidate_done 软隐藏）；如需更精确可保留原 issue_state 仅靠 candidate_done 折叠 |
+| 低危-6 | `sync.rs` stale→closed/done | ✅ **已修**（见下节「低危-6 修复：stale 候选回源确认」）|
+
+## 低危-6 修复：stale 候选回源确认
+
+### 背景 / 动机
+
+审查时列为「仅优化提示」暂缓，因其涉及**产品语义决策**。owner 确认「**真关闭的 issue仍应自动进已完成列**」后实施。
+
+### 根因
+
+5 个搜索源（`assignee:`/`author:`/`mentions:`/`commenter:`/`involves:` + `is:issue`，见 `github.rs:743-772`）
+**均不带 `is:open`**——Search API 默认只返回 open，但覆盖的是「我与该 issue 有某种关联」。
+故「不在搜索结果里」有**两种成因**，stalone 无法区分：
+
+1. issue 真已关闭；
+2. issue 仍 open，只是**被移出 assignee 且无 author/mention/comment/involves 等其他关联**。
+
+原实现对全部 stale 行**无条件**写 `issue_state='closed', status='done'` ⇒ 第 2 类被误标成已完成。
+
+### 设计 / 方案
+
+两阶段（`sync.rs` 搜索源完整分支）：
+
+1. **批量标候选**：`UPDATE tasks SET candidate_done = 1, stale = 0 WHERE account_id=?1 AND stale = 1`
+   （`candidate_done` 是**软折叠**语义——`TaskCard` 渲染 candidate 样式 + 「待确认」标签，卡片仍可见，非删除）。
+2. **逐条回源确认**：对本账号 `candidate_done=1` 的行（含历史遗留候选，一并复判）调
+   `github.rs::fetch_issue`（#250 按需拉取同款单 issue REST 端点），按结果分三路：
+
+| 回源结果 | 落库 | 理由 |
+|---|---|---|
+| `Closed` | 写 `issue_state='closed', status='done'`、`candidate_done` 保持 1 | 真关闭仍自动进已完成列（产品语义，远程权威覆盖本地手动态） |
+| `Open` | **仅** `candidate_done = 0`（解除候选），**不动** `issue_state`/`status` | #438 核心：不再误标已完成，保留真实状态与本地手动态 |
+| `Missing` / `Unreachable` | 保持 `candidate_done = 1` 软折叠，**不臆断状态** | 按 closed 会误标、按 open 会漏标；等下一轮同步复判 |
+
+### 关键权衡
+
+- **为何不复用已删的 `fetch_state`**：该函数随 #137 批量优化被删除（`issue-212`）。复用现有
+  `fetch_issue` 而非复活它，避免死代码回潮；且 `fetch_issue` 明确区分
+  「远端确实没有」(`Ok(None)`) 与「请求失败」(`Err`)，正是决策所需。
+- **API 成本可控**：调用只发生在 stale/候选行上（实测通常个位数~几十），走**核心 REST 配额**
+  （5000/h）而非 Search API 的 30/min 严限。
+- **可测试性**：`GitHubClient` 硬编码 `api.github.com`、无法注入测试端点，且项目硬约束「不引入新依赖」，
+  故把**纯决策**抽为 `candidate_decision()` + `remote_state_of()` 供离线单测，
+  网络调用留在调用方薄层——生产与测试共用同一判据，不存在两处失配（#430 教训）。
+
+### 接口 / 行为变更
+
+- 无 Schema 变更、无新 Tauri command / MCP 工具。
+- **行为变化**：搜索源完整时，「仅被移出 assignee、仍 open」的任务不再被写成已完成，
+  而是**保留原状态**并解除候选软折叠（会重新出现在看板上原列）。
+  真关闭的行为**不变**（仍自动置`done`，`candidate_done` 保持 1、`done_at` 仍受 `CASE WHEN done_at = 0` 保护）。
+- `sync_logs` 的 `candidate_done` 计数语义不变（仍为「本轮新标候选数」）。
+
+### 测试 / 验收
+
+新增 3 例（`sync.rs::tests`，lib 194 → **197**）：
+- `candidate_decision_covers_all_four_remote_states`：四态决策全覆盖。
+- `remote_state_of_distinguishes_missing_from_unreachable`：锁定 `Ok(None) ⇒ Missing`
+  （**不是** Unreachable）；closed 判定大小写不敏感（#335 口径）。
+- `candidate_decision_applied_to_db_keeps_open_issue_undone`：**集成到真实 SQLite** 断言最终列状态
+  （决策函数与 SQL 之间同样可能失配，故不只测返回值）—— 被移出 assignee 的 open issue
+  保持 `open/doing/candidate_done=0`；真关闭为 `closed/done/candidate_done=1/done_at=now`；
+  已有 `done_at` 的行保留原值不被覆盖。
+
+**反向验证（2/2 捕获）**：
+- `RemoteState::Open` 退回 `(true, true, now)`（即旧实现的无条件 closed/done）⇒ 捕获。
+- `Ok(None)` 误映射为 `Unreachable` ⇒ 捕获（`remote_state_of` 用例失败）。
+
+**门禁**：`cargo fmt --check` ✅ · `clippy --all-targets -D warnings` ✅ · `cargo test` **197 + 27** ✅。
 
 ## 已核对无回归项（本次审查确认正确，未改动）
 
@@ -100,7 +168,7 @@
 ## 验证（全绿）
 
 - `cargo build` / `cargo fmt --check` / `cargo clippy --lib -- -D warnings` / `cargo clippy --all-targets -D warnings`：✅
-- `cargo test`：**194 + 27 passed**，0 failed ✅
+- `cargo test`：**194 + 27 passed**，0 failed ✅（低危-6 修复后 lib 增至 **197**）
 - `npx tsc --noEmit` / `npm run lint --max-warnings 0` / `npx prettier --check` / `npm run i18n:check`（401 key）：✅
 - `npx vitest run`：**282 passed**（22 files，含新增跨账号 / 自定义列分组回归）：✅
 - `npm run build`：✅
