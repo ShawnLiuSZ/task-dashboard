@@ -6,6 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.6.13（2026-10-13）— 修复 stale 候选误标：被移出 assignee 的 issue 不再被当成已完成（#438）**
+
+  - **根因**：5 个搜索源（`assignee:`/`author:`/`mentions:`/`commenter:`/`involves:`）覆盖的是「我与该 issue 有某种关联」且默认只返回 open，故「不在搜索结果里」有**两种成因**：真已关闭，**或** 仍 open 但被移出 assignee 且无其他关联。原实现对全部 stale 行**无条件**写 `issue_state='closed', status='done'` ⇒ 后者被误标成已完成。
+  - **修复（两阶段）**：① 批量标`candidate_done=1`（**软折叠**语义，卡片仍可见、带「待确认」标签）；② 对候选行调单 issue REST（复用 #250 的 `fetch_issue`）逐条确认——真 `closed` 才写 `closed/done`；仍 `open`则**仅解除候选**，保留真实状态与本地手动态；远端已删/请求失败**不臆断**，保持候选等下一轮复判。
+  - **产品语义不变**：「远程已关闭即视为做完，以远程为权威覆盖本地手动态」——真关闭仍自动进已完成列，`done_at` 仍受 `CASE WHEN done_at = 0` 保护。唯一变化是**被移出 assignee 的 open issue不再被误标**，会保留原状态回到看板原列。
+  - **成本可控**：API 调用只发生在 stale/候选行上，且走**核心 REST 配额**（5000/h）而非 Search API 的 30/min 严限。
+  - **可测试性**：`GitHubClient` 硬编码 `api.github.com` 无法注入测试端点且项目不引入新依赖 ⇒ 把纯决策抽为 `candidate_decision()` / `remote_state_of()` 供离线单测，生产与测试共用同一判据。
+  - **测试**：新增 3 例（lib 194 → **197**），含**集成到真实 SQLite** 的落库断言（决策与 SQL 之间同样可能失配）。**反向验证 2/2 捕获**：「`Open` 退回无条件 closed/done」与「`Ok(None)` 误映射为 `Unreachable`」均被抓住。
+  - **验证**：`cargo fmt --check` / `clippy --all-targets -D warnings` 干净、`cargo test` **197 + 27 passed**。
+  - 详见 [`issue-438-hidden-bug-audit.md`](./issue-438-hidden-bug-audit.md)
+
 - **v0.6.12（2026-10-12）— 全量隐藏 Bug 审查与修复（#438）**
 
   - 一次覆盖 Rust 后端 / React 前端 / Python MCP 的**结构化静态审查**，按功能模块排查隐藏逻辑缺陷（修复此前报障式响应留下的同类隐患）。
