@@ -6,26 +6,36 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **v0.6.13（2026-10-13）— 修复 stale 候选误标：被移出 assignee 的 issue 不再被当成已完成（#438）**
+- **v0.7.0（2026-10-13）— 全量隐藏 Bug 审查与修复（#438）：4 中危 + 6 低危全部处理完毕**
 
-  - **根因**：5 个搜索源（`assignee:`/`author:`/`mentions:`/`commenter:`/`involves:`）覆盖的是「我与该 issue 有某种关联」且默认只返回 open，故「不在搜索结果里」有**两种成因**：真已关闭，**或** 仍 open 但被移出 assignee 且无其他关联。原实现对全部 stale 行**无条件**写 `issue_state='closed', status='done'` ⇒ 后者被误标成已完成。
-  - **修复（两阶段）**：① 批量标`candidate_done=1`（**软折叠**语义，卡片仍可见、带「待确认」标签）；② 对候选行调单 issue REST（复用 #250 的 `fetch_issue`）逐条确认——真 `closed` 才写 `closed/done`；仍 `open`则**仅解除候选**，保留真实状态与本地手动态；远端已删/请求失败**不臆断**，保持候选等下一轮复判。
-  - **产品语义不变**：「远程已关闭即视为做完，以远程为权威覆盖本地手动态」——真关闭仍自动进已完成列，`done_at` 仍受 `CASE WHEN done_at = 0` 保护。唯一变化是**被移出 assignee 的 open issue不再被误标**，会保留原状态回到看板原列。
-  - **成本可控**：API 调用只发生在 stale/候选行上，且走**核心 REST 配额**（5000/h）而非 Search API 的 30/min 严限。
-  - **可测试性**：`GitHubClient` 硬编码 `api.github.com` 无法注入测试端点且项目不引入新依赖 ⇒ 把纯决策抽为 `candidate_decision()` / `remote_state_of()` 供离线单测，生产与测试共用同一判据。
-  - **测试**：新增 3 例（lib 194 → **197**），含**集成到真实 SQLite** 的落库断言（决策与 SQL 之间同样可能失配）。**反向验证 2/2 捕获**：「`Open` 退回无条件 closed/done」与「`Ok(None)` 误映射为 `Unreachable`」均被抓住。
-  - **验证**：`cargo fmt --check` / `clippy --all-targets -D warnings` 干净、`cargo test` **197 + 27 passed**。
-  - 详见 [`issue-438-hidden-bug-audit.md`](./issue-438-hidden-bug-audit.md)
+  本版是一次覆盖 **Rust 后端 / React 前端 / Python MCP** 的**结构化全量静态审查**的结果——不再等用户撞见才发现同类隐患。
+  审查结论：**高危 0**（无数据损坏/安全类硬伤）/ 中危 4 / 低危 6，**全部已修**。
 
-- **v0.6.12（2026-10-12）— 全量隐藏 Bug 审查与修复（#438）**
+  **中危（4）**
 
-  - 一次覆盖 Rust 后端 / React 前端 / Python MCP 的**结构化静态审查**，按功能模块排查隐藏逻辑缺陷（修复此前报障式响应留下的同类隐患）。
-  - **聚合视图首屏范围错误**：挂载时 `settings=null` ⇒ `accountFilter=null`，后端按激活账号返回单账号数据却被伪装成聚合视图，最长约 20s（focus/轮询）才纠正。修复：`settings` 到达后补一次 `load()`。
-  - **自定义列分组永不命中**（潜伏）：原按 `task.status`（四态）匹配不透明串 `colKey`，取值域不同恒 false ⇒ 命名列恒空。改按 `task.projectStatus` 命中列 `matchRules`；`parseMatchRules` 抽到共享模块防双实现漂移。
-  - **sync stale 竞态**：stale 标记原按 `account_id` 全量，会把同步期间并发按需拉取的新 issue 误标 closed/done。收窄为「同步前已存在」的 key 集合。
-  - **Python MCP 漏写 `created_at`**：`TASK_INSERT_COLS` 缺该列 ⇒ 经 Python 拉的 issue 落库恒为 0，与 Rust 双实现漂移（`check-mcp-columns.py` 不交叉比对写路径，CI 兜不住）。已补列+ 填值 + 新增回归测试。
-  - 低危：`syncHint`/`SessionsPanel` 跨账号同 issueKey 键统一为 `taskIdentity`、切账号两次写解耦、注释更正。
-  - **验证**：`cargo test` **194+27 passed**、`clippy --all-targets -D warnings` 0 警告、`fmt` 干净、`vitest` **282 passed**、`tsc`/`lint`/`prettier`/`i18n`(401) 全绿、`server.py` **59 passed**、`check-mcp-columns` **29 列**、`check-doc-links`、`scripts` 单测全绿。
+  - **聚合视图首屏范围错误**：挂载时 `settings=null` ⇒ `accountFilter=null`，后端按激活账号返回**单账号**数据却被伪装成聚合视图，最长约 20s（focus/轮询）才纠正。修复：`settings` 到达后补一次 `load()`（`load` 读 `filterRef.current`，该 ref 的effect 先于 settings effect 执行，能拿到新 `accountFilter`）。
+  - **自定义列分组永不命中**（潜伏硬 bug）：原按四态 `task.status` 匹配不透明串 `colKey`（`col_xxx`），**取值域不同恒 false** ⇒ 命名列恒空。改按 `task.projectStatus` 命中列 `matchRules`；`parseMatchRules` 抽到共享模块 `utils/matchRules.ts` 供 SettingsPanel + Board 共用，防双实现漂移。
+  - **sync stale 竞态**：stale 标记原按 `account_id` **全量**，会把同步事务期间并发按需拉取（`InsertIfAbsent`）的新 issue 误标 closed/done。收窄为「同步前已存在」的 key 集合（`existing_map` 快照）。
+  - **Python MCP 漏写 `created_at`**：`TASK_INSERT_COLS` 缺该列 ⇒ 经 Python MCP 拉的 issue 落库恒为 0，与 Rust `build_task_row` **双实现漂移**。⚠️ `check-mcp-columns.py` 只校验读路径（`ENSURE_COLUMNS ⊇ SELECT_COLS`）、**不交叉比对写路径** ⇒ CI 兜不住。
+
+  **stale 候选回源确认（本版重点，独立章节）**
+
+  - **根因**：5 个搜索源（`assignee:`/`author:`/`mentions:`/`commenter:`/`involves:`）覆盖的是「我与该 issue 有某种关联」且 Search API 默认只返回 open，故「不在搜索结果里」有**两种成因**：真已关闭，**或** 仍 open 但被移出 assignee 且无其他关联。原实现对全部 stale 行**无条件**写 `issue_state='closed', status='done'` ⇒ 后者被误标成已完成。
+  - **修复（两阶段）**：① 批量标 `candidate_done=1`（**软折叠**语义，卡片仍可见、带「待确认」标签）；② 对候选行调单 issue REST（复用 #250 的 `fetch_issue`）逐条确认——真 `closed` 才写 `closed/done`；仍 `open` 则**仅解除候选**，保留真实状态与本地手动态；远端已删/请求失败**不臆断**，保持候选等下一轮复判。
+  - **产品语义不变**：「远程已关闭即视为做完，以远程为权威覆盖本地手动态」——真关闭仍自动进已完成列，`done_at` 仍受 `CASE WHEN done_at = 0` 保护。**唯一行为变化**：被移出 assignee 的 open issue 不再被误标，会保留原状态回到看板原列。
+  - **成本可控**：API 调用只发生在 stale/候选行上，且走**核心 REST 配额**（5000/h）而非 Search API 的 30/min 严限。复用 `fetch_issue` 而非复活已删的 `fetch_state`（#137/#212），避免死代码回潮。
+  - **可测试性**：`GitHubClient` 硬编码 `api.github.com` 无法注入测试端点且项目不引入新依赖 ⇒ 把纯决策抽为 `candidate_decision()` / `remote_state_of()` 供离线单测，**生产与测试共用同一判据**。
+
+  **低危（6）**
+  - `syncHint` / `SessionsPanel` 跨账号同 `issueKey` 的键统一为 `taskIdentity`（SessionsPanel 批量删除前映射回 `issue_key`，后端仍按 `issue_key` 定位）。
+  - `handleSwitchAccount` 两次写解耦（`setViewMode` 失败不再阻断后续刷新）。
+  - 注释更正 ×2（账号语义、`SELECT_COLS` 列数与占位符）。
+
+  **验证（全绿）**
+  - `cargo test` **197 + 27 passed** · `clippy --all-targets -D warnings` 0 警告 · `fmt` 干净
+  - `vitest` **282 passed** · `tsc` / `lint` 0 警告 / `prettier` / `i18n`(401) 全绿 · `npm run build`
+  - `server.py` **59 passed** · `check-mcp-columns` **29列** · `check-doc-links` **215 文件** · `check-versions` · `scripts` 单测 **117 passed**
+  - **反向验证 5/5 捕获**：`snapshotTasks` 键退回 `issueKey`、`TASK_INSERT_COLS` 移除 `created_at`、自定义列分组退回 `status` 匹配 `colKey`、`RemoteState::Open` 退回无条件 `closed/done`、`Ok(None)` 误映射为 `Unreachable`。
   - 详见 [`issue-438-hidden-bug-audit.md`](./issue-438-hidden-bug-audit.md)
 
 - **v0.6.11（2026-10-12）— 卡片显示 PR 合并状态，PR 行移到「分配人」下方（#435）**
