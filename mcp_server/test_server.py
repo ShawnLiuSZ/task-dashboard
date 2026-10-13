@@ -689,6 +689,36 @@ class IssueStateCaseTest(unittest.TestCase):
         self.assertEqual(row3["issue_state"], "open")
         self.assertEqual(row3["done_at"], 0)
 
+    def test_row_from_issue_writes_created_at(self):
+        """#438：按需拉取必须写 created_at —— 此前 `TASK_INSERT_COLS` 漏该列，
+        经 Python MCP 拉的 issue 落库恒为 0（epoch），与 Rust `build_task_row`
+        双实现漂移。漏写时 row 里没有该键 → `row["created_at"]` KeyError；
+        即便补了键但值恒 0，也被下面断言抓住。
+        """
+        account = {"id": 1, "login": "alice", "org": "Acme"}
+        base = {
+            "number": 7,
+            "title": "t",
+            "html_url": "https://github.com/Acme/r/issues/7",
+            "state": "OPEN",
+            "assignees": [],
+            "labels": [],
+            "comments": 0,
+            "updated_at": "2026-09-01T00:00:00Z",
+            "created_at": "2026-08-01T00:00:00Z",
+        }
+        row = S._row_from_issue(base, "r", "r#7", account, 1000)
+        # 期望值由 Python 标准库独立算得（非用被测函数自证）。
+        self.assertEqual(row["created_at"], 1785542400)
+        self.assertNotEqual(row["created_at"], 0, "created_at 不得恒 0")
+        # 缺失 created_at 时安全降级为 0（_iso_to_secs 对 None/空安全）。
+        row_no = S._row_from_issue(
+            {k: v for k, v in base.items() if k != "created_at"}, "r", "r#7", account, 1000
+        )
+        self.assertEqual(row_no["created_at"], 0)
+        # 写列清单必须含 created_at（漏了则整条不落库）。
+        self.assertIn("created_at", S.TASK_INSERT_COLS)
+
 
 class FramingTests(unittest.TestCase):
     """#345：stdio 分帧健壮性——畸形帧不得终止进程。

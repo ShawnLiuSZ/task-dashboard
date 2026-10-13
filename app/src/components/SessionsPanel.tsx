@@ -169,13 +169,17 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
   // #391：全选 / 取消全选。
   const toggleSelectAll = useCallback(() => {
     setSelectedKeys((prev) =>
-      prev.size === sessions.length ? new Set() : new Set(sessions.map((s) => s.issueKey)),
+      prev.size === sessions.length ? new Set() : new Set(sessions.map((s) => taskIdentity(s))),
     );
   }, [sessions]);
 
   // #391：批量清除选中会话（确认后调用）。
   const handleClearMulti = useCallback(async () => {
-    const keys = [...selectedKeys];
+    // #438：selectedKeys 现为 taskIdentity（issueKey@accountId）；后端 clear_sessions 仍按
+    // issue_key 定位，故删除前映射回各选中任务的 issueKey（去重）。
+    const keys = [
+      ...new Set(sessions.filter((s) => selectedKeys.has(taskIdentity(s))).map((s) => s.issueKey)),
+    ];
     try {
       await api.clearSessions(keys);
       setConfirmMulti(false);
@@ -185,7 +189,7 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
       console.error('批量清除会话失败:', e);
       setConfirmMulti(false);
     }
-  }, [selectedKeys, exitSelectMode, loadSessions]);
+  }, [selectedKeys, sessions, exitSelectMode, loadSessions]);
 
   const allSelected = selectedKeys.size === sessions.length && sessions.length > 0;
 
@@ -237,7 +241,7 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
                 const col = index % columns;
                 const colorIdx = (row + col) % 4;
                 const borderColor = `var(--session-card-border-${colorIdx + 1})`;
-                const isSelected = selectMode && selectedKeys.has(task.issueKey);
+                const isSelected = selectMode && selectedKeys.has(taskIdentity(task));
                 return (
                   <div
                     key={taskIdentity(task)}
@@ -245,7 +249,7 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
                       isSelected ? ' selected' : ''
                     }`}
                     style={{ borderColor }}
-                    onClick={selectMode ? () => toggleSelect(task.issueKey) : undefined}
+                    onClick={selectMode ? () => toggleSelect(taskIdentity(task)) : undefined}
                   >
                     {/* #391：选择模式下卡片左侧复选框；点击 label 仅触发 checkbox 自身，
                         不冒泡到卡片（否则会触发两次 toggle）。 */}
@@ -253,8 +257,8 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
                       <label className="session-card-check" onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
-                          checked={selectedKeys.has(task.issueKey)}
-                          onChange={() => toggleSelect(task.issueKey)}
+                          checked={selectedKeys.has(taskIdentity(task))}
+                          onChange={() => toggleSelect(taskIdentity(task))}
                           aria-label={t('sessions.toggleSelect', { num: task.number })}
                         />
                       </label>

@@ -70,7 +70,8 @@ describe('isHiddenByFilters', () => {
 
 describe('diffChangedTasks', () => {
   it('新 key 算新增；updatedAt 变大算变更；不变不算', () => {
-    const before = new Map([['a#1', 100]]);
+    // #438：before 的键改用 taskIdentity（issueKey@accountId，默认 accountId=1）。
+    const before = new Map([['a#1@1', 100]]);
     const after = [
       task({ issueKey: 'a#1', updatedAt: 100 }),
       task({ issueKey: 'a#1b', updatedAt: 50 }),
@@ -85,14 +86,29 @@ describe('diffChangedTasks', () => {
   });
   it('updatedAt 变大才算变更；null 按 0 计', () => {
     const before = new Map<string, number | null>([
-      ['a#1', 100],
-      ['a#2', null],
+      ['a#1@1', 100],
+      ['a#2@1', null],
     ]);
     const after = [
       task({ issueKey: 'a#1', updatedAt: 200 }),
       task({ issueKey: 'a#2', updatedAt: 1 }),
     ];
     expect(diffChangedTasks(before, after).map((t) => t.issueKey)).toEqual(['a#1', 'a#2']);
+  });
+  it('#438：聚合视图下同 issueKey 跨账号不被覆盖（issueKey 键会漏算变更）', () => {
+    // 同一 issue 被两个账号关联 ⇒ issueKey 相同、accountId 不同。
+    // 旧实现按 issueKey 建键，后者覆盖前者的 updatedAt ⇒ 该账号的变更被漏判。
+    const before = snapshotTasks([
+      task({ issueKey: 'a#1', updatedAt: 100, accountId: 1 }),
+      task({ issueKey: 'a#1', updatedAt: 500, accountId: 2 }),
+    ]);
+    const after = [
+      task({ issueKey: 'a#1', updatedAt: 100, accountId: 1 }), // 账号 1 未变
+      task({ issueKey: 'a#1', updatedAt: 999, accountId: 2 }), // 账号 2 变了
+    ];
+    const changed = diffChangedTasks(before, after);
+    expect(changed).toHaveLength(1);
+    expect(changed[0].accountId).toBe(2);
   });
 });
 

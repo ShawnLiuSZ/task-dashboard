@@ -1,4 +1,5 @@
 import type { Task } from '../types';
+import { taskIdentity } from './taskIdentity';
 
 /** 当前生效的筛选（与 App.tsx toolbar 同构：repo/query 前端筛，ownership 后端筛）。 */
 export interface ActiveFilters {
@@ -32,14 +33,17 @@ export function diffChangedTasks(
   after: Task[],
 ): Task[] {
   return after.filter((t) => {
-    if (!before.has(t.issueKey)) return true;
-    const prev = before.get(t.issueKey) ?? 0;
+    // #438：键用 taskIdentity（issueKey@accountId）——聚合视图下同一 issueKey 可来自
+    // 两个账号，用 issueKey 会被后者覆盖导致计数偏差（与 taskIdentity.ts #329 口径一致）。
+    const k = taskIdentity(t);
+    if (!before.has(k)) return true;
+    const prev = before.get(k) ?? 0;
     return (t.updatedAt ?? 0) > prev;
   });
 }
 
 export function snapshotTasks(tasks: Task[]): Map<string, number | null> {
-  return new Map(tasks.map((t) => [t.issueKey, t.updatedAt]));
+  return new Map(tasks.map((t) => [taskIdentity(t), t.updatedAt]));
 }
 
 /**

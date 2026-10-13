@@ -8,6 +8,7 @@ import {
   type BoardMode,
 } from '../types';
 import { useT } from '../i18n';
+import { parseMatchRules } from '../utils/matchRules';
 import { taskIdentity } from '../utils/taskIdentity';
 import TaskCard from './TaskCard';
 
@@ -94,18 +95,28 @@ export function resolveBoardView(
   return 'fourstate';
 }
 
-/** v0.3.51 (#159)：自定义列分组——任务 status 命中列 colKey 归入对应组，未命中进 unmatched。 */
+/** v0.3.51 (#159)：自定义列分组——任务归入对应组，未命中进 unmatched。
+ *  #438：分组依据是 `task.projectStatus` 命中某列的 `matchRules`（project status 原文
+ *  集合），**不是** `task.status`（四态）。`colKey` 只是 `genColKey` 生成的不透明稳定
+ *  标识，从不等于四态 status；原实现用 `valid.has(task.status)` 匹配 `colKey`，取值域
+ *  不同恒 false ⇒ 所有任务进 unmatched、命名列恒空。 */
 export function groupTasksByCustomColumns(
   tasks: Task[],
   accountColumns: AccountColumn[] | undefined,
 ): { groups: Map<string, Task[]>; unmatched: Task[] } {
   const cols = accountColumns ?? [];
-  const valid = new Set(cols.map((c) => c.colKey));
   const groups = new Map<string, Task[]>();
+  // 预解析每列的匹配规则（project status 值集合）。
+  const colRules = cols.map((c) => ({
+    colKey: c.colKey,
+    rules: new Set(parseMatchRules(c.matchRules)),
+  }));
   for (const c of cols) groups.set(c.colKey, []);
   const unmatched: Task[] = [];
   for (const task of tasks) {
-    if (valid.has(task.status)) groups.get(task.status)?.push(task);
+    const ps = (task.projectStatus ?? '').trim();
+    const hit = ps ? colRules.find((c) => c.rules.has(ps)) : undefined;
+    if (hit) groups.get(hit.colKey)?.push(task);
     else unmatched.push(task);
   }
   return { groups, unmatched };

@@ -136,7 +136,8 @@ function BoardApp() {
   //
   // #422：`activeAccountId <= 0` 时**不能**回传 0 —— 后端把 `Some(0)` 当「聚合全部账号」
   // （commands.rs::rows_to_tasks），会让单账号视图静默退化成全量。此处回传 null，
-  // 让后端走 `None` 分支读 meta.active_account_id；仍无账号时返回空列表而非全量。
+  // 让后端走 `None` 分支读 meta.active_account_id；仍无激活账号时后端返回**全部账号**
+  // 任务（rows_to_tasks 对 None + active<=0 不加 WHERE），并非空列表。
   const accountFilter = useMemo<number | null>(() => {
     if (!settings) return null;
     if (settings.viewMode === 'all') return 0;
@@ -362,9 +363,14 @@ function BoardApp() {
   // settings 就绪（activeAccountId / viewMode / accounts 任一变化）后拉取项目 Status 选项和自定义列
   useEffect(() => {
     if (!settings) return;
+    // #438：settings 首次到达时用最终 accountFilter 重查一次。否则聚合视图首屏会因
+    // 挂载时 settings=null → accountFilter=null → 后端按激活账号返回单账号数据，
+    // 而 filterRef 已刷新却无人触发 load，直到 focus/20s 轮询才纠正。
+    // load 读 filterRef.current（上方 effect 先于本 effect 执行），故拿到新 accountFilter。
+    void load();
     void loadProjectStatuses();
     void loadAccountColumns();
-  }, [settings, loadProjectStatuses, loadAccountColumns]);
+  }, [settings, loadProjectStatuses, loadAccountColumns, load]);
 
   // 仓库列表（去重排序），用于仓库筛选下拉。
   const repos = useMemo(() => [...new Set(tasks.map((t) => t.repo))].sort(), [tasks]);
@@ -473,9 +479,12 @@ function BoardApp() {
     setHiddenAfterSync(0);
     try {
       await api.setActiveAccount(id);
-      // #422：点账号的语义就是「只看这个账号」，故显式脱离聚合视图。
+      // #438：setViewMode 失败不阻断后续刷新——setActiveAccount 已成功，若因 setViewMode
+      // 抛错而跳过 loadSettings/loadWith，前端会停在旧筛选（激活账号已变但视图/筛选未刷新）。
       // 幂等：已是 'single' 时重复写入无副作用。
-      if (settings?.viewMode !== 'single') await api.setViewMode('single');
+      if (settings?.viewMode !== 'single') {
+        await api.setViewMode('single').catch((e) => setError(String(e)));
+      }
       await loadSettings();
       // #221：显式传新账号 id——闭包里的 accountFilter 还是旧值，靠它会查出旧账号。
       await loadWith(ownership, id);
