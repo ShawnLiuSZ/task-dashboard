@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { api, reportError } from '../api';
 import { useI18n, type LangMode } from '../i18n';
 import type { Account, AccountColumn, BoardMode, Project, Settings } from '../types';
 import { themeManager, type ThemeMode } from '../theme';
+import {
+  DEFAULT_FONT_FAMILY,
+  DEFAULT_MONO_FAMILY,
+  FONT_SIZE_PRESETS,
+  detectAvailableFonts,
+  fontPrefs,
+  type FontSizePreset,
+} from '../fontPrefs';
 import { parseMatchRules } from '../utils/matchRules';
 import { useEscLayer } from '../utils/useEscLayer';
 
@@ -13,6 +22,20 @@ interface Props {
 }
 
 const PRESETS = [15, 30, 60, 120, 240];
+
+/**
+ * #444：预览行的内联样式——直接用**用户所选字体**渲染，所见即所得。
+ *
+ * ⚠️ 这里必须自己拼 font-family，不能读 `--font-ui`：变量已把所选字体放在栈首，
+ * 但预览行的目的恰恰是「让用户看清所选字体长什么样」，若只依赖全局变量，
+ * 当用户选了 A 又切回「跟随系统」这类边界值时，预览会滞后一帧（应用与渲染
+ * 不同批）。直接内联可保证与下拉框选中项严格同步。
+ */
+function previewStyle(family: string): CSSProperties {
+  if (!family) return {};
+  const quoted = /^[-a-zA-Z][-a-zA-Z0-9]*$/.test(family) ? family : `"${family}"`;
+  return { fontFamily: `${quoted}, var(--font-ui)` };
+}
 
 // 自动生成稳定的自定义列标识
 function genColKey(): string {
@@ -47,6 +70,12 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
   const isEscTop = useEscLayer();
   const { t, mode: langMode, setMode: setLangMode } = useI18n();
   const [themeMode, setThemeMode] = useState<ThemeMode>(themeManager.getMode());
+  // #444：字体偏好（与主题同款：本地持久化 + 即时生效，不走后端 Settings）。
+  const [fontSize, setFontSize] = useState<FontSizePreset>(fontPrefs.getFontSize());
+  const [fontFamily, setFontFamily] = useState<string>(fontPrefs.getFontFamily());
+  const [monoFamily, setMonoFamily] = useState<string>(fontPrefs.getMonoFamily());
+  // 探测本机实际存在的候选字体。null = 尚未探测完成（面板显示「检测中…」）。
+  const [availFonts, setAvailFonts] = useState<string[] | null>(null);
   const [minutes, setMinutes] = useState(settings.scheduleMinutes);
   const [ghPath, setGhPath] = useState(settings.ghPath);
   const [autoCheckUpdates, setAutoCheckUpdates] = useState(settings.autoCheckUpdates);
@@ -70,6 +99,28 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
   const handleThemeChange = (mode: ThemeMode) => {
     setThemeMode(mode);
     themeManager.setMode(mode);
+  };
+
+  // #444：探测本机实际安装的候选字体（Web 平台无法枚举系统字体，只能试探）。
+  // 只在设置面板挂载时跑一次 —— 探测是纯 CPU 计算（约 25 次 canvas 测量，<1ms），
+  // 无需常驻；用户改完字体想刷新列表，重新打开面板即可。
+  useEffect(() => {
+    setAvailFonts(detectAvailableFonts());
+  }, []);
+
+  // #444：三个处理函数都「写偏好 + 立刻应用」——用户改字号时**必须即时看到效果**，
+  // 不能等点保存（偏好走 localStorage，不经后端 saveSettings）。
+  const handleFontSizeChange = (px: FontSizePreset) => {
+    setFontSize(px);
+    fontPrefs.setFontSize(px);
+  };
+  const handleFontFamilyChange = (name: string) => {
+    setFontFamily(name);
+    fontPrefs.setFontFamily(name);
+  };
+  const handleMonoFamilyChange = (name: string) => {
+    setMonoFamily(name);
+    fontPrefs.setMonoFamily(name);
   };
 
   // 初始化：加载所有账号的列配置
@@ -379,6 +430,69 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
               <option value="zh-CN">{t('settings.langZh')}</option>
               <option value="en-US">{t('settings.langEn')}</option>
             </select>
+          </div>
+
+          {/* #444：字体设置。字号用 chip 档位（即时生效），字体用下拉
+              （只列探测到本机真实存在的候选，避免「选了没反应」）。 */}
+          <div className="field">
+            <label>{t('settings.fontSize')}</label>
+            <div className="presets">
+              {FONT_SIZE_PRESETS.map((p) => (
+                <button
+                  key={p}
+                  className={`chip${fontSize === p ? ' on' : ''}`}
+                  onClick={() => handleFontSizeChange(p)}
+                  aria-pressed={fontSize === p}
+                >
+                  {t('settings.fontSizePx', { n: p })}
+                </button>
+              ))}
+            </div>
+            <div className="font-preview" style={previewStyle(fontFamily)}>
+              {t('settings.fontPreview')}
+            </div>
+          </div>
+
+          <div className="field">
+            <label>{t('settings.fontFamily')}</label>
+            {availFonts === null ? (
+              <div className="muted small">{t('settings.fontDetecting')}</div>
+            ) : (
+              <select
+                className="select"
+                value={fontFamily}
+                onChange={(e) => handleFontFamilyChange(e.target.value)}
+              >
+                <option value={DEFAULT_FONT_FAMILY}>{t('settings.fontSystemDefault')}</option>
+                {availFonts.map((f) => (
+                  <option key={f} value={f}>
+                    {f}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          <div className="field">
+            <label>{t('settings.fontMonoFamily')}</label>
+            {availFonts === null ? (
+              <div className="muted small">{t('settings.fontDetecting')}</div>
+            ) : (
+              <select
+                className="select"
+                value={monoFamily}
+                onChange={(e) => handleMonoFamilyChange(e.target.value)}
+              >
+                {/* #444：等宽默认「跟随界面字体」——用户只选一款字体时，
+                    分支名/路径/session id 一并跟随，无需再选一次。 */}
+                <option value={DEFAULT_MONO_FAMILY}>{t('settings.fontFollowUi')}</option>
+                {availFonts.map((f) => (
+                  <option key={f} value={f}>
+                    {f}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           <div className="field">
