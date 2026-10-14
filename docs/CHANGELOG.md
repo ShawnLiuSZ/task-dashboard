@@ -6,7 +6,7 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **v0.7.1（2026-10-14）— 修复：任务会话面板打开后不刷新（#441）**
+- **v0.7.1（未发布）— 修复：任务会话面板打开后不刷新（#441）**
 
   - **现象**：会话面板已打开时，agent 通过 MCP 开工（`record_session`）/ 收工（`clear_session`）后面板毫无变化，必须切走再切回（组件重新挂载）才更新。
   - **根因**：`SessionsPanel` 只有一个加载入口 `useEffect(…, [loadSessions])`，而 `loadSessions` 仅依赖 `accountId` ⇒ **不切账号就永不重查**。同项目 `App.tsx` 看板早有三路刷新（#181），会话面板从未获得该接线。
