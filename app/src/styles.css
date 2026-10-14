@@ -1,4 +1,21 @@
 :root {
+  /* #444：字体偏好变量（值由 fontPrefs.ts 在运行时写入 <html> 内联样式）。
+   * 这里的默认值 = 未设置偏好时的表现，与 v0.7.1 及之前逐字一致。
+   *
+   * ⚠️ --font-mono 此前在 .session-meta-value（:2282）被引用却**从未定义**，
+   * 一直靠 font-family 声明缺失时的 fallback 侥幸渲染。本次起有了权威定义。
+   *
+   * ⚠️ 字号缩放只作用于 rem/em 与 --font-size-base，**不覆盖散落的 83 处
+   * 硬编码 px**（10/11/12/13/14px 等）。原因：那些 px 承担着「徽章 / meta 行 /
+   * 图标文字」等**与基线字号解耦**的语义，全量改 rem 会连带改变徽章圆角、
+   * 行高与列宽的配合关系，回归面远大于收益。正文 / 标题 / 按钮等主层级已用rem。
+   */
+  --font-size-base: 13px;
+  --font-ui:
+    -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue',
+    'Segoe UI', sans-serif;
+  --font-mono: 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace;
+
   --bg: #f6f7f9;
   --surface: #ffffff;
   --surface-2: #f0f1f3;
@@ -104,8 +121,9 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
-  font-size: 13px;
+  /* #444：改用变量 + rem，使字号/字体偏好能全站生效（此前为硬编码 13px + 5 处栈）。 */
+  font-family: var(--font-ui);
+  font-size: var(--font-size-base);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
 }
@@ -158,7 +176,7 @@ body {
 
 /* #259：顶栏品牌名。 */
 .app-title {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   letter-spacing: 0.2px;
 }
@@ -658,7 +676,7 @@ body {
 
 .repo {
   /* #237：repo#编号 是识别任务最关键的锚点，字号 11px → 13px 以突出扫视。 */
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--text-2);
   background: var(--surface-2);
   padding: 1px 6px;
@@ -749,7 +767,7 @@ body {
 
 .num {
   /* #237：与 .repo 同步放大，让「repo #编号」作为一个视觉单元整体突出。 */
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--text-3);
 }
 
@@ -1109,7 +1127,7 @@ button.unassigned-tag:disabled {
 }
 
 .session code {
-  font-family: 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   color: #6b4700;
 }
@@ -1210,7 +1228,7 @@ button.unassigned-tag:disabled {
 }
 
 .detail-title {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 500;
   margin: 8px 0;
   line-height: 1.5;
@@ -1377,7 +1395,7 @@ button.unassigned-tag:disabled {
 
 .modal-title {
   margin: 0 0 14px;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 500;
 }
 
@@ -1393,7 +1411,7 @@ button.unassigned-tag:disabled {
 }
 
 .field.readonly .path {
-  font-family: 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   word-break: break-all;
 }
 
@@ -1401,6 +1419,21 @@ button.unassigned-tag:disabled {
   display: flex;
   gap: 6px;
   margin-top: 8px;
+}
+
+/* #444：字体预览行——把所选字体的真实字形展示给用户，避免「选了看不出区别」。
+   背景用 --surface-2 且加浅边框，与设置面板其他输入控件视觉分层。 */
+.font-preview {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  /* 用 rem 而非 px：随 --font-size-base 一起缩放，与正文字号联动。 */
+  font-size: 0.875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .chip {
@@ -1435,7 +1468,7 @@ button.unassigned-tag:disabled {
 
 .confirm-message {
   margin: 0 0 16px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.5;
   word-break: break-all;
 }
@@ -1601,7 +1634,7 @@ button.unassigned-tag:disabled {
 }
 
 .user-code {
-  font-family: 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 26px;
   font-weight: 600;
   letter-spacing: 4px;
@@ -1617,9 +1650,9 @@ button.unassigned-tag:disabled {
 /* 详情面板分支行：比 muted small 更大、等宽字体可读性好 */
 .branch-line {
   margin-top: 8px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--text);
-  font-family: 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   word-break: break-all;
 }
 
@@ -1633,7 +1666,7 @@ button.unassigned-tag:disabled {
   gap: 6px;
   flex-wrap: wrap;
   margin-top: 8px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--text);
 }
 
@@ -1659,7 +1692,7 @@ button.unassigned-tag:disabled {
 
 .link-ref {
   flex: 0 0 auto;
-  font-family: 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--text);
 }
 
@@ -1831,7 +1864,7 @@ button.unassigned-tag:disabled {
 
 /* 目标列（REST 路径 / GraphQL 操作名）等宽展示，长 URL 单行省略 + tooltip。 */
 .sync-logs-table .mono {
-  font-family: 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   max-width: 320px;
   overflow: hidden;
@@ -1868,7 +1901,7 @@ button.unassigned-tag:disabled {
   border: 0.5px solid var(--border);
   border-radius: 6px;
   background: var(--surface);
-  font-family: 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.5;
   color: var(--text);
@@ -1933,7 +1966,7 @@ button.unassigned-tag:disabled {
   border-radius: 7px;
   padding: 6px 10px;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--text);
   cursor: pointer;
   text-align: left;
@@ -2098,7 +2131,7 @@ button.unassigned-tag:disabled {
 
 .panel-page-title {
   flex: 1 1 auto;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 500;
 }
 
@@ -2116,7 +2149,7 @@ button.unassigned-tag:disabled {
   align-items: center;
   gap: 6px;
   margin: 0 0 8px;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .agent-tools-table,
@@ -2143,7 +2176,7 @@ button.unassigned-tag:disabled {
 
 .agent-tools-table .mono,
 .agent-trigger-table .mono {
-  font-family: 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 
@@ -2205,7 +2238,7 @@ button.unassigned-tag:disabled {
   gap: 8px;
 }
 .session-card-title {
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   color: var(--text);
   flex: 1 1 auto;
@@ -2484,7 +2517,7 @@ button.unassigned-tag:disabled {
   background: transparent;
   color: var(--text);
   font-family: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.6;
   resize: none;
   overflow-y: auto;
@@ -2597,7 +2630,7 @@ button.unassigned-tag:disabled {
 
 .note-content {
   margin: 0 0 4px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.6;
   color: var(--text);
   white-space: pre-wrap;
@@ -2928,7 +2961,7 @@ button.unassigned-tag:disabled {
 .about-window-row {
   display: flex;
   justify-content: space-between;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .about-window-key {

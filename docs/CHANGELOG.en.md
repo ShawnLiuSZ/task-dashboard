@@ -2,6 +2,20 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.7.2 (unreleased) — Configurable UI font size + selectable installed system fonts (#444)**
+
+  - **Font size**: five presets (12 / 13 / 14 / 16 / 18 px) as chips, applied **immediately on click** (no need to press Save). The 13 px baseline matches v0.7.1 pixel-for-pixel ⇒ with no preference set, rendering is unchanged.
+  - **Fonts**: 25 built-in CJK/Latin candidates, filtered through **canvas width probing** so only fonts actually installed on this machine appear in the dropdowns. Separate dropdowns for UI and monospace; monospace defaults to "follow UI font".
+  - **⚠️ Why system fonts can't simply be listed**: the Web platform **does not allow enumerating installed fonts** (`queryLocalFonts()` is not broadly available); fonts can only be handed to CSS by name ⇒ probing is the only option.
+  - **⚠️ Why not `document.fonts.check()`**: it returns **true for system fonts** (it only reflects "is the font loaded", and system fonts never go through a loading flow) ⇒ all 25 candidates would be reported as available, making the probe useless. Instead: canvas width deltas with a **dual-baseline AND condition** (`w1≠baseMono` **and** `w2≠baseSans`) — testing a single baseline would misclassify fonts that merely happen to differ in width.
+  - **Also fixes a pre-existing defect**: `--font-mono` was referenced in `.session-meta-value` but **never defined**, rendering only by luck via the fallback for a missing `font-family` declaration.
+  - **CSS consolidation**: `body`'s hard-coded font stack / 13 px now use variables; all **8** scattered `'SF Mono', Menlo, monospace` declarations became `var(--font-mono)`.
+  - **Only the primary type scale is converted**: of 83 `font-size` declarations, only 13 px (10) and 14 px (5) become rem; **10 / 11 / 12 px deliberately stay px** — they carry semantics *decoupled* from the baseline size (badges / meta rows / icon text); converting them would also shift corner radii, line heights and column widths, a regression surface far larger than the benefit.
+  - **Security**: font names go through a **whitelist** (only names from the probe list). `localStorage` can be written by same-origin scripts, so without validation `"; background: url(...)` could be injected as CSS.
+  - **Preferences live in localStorage**, not backend Settings ⇒ zero backend / SQL / DB schema changes. i18n gains 9 keys × 2 locales (401 → 410).
+  - **Verification**: `vitest` **322 passed** (32 new) · tsc / eslint / prettier / i18n (410) / build / check-doc-links all green. **Mutation testing 4/4 caught**: removing the whitelist, letting invalid sizes pass through, dropping the dual-baseline check, and not carrying the UI font into the monospace stack.
+  - See [`issue-444-font-preferences.md`](./issue-444-font-preferences.md)
+
 - **v0.7.1 (2026-10-14) — Fix: Task Sessions panel did not refresh while open (#441)**
 
   - **Symptom**: with the panel already open, an agent starting (`record_session`) or finishing (`clear_session`) work via MCP produced no change; the list only updated after navigating away and back (remounting the component).

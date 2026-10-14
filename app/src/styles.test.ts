@@ -272,3 +272,65 @@ describe('会话卡片选中态高亮 #391', () => {
     expect(d).toMatch(/display\s*:\s*flex/);
   });
 });
+
+/**
+ * 字体偏好接线（#444）回归。
+ *
+ * 关键不变量：**body 不得再出现硬编码的 font-family / font-size**。
+ * #444 之前 `body` 写死 `-apple-system, ...` 与 `13px`，另有 8 处
+ * `font-family: 'SF Mono', Menlo, monospace` 散落各处（分支名 / 路径 /
+ * session id / 代码块）。字体偏好要能全站生效，这些硬编码必须全部收进
+ * `--font-ui` / `--font-mono` 变量 —— 漏一处，该处就**不跟随**用户选择，
+ * 且症状隐蔽（其它区域都变了，只有这一小块没变）。
+ */
+describe('字体偏好接线（#444）', () => {
+  it('--font-ui / --font-mono / --font-size-base 三个变量都有权威定义', () => {
+    const root = decls(':root');
+    expect(root, ':root 须定义 --font-ui').toMatch(/--font-ui\s*:/);
+    expect(root, ':root 须定义 --font-mono').toMatch(/--font-mono\s*:/);
+    expect(root, ':root 须定义 --font-size-base').toMatch(/--font-size-base\s*:/);
+  });
+
+  it('body 的 font-family / font-size 均走变量，不再硬编码', () => {
+    // ⚠️ 不能用 decls('body')：它按**后缀**匹配，会把 `html, body` 合并规则
+    // 一并返回（那条规则里仍有 13px），导致本条恒失败。改为直接对 body 专属
+    // 声明块断言（用前置换行 + 精确 `}` 收尾）。
+    const m = styles.match(/(?:^|\})\s*body\s*\{([^}]*)\}/m);
+    const body = m?.[1] ?? '';
+    expect(body, '应能取到 body 专属声明块').not.toBe('');
+    expect(body).toMatch(/font-family\s*:\s*var\(--font-ui\)/);
+    expect(body).toMatch(/font-size\s*:\s*var\(--font-size-base\)/);
+    // 负向：这两行是本次要消灭的硬编码形态
+    expect(body).not.toMatch(/font-family\s*:\s*-apple-system/);
+    expect(body).not.toMatch(/font-size\s*:\s*\d+px/);
+  });
+
+  it('全站无硬编码等宽字体栈（原先散落 8 处，全部改为变量引用）', () => {
+    const body = stylesRaw;
+    expect(body, "styles.css 不应再出现 font-family: 'SF Mono', Menlo, monospace").not.toMatch(
+      /font-family\s*:\s*'SF Mono',\s*Menlo,\s*monospace/,
+    );
+    // 变量引用数 = 8 处替换 + :root 定义 1 处
+    const refs = (body.match(/var\(--font-mono\)/g) ?? []).length;
+    expect(refs).toBeGreaterThanOrEqual(9);
+  });
+
+  it('主层级字号用 rem（随 --font-size-base 缩放），徽章/meta 的 10-12px 保持 px', () => {
+    const body = stylesRaw;
+    // 正文主层级已转 rem（13px→0.8125rem、14px→0.875rem）
+    expect(body).toMatch(/font-size\s*:\s*0\.8125rem/);
+    expect(body).toMatch(/font-size\s*:\s*0\.875rem/);
+    // ⚠️ 徽章 / meta / 图标类 10-12px **有意保留 px**：它们承担与基线字号
+    // 解耦的语义（见知识库文档「为何不改 px」），故此处断言 px 仍存在。
+    expect(body, '徽章/meta 小字号应仍为 px').toMatch(/font-size\s*:\s*1[012]px/);
+    // 13/14px 主层级不得再以 px 形式出现
+    expect(body).not.toMatch(/font-size\s*:\s*1[34]px/);
+  });
+
+  it('.font-preview 预览行有独立视觉分层，且字号用 rem 跟随缩放', () => {
+    const d = decls('.font-preview');
+    expect(d).toMatch(/border/);
+    expect(d).toMatch(/background/);
+    expect(d).toMatch(/font-size\s*:\s*0\.875rem/);
+  });
+});
