@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, openExternal } from '../api';
+import { api, onSynced, onTasksChanged, openExternal } from '../api';
 import ConfirmDialog from './ConfirmDialog';
 import { useT } from '../i18n';
 import type { Task } from '../types';
@@ -56,6 +56,10 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
   const t = useT();
   const [sessions, setSessions] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
+  // #441：后台刷新（事件 / 轮询触发）只降透明提示，不整块替换成「加载中」占位。
+  // 会话面板刷新频繁，整块替换会让卡片列表反复闪成占位符。
+  const [refreshing, setRefreshing] = useState(false);
+  const loadedOnce = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [clearKey, setClearKey] = useState<string | null>(null);
@@ -86,20 +90,71 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
   }, [sessions, updateColumns]);
 
   const loadSessions = useCallback(async () => {
-    setLoading(true);
+    // #441：与 NotesPanel #329 同款——首屏才用 loading 占位，后续重查只置
+    // refreshing（容器降透明）。会话面板是**唯一需要在外部写入时实时跟进**
+    // 的面板（MCP 进程直写 SQLite），刷新频率远高于记事面板；若每次重查都把
+    // 整块替换成「加载中」，用户会看到列表反复闪成占位符。
+    if (loadedOnce.current) setRefreshing(true);
+    else setLoading(true);
     try {
       setSessions(await api.listActiveSessions(accountId));
       setError(null);
+      loadedOnce.current = true;
     } catch (e) {
       console.error('加载会话失败:', e);
       setError(errText(e));
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [accountId]);
 
   useEffect(() => {
     void loadSessions();
+  }, [loadSessions]);
+
+  // #441：会话面板原本**只在挂载时查一次**，此后面板开着再也不刷新。
+  // 用户可感知的表现：agent 通过 MCP `record_session` / `clear_session`
+  // 开工或收工后，面板仍停在打开那一刻的快照，必须切走再切回
+  // （组件重新挂载 → 重新查库）才更新。
+  //
+  // 之所以不能只靠事件：MCP 是**独立进程直写 SQLite**，发不出 Tauri 事件
+  // （与 App.tsx 的 `load()` 同款困境，见其 #181 注释）。故与 App 看板对齐，
+  // 三路刷新缺一不可：
+  //   ① onSynced        —— 本进程触发的同步完成（托盘/顶栏/定时）
+  //   ② onTasksChanged  —— 本进程 GUI 写入（详情页记会话、清会话）
+  //   ③ focus / 可见性恢复 / 20s 轮询 —— MCP 外部写入的兜底
+  useEffect(() => {
+    const refresh = () => {
+      if (!document.hidden) void loadSessions();
+    };
+    const onFocus = () => void loadSessions();
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', refresh);
+    const timer = window.setInterval(refresh, 20000);
+
+    // listen 返回 Promise<unlisten>：cleanup 不能返回 Promise，否则 React
+    // 无法等待，快速重订阅时会短暂双订阅（同 App.tsx）。用 cancelled 标记。
+    let cancelled = false;
+    let unlistenSynced: (() => void) | null = null;
+    let unlistenTasks: (() => void) | null = null;
+    void onSynced(refresh).then((f) => {
+      if (cancelled) f();
+      else unlistenSynced = f;
+    });
+    void onTasksChanged(refresh).then((f) => {
+      if (cancelled) f();
+      else unlistenTasks = f;
+    });
+
+    return () => {
+      cancelled = true;
+      unlistenSynced?.();
+      unlistenTasks?.();
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', refresh);
+      window.clearInterval(timer);
+    };
   }, [loadSessions]);
 
   // #329：与 DetailPanel 同款——`writeText` 在权限不足 / 非安全上下文会 reject，
@@ -195,7 +250,7 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
 
   return (
     <div className="panel-page">
-      <div className="panel-content sessions-content">
+      <div className="panel-content sessions-content" aria-busy={refreshing || undefined}>
         {loading ? (
           <div className="notes-placeholder">{t('notes.loading')}</div>
         ) : error ? (

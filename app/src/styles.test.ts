@@ -237,6 +237,17 @@ describe('CSS 变量引用完整性（#329）', () => {
     const d = decls('.notes-card-cols[aria-busy]');
     expect(d).toMatch(/opacity/);
   });
+
+  it('会话面板后台刷新用 aria-busy 降透明，不再整块替换占位（#441）', () => {
+    // 会话面板刷新频率远高于记事面板（MCP 直写 SQLite，靠事件 + 20s 轮询），
+    // 若不降透明，用户会看到卡片列表每 20s 闪一次「加载中」占位。
+    const d = decls('.sessions-content[aria-busy]');
+    expect(d).toMatch(/opacity/);
+  });
+
+  it('会话面板刷新用 opacity 过渡，避免降透明时硬跳变（#441）', () => {
+    expect(decls('.sessions-content')).toMatch(/transition\s*:\s*opacity/);
+  });
 });
 
 /**
