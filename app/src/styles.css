@@ -2174,6 +2174,13 @@ button.unassigned-tag:disabled {
   min-height: 0;
   min-width: 0;
   overflow-y: auto;
+  transition: opacity 0.15s ease;
+}
+/* #441：会话面板后台刷新（事件 / 20s 轮询）只做轻量降透明提示，不再整块
+   替换成「加载中」占位 —— 与 .notes-card-cols[aria-busy] 同款。
+   `aria-busy` 由 SessionsPanel 在 refreshing 时设置。 */
+.sessions-content[aria-busy] {
+  opacity: 0.65;
 }
 .sessions-list {
   display: grid;

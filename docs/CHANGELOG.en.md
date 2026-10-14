@@ -2,6 +2,17 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.7.1 (2026-10-14) — Fix: Task Sessions panel did not refresh while open (#441)**
+
+  - **Symptom**: with the panel already open, an agent starting (`record_session`) or finishing (`clear_session`) work via MCP produced no change; the list only updated after navigating away and back (remounting the component).
+  - **Root cause**: `SessionsPanel` had a single load entry point, `useEffect(…, [loadSessions])`, and `loadSessions` depends only on `accountId` ⇒ **it never re-queried unless the account changed**. The board in `App.tsx` already had three refresh channels (#181); the sessions panel never got that wiring.
+  - **Key constraint**: MCP is a **separate process writing SQLite directly and cannot emit Tauri events** ⇒ subscribing to `onSynced` / `onTasksChanged` alone would not cover agent-side writes, so the focus / visibility-restore / 20s poll fallback must stay. All three channels are required.
+  - **Avoiding a worse bug in the process**: the sessions panel refreshes far more often than the notes panel; keeping "set `loading` on every re-query" would make the card list flash a full-page "Loading" placeholder **every 20 seconds**. Switched to the NotesPanel #329 pattern (first screen vs. background refresh, with `loadedOnce` + `refreshing` + `aria-busy` opacity cue).
+  - **Dependency array is `[loadSessions]`, not `[]`**: `[]` would make the subscriptions permanently capture the first render's `accountId` ⇒ after switching accounts it would look like "it refreshed but the data is wrong", which is harder to diagnose than the original defect.
+  - **Zero changes** to backend commands, SQL, DB schema, and i18n.
+  - **Verification**: `vitest` **290 passed** (8 new) · `tsc` / `eslint` / `prettier` / `i18n` (401 keys) / `build` all green. **Mutation testing 4/4 caught**: removing the `onSynced` subscription, removing the 20s poll, and changing the dependency array to `[]` are all caught by the tests.
+  - See [`issue-441-sessions-panel-refresh.md`](./issue-441-sessions-panel-refresh.md)
+
 - **v0.7.0 (2026-10-13) — Full hidden-bug audit and fixes (#438): 4 medium + 6 low severity, all resolved**
 
   A **structured full static audit** spanning the Rust backend, React frontend, and Python MCP — closing same-class latent defects proactively instead of waiting for users to hit them. Findings: **0 high severity** (no data-corruption/security defects) / 4 medium / 6 low — **all fixed**.

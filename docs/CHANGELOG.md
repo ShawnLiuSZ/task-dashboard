@@ -6,6 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.1（2026-10-14）— 修复：任务会话面板打开后不刷新（#441）**
+
+  - **现象**：会话面板已打开时，agent 通过 MCP 开工（`record_session`）/ 收工（`clear_session`）后面板毫无变化，必须切走再切回（组件重新挂载）才更新。
+  - **根因**：`SessionsPanel` 只有一个加载入口 `useEffect(…, [loadSessions])`，而 `loadSessions` 仅依赖 `accountId` ⇒ **不切账号就永不重查**。同项目 `App.tsx` 看板早有三路刷新（#181），会话面板从未获得该接线。
+  - **关键约束**：MCP 是**独立进程直写 SQLite、发不出 Tauri 事件** ⇒ 只订阅 `onSynced` / `onTasksChanged` 覆盖不了 agent侧写入，必须保留 focus /可见性恢复 / 20s 轮询兜底。故三路缺一不可。
+  - **顺带避免一个更烦的 bug**：会话面板刷新频率远高于记事面板，若沿用「每次重查都 `setLoading(true)`」，卡片列表会**每 20 秒闪一次「加载中」占位**。改用 `NotesPanel` #329 的首屏/后台分离（`loadedOnce` + `refreshing` + `aria-busy` 降透明）。
+  - **依赖数组守`[loadSessions]` 而非 `[]`**：写成 `[]` 会让订阅永久捕获首次渲染的 `accountId` ⇒ 切账号后表现为「刷新了但数据不对」，比原缺陷更难定位。
+  - **后端 / SQL / DB schema / i18n 全部零改动**。
+  - **验证**：`vitest` **290 passed**（新增 8）· `tsc` / `eslint` / `prettier` / `i18n`(401) / `build` 全绿。**反向验证 4/4 捕获**：去掉 `onSynced` 订阅、去掉 20s 轮询、依赖数组改 `[]` 均被测试捕获。
+  - 详见 [`issue-441-sessions-panel-refresh.md`](./issue-441-sessions-panel-refresh.md)
+
 - **v0.7.0（2026-10-13）— 全量隐藏 Bug 审查与修复（#438）：4 中危 + 6 低危全部处理完毕**
 
   本版是一次覆盖 **Rust 后端 / React 前端 / Python MCP** 的**结构化全量静态审查**的结果——不再等用户撞见才发现同类隐患。

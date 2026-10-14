@@ -114,3 +114,75 @@ describe('SessionsPanel 多选 UI 接线（#391）', () => {
     expect(sessionsRaw).toMatch(/e\.stopPropagation\(\);\s*handleOpenTask\(task\)/);
   });
 });
+
+/**
+ * #441 会话面板「打开后永不刷新」回归。
+ *
+ * 缺陷本体：SessionsPanel 只在挂载时查一次库，此后不订阅任何刷新来源。
+ * MCP 是**独立进程直写 SQLite**、发不出 Tauri 事件，于是 agent 开工
+ * （record_session）/ 收工（clear_session）后面板毫无反应 —— 用户只能切走
+ * 再切回，靠组件重新挂载才看到新数据。
+ *
+ * 三路刷新缺一不可，逐一断言（任一路被删掉都会失败）：
+ *   ① onSynced        —— 本进程触发的同步完成
+ *   ② onTasksChanged  —— 本进程 GUI 写入（详情页记会话 / 清会话）
+ *   ③ focus / visibilitychange / 20s 轮询 —— MCP 外部写入的唯一兜底
+ */
+describe('SessionsPanel 打开后保持刷新（#441）', () => {
+  it('① 订阅 onSynced 与 onTasksChanged 两路事件', () => {
+    expect(sessionsRaw).toMatch(/import \{[^}]*\bonSynced\b[^}]*\} from '\.\.\/api'/);
+    expect(sessionsRaw).toMatch(/import \{[^}]*\bonTasksChanged\b[^}]*\} from '\.\.\/api'/);
+    expect(sessionsRaw).toMatch(/void onSynced\(refresh\)/);
+    expect(sessionsRaw).toMatch(/void onTasksChanged\(refresh\)/);
+  });
+
+  it('① 事件订阅的 unlisten 在 cleanup 里释放（否则快速重订阅会双订阅）', () => {
+    const effect =
+      sessionsRaw.match(
+        /useEffect\(\(\) => \{\n {4}const refresh = \(\) => \{[\s\S]*?\n {2}\}, \[loadSessions\]\);/,
+      )?.[0] ?? '';
+    expect(effect, '应能取到刷新订阅 effect').not.toBe('');
+    // listen 返回 Promise<unlisten>，cleanup 不能返回 Promise ⇒ 用 cancelled 标记。
+    expect(effect).toMatch(/let cancelled = false/);
+    expect(effect).toMatch(/unlistenSynced\?\.\(\)/);
+    expect(effect).toMatch(/unlistenTasks\?\.\(\)/);
+  });
+
+  it('② 事件回调真正触发重查（不是只订阅不刷新）', () => {
+    expect(sessionsRaw).toMatch(
+      /const refresh = \(\) => \{\n {6}if \(!document\.hidden\) void loadSessions\(\);/,
+    );
+    expect(sessionsRaw).toMatch(/const onFocus = \(\) => void loadSessions\(\)/);
+    expect(sessionsRaw).toMatch(/window\.addEventListener\('focus', onFocus\)/);
+    expect(sessionsRaw).toMatch(/document\.addEventListener\('visibilitychange', refresh\)/);
+  });
+
+  it('③ MCP 外部写入靠 20s 轮询兜底，且监听器在 cleanup 中全部移除', () => {
+    // 与 App.tsx 的 load() 同频（#181），保证 MCP 直写 SQLite 最迟 20s 内可见。
+    expect(sessionsRaw).toMatch(/window\.setInterval\(refresh, 20000\)/);
+    // ⚠️ 漏移除 ⇒ 面板反复挂载会累积 N 个定时器与 N 组监听，查询量线性放大。
+    expect(sessionsRaw).toMatch(/window\.removeEventListener\('focus', onFocus\)/);
+    expect(sessionsRaw).toMatch(/document\.removeEventListener\('visibilitychange', refresh\)/);
+    expect(sessionsRaw).toMatch(/window\.clearInterval\(timer\)/);
+  });
+
+  it('④ 后台刷新不整块替换成「加载中」占位（否则卡片列表反复闪白）', () => {
+    expect(sessionsRaw).toMatch(/if \(loadedOnce\.current\) setRefreshing\(true\)/);
+    expect(sessionsRaw).toMatch(/else setLoading\(true\)/);
+    expect(sessionsRaw).toMatch(/loadedOnce\.current = true/);
+    expect(sessionsRaw).toMatch(
+      /<div className="panel-content sessions-content" aria-busy=\{refreshing \|\| undefined\}>/,
+    );
+  });
+
+  it('⑤ 刷新依赖 loadSessions —— 账号切换后新订阅用的是新闭包，不持有旧 accountId', () => {
+    // 依赖写成 [] 会让订阅永久捕获首次渲染的 accountId ⇒ 切账号后面板恒按旧账号查。
+    const effect =
+      sessionsRaw.match(
+        /useEffect\(\(\) => \{\n {4}const refresh = \(\) => \{[\s\S]*?\n {2}\}, \[loadSessions\]\);/,
+      )?.[0] ?? '';
+    expect(effect, '应能取到刷新订阅 effect').not.toBe('');
+    expect(effect).toMatch(/\}, \[loadSessions\]\);$/);
+    expect(effect).not.toMatch(/\}, \[\]\);$/);
+  });
+});
