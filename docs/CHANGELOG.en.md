@@ -2,7 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **v0.7.1 (unreleased) — Fix: Task Sessions panel did not refresh while open (#441)**
+- **v0.7.1 (2026-10-14) — Fix: Task Sessions panel did not refresh while open (#441)**
 
   - **Symptom**: with the panel already open, an agent starting (`record_session`) or finishing (`clear_session`) work via MCP produced no change; the list only updated after navigating away and back (remounting the component).
   - **Root cause**: `SessionsPanel` had a single load entry point, `useEffect(…, [loadSessions])`, and `loadSessions` depends only on `accountId` ⇒ **it never re-queried unless the account changed**. The board in `App.tsx` already had three refresh channels (#181); the sessions panel never got that wiring.
