@@ -2,7 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **v0.7.2 (unreleased) — Configurable UI font size + selectable installed system fonts (#444)**
+- **v0.7.2 (2026-10-14) — Configurable UI font size + selectable installed system fonts (#444)**
 
   - **Font size**: five presets (12 / 13 / 14 / 16 / 18 px) as chips, applied **immediately on click** (no need to press Save). The 13 px baseline matches v0.7.1 pixel-for-pixel ⇒ with no preference set, rendering is unchanged.
   - **Fonts**: 25 built-in CJK/Latin candidates, filtered through **canvas width probing** so only fonts actually installed on this machine appear in the dropdowns. Separate dropdowns for UI and monospace; monospace defaults to "follow UI font".
@@ -14,6 +14,7 @@
   - **Security**: font names go through a **whitelist** (only names from the probe list). `localStorage` can be written by same-origin scripts, so without validation `"; background: url(...)` could be injected as CSS.
   - **Preferences live in localStorage**, not backend Settings ⇒ zero backend / SQL / DB schema changes. i18n gains 9 keys × 2 locales (401 → 410).
   - **Verification**: `vitest` **322 passed** (32 new) · tsc / eslint / prettier / i18n (410) / build / check-doc-links all green. **Mutation testing 4/4 caught**: removing the whitelist, letting invalid sizes pass through, dropping the dual-baseline check, and not carrying the UI font into the monospace stack.
+  - **About panel copy fixes**: `about.cap.kanban` drops the "Four-state" qualifier (the four states **are** implemented — `types.ts:1` `StatusKey` / `common.rs:190` `normalize_status` with the Chinese alias / `common.rs:775` four-state test), so users still see a real capability; `about.cap.sync` previously claimed closed issues "auto-move to Done", which described the **pre-#438** behaviour. #438 made it two-phase (flag `candidate_done` with a soft-fold "pending" label, then re-fetch the single issue to confirm — only genuinely closed ones become done), so the old wording was the **opposite** of actual behaviour and now reads "issues closed remotely move to Done after re-fetch confirmation".
   - See [`issue-444-font-preferences.md`](./issue-444-font-preferences.md)
 
 - **v0.7.1 (2026-10-14) — Fix: Task Sessions panel did not refresh while open (#441)**
