@@ -2,6 +2,16 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.7.3 (unreleased) — Notes creation moved to top-bar Modal (#447)**
+
+  - **Entry moved**: A "New note" button is added to the top bar, to the right of the task count; clicking it opens a Modal.
+  - **Panel simplified**: The left-hand composer column is removed from the Notes panel, giving the full width to the four priority columns; import/export are kept in a new panel toolbar above the columns.
+  - **Save experience**: After saving, the Modal closes, the Notes list refreshes, the view switches to Notes, and a 4-second success banner is shown. On failure, the Modal stays open and displays the error.
+  - **Implementation notes**: New `NoteComposerModal` component; `NotesPanel` is now a `forwardRef` exposing `reload()` for the top bar; ESC handling uses `useEscLayer`.
+  - Zero backend / SQL / DB schema changes; i18n gains 3 keys × 2 locales (413 → 416).
+  - **Verification**: `vitest` 317 passed · `tsc` / `eslint` / `prettier` / `i18n:check` all green.
+  - See [`issue-447-notes-modal.md`](./issue-447-notes-modal.md)
+
 - **v0.7.2 (2026-10-14) — Configurable UI font size + selectable installed system fonts (#444)**
 
   - **Font size**: five presets (12 / 13 / 14 / 16 / 18 px) as chips, applied **immediately on click** (no need to press Save). The 13 px baseline matches v0.7.1 pixel-for-pixel ⇒ with no preference set, rendering is unchanged.

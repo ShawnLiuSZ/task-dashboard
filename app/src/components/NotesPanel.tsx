@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { CSSProperties } from 'react';
 import { api } from '../api';
 import { useT } from '../i18n';
@@ -52,22 +61,12 @@ function Icon({ d, size = 14 }: { d: string; size?: number }) {
 }
 
 const ICON = {
-  notebook:
-    'M5 4.5A1.5 1.5 0 0 1 6.5 3H18a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6.5A1.5 1.5 0 0 1 5 19.5z M5 16.5h14 M9 8h6 M9 11.5h6',
-  plus: 'M12 5v14 M5 12h14',
   pencil: 'M4 20h4l10.5-10.5a2.12 2.12 0 0 0-3-3L5 17v3z',
   trash: 'M4 7h16 M9 7V5h6v2 M6 7l1 13h10l1-13 M10 11v6 M14 11v6',
-  check: 'M5 12.5l4.5 4.5L19 7.5',
   close: 'M6 6l12 12 M18 6L6 18',
-  collapse: 'M14 6l-6 6 6 6',
-  expand: 'M10 6l6 6-6 6',
   download: 'M12 3v12 M7 10l5 5 5-5 M5 21h14',
   upload: 'M12 15V3 M7 8l5-5 5 5 M5 21h14',
 };
-
-/** 创建列（左栏）收起状态持久化键（本地偏好，不入数据库）。
- *  #259：记事本已是主区整页，收起粒度只到「创建列」，不再有整面板收起。 */
-const ADD_COL_COLLAPSED_KEY = 'notes.addColCollapsed';
 
 /* ---------- 时间格式化（v0.3.49 #148：文案走 i18n） ---------- */
 
@@ -115,46 +114,15 @@ function useAutoSize(value: string, active: boolean) {
   return { ref, resize };
 }
 
-/* ---------- 子组件 ---------- */
-
-/** 标签选择：一组分段 chip，替代原生 select。 */
-function LabelPicker({
-  value,
-  onChange,
-  size = 'md',
-}: {
-  value: NoteLabel;
-  onChange: (l: NoteLabel) => void;
-  size?: 'sm' | 'md';
-}) {
-  const t = useT();
-  const labels = useLabels();
-  return (
-    <div
-      className={`label-picker ${size === 'sm' ? 'sm' : ''}`}
-      role="group"
-      aria-label={t('notes.labelGroup')}
-    >
-      {labels.map((l) => (
-        <button
-          key={l.value}
-          type="button"
-          className={`label-chip${l.value === value ? ' active' : ''}`}
-          style={{ '--chip': l.color } as CSSProperties}
-          onClick={() => onChange(l.value)}
-          title={t('notes.markAs', { label: l.label })}
-        >
-          {l.label}
-        </button>
-      ))}
-    </div>
-  );
+export interface NotesPanelRef {
+  /** #447：供顶栏创建 Modal 保存后主动刷新备忘录列表。 */
+  reload: () => void;
 }
 
 /* ---------- 主组件 ---------- */
 
 /** v0.3.24+ 记事本面板：快速记录任务相关的临时笔记。 */
-export default function NotesPanel() {
+export default forwardRef<NotesPanelRef>(function NotesPanel(_props, ref) {
   const t = useT();
   const labels = useLabels();
   const [notes, setNotes] = useState<Note[]>([]);
@@ -162,9 +130,6 @@ export default function NotesPanel() {
   /** #329：后台刷新（增删改后的重查）——不替换内容，只做轻量反馈。 */
   const [refreshing, setRefreshing] = useState(false);
   const loadedOnce = useRef(false);
-  const [draft, setDraft] = useState('');
-  const [draftLabel, setDraftLabel] = useState<NoteLabel>('low');
-  const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState('');
   const [saving, setSaving] = useState(false);
@@ -173,14 +138,6 @@ export default function NotesPanel() {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  // 添加列（左栏）收起状态——**只影响创建列，不影响右侧四列**（#259）。
-  const [addColCollapsed, setAddColCollapsed] = useState(
-    () => localStorage.getItem(ADD_COL_COLLAPSED_KEY) === '1',
-  );
-  useEffect(() => {
-    localStorage.setItem(ADD_COL_COLLAPSED_KEY, addColCollapsed ? '1' : '0');
-  }, [addColCollapsed]);
 
   const editRef = useAutoSize(editDraft, editingId !== null);
 
@@ -202,6 +159,8 @@ export default function NotesPanel() {
       setRefreshing(false);
     }
   }, [t]);
+
+  useImperativeHandle(ref, () => ({ reload: loadNotes }), [loadNotes]);
 
   useEffect(() => {
     void loadNotes();
@@ -348,24 +307,6 @@ export default function NotesPanel() {
     );
   };
 
-  const handleAdd = useCallback(async () => {
-    const content = draft.trim();
-    if (!content) return;
-    setAdding(true);
-    try {
-      await api.addNote(content, draftLabel);
-      setDraft('');
-      setDraftLabel('low');
-      setError(null);
-      await loadNotes();
-    } catch (e) {
-      console.error('添加记事失败:', e);
-      setError(t('notes.addFailed', { error: errText(e) }));
-    } finally {
-      setAdding(false);
-    }
-  }, [draft, draftLabel, loadNotes, t]);
-
   const handleSave = useCallback(async () => {
     if (editingId === null) return;
     const content = editDraft.trim();
@@ -470,148 +411,92 @@ export default function NotesPanel() {
   return (
     // #259：记事本是主区整页，宽度由 .notes-page 撑满 —— **不要再挂行内 flex/width**，
     // 行内样式优先级高于样式表，曾把面板锁在 25% 宽（四列被压成竖条的根因）。
-    // 整行页头（记事本 + 导入/导出 + 收起）已移除：标题与侧边栏重复，导入/导出
-    // 挪进创建列顶部工具行，把纵向空间还给列。
     <aside className="notes-panel">
-      <div className="notes-body">
-        {/* 左侧：创建列（仅 composer，textarea 撑满列高；不展示已添加的记事）。
-            收起时只换成一条窄导轨——右侧四列不受影响（#259）。 */}
-        {addColCollapsed ? (
+      {notice && (
+        <div className="note-notice" role="status">
+          <span>{notice}</span>
           <button
             type="button"
-            className="notes-add-rail"
-            title={t('notes.expandAddCol')}
-            aria-expanded={false}
-            onClick={() => setAddColCollapsed(false)}
+            className="note-tool"
+            title={t('notes.closeTitle')}
+            onClick={() => setNotice(null)}
           >
-            <Icon d={ICON.expand} size={13} />
-            <span className="notes-add-rail-text">{t('notes.title')}</span>
-            <Icon d={ICON.plus} size={12} />
+            <Icon d={ICON.close} size={12} />
           </button>
-        ) : (
-          <div className="notes-add-col">
-            {/* 创建列顶部工具行：收起创建列（左）+ 导入/导出（右）。 */}
-            <div className="notes-add-col-tools">
-              <button
-                type="button"
-                className="note-tool"
-                title={t('notes.collapseAddCol')}
-                aria-expanded
-                onClick={() => setAddColCollapsed(true)}
-              >
-                <Icon d={ICON.collapse} size={13} />
-              </button>
-              <span className="notes-add-col-spacer" />
-              <button
-                type="button"
-                className="note-tool"
-                title={t('notes.exportTitle')}
-                onClick={() => void handleExport()}
-                disabled={busy !== null}
-              >
-                <Icon d={ICON.download} size={13} />
-              </button>
-              <button
-                type="button"
-                className="note-tool"
-                title={t('notes.importTitle')}
-                onClick={() => fileInputRef.current?.click()}
-                disabled={busy !== null}
-              >
-                <Icon d={ICON.upload} size={13} />
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="application/json,.json"
-                style={{ display: 'none' }}
-                onChange={(e) => void handleImport(e.target.files?.[0] ?? null)}
-              />
-            </div>
-            {notice && (
-              <div className="note-notice" role="status">
-                <span>{notice}</span>
-                <button
-                  type="button"
-                  className="note-tool"
-                  title={t('notes.closeTitle')}
-                  onClick={() => setNotice(null)}
-                >
-                  <Icon d={ICON.close} size={12} />
-                </button>
-              </div>
-            )}
-            {error && (
-              <div className="note-error" role="alert">
-                <span>{error}</span>
-                <button
-                  type="button"
-                  className="note-tool"
-                  title={t('notes.closeTitle')}
-                  onClick={() => setError(null)}
-                >
-                  <Icon d={ICON.close} size={12} />
-                </button>
-              </div>
-            )}
-
-            <div className="note-composer note-composer-full">
-              <textarea
-                className="note-textarea note-textarea-full"
-                placeholder={t('notes.composer.placeholder')}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !adding && draft.trim()) {
-                    e.preventDefault();
-                    void handleAdd();
-                  }
-                }}
-              />
-              <div className="note-composer-foot">
-                <LabelPicker value={draftLabel} onChange={setDraftLabel} />
-                <button
-                  type="button"
-                  className="btn primary"
-                  onClick={() => void handleAdd()}
-                  disabled={adding || !draft.trim()}
-                >
-                  {!adding && <Icon d={ICON.plus} size={13} />}
-                  {adding ? t('notes.adding') : t('notes.add')}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 右侧：固定四列（紧急 / 高 / 中 / 低），与看板列同构：等宽、全高、列内纵向滚动。 */}
-        <div className="notes-card-cols" aria-busy={refreshing || undefined}>
-          {loading ? (
-            <div className="notes-placeholder">{t('notes.loading')}</div>
-          ) : (
-            priorityColumns.map((col) => (
-              <div
-                key={col.label}
-                className={`note-col note-col--${col.label}`}
-                style={{ '--col-accent': col.opt.color } as CSSProperties}
-              >
-                <div className="note-col-head">
-                  <span className="note-col-dot" aria-hidden="true" />
-                  <span className="note-col-title">{col.opt.label}</span>
-                  <span className="note-col-count">{col.items.length}</span>
-                </div>
-                <div className="note-col-body">
-                  {col.items.length === 0 ? (
-                    <div className="note-col-empty">{t('notes.colEmpty')}</div>
-                  ) : (
-                    col.items.map(renderNoteCard)
-                  )}
-                </div>
-              </div>
-            ))
-          )}
         </div>
+      )}
+      {error && (
+        <div className="note-error" role="alert">
+          <span>{error}</span>
+          <button
+            type="button"
+            className="note-tool"
+            title={t('notes.closeTitle')}
+            onClick={() => setError(null)}
+          >
+            <Icon d={ICON.close} size={12} />
+          </button>
+        </div>
+      )}
+
+      {/* #447：创建入口移到顶部标题栏 Modal；面板内保留导入/导出工具行。 */}
+      <div className="notes-toolbar">
+        <span className="notes-toolbar-title">{t('notes.title')}</span>
+        <span className="notes-toolbar-spacer" />
+        <button
+          type="button"
+          className="note-tool"
+          title={t('notes.exportTitle')}
+          onClick={() => void handleExport()}
+          disabled={busy !== null}
+        >
+          <Icon d={ICON.download} size={13} />
+        </button>
+        <button
+          type="button"
+          className="note-tool"
+          title={t('notes.importTitle')}
+          onClick={() => fileInputRef.current?.click()}
+          disabled={busy !== null}
+        >
+          <Icon d={ICON.upload} size={13} />
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          style={{ display: 'none' }}
+          onChange={(e) => void handleImport(e.target.files?.[0] ?? null)}
+        />
+      </div>
+
+      {/* 右侧：固定四列（紧急 / 高 / 中 / 低），与看板列同构：等宽、全高、列内纵向滚动。 */}
+      <div className="notes-card-cols" aria-busy={refreshing || undefined}>
+        {loading ? (
+          <div className="notes-placeholder">{t('notes.loading')}</div>
+        ) : (
+          priorityColumns.map((col) => (
+            <div
+              key={col.label}
+              className={`note-col note-col--${col.label}`}
+              style={{ '--col-accent': col.opt.color } as CSSProperties}
+            >
+              <div className="note-col-head">
+                <span className="note-col-dot" aria-hidden="true" />
+                <span className="note-col-title">{col.opt.label}</span>
+                <span className="note-col-count">{col.items.length}</span>
+              </div>
+              <div className="note-col-body">
+                {col.items.length === 0 ? (
+                  <div className="note-col-empty">{t('notes.colEmpty')}</div>
+                ) : (
+                  col.items.map(renderNoteCard)
+                )}
+              </div>
+            </div>
+          ))
+        )}
       </div>
     </aside>
   );
-}
+});
