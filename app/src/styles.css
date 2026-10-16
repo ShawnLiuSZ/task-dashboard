@@ -1460,6 +1460,40 @@ button.unassigned-tag:disabled {
   margin-top: 4px;
 }
 
+/* #447：顶部标题栏「新建备忘录」Modal。 */
+.note-composer-modal {
+  width: 480px;
+}
+
+.note-composer-textarea {
+  min-height: 120px;
+  max-height: 360px;
+}
+
+.note-composer-modal .note-error {
+  margin-top: 12px;
+}
+
+.note-composer-modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.note-composer-modal-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+/* #447：顶部标题栏新建备忘录按钮，窄窗口下仅保留图标。 */
+@media (max-width: 1100px) {
+  .topbar-add-note .btn-label {
+    display: none;
+  }
+}
+
 /* ===== v0.3.51+ 应用内确认弹窗（替代 Tauri 不支持的 window.confirm） ===== */
 
 .confirm-modal {
@@ -2329,42 +2363,23 @@ button.unassigned-tag:disabled {
   color: var(--accent-hover);
 }
 
-/* 整行页头（记事本 + 导入/导出 + 收起）已移除：标题与侧边栏重复、白占一行纵向空间；
- * 导入/导出与收起挪进创建列顶部工具行（.notes-add-col-tools）。
- * `.notes-tools`（卡片 hover 操作区）与本页头无关，保留。 */
+/* #447：创建入口移到顶部标题栏 Modal；面板内只保留导入/导出工具行与四列。 */
 
-.notes-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: row;
-  overflow: hidden;
-  align-items: stretch;
-  gap: 12px;
-  padding: 12px 16px 16px;
-}
-
-/* 左侧：创建列——与四个优先级列同宽（--notes-col-w）、同款包围框（surface-2 圆角块）。 */
-.notes-add-col {
-  flex: 0 0 var(--notes-col-w);
-  width: var(--notes-col-w);
-  background: var(--surface-2);
-  border-radius: 10px;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding: 8px 10px 10px;
-  gap: 8px;
-}
-
-/* 创建列顶部工具行：收起创建列（左）+ 导入/导出（右）。 */
-.notes-add-col-tools {
+.notes-toolbar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 0.5px solid var(--border);
 }
-.notes-add-col-spacer {
+
+.notes-toolbar-title {
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.notes-toolbar-spacer {
   flex: 1 1 auto;
 }
 
@@ -2387,36 +2402,6 @@ button.unassigned-tag:disabled {
    避免右栏四列跳变。`aria-busy` 由 NotesPanel 在 refreshing 时设置。 */
 .notes-card-cols[aria-busy] {
   opacity: 0.65;
-}
-
-/* 创建列收起后占位的一条窄导轨（只影响创建列本身）。 */
-.notes-add-rail {
-  flex: 0 0 30px;
-  width: 30px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px 0;
-  border: 0;
-  border-radius: 10px;
-  background: var(--surface-2);
-  color: var(--text-3);
-  font-family: inherit;
-  font-size: 11px;
-  cursor: pointer;
-  transition:
-    color 0.15s,
-    background 0.15s;
-}
-.notes-add-rail:hover {
-  background: var(--surface);
-  color: var(--text);
-}
-.notes-add-rail-text {
-  writing-mode: vertical-rl;
-  letter-spacing: 2px;
 }
 
 /* 单优先级 card 列——**与看板 .column 完全同构**（固定 320px / 全高 / 列内纵向滚动 /
@@ -2525,23 +2510,6 @@ button.unassigned-tag:disabled {
 
 .note-textarea:focus {
   outline: none;
-}
-
-/* 创建列内 composer 撑满剩余高度 */
-.note-composer-full {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-/* 创建列内的 textarea：撑满列高（与面板等高），不参与 useAutoSize 的行高计算。 */
-.note-textarea-full {
-  flex: 1 1 auto;
-  min-height: 0;
-  height: auto;
-  max-height: none;
 }
 
 .note-textarea::placeholder {

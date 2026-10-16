@@ -19,7 +19,8 @@ import SettingsPanel from './components/SettingsPanel';
 import AboutPanel from './components/AboutPanel';
 import AccountsPanel from './components/AccountsPanel';
 import SyncLogsPanel from './components/SyncLogsPanel';
-import NotesPanel from './components/NotesPanel';
+import NotesPanel, { type NotesPanelRef } from './components/NotesPanel';
+import NoteComposerModal from './components/NoteComposerModal';
 import SessionsPanel from './components/SessionsPanel';
 import Sidebar, { type NavKey } from './components/Sidebar';
 import AgentPanel from './components/AgentPanel';
@@ -68,6 +69,10 @@ function BoardApp() {
   const [quarantineNotice, setQuarantineNotice] = useState<string | null>(null);
   // #276：每日自动检查发现新版本时的弹框提醒。
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
+  // #447：顶部标题栏「新建备忘录」Modal。
+  const [noteComposerOpen, setNoteComposerOpen] = useState(false);
+  const [noteNotice, setNoteNotice] = useState<string | null>(null);
+  const notesPanelRef = useRef<NotesPanelRef>(null);
 
   // v0.3.28+：监听全局错误上报（如 openExternal 失败），统一在错误 banner 显示，
   // 避免无 UI 上下文的异步失败只落在 console 里造成「点了没反应」。
@@ -109,6 +114,13 @@ function BoardApp() {
     }, 4000);
     return () => clearTimeout(t);
   }, [lastResult, lastWarning]);
+
+  // #447：备忘录创建成功提示 4 秒后自动消失。
+  useEffect(() => {
+    if (!noteNotice) return;
+    const t = setTimeout(() => setNoteNotice(null), 4000);
+    return () => clearTimeout(t);
+  }, [noteNotice]);
 
   // #265：监听窗口尺寸变化，窗口 < 900px 时自动收起侧边栏为纯图标模式。
   // 状态值与上次相同（同为 false / true）时 setState 为 no-op，不会触发多余重渲染，无需手抖防抖。
@@ -531,6 +543,30 @@ function BoardApp() {
           {/* #259：品牌 + 当前视图条数；账号切换移到左侧 Sidebar。 */}
           <span className="app-title">{t('app.title')}</span>
           <span className="muted">{t('topbar.totalCount', { n: visible.length })}</span>
+          {/* #447：新建备忘录入口移到顶栏，点击弹出 Modal。 */}
+          <button
+            type="button"
+            className="btn ghost topbar-add-note"
+            title={t('topbar.addNote')}
+            onClick={() => setNoteComposerOpen(true)}
+          >
+            <svg
+              className="btn-icon"
+              viewBox="0 0 24 24"
+              width="14"
+              height="14"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H18a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6.5A1.5 1.5 0 0 1 5 19.5z" />
+              <path d="M5 16.5h14 M9 8h6 M9 11.5h6" />
+            </svg>
+            <span className="btn-label">{t('topbar.addNote')}</span>
+          </button>
         </div>
 
         <div className="topbar-right">
@@ -573,18 +609,19 @@ function BoardApp() {
         </div>
       </header>
 
-      {(error || lastResult || lastWarning || quarantineNotice) && (
+      {(error || lastResult || lastWarning || quarantineNotice || noteNotice) && (
         <div className="banner-row">
           {error && <div className="banner error">{error}</div>}
-          {!error && quarantineNotice && (
+          {!error && noteNotice && <div className="banner ok">{noteNotice}</div>}
+          {!error && !noteNotice && quarantineNotice && (
             <div className="banner warn" onClick={() => setQuarantineNotice(null)}>
               {quarantineNotice}
             </div>
           )}
-          {!error && !quarantineNotice && lastWarning && (
+          {!error && !noteNotice && !quarantineNotice && lastWarning && (
             <div className="banner warn">{lastWarning}</div>
           )}
-          {!error && !quarantineNotice && !lastWarning && lastResult && (
+          {!error && !noteNotice && !quarantineNotice && !lastWarning && lastResult && (
             <div className="banner ok">{lastResult}</div>
           )}
         </div>
@@ -679,7 +716,7 @@ function BoardApp() {
           )}
           {nav === 'notes' && (
             <div className="notes-page">
-              <NotesPanel />
+              <NotesPanel ref={notesPanelRef} />
             </div>
           )}
           {nav === 'sessions' && <SessionsPanel accountId={accountFilter} />}
@@ -739,6 +776,20 @@ function BoardApp() {
       )}
 
       {showAbout && <AboutPanel onClose={() => setShowAbout(false)} />}
+
+      {/* #447：顶部标题栏新建备忘录 Modal。 */}
+      {noteComposerOpen && (
+        <NoteComposerModal
+          onClose={() => setNoteComposerOpen(false)}
+          onSave={async (content, label) => {
+            await api.addNote(content, label);
+            notesPanelRef.current?.reload();
+            setNoteComposerOpen(false);
+            setNav('notes');
+            setNoteNotice(t('notes.added'));
+          }}
+        />
+      )}
 
       {/* #276：每日自动检查发现新版本的弹框提醒。
           #329：抽成独立组件——只有弹框自身挂载时才注册 Esc 分层，否则在

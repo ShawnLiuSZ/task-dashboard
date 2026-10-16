@@ -131,13 +131,6 @@ describe('记事本四列（看板列模式，#259）', () => {
     expect(col).toMatch(/border-radius\s*:\s*10px/);
   });
 
-  it('创建列与四列同款包围框（surface-2 圆角块，不再用 border-right 分隔）', () => {
-    const add = decls('.notes-add-col');
-    expect(add).toMatch(/background\s*:\s*var\(--surface-2\)/);
-    expect(add).toMatch(/border-radius\s*:\s*10px/);
-    expect(add).not.toMatch(/border-right/);
-  });
-
   it('空列提示与看板 .empty 同款（灰色文字，不用虚线框）', () => {
     const d = decls('.note-col-empty');
     expect(d).toMatch(/color\s*:\s*var\(--text-3\)/);
@@ -185,12 +178,6 @@ describe('记事本四列（看板列模式，#259）', () => {
     // 没有 min-height: 0，flex 项的 auto 最小高度会阻止收缩，滚动条会落到可视区之外
     expect(d).toMatch(/min-height\s*:\s*0/);
   });
-
-  it('创建列的 textarea 撑满列高（不得受 260px 上限约束）', () => {
-    const d = decls('.note-textarea-full');
-    expect(d).toMatch(/flex\s*:\s*1\s+1\s+auto/);
-    expect(d).toMatch(/max-height\s*:\s*none/);
-  });
 });
 
 describe('记事本面板撑满主区（#259）', () => {
@@ -227,7 +214,7 @@ describe('记事本面板撑满主区（#259）', () => {
   });
 });
 
-describe('整行页头移除，导入/导出挪进创建列（#259）', () => {
+describe('整行页头移除，导入/导出保留在面板工具行（#447）', () => {
   it('页头（记事本 + 计数 + 工具行）已从组件与样式表中移除', () => {
     // 页头与侧边栏标题重复，白占一行纵向空间
     expect(panel).not.toContain('notes-head');
@@ -238,21 +225,16 @@ describe('整行页头移除，导入/导出挪进创建列（#259）', () => {
     expect(styles).not.toMatch(/\.notes-tools\s*\{/);
   });
 
-  it('导入/导出与收起按钮在创建列的工具行内（列收起时随列隐藏）', () => {
-    const addStart = panel.indexOf('className="notes-add-col"');
+  it('导入/导出按钮在面板工具行内（#447）', () => {
+    const toolbarStart = panel.indexOf('className="notes-toolbar"');
     const cardStart = panel.indexOf('className="notes-card-cols"');
-    const toolsIdx = panel.indexOf('notes-add-col-tools');
-    expect(addStart).toBeGreaterThan(-1);
-    expect(cardStart).toBeGreaterThan(addStart);
-    // 工具行必须落在创建列内部（add-col 开标签之后、四列区之前）——
-    // 用「位置区间」断言而不是子串包含，避免挪到别处时误判为通过
-    expect(toolsIdx, '工具行不在创建列内部').toBeGreaterThan(addStart);
-    expect(toolsIdx).toBeLessThan(cardStart);
-    const toolsBlock = panel.slice(toolsIdx, cardStart);
-    expect(toolsBlock).toContain('handleExport');
-    expect(toolsBlock).toContain('handleImport');
-    expect(toolsBlock).toContain('fileInputRef');
-    expect(toolsBlock).toContain('setAddColCollapsed(true)');
+    expect(toolbarStart, 'NotesPanel.tsx 中找不到 .notes-toolbar').toBeGreaterThan(-1);
+    expect(cardStart, 'NotesPanel.tsx 中找不到 .notes-card-cols').toBeGreaterThan(-1);
+    expect(toolbarStart, '工具行不在四列区之前').toBeLessThan(cardStart);
+    const toolbarBlock = panel.slice(toolbarStart, cardStart);
+    expect(toolbarBlock).toContain('handleExport');
+    expect(toolbarBlock).toContain('handleImport');
+    expect(toolbarBlock).toContain('fileInputRef');
   });
 
   it('列头几何不受「空列」影响（历史缺陷：空列被多顶下 8px）', () => {
@@ -262,28 +244,6 @@ describe('整行页头移除，导入/导出挪进创建列（#259）', () => {
     expect(styles).not.toMatch(/note-col--empty/);
     expect(panel).not.toContain('note-col--empty');
     expect(decls('.note-col-head')).toMatch(/margin\s*:\s*8px 8px 2px/);
-  });
-});
-
-describe('创建列收起只影响创建列（#259）', () => {
-  it('面板整体收起态已移除（记事本是主区整页，无 36px 导轨）', () => {
-    expect(panel).not.toContain('notes-panel collapsed');
-    expect(styles).not.toMatch(/\.notes-panel\.collapsed/);
-  });
-
-  it('四列区块内不得引用创建列收起状态 ⇒ 收起创建列不会动四列', () => {
-    const idx = panel.indexOf('className="notes-card-cols"');
-    expect(idx, 'NotesPanel.tsx 中找不到 .notes-card-cols').toBeGreaterThan(-1);
-    const cardColsBlock = panel.slice(idx);
-    expect(cardColsBlock).not.toContain('addColCollapsed');
-    expect(cardColsBlock).not.toContain('notes-add-col');
-  });
-
-  it('创建列与四列区共用同一父容器（.notes-body）⇒ 二者互为兄弟而非嵌套', () => {
-    expect((panel.match(/className="notes-card-cols"/g) ?? []).length).toBe(1);
-    expect((panel.match(/className="notes-add-col"/g) ?? []).length).toBe(1);
-    expect(panel).toContain('className="notes-add-rail"');
-    expect(panel).toContain('className="notes-body"');
   });
 });
 
