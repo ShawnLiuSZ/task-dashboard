@@ -2,7 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **v0.7.3 (unreleased) — Notes creation moved to top-bar Modal (#447)**
+- **v0.7.3 (2026-10-16) — Notes creation moved to top-bar Modal (#447)**
 
   - **Entry moved**: A "New note" button is added to the top bar, to the right of the task count; clicking it opens a Modal.
   - **Panel simplified**: The left-hand composer column is removed from the Notes panel, giving the full width to the four priority columns; import/export are kept in a new panel toolbar above the columns.
