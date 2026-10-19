@@ -869,16 +869,26 @@ fn migrate_tasks_v2_rebuild(conn: &Connection) -> Result<(), String> {
           account_id     INTEGER NOT NULL DEFAULT 1,
           UNIQUE(repo, number, account_id)
         );
+        -- #450：`work_dir` 必须带进白名单。`migrate_legacy_alters`（:784）会先给旧表
+        -- 补上该列，但它执行在**本重建之前**；而本重建的列清单是写死的，
+        -- 不在此处的列会被 `INSERT..SELECT` 丢掉、再由 `tasks_new` 的 DEFAULT '' 兜底
+        -- ⇒ agent 写入过的工作目录在迁移后**静默清空且不可恢复**。
+        -- 这正是本文件 :426-431 记录的硬约束（「新增列的 ALTER 必须写在
+        -- `MIGRATION_DDL` 而非 `migrate_legacy_alters`，否则会被重建丢掉」）的同型问题。
+        -- ⚠️ `author` / `parent_issue` / `sub_issues` 三列**有意不带走**：它们是 v0.6.x
+        -- 才加入的，`user_version < 1` 的旧库从来不存在这些列，无源可取，由
+        -- `MIGRATION_DDL` 的幂等 ALTER 补默认值即可。
         INSERT INTO tasks_new
           (issue_key, owner, repo, number, title, url, issue_state, ownership, status,
            session_id, session_agent, session_at, candidate_done, stale, project_status,
            assignees, labels, done_at, mentioned, comments_count, latest_comment_url,
-           pr_number, pr_url, branch, work_branch, handoff, updated_at, synced_at, account_id)
+           pr_number, pr_url, branch, work_branch, work_dir, handoff, updated_at, synced_at,
+           account_id)
         SELECT
            key, owner, repo, number, title, url, gh_state, ownership, status,
            session_id, session_agent, session_at, candidate_done, stale, gh_status,
            assignees, labels, done_at, mentioned, comments_count, latest_comment_url,
-           pr_number, pr_url, branch, work_branch, handoff,
+           pr_number, pr_url, branch, work_branch, work_dir, handoff,
            COALESCE(CAST(strftime('%s', NULLIF(TRIM(updated_at), '')) AS INTEGER), 0),
            synced_at, account_id
         FROM tasks;
@@ -3399,15 +3409,18 @@ mod tests {
                 mentioned INTEGER NOT NULL DEFAULT 0, comments_count INTEGER NOT NULL DEFAULT 0,
                 latest_comment_url TEXT NOT NULL DEFAULT '', pr_number INTEGER NOT NULL DEFAULT 0,
                 pr_url TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL DEFAULT '',
-                work_branch TEXT NOT NULL DEFAULT '', handoff TEXT NOT NULL DEFAULT '',
+                work_branch TEXT NOT NULL DEFAULT '',
+                -- #450：`migrate_legacy_alters` 会给旧表补这一列，且它执行在重建之前 ⇒
+                -- 重建必须把它带走，否则工作目录被静默清空。
+                work_dir TEXT NOT NULL DEFAULT '', handoff TEXT NOT NULL DEFAULT '',
                 updated_at TEXT, synced_at INTEGER NOT NULL, account_id INTEGER NOT NULL DEFAULT 1
             );
             -- 模拟「上次重建中途失败」留下的残骸
             CREATE TABLE tasks_new (bogus TEXT);
             INSERT INTO tasks (key, owner, repo, number, title, url, gh_state, ownership, status,
-                               work_branch, handoff, updated_at, synced_at)
+                               work_branch, work_dir, handoff, updated_at, synced_at)
             VALUES ('o/r#1', 'o', 'r', 1, 't', 'u', 'open', 'notassignee', 'doing',
-                    'feature/x', '交接内容', '2026-01-01T00:00:00Z', 100);
+                    'feature/x', '/Users/dev/work/repo', '交接内容', '2026-01-01T00:00:00Z', 100);
             "#,
         )
         .unwrap();
@@ -3435,6 +3448,17 @@ mod tests {
         assert_eq!(wb, "feature/x", "agent 工作分支不能被重建丢掉");
         assert_eq!(handoff, "交接内容", "handoff 不能被重建丢掉");
         assert_eq!(updated_at, 1_767_225_600, "RFC3339 应转成 Unix 秒");
+
+        // #450：`work_dir` 必须随重建搬迁。`migrate_legacy_alters`（:784）会给旧表补该列，
+        // 但它跑在重建**之前**，而重建列清单写死 —— 不把 `work_dir` 写进 `INSERT..SELECT`
+        // 就会退回 `tasks_new` 的 DEFAULT ''，agent 写入过的工作目录**静默清空且不可恢复**。
+        let work_dir: String = conn
+            .query_row("SELECT work_dir FROM tasks", [], |r| r.get(0))
+            .expect("work_dir 必须可读");
+        assert_eq!(
+            work_dir, "/Users/dev/work/repo",
+            "work_dir 不能被重建白名单丢掉"
+        );
 
         let legacy_key: bool = conn
             .prepare("SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'key'")

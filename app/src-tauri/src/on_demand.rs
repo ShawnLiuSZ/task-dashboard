@@ -403,8 +403,25 @@ pub fn ensure_task_available(conn: &Connection, ref_: &str) -> Result<EnsureOutc
     // 竞态防护：拉取期间 App 的同步可能刚好写入了这一行。用 InsertIfAbsent——
     // 行已存在则零副作用，**绝不覆盖**同步写入的 project_status / mentioned / pr_* 等字段
     // （按需拉取拿不到这些值，覆盖即等于清空）。
-    crate::db::write_task(conn, &row, now, TaskWriteMode::InsertIfAbsent)?;
-    Ok(EnsureOutcome::Pulled)
+    let affected = crate::db::write_task(conn, &row, now, TaskWriteMode::InsertIfAbsent)?;
+    Ok(outcome_from_affected(affected))
+}
+
+/// #450：把 `InsertIfAbsent` 的受影响行数翻译成 `EnsureOutcome`。
+///
+/// `InsertIfAbsent` 在「行已存在」时返回 0 且零覆盖，因此 0 意味着
+/// **本次按需拉取并没有真的写入任何东西** —— 报 `Pulled` 会让 MCP 返回 `pulled: true`
+/// 误导 agent「刚创建」。数据本身不受影响（DO NOTHING 仍零覆盖），只有标志位在说谎。
+///
+/// 抽成独立函数是为了让这个决策点**可被单测覆盖**：`ensure_task_available` 本身需要网络，
+/// 无法在单测里跑通。
+fn outcome_from_affected(affected: usize) -> EnsureOutcome {
+    if affected == 0 {
+        // 行已由同步抢先写入：如实报告「本地已有」。
+        EnsureOutcome::AlreadyLocal
+    } else {
+        EnsureOutcome::Pulled
+    }
 }
 
 #[cfg(test)]
@@ -637,5 +654,30 @@ mod tests {
             }
             other => panic!("无账号应为 Unavailable，实际: {other:?}"),
         }
+    }
+
+    /// #450 回归：`InsertIfAbsent` 受影响 0 行时**不得**报 `Pulled`。
+    ///
+    /// 缺陷形态：原实现丢弃 `write_task` 返回值、无条件回 `Pulled`，于是同步抢先写入时
+    /// MCP 返回 `pulled: true`，agent 会以为「刚创建」而实际零写入。
+    ///
+    /// **反向验证**：把 `outcome_from_affected` 改回恒返回 `Pulled` 时，
+    /// `insert_if_absent_zero_must_not_report_pulled` 必然失败。
+    #[test]
+    fn insert_if_absent_zero_must_not_report_pulled() {
+        // 0 行受影响 = 行已存在（DO NOTHING 零覆盖）⇒ 如实报告「本地已有」。
+        assert_eq!(
+            super::outcome_from_affected(0),
+            EnsureOutcome::AlreadyLocal,
+            "0 行受影响说明什么都没写入，不得报 Pulled"
+        );
+        assert!(
+            !super::outcome_from_affected(0).pulled(),
+            "`pulled()` 必须为 false，否则 MCP 返回体里的 pulled:true 会误导 agent"
+        );
+
+        // ≥1 行 = 真插入 ⇒ 报 Pulled。
+        assert_eq!(super::outcome_from_affected(1), EnsureOutcome::Pulled);
+        assert!(super::outcome_from_affected(1).pulled());
     }
 }

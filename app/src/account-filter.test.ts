@@ -118,13 +118,48 @@ describe('任务会话面板遵守同一套账号语义（#422）', () => {
     const m = commandsRaw.match(/pub fn list_active_sessions\([\s\S]*?\n\}/);
     expect(m).not.toBeNull();
     expect(m![0]).toMatch(/account_id:\s*Option<i64>/);
-    expect(m![0]).toMatch(/Some\(0\)\s*=>\s*None/);
     expect(m![0]).toMatch(/t\.account_id\s*==\s*id/);
+    // #450：账号解析已抽到 resolve_session_account_filter，函数体只剩调用。
+    expect(m![0]).toMatch(/resolve_session_account_filter\(&conn,\s*account_id\)/);
   });
 
-  it('后端语义与 list_tasks 一致：都把 Some(0) 视作聚合', () => {
+  it('#422 三态编码在 resolve_session_account_filter 中完整实现', () => {
+    // #450：解析逻辑从 list_active_sessions 抽到共用函数后，#422 口径的守卫
+    // 必须跟着搬过来 —— 否则「函数抽走了、守卫没跟上」会留下真空。
+    const m = commandsRaw.match(/fn resolve_session_account_filter\([\s\S]*?\n\}/);
+    expect(m).not.toBeNull();
+    const src = m![0];
+    // Some(0) ⇒ None（聚合全部）
+    expect(src).toMatch(/Some\(0\)\s*=>\s*None/);
+    // Some(n) ⇒ n（原样透传）
+    expect(src).toMatch(/Some\(n\)\s*=>\s*Some\(n\)/);
+    // None ⇒ 读 meta.active_account_id，>0 才返回（**不是**直接 None）
+    expect(src).toMatch(/None\s*=>\s*\{/);
+    expect(src).toMatch(/read_active_account_id\(conn\)/);
+    expect(src).toMatch(/if active\s*>\s*0/);
+    // ⚠️ 关键防线：None 分支必须**读 meta**，而不是直接透传成「不过滤」。
+    // 旧缺陷写法是 `None => None`（与 Some(0) 混同）⇒ 会话面板显示全账号会话。
+    const noneBranch = src.slice(src.indexOf('None => {'));
+    expect(noneBranch).not.toMatch(/None\s*=>\s*None\s*[,}]/);
+  });
+
+  it('后端语义与 list_tasks 一致：都把 Some(0) 视作聚合、都让 None 回落 meta', () => {
     // 两处口径必须一致，否则会出现「列表按账号、会话不按账号」的错位。
-    const sessions = commandsRaw.match(/pub fn list_active_sessions\([\s\S]*?\n\}/)![0];
-    expect(sessions).toMatch(/Some\(0\)\s*=>\s*None/);
+    // #450：rows_to_tasks 与 list_active_sessions 现在**共用**同一解析函数，
+    // 口径一致性由结构保证；本断言守住「共用关系不被拆开」。
+    expect(commandsRaw).toMatch(
+      /pub fn list_active_sessions\([\s\S]*?resolve_session_account_filter\(&conn,\s*account_id\)/,
+    );
+    // rows_to_tasks 侧仍须保留自己的回落逻辑（它还兼ownership 过滤，
+    // 不能直接复用会话侧的纯解析），口径必须一致。
+    // ⚠️ `read_active_account_id(conn)` 在 match **之前**调用（`let active_account_id = …`），
+    // 断言范围必须覆盖到那一行，只框 match 块会漏掉。
+    const rowsToTasks = commandsRaw.match(
+      /let active_account_id = read_active_account_id\(conn\);[\s\S]*?let account_id: Option<i64> = match account_filter \{[\s\S]*?\n\s*\};/,
+    );
+    expect(rowsToTasks).not.toBeNull();
+    expect(rowsToTasks![0]).toMatch(/read_active_account_id\(conn\)/);
+    expect(rowsToTasks![0]).toMatch(/Some\(0\)\s*=>\s*None/);
+    expect(rowsToTasks![0]).toMatch(/active_account_id\s*>\s*0/);
   });
 });
