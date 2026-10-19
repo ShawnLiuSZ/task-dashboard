@@ -12,7 +12,6 @@ import type { CSSProperties } from 'react';
 import { api } from '../api';
 import { useT } from '../i18n';
 import type { Note } from '../types';
-import { groupNotesByDate } from '../utils/noteDateGroups';
 
 type NoteLabel = Note['label'];
 
@@ -167,16 +166,12 @@ export default forwardRef<NotesPanelRef>(function NotesPanel(_props, ref) {
     void loadNotes();
   }, [loadNotes]);
 
-  // #456：分列依据从**优先级**改为**添加日期**（相对时间段，列序从新到旧）。
+  // #456：改为**列表展示**（与「任务会话」面板同构的单网格列表，不再分列）。
   //
-  // 优先级不再作为分列维度，但**颜色保留在卡片上**（`--note-accent` + `.note-tag` 色点），
-  // 切换优先级的交互链路完全不变。原先的 `priorityColumns` 及其排序一并移除 ——
-  // 列内已由日期分组函数保证倒序，不再需要全局按优先级排序。
-  //
-  // `now` 存state 而非在渲染里直接调 `Date.now()`：分组是纯函数、依赖显式时间戳，
-  // 这样才能在测试里注入固定时刻验证日期边界。
-  const [now] = useState(() => Date.now());
-  const dateColumns = useMemo(() => groupNotesByDate(notes, now), [notes, now]);
+  // 排序只用**创建时间倒序** —— 最新的在最前面，符合「刚写了什么」的使用直觉。
+  // 优先级既不再分列也不再参与排序，仅作为**卡片上的颜色标记**存在
+  // （`--note-accent` + `.note-tag` 色点），切换优先级的交互链路完全不变。
+  const sortedNotes = useMemo(() => [...notes].sort((a, b) => b.createdAt - a.createdAt), [notes]);
 
   const renderNoteCard = (note: Note) => {
     const opt = labelOf(labels, note.label);
@@ -458,28 +453,16 @@ export default forwardRef<NotesPanelRef>(function NotesPanel(_props, ref) {
         />
       </div>
 
-      {/* #456：按添加日期横向分列（今天 → 昨天 → 本周 → 更早，只渲染非空列）。
-          列头**不再有优先级色点与彩色列顶横条** —— 优先级颜色改由卡片承载
- （`.note-tag .note-dot` 取 `--note-accent`；卡片左侧色条是#259 时用户主动去掉的，勿再加回）。 */}
-      <div className="notes-card-cols" aria-busy={refreshing || undefined}>
+      {/* #456：列表展示 —— 网格容器与「任务会话」面板的 `.sessions-list` 同参
+          （auto-fill minmax(320px, 1fr)：宽窗口自动排多列，窄窗口降为单列）。
+          优先级颜色完全由卡片承载（`--note-accent` + `.note-tag` 色点），列不再存在。 */}
+      <div className="notes-list" aria-busy={refreshing || undefined}>
         {loading ? (
           <div className="notes-placeholder">{t('notes.loading')}</div>
+        ) : sortedNotes.length === 0 ? (
+          <div className="notes-placeholder">{t('notes.colEmpty')}</div>
         ) : (
-          dateColumns.map((col) => (
-            <div key={col.key} className={`note-col note-col--${col.key}`}>
-              <div className="note-col-head">
-                <span className="note-col-title">{t(`notes.dateGroup.${col.key}`)}</span>
-                <span className="note-col-count">{col.items.length}</span>
-              </div>
-              <div className="note-col-body">
-                {col.items.length === 0 ? (
-                  <div className="note-col-empty">{t('notes.colEmpty')}</div>
-                ) : (
-                  col.items.map(renderNoteCard)
-                )}
-              </div>
-            </div>
-          ))
+          sortedNotes.map(renderNoteCard)
         )}
       </div>
     </aside>
