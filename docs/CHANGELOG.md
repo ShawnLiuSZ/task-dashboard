@@ -13,7 +13,8 @@
   - **迁移不再丢 `work_dir`**：`migrate_legacy_alters` 会给旧表补 `work_dir` 且执行在物理重建**之前**，而重建的列清单是写死的 —— 不把该列写进 `INSERT..SELECT` 就会退回默认空串，**agent 写入过的工作目录静默清空且不可恢复**。已补入白名单（`author` / `parent_issue` / `sub_issues` 有意不带：旧库本无此列，无源可取）。
   - **按需拉取不再谎报「已拉取」**：`InsertIfAbsent` 的返回值原先被丢弃、无条件回 `Pulled`，于是同步抢先写入时 agent 会收到 `pulled: true` 却其实什么都没写。改为按受影响行数区分 `Pulled` / `AlreadyLocal`（数据本身不受影响，`DO NOTHING` 仍零覆盖）。
   - DB schema / SQL / MCP 工具集 / i18n 零改动。
-  - **验证**：`cargo test` · `cargo fmt --check` · `cargo clippy -D warnings` 全绿。新增回归测试 4 组，其中「`等待完成` 不得判 done」「`work_dir` 随重建搬迁」两条在旧实现下**必然失败**（反向验证）。
+  - **验证**：`cargo test` **202 + 27 passed**（原 198 + 27）· `cargo fmt --check` · `cargo clippy -D warnings`（零警告）· `vitest` **318 passed** · `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check` / `check-mcp-columns` / `check-doc-links` 全绿。
+  - **反向验证 4/4 捕获**：3 处变异（账号回落改为不过滤 / `Pulled` 标志恒真 / 重建白名单去掉 `work_dir`）→ 4 个测试失败。其中变异 1 同时被 Rust 单测与前端 `account-filter.test.ts` 静态守卫两侧捕获。
   - 详见 [`issue-450-backend-logic-fixes.md`](./issue-450-backend-logic-fixes.md)
 
 - **v0.7.3（2026-10-16）— 备忘录创建入口改为顶部标题栏 Modal（#447）**

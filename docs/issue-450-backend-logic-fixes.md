@@ -158,6 +158,7 @@ agent 会以为「刚创建」。
 | `commands::tests::session_account_filter_actually_filters_rows` | 新增。锁「解析 → 行过滤」完整链路 |
 | `on_demand::tests::insert_if_absent_zero_must_not_report_pulled` | 新增。0 行不得报 `Pulled` |
 | `db::tests::tasks_v2_rebuild_heals_leftover_tasks_new` | **修改**。建表与断言补 `work_dir` |
+| `account-filter.test.ts`（前端静态守卫） | **修改**。#422 口径断言从 `list_active_sessions` 函数体搬到 `resolve_session_account_filter`，并新增「`None` 分支必须读 meta、不得直接透传」的防线 |
 
 ### 反向验证（非恒真断言）
 
@@ -173,10 +174,15 @@ agent 会以为「刚创建」。
 ### 已跑校验
 
 ```
-cargo fmt --check           ✅
-cargo clippy --lib -p taskboard -- -D warnings   ✅
-cargo test -p taskboard     ✅
-python3 scripts/check-mcp-columns.py             ✅（列白名单变更后必跑）
+cargo fmt --check                                ✅
+cargo clippy --lib -p taskboard -- -D warnings   ✅（零警告）
+cargo test -p taskboard                          ✅（202 + 27 passed）
+npx vitest run                                   ✅（318 passed）
+npx tsc --noEmit                                 ✅
+npm run lint                ✅（--max-warnings 0，脚本内建）
+npx prettier --check                              ✅
+npm run i18n:check                                ✅
+python3 scripts/check-mcp-columns.py             ✅
 python3 scripts/check-doc-links.py               ✅
 ```
 
