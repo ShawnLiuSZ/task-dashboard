@@ -61,6 +61,10 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
   const [refreshing, setRefreshing] = useState(false);
   const loadedOnce = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  // #452：`copiedKey` 用 `taskIdentity`（issueKey@accountId）而非裸 `issueKey`，
+  // 与选中态 / 卡片 key 同口径（#438 已统一选中态，此前漏了这里）。
+  // 聚合视图下同一 issueKey 可来自两个账号，用裸 issueKey 会让两个条目共享
+  // 同一个 copiedKey ⇒ 复制其中一条的分支/目录/会话，另一条也错误亮起「已复制」。
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [clearKey, setClearKey] = useState<string | null>(null);
   // #391：多选删除——选择模式 + 已选 issueKey 集合 + 批量确认框。
@@ -374,10 +378,10 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
                             title={t('sessions.copyBranch')}
                             onClick={(e) => {
                               e.stopPropagation();
-                              void handleCopy(task.workBranch, `branch-${task.issueKey}`);
+                              void handleCopy(task.workBranch, `branch-${taskIdentity(task)}`);
                             }}
                           >
-                            {copiedKey === `branch-${task.issueKey}` ? (
+                            {copiedKey === `branch-${taskIdentity(task)}` ? (
                               <Icon d={ICON.check} />
                             ) : (
                               <Icon d={ICON.copy} />
@@ -395,10 +399,10 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
                             title={t('sessions.copyDir')}
                             onClick={(e) => {
                               e.stopPropagation();
-                              void handleCopy(task.workDir, `dir-${task.issueKey}`);
+                              void handleCopy(task.workDir, `dir-${taskIdentity(task)}`);
                             }}
                           >
-                            {copiedKey === `dir-${task.issueKey}` ? (
+                            {copiedKey === `dir-${taskIdentity(task)}` ? (
                               <Icon d={ICON.check} />
                             ) : (
                               <Icon d={ICON.copy} />
@@ -416,10 +420,10 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
                             title={t('sessions.copySession')}
                             onClick={(e) => {
                               e.stopPropagation();
-                              void handleCopy(task.sessionId!, `session-${task.issueKey}`);
+                              void handleCopy(task.sessionId!, `session-${taskIdentity(task)}`);
                             }}
                           >
-                            {copiedKey === `session-${task.issueKey}` ? (
+                            {copiedKey === `session-${taskIdentity(task)}` ? (
                               <Icon d={ICON.check} />
                             ) : (
                               <Icon d={ICON.copy} />

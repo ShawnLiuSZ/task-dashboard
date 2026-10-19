@@ -6,6 +6,16 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.4（未发布）— 修复过期请求参数重放 / 复制高亮键串号（#452）**
+
+  - **失败即丢弃积压**：`coalescedLoad` 原先在 `exec` 抛错后把残留 `pending` 留给「下次调用消费」，而那个 pending 是**更早一次**的请求参数 —— 时序为「A 执行中→ B 记入 pending → A 抛错残留 B → C 触发新循环 → 循环末尾取出 B 又跑一遍」。最终 state 被更早的筛选覆盖，表现为**切到 C 账号却显示 B 账号数据**。现于 `catch` 中清空后重新抛出；成功路径的 #221 合并语义**不变**。
+  - **复制高亮键改用 `taskIdentity`**：`SessionsPanel` 三处复制入口（分支 / 目录 / 会话 id）的「已复制」勾，#438 已把选中态统一为 `taskIdentity`（`issueKey@accountId`），此处漏改。聚合视图下同一 `issueKey` 可来自两个账号，共享同一 `copiedKey` ⇒ 复制一条后另一条也错误亮起。六处（3 写入 + 3 读取）一次性对齐。
+  - **写入点与读取点必须同时改**：只改一侧会让勾**永远亮不起来**（比串号更难察觉，用户只会认为「点击没反应」）。测试对两者分别断言，并加一条「不得回退裸 `issueKey`」堵住改了一半的中间态。
+  - 后端 / DB schema / MCP 工具集 / i18n 零改动。
+  - **验证**：`vitest` **324 passed**（原 318）· `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check` 全绿。
+  - **反向验证 2/2 捕获**：去掉 `catch` 清理 ⇒ 时序用例失败；`copiedKey` 读取点回退裸 `issueKey` ⇒ 两条守卫失败。
+  - 详见 [`issue-452-frontend-state-fixes.md`](./issue-452-frontend-state-fixes.md)
+
 - **v0.7.4（未发布）— MCP 双实现对齐 / workflow 检查误报 / CI 盲区补齐（#451）**
 
   - **MCP 分帧语义对齐 Rust**：缺 / 不可解析 `Content-Length` 由 `Malformed` 改判 **`Fatal`**。原注释「头部已正常收尾 ⇒ 帧边界已知，继续读是安全的」推理错误 —— 缺该头恰恰说明**正文长度未知**，按 `Malformed` 继续读会把正文字节当头部解析、产出垃圾帧。Rust 侧 [#357](https://github.com/ShawnLiuSZ/task-dashboard/issues/357) 早已修正，Python 侧未跟上；两条把错误行为钉死的测试同步更新。
