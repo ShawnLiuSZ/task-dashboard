@@ -12,6 +12,7 @@ import type { CSSProperties } from 'react';
 import { api } from '../api';
 import { useT } from '../i18n';
 import type { Note } from '../types';
+import { groupNotesByDate } from '../utils/noteDateGroups';
 
 type NoteLabel = Note['label'];
 
@@ -166,29 +167,16 @@ export default forwardRef<NotesPanelRef>(function NotesPanel(_props, ref) {
     void loadNotes();
   }, [loadNotes]);
 
-  // 排序：优先级 urgent(0) > high(1) > medium(2) > low(3)；同优先级按倒序创建时间。
-  const sortedNotes = useMemo(() => {
-    const prio: Record<NoteLabel, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
-    return [...notes].sort((a, b) => {
-      const pd = prio[a.label] - prio[b.label];
-      return pd !== 0 ? pd : b.createdAt - a.createdAt;
-    });
-  }, [notes]);
-
-  // 按优先级分列（右侧横向 card 列用），列内按创建时间倒序。
-  const priorityColumns = useMemo(() => {
-    const prioOrder: NoteLabel[] = ['urgent', 'high', 'medium', 'low'];
-    const byPrio = new Map<NoteLabel, Note[]>();
-    for (const n of sortedNotes) {
-      if (!byPrio.has(n.label)) byPrio.set(n.label, []);
-      byPrio.get(n.label)!.push(n);
-    }
-    return prioOrder.map((p) => ({
-      label: p,
-      items: byPrio.get(p) ?? [],
-      opt: labelOf(labels, p),
-    }));
-  }, [sortedNotes, labels]);
+  // #456：分列依据从**优先级**改为**添加日期**（相对时间段，列序从新到旧）。
+  //
+  // 优先级不再作为分列维度，但**颜色保留在卡片上**（`--note-accent` + `.note-tag` 色点），
+  // 切换优先级的交互链路完全不变。原先的 `priorityColumns` 及其排序一并移除 ——
+  // 列内已由日期分组函数保证倒序，不再需要全局按优先级排序。
+  //
+  // `now` 存state 而非在渲染里直接调 `Date.now()`：分组是纯函数、依赖显式时间戳，
+  // 这样才能在测试里注入固定时刻验证日期边界。
+  const [now] = useState(() => Date.now());
+  const dateColumns = useMemo(() => groupNotesByDate(notes, now), [notes, now]);
 
   const renderNoteCard = (note: Note) => {
     const opt = labelOf(labels, note.label);
@@ -470,20 +458,17 @@ export default forwardRef<NotesPanelRef>(function NotesPanel(_props, ref) {
         />
       </div>
 
-      {/* 右侧：固定四列（紧急 / 高 / 中 / 低），与看板列同构：等宽、全高、列内纵向滚动。 */}
+      {/* #456：按添加日期横向分列（今天 → 昨天 → 本周 → 更早，只渲染非空列）。
+          列头**不再有优先级色点与彩色列顶横条** —— 优先级颜色改由卡片承载
+ （`.note-tag .note-dot` 取 `--note-accent`；卡片左侧色条是#259 时用户主动去掉的，勿再加回）。 */}
       <div className="notes-card-cols" aria-busy={refreshing || undefined}>
         {loading ? (
           <div className="notes-placeholder">{t('notes.loading')}</div>
         ) : (
-          priorityColumns.map((col) => (
-            <div
-              key={col.label}
-              className={`note-col note-col--${col.label}`}
-              style={{ '--col-accent': col.opt.color } as CSSProperties}
-            >
+          dateColumns.map((col) => (
+            <div key={col.key} className={`note-col note-col--${col.key}`}>
               <div className="note-col-head">
-                <span className="note-col-dot" aria-hidden="true" />
-                <span className="note-col-title">{col.opt.label}</span>
+                <span className="note-col-title">{t(`notes.dateGroup.${col.key}`)}</span>
                 <span className="note-col-count">{col.items.length}</span>
               </div>
               <div className="note-col-body">
