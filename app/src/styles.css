@@ -2221,11 +2221,10 @@ button.unassigned-tag:disabled {
 /* #259：记事本作为主区「整页」——撑满主内容区。
  * ⚠️ 组件里**不得**再挂行内 flex/width：行内样式优先级高于样式表，
  * 曾把面板锁在 25% 宽，导致右侧四列被压成竖条 + 容器横向滚动条。
- * 背景用 --bg（与看板页面一致）：列底色是 --surface-2，底色相同则列的包围框不可见。 */
-/* 记事本列宽：与看板 .column 保持一致（固定 320px）——两处面板的列视觉统一。
- * 创建列与四个优先级列共用同一变量。 */
+ * 背景用 --bg（与看板页面一致）：卡片底色是 --surface-2，底色相同则卡片边界不可见。
+ * #456：--notes-col-w（原「四列固定列宽」）随分列一同移除 ——
+ * 网格列最小宽度改由 `.notes-list` 的 minmax(320px, 1fr) 定义，字面量不再重复一份。 */
 .notes-panel {
-  --notes-col-w: 320px;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
@@ -2383,85 +2382,30 @@ button.unassigned-tag:disabled {
   flex: 1 1 auto;
 }
 
-/* 右侧：固定四列（紧急/高/中/低）。
- * 列最小宽度固定（--notes-col-w）⇒ 窄窗口压不扁、出**有意**的横向滚动条；
- * 宽窗口则四列等分撑满，不留死空间。纵向滚动下沉到每列内部（.note-col-body）。 */
-.notes-card-cols {
+/* #456：列表展示 —— 网格参数与「任务会话」面板的 `.sessions-list` **完全同参**
+ * （auto-fill minmax(320px, 1fr)）：宽窗口自动排多列卡片，窄窗口自然降为单列。
+ * 这取代了原先的 `.notes-card-cols` 横向分列（priorityColumns / dateColumns）——
+ * 分列在备忘录场景下纵向聚合价值低，反倒挤掉了每张卡片的横向空间。
+ *
+ * 纵向滚动交给容器自身（面板已 overflow: hidden + flex 列，列表区 flex:1）。
+ */
+.notes-list {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  display: flex;
-  flex-direction: row;
-  align-items: stretch;
-  gap: 12px;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-/* #329：后台刷新（增删改后的重查）只做轻量降透明提示，不再整块替换成「加载中」占位，
-   避免右栏四列跳变。`aria-busy` 由 NotesPanel 在 refreshing 时设置。 */
-.notes-card-cols[aria-busy] {
-  opacity: 0.65;
-}
-
-/* #456：列不再承载优先级 —— 分列依据已从「优先级」改为「添加日期」，
- * 列头不再有彩色圆点、列顶不再有彩色横条（原先由 --col-accent 注入优先级色）。
- * 优先级颜色完全由卡片承载：`.note-card` 的 --note-accent + `.note-tag .note-dot`。
- * 视觉重心回到列头文字（日期），日期列之间靠背景色而非色条区分。 */
-.note-col {
-  flex: 0 0 var(--notes-col-w);
-  width: var(--notes-col-w);
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface-2);
-  border: 0.5px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-  overflow: clip;
-}
-
-/* 列头：与看板 .column-head 同款几何，**不带底色**。#456 起只有日期文案 + 计数。 */
-.note-col-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  margin: 8px 8px 2px;
-  padding: 5px 10px;
-  border-radius: 7px;
-}
-
-/* #456：`.note-col-dot` 已随优先级色点一并移除（列头只剩日期文字）。
- * 保留一条空规则以说明为何不再有该元素，避免后来者误加回来。 */
-
-.note-col-title {
-  font-weight: 500;
-}
-
-.note-col-count {
-  margin-left: auto;
-  color: var(--text-3);
-  font-size: 11px;
-}
-
-/* 列内滚动容器：每列各自纵向滚动，与看板 .column-body 同参。
- * overscroll-behavior: contain —— 列体滚到头后不再向父级（列框/页面）链式滚动。 */
-.note-col-body {
-  flex: 1 1 auto;
-  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 10px;
+  align-content: start;
   overflow-y: auto;
+  padding: 8px;
   overscroll-behavior: contain;
-  padding: 0 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
-/* 空列提示：与看板 .empty 同款（灰色文字，不用虚线框——列本身就是包围框）。 */
-.note-col-empty {
-  color: var(--text-3);
-  font-size: 11px;
-  padding: 8px 4px;
+
+/* #329：后台刷新（增删改后的重查）只做轻量降透明提示，不再整块替换成「加载中」占位。
+ * `aria-busy` 由 NotesPanel 在 refreshing 时设置。 */
+.notes-list[aria-busy] {
+  opacity: 0.65;
 }
 
 /* ---------- 新建区 ---------- */
@@ -2567,30 +2511,39 @@ button.unassigned-tag:disabled {
   padding: 18px 8px;
 }
 
+/* #456：列表展示后卡片与「任务会话」的 `.session-card` 同构 ——
+ * 背景 --surface-2、边框取优先级色（--note-accent，由组件按标签注入），
+ * 形状与几何对齐（radius 10px / padding 12px 14px / gap 8px / column 布局）。
+ * 边框染色是关键：网格里不再有列头做视觉锚点，优先级全靠卡片边框 + 标签色点传达。 */
 .note-card {
   position: relative;
-  /* 列是固定宽度，但卡片仍须能收缩：否则子元素（.note-foot）的 min-content
-   * 会把卡片撑宽，进而在 .note-col-body（overflow-y: auto ⇒ overflow-x 计算成 auto）
+  /* 网格列最小 320px，但卡片仍须能收缩：否则子元素（.note-foot）的 min-content
+   * 会把卡片撑宽，进而在 .notes-list（overflow-y: auto ⇒ overflow-x 计算成 auto）
    * 里长出横向滚动条。 */
   min-width: 0;
-  background: var(--surface);
-  border: 0.5px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 12px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--note-accent, var(--border));
+  border-radius: 10px;
+  padding: 12px 14px;
   transition:
     box-shadow 0.15s,
     border-color 0.15s;
 }
 
-/* 用户指定：卡片不再用左侧色条区分优先级（优先级由列分组 + 卡片底部标签表达）。 */
+/* 用户指定（#259）：卡片不用左侧色条区分优先级 —— 改为整圈边框染色 + 标签色点。 */
 
 .note-card:hover {
   border-color: var(--border-strong);
   box-shadow: 0 2px 8px var(--shadow);
 }
 
+/* #456：卡片改为 column 布局 + gap 8px（与 .session-card 同参）后，
+ * 原来给页脚留的 margin-bottom 4px 会变成额外间距 ⇒ 归零。 */
 .note-content {
-  margin: 0 0 4px;
+  margin: 0;
   font-size: 0.8125rem;
   line-height: 1.6;
   color: var(--text);

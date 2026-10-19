@@ -5,27 +5,23 @@ import stylesRaw from '../styles.css?raw';
 import panelRaw from './NotesPanel.tsx?raw';
 
 /**
- * 记事本分列布局回归测试（#259 建立，#456 改列依据）。
+ * 记事本列表布局回归测试（#259 建立，#456 改列表）。
  *
- * 演进（2026-09-16，两轮）：
- * 1. 初版按「四列等宽可收缩」实现，但真机四列被压成~18px 竖条 —— 根因是
+ * 演进（2026-09-16 两轮 + 2026-10-19 一轮）：
+ * 1. 初版按「四列等宽可收缩」实现，但真机四列被压成 ~18px 竖条 —— 根因是
  *    `NotesPanel` 在面板元素上挂了行内 `style={{flex:'0 0 25%', width:'25%'}}`（#202 遗留），
  *    行内样式优先级高于样式表，`.notes-page .notes-panel` 的「撑满」覆盖从未生效。
- * 2. 移除宽度机制 + 面板整页化后，用户把交互定为**看板列模式**：
- *    四列**固定宽度**（与最左侧创建列同宽，`--notes-col-w`）、放不下时出**有意**的
- *    横向滚动条、卡片不再用左侧色条区分优先级。
- * 3. **#456**：分列依据从「优先级」改为「添加日期」（相对时间段，列序从新到旧），
- *    列数随数据变化（只渲染非空列）。列的**几何**（宽度 / 滚动 / 边框 / 列头尺寸）
- *    全部沿用第 2 步的成果，本文件继续守护；变化的是「列头不再有优先级色点、
- *    列顶不再有色横条、优先级色改由卡片承载」。
+ * 2. 移除宽度机制 + 面板整页化后定为**看板列模式**：四列固定宽度、放不下出横向滚动条。
+ * 3. **#456**：改为**列表展示** —— 网格参数与「任务会话」面板的 `.sessions-list` 完全同参
+ *    （`auto-fill minmax(320px, 1fr)`），不再分列、不再有列头/列体/列宽变量。
+ *    优先级从「分列依据」降级为「卡片边框 + 标签色点」的**颜色标记**。
  *
- * 判定口径（最终）：面板必须撑满主区且不得再挂行内宽度；列与创建列共用同一宽度变量；
- * 容器是受约束的横向滚动区（overflow-x: auto + overflow-y: hidden，不换行）；
- * 纵向滚动下沉到每列内部；卡片/页脚可收缩。
+ * 判定口径（最终）：面板撑满主区且不挂行内宽度；网格与 `.sessions-list` 逐项同参；
+ * 列表区是受约束的纵向滚动区；卡片与 `.session-card` 同构且可收缩；旧的分列结构零残留。
  *
- * ⚠️ 本仓库约定：改被静态断言覆盖的源码必须**同步改这里**（#444 / #450 / #452 均踩过）。
+ * ⚠️ 本仓库约定：改被静态断言覆盖的源码必须**同步改这里**（#444 / #450 / #452 / #456 均踩过）。
  *
- * vitest 跑在node 环境（无 DOM、无布局引擎），无法用渲染断言覆盖，
+ * vitest 跑在 node 环境（无 DOM、无布局引擎），无法用渲染断言覆盖，
  * 因此改为对源码做静态断言——与 `styles.test.ts`、`scripts/check-*.py` 同一思路。
  */
 
@@ -71,135 +67,102 @@ function decls(selector: string): string {
   return hits.join('\n');
 }
 
-describe('记事本分列（看板列模式，#259；列依据改为日期 #456）', () => {
-  it('容器不换行：flex-wrap 不得为 wrap', () => {
-    expect(decls('.notes-card-cols')).not.toMatch(/flex-wrap\s*:\s*wrap/);
-  });
-
-  it('容器是受约束的横向滚动区：列宽固定后，横向滚动是「有意」的', () => {
-    const d = decls('.notes-card-cols');
-    // overflow-x 显式声明（而不是靠 overflow-y 隐式带出），纵向交给每列自己
-    expect(d).toMatch(/overflow-x\s*:\s*auto/);
-    expect(d).toMatch(/overflow-y\s*:\s*hidden/);
-    expect(d).toMatch(/min-width\s*:\s*0/);
-  });
-
-  it('列宽与看板 .column 保持一致（固定 320px，不随容器伸缩）', () => {
-    const col = decls('.note-col');
-    const board = decls('.column');
-    expect(col).toMatch(/flex\s*:\s*0\s+0\s+var\(--notes-col-w\)/);
-    expect(col).toMatch(/width\s*:\s*var\(--notes-col-w\)/);
-    // 变量值必须等于看板列宽（两处面板列视觉统一，用户明确要求）
-    expect(decls('.notes-panel')).toMatch(/--notes-col-w\s*:\s*320px/);
-    expect(board).toMatch(/flex\s*:\s*0\s+0\s+320px/);
-    // 不得回到「随容器伸缩」写法
-    expect(col).not.toMatch(/flex\s*:\s*1\s+1\s+0/);
-  });
-
-  it('列头/列体几何与看板同参（margin / padding / 圆角逐条对齐）', () => {
-    const head = decls('.note-col-head');
-    const boardHead = decls('.column-head');
-    for (const d of [head, boardHead]) {
-      expect(d).toMatch(/margin\s*:\s*8px 8px 2px/);
-      expect(d).toMatch(/padding\s*:\s*5px 10px/);
-      expect(d).toMatch(/border-radius\s*:\s*7px/);
-    }
-    for (const d of [decls('.note-col-body'), decls('.column-body')]) {
-      expect(d).toMatch(/padding\s*:\s*0 8px 10px/);
-      expect(d).toMatch(/gap\s*:\s*8px/);
-    }
-  });
-
-  it('列头只有日期标题 + 右侧灰色计数（#456 起不再有优先级色点）', () => {
-    // #456：分列依据从「优先级」改为「添加日期」⇒ 列头不再渲染彩色圆点
-    // （优先级颜色完全由卡片承载）。这里既断言新形态，也反向锁住旧元素不回流。
-    expect(panel, '列头不应再有 note-col-dot（优先级色点已移到卡片）').not.toContain(
-      'note-col-dot',
+describe('记事本列表（网格布局，#456；原 #259 四列）', () => {
+  it('网格参数与「任务会话」面板的 .sessions-list 完全同参', () => {
+    // #456 的核心判定：备忘录与任务会话**用同一套网格**（auto-fill minmax(320px, 1fr)）——
+    // 宽窗口自动排多列、窄窗口降为单列，两者视觉与响应式行为因此完全一致。
+    const list = decls('.notes-list');
+    const sessions = decls('.sessions-list');
+    expect(list).toMatch(
+      /grid-template-columns\s*:\s*repeat\(auto-fill,\s*minmax\(320px,\s*1fr\)\)/,
     );
-    expect(styles, '.note-col-dot 规则应已移除').not.toMatch(/\.note-col-dot\s*\{/);
-    // 标题与计数仍是原来的几何（这两条不因改列而变化）
-    expect(decls('.note-col-title')).toMatch(/font-weight\s*:\s*500/);
-    expect(decls('.note-col-count')).toMatch(/margin-left\s*:\s*auto/);
-    expect(decls('.note-col-count')).toMatch(/color\s*:\s*var\(--text-3\)/);
+    // 逐项比对，防止日后两者漂移
+    expect(list).toMatch(sessions.match(/grid-template-columns[^;]*;/)![0]);
+    expect(list).toMatch(sessions.match(/gap\s*:\s*10px/)![0]);
+    expect(list).toMatch(sessions.match(/align-content\s*:\s*start/)![0]);
   });
 
-  it('列不再有状态色横条（#456），改用普通边框做包围', () => {
-    // #456：列顶 3px 优先级色横条（border-top: 3px solid var(--col-accent)）已移除 ——
-    // 日期列之间没有「优先级」可言，用 0.5px 普通边框保持列的包围感即可。
-    const col = decls('.note-col');
-    expect(col, '日期列不应再有优先级色横条').not.toMatch(/border-top\s*:\s*3px/);
-    expect(col, '改用普通边框').toMatch(/border\s*:\s*0\.5px solid var\(--border\)/);
-    // 组件侧也不该再注入 --col-accent（那是优先级色）
-    expect(panel, '不应再注入 --col-accent').not.toContain('--col-accent');
-    // 列头不得有底色（胶囊底是 4 状态看板视图的写法）
-    expect(decls('.note-col-head')).not.toMatch(/background\s*:/);
+  it('列表容器是受约束的纵向滚动区（flex + min-height 0 + overflow-y auto）', () => {
+    // flex 子项的 auto 最小高度会阻止收缩 ⇒ 没有 min-height:0 时滚动条会落到可视区之外。
+    const d = decls('.notes-list');
+    expect(d).toMatch(/flex\s*:\s*1\s+1\s+auto/);
+    expect(d).toMatch(/min-height\s*:\s*0/);
+    expect(d).toMatch(/overflow-y\s*:\s*auto/);
+    // 滚到头后不再向父级链式滚动
+    expect(d).toMatch(/overscroll-behavior\s*:\s*contain/);
   });
 
-  it('优先级颜色改由卡片承载：色点仍取 --note-accent，且更醒目', () => {
-    // #456：列不再有颜色 ⇒ 「这条是什么优先级」只能靠卡片。
-    // 原本 .note-dot 已用 var(--note-accent)，这里锁住它不被回退成中性色，
-    // 并锁定 7px + 同色淡描边（无列色辅助后的加强）。
+  it('旧的分列结构已彻底移除（.notes-card-cols / .note-col* 一族）', () => {
+    // 这类「僵尸 CSS + 僵尸类名」是分列改列表后最容易留下的残留：
+    // 规则还在、但没人用，日后改主题变量会以为它在生效。
+    expect(panel, '组件仍在用 .notes-card-cols').not.toContain('notes-card-cols');
+    expect(panel, '组件仍在用 note-col').not.toContain('note-col');
+    expect(styles, 'styles.css 仍残留 .notes-card-cols 规则').not.toMatch(/\.notes-card-cols\s*\{/);
+    expect(styles, 'styles.css 仍残留 .note-col 规则').not.toMatch(/\.note-col\s*\{/);
+    // 列宽变量随之失效：网格列最小宽度已由 minmax(320px,1fr) 定义
+    expect(styles, '--notes-col-w 已随分列移除').not.toMatch(/--notes-col-w/);
+  });
+
+  it('卡片与 .session-card 同构：背景 / 圆角 / 内边距 / column 布局', () => {
+    const card = decls('.note-card');
+    const session = decls('.session-card');
+    expect(card).toMatch(/display\s*:\s*flex/);
+    expect(card).toMatch(/flex-direction\s*:\s*column/);
+    expect(card).toMatch(/border-radius\s*:\s*10px/);
+    expect(card).toMatch(/padding\s*:\s*12px 14px/);
+    // 逐项比对会话卡片，防止两者漂移
+    expect(card).toMatch(session.match(/border-radius[^;]*;/)![0]);
+    expect(card).toMatch(session.match(/padding\s*:\s*12px 14px/)![0]);
+    expect(card).toMatch(session.match(/gap\s*:\s*8px/)![0]);
+  });
+
+  it('优先级颜色改由卡片承载：边框染色 + 标签色点', () => {
+    // #456：网格里没有列头做视觉锚点，优先级只能靠卡片自身传达。
+    // 边框染成优先级色（--note-accent 由组件按标签注入）比仅靠一个小色点更易扫视。
+    const card = decls('.note-card');
+    expect(card).toMatch(/border\s*:\s*1px solid var\(--note-accent/);
+    // 组件必须真的注入 --note-accent（否则全部落 var(--border) 兜底，四色全同）
+    expect(panel).toContain("'--note-accent': opt.color");
+    // 标签色点保留并加强
     const dot = decls('.note-dot');
     expect(dot).toMatch(/background\s*:\s*var\(--note-accent/);
     expect(dot).toMatch(/width\s*:\s*7px/);
     expect(dot).toMatch(/box-shadow\s*:[^;]*color-mix/);
   });
 
-  it('列有「明显的包围框」：页面底 --bg 上放 --surface-2 列（同色则包围框不可见）', () => {
-    // 曾因 .notes-panel 与 .note-col 同为 --surface-2，四列的框完全看不见
-    expect(decls('.notes-panel')).toMatch(/background\s*:\s*var\(--bg\)/);
-    const col = decls('.note-col');
-    expect(col).toMatch(/background\s*:\s*var\(--surface-2\)/);
-    expect(col).toMatch(/border-radius\s*:\s*10px/);
-  });
-
-  it('空列提示与看板 .empty 同款（灰色文字，不用虚线框）', () => {
-    const d = decls('.note-col-empty');
-    expect(d).toMatch(/color\s*:\s*var\(--text-3\)/);
-    expect(d).not.toMatch(/border/);
-  });
-
-  it('列框不是滚动容器：overflow 用 clip（防滚动手势链式传导把列头滚偏）', () => {
-    // overflow: hidden 的盒子仍是滚动容器——列体（真正滚动区）滚到头后，
-    // 继续滚动会链式传导到列框，把列头滚高几像素（实测有记录的列比空列高 ~5-7px）。
-    // clip 只裁剪、不可滚动，从根上杜绝；不支持 clip 的引擎回退 hidden。
-    const d = decls('.note-col');
-    expect(d).toMatch(/overflow\s*:\s*hidden/);
-    expect(d).toMatch(/overflow\s*:\s*clip/);
-    // 列体是唯一的滚动区，且不再向父级链式滚动
-    expect(decls('.note-col-body')).toMatch(/overscroll-behavior\s*:\s*contain/);
-  });
-
-  it('列类名用专属命名（note-col--<日期组>），不得复用看板的裸 .empty', () => {
-    // 看板的 .empty { padding: 8px 4px } 是全局规则；记事本列若复用裸 empty 类，
-    // 列框会被加上 8px 顶部内边距 ⇒ 有记录/没有记录的列列头高低不一致（用户实测）。
-    expect(panel, '记事本列又复用了裸 empty 类').not.toContain("' empty'");
-    // #456：列类名后缀从「优先级」改为「日期组键」（col.key = today / yesterday / week / earlier）。
-    expect(panel).toContain('note-col--${col.key}');
-    // 看板自己的 .empty 规则限定在 .board 作用域，防止再漏进其他页面
-    expect(styles).not.toMatch(/(?:^|[},])\s*\.empty\s*\{/);
-    expect(styles).toMatch(/\.board \.empty\s*\{/);
-  });
-
-  it('记事卡片不再有左侧色条（优先级由列分组 + 卡片底部标签表达）', () => {
+  it('卡片仍无左侧色条（#259 用户明确要求，不得借改版之机加回来）', () => {
     expect(styles).not.toMatch(/\.note-card::before/);
-    // 色条没了，左侧内边距也不再为色条留位（原来左 13px / 右 12px）
-    expect(decls('.note-card')).toMatch(/padding\s*:\s*8px 12px 6px/);
   });
 
-  it('窄列下卡片与页脚可收缩 ⇒ 列内不会长出横向滚动条', () => {
+  it('卡片可收缩 ⇒ 网格内不会长出横向滚动条', () => {
     // 若卡片保持 min-width: auto，其子元素（.note-foot 的标签 + 时间 + 操作按钮）
-    // 的 min-content 会把卡片撑宽，进而让 .note-col-body（overflow-y: auto ⇒
+    // 的 min-content 会把卡片撑宽，进而让 .notes-list（overflow-y: auto ⇒
     // overflow-x 计算成 auto）出现横向滚动条。
     expect(decls('.note-card')).toMatch(/min-width\s*:\s*0/);
     expect(decls('.note-foot')).toMatch(/flex-wrap\s*:\s*wrap/);
   });
 
-  it('列内纵向滚动：.note-col-body 是受约束的滚动区', () => {
-    const d = decls('.note-col-body');
-    expect(d).toMatch(/overflow-y\s*:\s*auto/);
-    // 没有 min-height: 0，flex 项的 auto 最小高度会阻止收缩，滚动条会落到可视区之外
-    expect(d).toMatch(/min-height\s*:\s*0/);
+  it('卡片底色与面板底色不同 ⇒ 卡片边界可见（#259 踩过的坑）', () => {
+    expect(decls('.notes-panel')).toMatch(/background\s*:\s*var\(--bg\)/);
+    expect(decls('.note-card')).toMatch(/background\s*:\s*var\(--surface-2\)/);
+  });
+
+  it('排序只用创建时间倒序，优先级不参与排序也不参与分列', () => {
+    // #456：优先级只决定颜色，不再是组织维度。
+    const m = panel.match(/const sortedNotes = useMemo\([\s\S]*?\);/);
+    expect(m, '应能取到 sortedNotes').not.toBeNull();
+    expect(m![0]).toMatch(/b\.createdAt\s*-\s*a\.createdAt/);
+    // 依赖数组必须跟着变（notes 变化才重排）
+    expect(m![0]).toMatch(/\[notes\]/);
+    // 不得残留按优先级排序的权重表
+    expect(panel).not.toMatch(/prio\s*:/);
+    // 容器直接渲染 sortedNotes，不再有分列 map
+    expect(panel).toContain('sortedNotes.map(renderNoteCard)');
+    expect(panel, '不得再有分列渲染').not.toMatch(/\.map\(\(col\)/);
+  });
+
+  it('空列表有占位提示（原来只有 loading 分支，空列表会渲染空白）', () => {
+    expect(panel).toContain('sortedNotes.length === 0');
   });
 });
 
@@ -250,23 +213,23 @@ describe('整行页头移除，导入/导出保留在面板工具行（#447）',
 
   it('导入/导出按钮在面板工具行内（#447）', () => {
     const toolbarStart = panel.indexOf('className="notes-toolbar"');
-    const cardStart = panel.indexOf('className="notes-card-cols"');
+    // #456：列表容器类名从 .notes-card-cols 改为 .notes-list
+    const listStart = panel.indexOf('className="notes-list"');
     expect(toolbarStart, 'NotesPanel.tsx 中找不到 .notes-toolbar').toBeGreaterThan(-1);
-    expect(cardStart, 'NotesPanel.tsx 中找不到 .notes-card-cols').toBeGreaterThan(-1);
-    expect(toolbarStart, '工具行不在四列区之前').toBeLessThan(cardStart);
-    const toolbarBlock = panel.slice(toolbarStart, cardStart);
+    expect(listStart, 'NotesPanel.tsx 中找不到 .notes-list').toBeGreaterThan(-1);
+    expect(toolbarStart, '工具行不在列表区之前').toBeLessThan(listStart);
+    const toolbarBlock = panel.slice(toolbarStart, listStart);
     expect(toolbarBlock).toContain('handleExport');
     expect(toolbarBlock).toContain('handleImport');
     expect(toolbarBlock).toContain('fileInputRef');
   });
 
-  it('列头几何不受「空列」影响（历史缺陷：空列被多顶下 8px）', () => {
-    // 历史缺陷：记事本列复用了看板的裸 .empty 类，其 padding: 8px 4px 命中列框，
-    // 让空列的列头比有记录的列低 8px。修法是专属命名 + 看板规则限定作用域，
-    // 因此空列不再需要任何专属规则（与看板一致：空列同样显示彩色列头与计数 0）。
-    expect(styles).not.toMatch(/note-col--empty/);
-    expect(panel).not.toContain('note-col--empty');
-    expect(decls('.note-col-head')).toMatch(/margin\s*:\s*8px 8px 2px/);
+  it('看板的裸 .empty 规则仍限定在 .board 作用域（不得漏进记事本）', () => {
+    // 历史缺陷（#259）：记事本曾复用看板的裸 .empty 类，其 padding: 8px 4px
+    // 会命中容器、造成纵向偏移。改列表后虽然不再有列，但这条作用域约束要继续守住 ——
+    // 将来若再引入空态元素，很容易顺手复用这个类名。
+    expect(styles).not.toMatch(/(?:^|[},])\s*\.empty\s*\{/);
+    expect(styles).toMatch(/\.board \.empty\s*\{/);
   });
 });
 

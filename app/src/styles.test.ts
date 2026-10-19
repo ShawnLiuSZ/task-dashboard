@@ -234,7 +234,8 @@ describe('CSS 变量引用完整性（#329）', () => {
   });
 
   it('笔记面板后台刷新用 aria-busy 降透明，不再整块替换占位（#329）', () => {
-    const d = decls('.notes-card-cols[aria-busy]');
+    // #456：容器类名从 .notes-card-cols 改为 .notes-list
+    const d = decls('.notes-list[aria-busy]');
     expect(d).toMatch(/opacity/);
   });
 
