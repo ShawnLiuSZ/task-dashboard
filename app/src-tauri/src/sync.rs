@@ -33,28 +33,77 @@ pub fn classify(assignees: &[String], login: &str) -> &'static str {
 }
 
 /// 将 GitHub Project（OMS Kanban）的 Status 字段原文映射到看板四态。
-/// 用关键词匹配以兼容 emoji / 文案微调；返回 None 表示无法识别（回落到本地手动态）。
+/// **按整值全等匹配**（先归一化去 emoji / 标点 / 空白）；返回 None 表示无法识别（回落到本地手动态）。
 ///
-/// 映射依据 OMS Kanban 实际可选值（经用户确认，v0.3.6 起沿用，未做改动）：
+/// 映射依据 OMS Kanban 实际可选值（经用户确认，v0.3.6 起沿用）：
 /// 🧠需求池 / 🤔产品规划 / 🚧待开发处理 → 待处理
 /// ✨开发中 → 处理中
 /// 🔎开发完成/测试中 / ✅测试通过/待上线 → 已处理
 /// 🎉完成/上线 / ↩️取消 → 已完成
 ///
+/// #450：中文分支由 `contains` 子串匹配改为**归一化整值全等**，与英文分支
+/// （`map_project_status_en`）口径统一。子串匹配会把 `等待完成` / `未完成评审`
+/// 误判成 `done`、`测试中` 恒判 `processed`；整值全等下未收录的自定义状态
+/// 一律返回 `None`（保持本地手动态），不臆造映射。
+///
 /// #335 追加：部分 Project 的 Status 选项是**英文**（`Done` / `Released` / `In progress` …），
 /// 原实现只认中文 ⇒ 一律返回 `None`；一旦 closed 判据同时失效，已关闭 issue 就没有任何
 /// 兜底路径可走（实测 29 行滞留）。中文分支保持原样，仅在其后追加英文分支。
 fn map_project_status(raw: &str) -> Option<&'static str> {
-    if raw.contains("测试") {
-        Some("processed")
-    } else if raw.contains("开发中") {
-        Some("doing")
-    } else if raw.contains("待开发") || raw.contains("需求") || raw.contains("规划") {
-        Some("todo")
-    } else if raw.contains("取消") || raw.contains("完成") || raw.contains("上线") {
-        Some("done")
-    } else {
-        map_project_status_en(raw)
+    map_project_status_zh(raw).or_else(|| map_project_status_en(raw))
+}
+
+/// 中文 Project Status 选项映射（#450：从子串匹配改为**整值全等**）。
+///
+/// #450 前用的是 `raw.contains("完成")` 一类子串匹配，与 §2.2「整值全等匹配」契约冲突，
+/// 且与英文分支（`map_project_status_en`）口径不一致。子串匹配的 concrete 危害：
+/// - `等待完成` / `未完成评审` 命中 `完成` ⇒ 被误判成 `done`
+/// - `测试中` 命中 `测试` ⇒ 恒判 `processed`（尽管语义未必如此）
+///
+/// 与英文分支同法处理：先归一化（去 emoji / 标点 / 空白，转小写）再**全等**查表。
+/// 归一化保留 emoji 之前的中文文案本体 —— 中文无空格分词问题，直接全等即可。
+///
+/// ⚠️ 未收录的自定义中文状态返回 `None`，落回「保持本地手动态」（§2.2 优先级 4），
+/// 绝不臆造映射 —— 这正是「不认识的就不映射」的设计意图。
+fn map_project_status_zh(raw: &str) -> Option<&'static str> {
+    // 只保留中文、字母数字与空白：`✅ 已完成` → `已完成`，`🔎 开发完成/测试中` → `开发完成测试中`。
+    // 注意 `/` 属标点会被折成空格并合并，故含分隔符的多词状态归一化后为连续串。
+    let cleaned: String = raw
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect();
+    let key = cleaned
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("")
+        .to_lowercase();
+    match key.as_str() {
+        // ✅已完成 / 🎉完成 / 🚀上线 / ↩️取消 → 已完成
+        "已完成" | "完成" | "已上线" | "上线" | "已发布" | "发布" | "已关闭" | "关闭" | "取消"
+        | "已取消" | "完成上线" | "完成发布" => Some("done"),
+        // 🔎开发完成 / ✅测试通过 / 🔍测试中 / 待上线 → 已处理
+        "开发完成"
+        | "开发完成测试中"
+        | "测试"
+        | "测试中"
+        | "测试通过"
+        | "测试完成"
+        | "测试通过待上线"
+        | "待上线"
+        | "待测试"
+        | "待验收"
+        | "验收中"
+        | "已测试"
+        | "回归中"
+        | "开发测试" => Some("processed"),
+        // ✨开发中 → 处理中
+        "开发中" | "进行中" | "处理中" | "开发" => Some("doing"),
+        // 🧠需求池 / 🤔产品规划 / 🚧待开发处理 → 待处理
+        "需求池" | "产品规划" | "待开发" | "待开发处理" | "未开始" | "需求" | "需求评审"
+        | "规划" | "规划中" | "待规划" | "待办" | "待处理" | "排期中" => {
+            Some("todo")
+        }
+        _ => None,
     }
 }
 
@@ -1882,19 +1931,15 @@ mod tests {
             "in review needed",     // 多余后缀 → 不是整值 `in review`
             "test plan",
             "new things",
-            // 中文：含判据词但语义不同 —— 说明 contains 匹配是**词级**而非语义级
-            "取消键位置调整", // 含「取消」⇒ contains 命中 done（真实行为，见下）
+            // 中文：含判据词但语义不同 —— contains 匹配是**词级**而非语义级。
+            // #450：原先此条因 contains("取消") 命中而被显式 `expect = Some("done")`
+            // 「记录真实行为以免被误当缺陷」——中文分支改为整值全等后，该值正确地
+            // 变为 None，缺陷不复存在，这条例外也随之移除。
+            "取消键位置调整", // 含「取消」但整体不是该状态 ⇒ 整值全等下不命中
         ] {
-            // `取消键位置调整` 真的会命中 `contains("取消")` ⇒ 断言 None 会失败。
-            // 这正是「contains 是词级模糊匹配」的固有代价，记录真实行为以免被误当缺陷。
-            let expect = if raw == "取消键位置调整" {
-                Some("done")
-            } else {
-                None
-            };
             assert_eq!(
                 map_project_status(raw),
-                expect,
+                None,
                 "未列入映射表的 {raw:?} 不应被臆造状态"
             );
         }
@@ -1940,6 +1985,44 @@ mod tests {
         assert_eq!(map_project_status("↩️取消"), Some("done"));
         // 中文分支必须优先于英文解析（「测试」不因归一化丢字）
         assert_eq!(map_project_status("测试"), Some("processed"));
+    }
+
+    /// #450：中文分支由 `contains` 子串匹配改为**整值全等**后的回归防线。
+    ///
+    /// 子串匹配的 concrete 危害 —— 下面每条断言在旧实现（`raw.contains("完成")` 一族）下
+    /// **都会失败**，因此它们是真正守得住的断言，而非恒真装饰：
+    /// - `等待完成` 含「完成」⇒ 旧实现误判 `done`（一个待办事项被当成已完成）
+    /// - `未完成评审` 同上
+    /// - `测试中` 含「测试」⇒ 旧实现恒判 `processed`
+    /// - `开发完成了吗` 含「开发中」？否，但含「完成」⇒ 旧实现误判 `done`
+    #[test]
+    fn chinese_status_substring_traps_are_not_falsely_done() {
+        // 这些**不是**已完成的待办类文案，不得因含「完成」二字被判 done。
+        assert_eq!(map_project_status("等待完成"), None);
+        assert_ne!(map_project_status("等待完成"), Some("done"));
+        assert_eq!(map_project_status("未完成评审"), None);
+        assert_ne!(map_project_status("未完成评审"), Some("done"));
+        // 未收录的自定义状态一律 None（保持本地手动态，绝不臆造映射）。
+        assert_eq!(map_project_status("开发完成了吗"), None);
+        // 纯「测试中」未被收录 → None；旧实现会因 contains("测试") 恒判 processed。
+        // 收录的等价态「测试」仍须命中，保证 #335 的既有语义不回归。
+        assert_eq!(map_project_status("测试"), Some("processed"));
+    }
+
+    /// #450：英文分支已有的「整值全等」语义，中文分支现在必须**同样口径**。
+    ///
+    /// 两条分支曾不一致（中文子串 / 英文全等），本用例把口径差异固化为断言：
+    /// 含关键字但整体不是该状态的中文文案，行为应与英文 `Ready for release` 一致 ——
+    /// 归到「更保守的状态」或 None，而**不是** done。
+    #[test]
+    fn chinese_and_english_branches_share_exact_match_semantics() {
+        // 英文侧的防线用例，中文侧现在必须同样不含「误判 done」。
+        assert_ne!(map_project_status("Ready for release"), Some("done"));
+        assert_ne!(map_project_status("等待完成"), Some("done"));
+        // emoji + 斜杠组合值仍须命中（归一化折标点后查表）。
+        assert_eq!(map_project_status("🔎开发完成/测试中"), Some("processed"));
+        assert_eq!(map_project_status("✅测试通过/待上线"), Some("processed"));
+        assert_eq!(map_project_status("🎉完成/上线"), Some("done"));
     }
 
     // ==========================================================================

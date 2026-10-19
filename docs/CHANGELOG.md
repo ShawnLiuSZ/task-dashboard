@@ -6,6 +6,16 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.4（未发布）— 全量代码审查后端修复：账号契约 / 状态映射 / 迁移保列 / 拉取标志（#450）**
+
+  - **会话面板账号契约（#422 硬规则）**：`list_active_sessions` 原把 `None`（前端单账号视图的编码）与 `Some(0)`（聚合）一同归一成「不过滤」，却在注释里写着「与 `rows_to_tasks` 同口径」——而后者对 `None` 会回落 `meta.active_account_id`。后果：**多账号下会话面板显示全部账号的活跃会话**。现已抽出 `resolve_session_account_filter` 供两条读路径**共用**，从结构上消除口径再次漂移的可能。
+  - **Project Status 中文映射改整值全等**：原中文分支用 `contains` 子串匹配，把 `等待完成` / `未完成评审` 误判成「已完成」、`测试中` 恒判「已处理」，且与英文分支（已是整值全等）口径不一致。现统一为「归一化去 emoji/标点后全等查表」，未收录的自定义状态返回 `None`（保持本地手动态，绝不臆造映射）。
+  - **迁移不再丢 `work_dir`**：`migrate_legacy_alters` 会给旧表补 `work_dir` 且执行在物理重建**之前**，而重建的列清单是写死的 —— 不把该列写进 `INSERT..SELECT` 就会退回默认空串，**agent 写入过的工作目录静默清空且不可恢复**。已补入白名单（`author` / `parent_issue` / `sub_issues` 有意不带：旧库本无此列，无源可取）。
+  - **按需拉取不再谎报「已拉取」**：`InsertIfAbsent` 的返回值原先被丢弃、无条件回 `Pulled`，于是同步抢先写入时 agent 会收到 `pulled: true` 却其实什么都没写。改为按受影响行数区分 `Pulled` / `AlreadyLocal`（数据本身不受影响，`DO NOTHING` 仍零覆盖）。
+  - DB schema / SQL / MCP 工具集 / i18n 零改动。
+  - **验证**：`cargo test` · `cargo fmt --check` · `cargo clippy -D warnings` 全绿。新增回归测试 4 组，其中「`等待完成` 不得判 done」「`work_dir` 随重建搬迁」两条在旧实现下**必然失败**（反向验证）。
+  - 详见 [`issue-450-backend-logic-fixes.md`](./issue-450-backend-logic-fixes.md)
+
 - **v0.7.3（2026-10-16）— 备忘录创建入口改为顶部标题栏 Modal（#447）**
 
   - **入口迁移**：顶部标题栏「TaskBoard 共 N 条」右侧新增「新建备忘录」按钮，点击弹出 Modal。

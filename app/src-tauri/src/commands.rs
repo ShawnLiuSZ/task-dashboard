@@ -426,11 +426,7 @@ pub fn list_active_sessions(
     account_id: Option<i64>,
 ) -> Result<Vec<Task>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    // 与 rows_to_tasks 同口径：Some(0) ⇒ None（聚合，不过滤）。
-    let account_filter = match account_id {
-        Some(0) => None,
-        other => other,
-    };
+    let account_filter = resolve_session_account_filter(&conn, account_id);
     // JOIN tasks 取任务本体字段（title / work_branch / work_dir / url …），
     // ⚠️ #429：SELECT 列前缀必须与 FROM 里的表别名**逐字一致** —— 表一旦被别名成 `t`，
     // `tasks` 这个名字对 SQLite 不可见 ⇒ 报 `no such column: tasks.issue_key`。
@@ -452,6 +448,35 @@ pub fn list_active_sessions(
         }
     }
     Ok(result)
+}
+
+/// #422 账号维度解析：`Option<i64>` → 实际用于过滤的账号 id。
+///
+/// **返回 `None` 表示「聚合全部、不过滤」**（不是「无账号」）。契约：
+/// - `Some(0)` → `None`（全部账号聚合视图）
+/// - `Some(n>0)` → `Some(n)`（该账号）
+/// - `None` → 读 `meta.active_account_id`；`>0` 才返回该 id，否则 `None`（无激活账号）
+///
+/// #450：`list_active_sessions` 原先把 `None` 与 `Some(0)` 一同归一成 `None`（不过滤），
+/// 却把注释写成「与 `rows_to_tasks` 同口径」——而 `rows_to_tasks:199-209` 对 `None`
+/// 会回落到活动账号。后果：多账号下前端以 `null` 调会话命令（单账号视图）时，
+/// 返回**全部账号**的活跃会话。
+///
+/// 现在两条读路径**共用本函数**，从结构上消除再次口径漂移的可能
+/// （同样的教训此前已在 `rows_to_tasks` / `my_logins` / 前端 `accountFilter` 上重演过多次）。
+fn resolve_session_account_filter(conn: &Connection, account_filter: Option<i64>) -> Option<i64> {
+    match account_filter {
+        Some(0) => None,
+        Some(n) => Some(n),
+        None => {
+            let active = read_active_account_id(conn);
+            if active > 0 {
+                Some(active)
+            } else {
+                None
+            }
+        }
+    }
 }
 
 /// `list_active_sessions` 的**完整 SQL**（#429）。
@@ -2279,6 +2304,108 @@ mod tests {
             conn.prepare(&bad).is_err(),
             "表被别名成 t 后，tasks. 前缀必须不可用（SQLite 报错）—— 这正是 #429 的成因"
         );
+    }
+
+    /// #450 回归：`resolve_session_account_filter` 必须与 `rows_to_tasks` 同口径。
+    ///
+    /// 缺陷形态：`None`（前端单账号视图的编码）被当成「聚合不过滤」⇒ 多账号下会话面板
+    /// 显示**全部账号**的活跃会话。本用例把 #422 三态编码逐条钉死：
+    /// `0` = 聚合 / `>0` = 该账号 / `None` = 读 meta 回落。
+    ///
+    /// **反向验证**：把 `None` 分支改回 `None`（缺陷写法）时，
+    /// `none_falls_back_to_active_account` 必然失败。
+    #[test]
+    fn session_account_filter_follows_422_encoding() {
+        let conn = crate::db::open_db(std::path::Path::new(":memory:")).unwrap();
+
+        // ⚠️ `open_db` 会预置 `active_account_id = 1`（见下方「显式清零」用例前的实测），
+        // 因此「无激活账号」不是开箱态，必须显式写 0 才能构造。
+        assert_eq!(
+            crate::db::get_setting(&conn, "active_account_id"),
+            "1",
+            "新库默认激活账号为 1（测试前提，勿改）"
+        );
+
+        // 显式值优先于 meta，不受激活账号影响。
+        assert_eq!(super::resolve_session_account_filter(&conn, Some(0)), None);
+        assert_eq!(
+            super::resolve_session_account_filter(&conn, Some(7)),
+            Some(7),
+            "显式账号 id 必须原样透传，不被 meta 覆盖"
+        );
+
+        // `None` 必须回落到激活账号（=1），**不得**当成聚合不过滤 —— 这是缺陷防线。
+        assert_eq!(
+            super::resolve_session_account_filter(&conn, None),
+            Some(1),
+            "None 必须回落 meta.active_account_id（#422），不得当成聚合"
+        );
+
+        // 无激活账号（meta = 0）⇒ None（不过滤）。
+        crate::db::set_setting(&conn, "active_account_id", "0").unwrap();
+        assert_eq!(super::resolve_session_account_filter(&conn, None), None);
+    }
+
+    /// #450 回归：解析结果真的作用到行过滤上（不只是解析函数自身正确）。
+    ///
+    /// 上一条只验解析函数；本条按解析结果实际过滤 `active_sessions_sql()` 的行，
+    /// 锁住「解析 → 过滤」这条完整链路。
+    #[test]
+    fn session_account_filter_actually_filters_rows() {
+        let conn = crate::db::open_db(std::path::Path::new(":memory:")).unwrap();
+        // ⚠️ UNIQUE(repo, number, account_id) ⇒ number 必须逐行不同。
+        for (issue_key, number, account_id) in
+            [("o/r#1", 1i64, 1i64), ("o/r#2", 2, 2), ("o/r#3", 3, 2)]
+        {
+            conn.execute(
+                "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
+                                    ownership, status, synced_at, account_id)
+                 VALUES (?1,'o','r',?2,'t','u','open','assigned','todo',1,?3)",
+                rusqlite::params![issue_key, number, account_id],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sessions (account_id, issue_key, session_id, session_agent,
+                                       session_at, is_active)
+                 VALUES (?1, ?2, 'sess', 'claude', 1000, 1)",
+                rusqlite::params![account_id, issue_key],
+            )
+            .unwrap();
+        }
+        crate::db::set_setting(&conn, "active_account_id", "2").unwrap();
+
+        let sql = super::active_sessions_sql();
+        let filter = super::resolve_session_account_filter(&conn, None);
+        assert_eq!(filter, Some(2), "None 必须回落到激活账号 2");
+
+        let mut stmt = conn.prepare(&sql).unwrap();
+        let rows = stmt
+            .query_map([], |r| Ok(r.get::<_, String>(0).unwrap()))
+            .unwrap();
+        let got: Vec<String> = rows
+            .map(|r| r.unwrap())
+            .filter(|k| match filter {
+                None => true,
+                Some(_) => {
+                    // 与生产 keep 判定同构：按账号列匹配。
+                    let acct: i64 = conn
+                        .query_row(
+                            "SELECT account_id FROM tasks WHERE issue_key = ?1",
+                            rusqlite::params![k],
+                            |r| r.get(0),
+                        )
+                        .unwrap();
+                    acct == filter.unwrap()
+                }
+            })
+            .collect();
+
+        assert_eq!(
+            got.len(),
+            2,
+            "激活账号 2 应只见自己的 2 条会话，账号 1 的那条必须被过滤掉"
+        );
+        assert!(!got.contains(&"o/r#1".to_string()), "账号 1 的会话不得出现");
     }
     use rusqlite::Connection;
 
