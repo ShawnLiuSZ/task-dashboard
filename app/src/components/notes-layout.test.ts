@@ -5,21 +5,27 @@ import stylesRaw from '../styles.css?raw';
 import panelRaw from './NotesPanel.tsx?raw';
 
 /**
- * 记事本「四列」布局回归测试（#259）。
+ * 记事本分列布局回归测试（#259 建立，#456 改列依据）。
  *
  * 演进（2026-09-16，两轮）：
- * 1. 初版按「四列等宽可收缩」实现，但真机四列被压成 ~18px 竖条 —— 根因是
+ * 1. 初版按「四列等宽可收缩」实现，但真机四列被压成~18px 竖条 —— 根因是
  *    `NotesPanel` 在面板元素上挂了行内 `style={{flex:'0 0 25%', width:'25%'}}`（#202 遗留），
  *    行内样式优先级高于样式表，`.notes-page .notes-panel` 的「撑满」覆盖从未生效。
  * 2. 移除宽度机制 + 面板整页化后，用户把交互定为**看板列模式**：
  *    四列**固定宽度**（与最左侧创建列同宽，`--notes-col-w`）、放不下时出**有意**的
  *    横向滚动条、卡片不再用左侧色条区分优先级。
+ * 3. **#456**：分列依据从「优先级」改为「添加日期」（相对时间段，列序从新到旧），
+ *    列数随数据变化（只渲染非空列）。列的**几何**（宽度 / 滚动 / 边框 / 列头尺寸）
+ *    全部沿用第 2 步的成果，本文件继续守护；变化的是「列头不再有优先级色点、
+ *    列顶不再有色横条、优先级色改由卡片承载」。
  *
- * 判定口径（最终）：面板必须撑满主区且不得再挂行内宽度；四列与创建列共用同一宽度变量；
+ * 判定口径（最终）：面板必须撑满主区且不得再挂行内宽度；列与创建列共用同一宽度变量；
  * 容器是受约束的横向滚动区（overflow-x: auto + overflow-y: hidden，不换行）；
  * 纵向滚动下沉到每列内部；卡片/页脚可收缩。
  *
- * vitest 跑在 node 环境（无 DOM、无布局引擎），无法用渲染断言覆盖，
+ * ⚠️ 本仓库约定：改被静态断言覆盖的源码必须**同步改这里**（#444 / #450 / #452 均踩过）。
+ *
+ * vitest 跑在node 环境（无 DOM、无布局引擎），无法用渲染断言覆盖，
  * 因此改为对源码做静态断言——与 `styles.test.ts`、`scripts/check-*.py` 同一思路。
  */
 
@@ -65,7 +71,7 @@ function decls(selector: string): string {
   return hits.join('\n');
 }
 
-describe('记事本四列（看板列模式，#259）', () => {
+describe('记事本分列（看板列模式，#259；列依据改为日期 #456）', () => {
   it('容器不换行：flex-wrap 不得为 wrap', () => {
     expect(decls('.notes-card-cols')).not.toMatch(/flex-wrap\s*:\s*wrap/);
   });
@@ -104,23 +110,39 @@ describe('记事本四列（看板列模式，#259）', () => {
     }
   });
 
-  it('列头内容与看板同构：圆点 + 标题 + 右侧灰色计数', () => {
-    expect(panel).toContain('note-col-dot');
-    expect(decls('.note-col-dot')).toMatch(/border-radius\s*:\s*50%/);
+  it('列头只有日期标题 + 右侧灰色计数（#456 起不再有优先级色点）', () => {
+    // #456：分列依据从「优先级」改为「添加日期」⇒ 列头不再渲染彩色圆点
+    // （优先级颜色完全由卡片承载）。这里既断言新形态，也反向锁住旧元素不回流。
+    expect(panel, '列头不应再有 note-col-dot（优先级色点已移到卡片）').not.toContain(
+      'note-col-dot',
+    );
+    expect(styles, '.note-col-dot 规则应已移除').not.toMatch(/\.note-col-dot\s*\{/);
+    // 标题与计数仍是原来的几何（这两条不因改列而变化）
     expect(decls('.note-col-title')).toMatch(/font-weight\s*:\s*500/);
     expect(decls('.note-col-count')).toMatch(/margin-left\s*:\s*auto/);
     expect(decls('.note-col-count')).toMatch(/color\s*:\s*var\(--text-3\)/);
   });
 
-  it('列顶状态色横条 + 列头无胶囊底色（同看板 .column-status-N）', () => {
-    // 看板状态列只在列顶画 3px 状态色横条、列头不带底色
+  it('列不再有状态色横条（#456），改用普通边框做包围', () => {
+    // #456：列顶 3px 优先级色横条（border-top: 3px solid var(--col-accent)）已移除 ——
+    // 日期列之间没有「优先级」可言，用 0.5px 普通边框保持列的包围感即可。
     const col = decls('.note-col');
-    expect(col).toMatch(/border-top\s*:\s*3px solid var\(--col-accent/);
-    expect(decls('.column-status-0')).toMatch(/border-top\s*:\s*3px solid var\(--status-0\)/);
-    // 列头不得有底色（胶囊底是 4 状态看板视图的写法，不是状态列写法）
+    expect(col, '日期列不应再有优先级色横条').not.toMatch(/border-top\s*:\s*3px/);
+    expect(col, '改用普通边框').toMatch(/border\s*:\s*0\.5px solid var\(--border\)/);
+    // 组件侧也不该再注入 --col-accent（那是优先级色）
+    expect(panel, '不应再注入 --col-accent').not.toContain('--col-accent');
+    // 列头不得有底色（胶囊底是 4 状态看板视图的写法）
     expect(decls('.note-col-head')).not.toMatch(/background\s*:/);
-    // 标题用默认文字色：看板状态列不单独给标题上色
-    expect(styles).not.toMatch(/\.note-col--(urgent|high|medium|low) \.note-col-title/);
+  });
+
+  it('优先级颜色改由卡片承载：色点仍取 --note-accent，且更醒目', () => {
+    // #456：列不再有颜色 ⇒ 「这条是什么优先级」只能靠卡片。
+    // 原本 .note-dot 已用 var(--note-accent)，这里锁住它不被回退成中性色，
+    // 并锁定 7px + 同色淡描边（无列色辅助后的加强）。
+    const dot = decls('.note-dot');
+    expect(dot).toMatch(/background\s*:\s*var\(--note-accent/);
+    expect(dot).toMatch(/width\s*:\s*7px/);
+    expect(dot).toMatch(/box-shadow\s*:[^;]*color-mix/);
   });
 
   it('列有「明显的包围框」：页面底 --bg 上放 --surface-2 列（同色则包围框不可见）', () => {
@@ -148,11 +170,12 @@ describe('记事本四列（看板列模式，#259）', () => {
     expect(decls('.note-col-body')).toMatch(/overscroll-behavior\s*:\s*contain/);
   });
 
-  it('列类名用专属命名（note-col--<优先级>），不得复用看板的裸 .empty', () => {
+  it('列类名用专属命名（note-col--<日期组>），不得复用看板的裸 .empty', () => {
     // 看板的 .empty { padding: 8px 4px } 是全局规则；记事本列若复用裸 empty 类，
     // 列框会被加上 8px 顶部内边距 ⇒ 有记录/没有记录的列列头高低不一致（用户实测）。
     expect(panel, '记事本列又复用了裸 empty 类').not.toContain("' empty'");
-    expect(panel).toContain('note-col--${col.label}');
+    // #456：列类名后缀从「优先级」改为「日期组键」（col.key = today / yesterday / week / earlier）。
+    expect(panel).toContain('note-col--${col.key}');
     // 看板自己的 .empty 规则限定在 .board 作用域，防止再漏进其他页面
     expect(styles).not.toMatch(/(?:^|[},])\s*\.empty\s*\{/);
     expect(styles).toMatch(/\.board \.empty\s*\{/);

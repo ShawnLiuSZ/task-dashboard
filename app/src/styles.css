@@ -2404,12 +2404,10 @@ button.unassigned-tag:disabled {
   opacity: 0.65;
 }
 
-/* 单优先级 card 列——**与看板 .column 完全同构**（固定 320px / 全高 / 列内纵向滚动 /
- * 列顶状态色横条 + 无胶囊列头），让两个面板的列视觉统一。
- * 列顶横条同看板 `.column-status-N { border-top: 3px solid var(--status-N) }`：
- * 这里用 --col-accent（优先级色，由组件按看板同一套色板注入）。
- * ⚠️ overflow 用 clip（不支持时回退 hidden）：hidden 的盒子仍是滚动容器，
- * 列体滚动到底后滚动手势会链式传导到列框本身，把列头滚高几像素；clip 从根上杜绝。 */
+/* #456：列不再承载优先级 —— 分列依据已从「优先级」改为「添加日期」，
+ * 列头不再有彩色圆点、列顶不再有彩色横条（原先由 --col-accent 注入优先级色）。
+ * 优先级颜色完全由卡片承载：`.note-card` 的 --note-accent + `.note-tag .note-dot`。
+ * 视觉重心回到列头文字（日期），日期列之间靠背景色而非色条区分。 */
 .note-col {
   flex: 0 0 var(--notes-col-w);
   width: var(--notes-col-w);
@@ -2417,13 +2415,13 @@ button.unassigned-tag:disabled {
   display: flex;
   flex-direction: column;
   background: var(--surface-2);
-  border-top: 3px solid var(--col-accent, var(--border));
+  border: 0.5px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
   overflow: clip;
 }
 
-/* 列头：与看板 .column-head 同款几何，**不带底色**（状态色只落在列顶横条与圆点上）。 */
+/* 列头：与看板 .column-head 同款几何，**不带底色**。#456 起只有日期文案 + 计数。 */
 .note-col-head {
   display: flex;
   align-items: center;
@@ -2434,13 +2432,8 @@ button.unassigned-tag:disabled {
   border-radius: 7px;
 }
 
-.note-col-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex: 0 0 8px;
-  background: var(--col-accent, var(--text-3));
-}
+/* #456：`.note-col-dot` 已随优先级色点一并移除（列头只剩日期文字）。
+ * 保留一条空规则以说明为何不再有该元素，避免后来者误加回来。 */
 
 .note-col-title {
   font-weight: 500;
@@ -2632,11 +2625,15 @@ button.unassigned-tag:disabled {
   color: var(--text);
 }
 
+/* #456：列不再有优先级色，优先级**完全**由卡片承载 ⇒ 色点从 6px 提到 7px、
+ * 外加一圈同色淡描边，让「这条是什么优先级」在无列色辅助时也能一眼分辨。 */
 .note-dot {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--note-accent, var(--text-3));
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--note-accent, var(--text-3)) 22%, transparent);
+  flex: 0 0 auto;
 }
 
 .note-time {
