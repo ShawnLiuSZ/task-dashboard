@@ -240,6 +240,99 @@ jobs:
 """
         self.assertEqual(errs(text), [])
 
+    def test_list_item_block_scalar_run_is_not_flagged(self):
+        """#451：列表项形式的块标量 `- run: |` **不得**误报。
+
+        缺陷形态：`- run: |` 同时满足 `startswith("- ")`，原实现在列表项分支
+        提前 `continue`，永远到不了块标量判定 ⇒ 其后每行脚本体都被报
+        「不是合法的 key: value 行」。
+
+        `- run: |` 是 GitHub Actions 最常用的写法之一，仓库当前 6 个 workflow
+        恰好都没用它，所以这个误报一直潜伏着 —— 合规 PR 的 CI 会直接红。
+        """
+        text = """\
+name: demo
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo hello
+          echo world
+      - uses: actions/checkout@v5
+"""
+        self.assertEqual(
+            errs(text),
+            [],
+            "合法的列表项块标量 `- run: |` 必须零误报（#451）",
+        )
+
+    def test_list_item_block_scalar_after_name_is_not_flagged(self):
+        """#451：`- name:` + 列表项内 `if: |` 的组合也不得误报。
+
+        与 `test_block_scalar_run_is_not_empty_step`（分隔行形式）互补 ——
+        那一例的 `run: |` 是独立行、走 `parse_kv` 分支；本例的块标量**在列表项内**，
+        走的是原先会提前 `continue` 的那条路径。
+        """
+        text = """\
+name: demo
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Import cert
+        run: |
+          echo hi
+          echo yo
+"""
+        self.assertEqual(errs(text), [])
+
+    def test_list_item_block_scalar_body_lines_are_not_parsed_as_keys(self):
+        """#451 防线：块标量**内部**的行不得被当成 `key: value` 解析。
+
+        脚本体里出现 `- 变量: 值` 这类形态时，若块状态没开，它会被当成
+        步骤起始行并触发「空步骤」误报。
+        """
+        text = """\
+name: demo
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: |
+          echo "- not-a-step: x"
+          echo ok
+"""
+        self.assertEqual(
+            errs(text),
+            [],
+            "块标量内部的 `- key: value` 形态不得被当成新步骤（#451）",
+        )
+
     def test_odd_indent_inside_block_scalar_is_allowed(self):
         # `if: >-` 的续行常故意用非偶数缩进做视觉对齐 —— 块标量内部是自由文本。
         text = """\

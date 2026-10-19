@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.4（未发布）— MCP 双实现对齐 / workflow 检查误报 / CI 盲区补齐（#451）**
+
+  - **MCP 分帧语义对齐 Rust**：缺 / 不可解析 `Content-Length` 由 `Malformed` 改判 **`Fatal`**。原注释「头部已正常收尾 ⇒ 帧边界已知，继续读是安全的」推理错误 —— 缺该头恰恰说明**正文长度未知**，按 `Malformed` 继续读会把正文字节当头部解析、产出垃圾帧。Rust 侧 [#357](https://github.com/ShawnLiuSZ/task-dashboard/issues/357) 早已修正，Python 侧未跟上；两条把错误行为钉死的测试同步更新。
+  - **NDJSON 长度上限改为增量判定**：原实现先 `readline()` 把整行读进内存、**之后**才判上限 —— 对无终止符的长行等于「先OOM 再报错」，上限只挡得住已读完的情况。改为逐字节累积、超限立即终止（对齐 Rust），内存不膨胀。
+  - **`- run: |` 不再误报**：`check-workflow-yaml.py` 的列表项分支提前 `continue`，永远到不了块标量判定 ⇒ 脚本体每行被报「不是合法的 key: value 行」。`- run: |` 是 GitHub Actions 最常用写法之一，仓库当前 6 个 workflow 恰好都没用 ⇒ 潜伏雷。
+  - **CI 补上写入列盲区**：`check-mcp-columns.py` 新增 Python `TASK_INSERT_COLS` × Rust `TASK_INSERT_HEAD` 交叉比对。#438 的 `created_at` 漂移当年是人工发现的，此后再无兜底。豁免差集须显式登记进 `RUST_EXPLICIT_EMPTY`，不做默认放过。
+  - **`check-mcp-columns.py` 有了单测**：此前 `scripts/` 下 5 个检查脚本只有它没有回归测试 —— 而它失效的方式恰恰是**静默的**（不报错，只是不再报警）。新增 12 个用例，含「每类漂移都能检出」与「豁免名单不得误报」双向验证。
+  - MCP 工具集 / `SELECT_COLS`（29 列）/ DB schema / i18n / 前端零改动。
+  - **验证**：`python3 -m unittest discover -s scripts` **129 passed**（原 117）· `mcp_server.test_server` **60 passed**（原 59）· 5 个检查脚本全绿。
+  - **反向验证 3/3 捕获**：NDJSON 退化回 `readline()` ⇒ 增量守卫失败；删掉 `created_at` ⇒ 列校验退出码 1；`TASK_INSERT_HEAD` 按单行解析 ⇒ 跨行 SQL 用例失败。
+  - 详见 [`issue-451-mcp-and-scripts-fixes.md`](./issue-451-mcp-and-scripts-fixes.md)
+
 - **v0.7.4（未发布）— 全量代码审查后端修复：账号契约 / 状态映射 / 迁移保列 / 拉取标志（#450）**
 
   - **会话面板账号契约（#422 硬规则）**：`list_active_sessions` 原把 `None`（前端单账号视图的编码）与 `Some(0)`（聚合）一同归一成「不过滤」，却在注释里写着「与 `rows_to_tasks` 同口径」——而后者对 `None` 会回落 `meta.active_account_id`。后果：**多账号下会话面板显示全部账号的活跃会话**。现已抽出 `resolve_session_account_filter` 供两条读路径**共用**，从结构上消除口径再次漂移的可能。

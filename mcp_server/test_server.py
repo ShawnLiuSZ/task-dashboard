@@ -800,18 +800,28 @@ class FramingTests(unittest.TestCase):
         self.assertEqual(outs[1].kind, S.ReadOutcome.MSG, "坏 body 不应终止后续读取")
         self.assertEqual(outs[1].msg["id"], 9)
 
-    def test_missing_content_length_is_malformed(self):
-        """头正常收尾但缺 Content-Length ⇒ 边界已知，跳过后可继续。"""
+    def test_missing_content_length_is_fatal(self):
+        """头正常收尾但缺 Content-Length ⇒ **Fatal**（对齐 Rust #357）。
+
+        #451：原断言是 MALFORMED + 继续读下一条，其 docstring 写「边界已知，
+        跳过后可继续」—— 该推理是错的：缺 Content-Length 恰恰说明**正文长度未知**，
+        流位置并未确定（头部结束处就是正文首字节）。按 Malformed 继续读，后续读取
+        会把正文字节当头部解析，产出更多垃圾帧。
+        """
         payload = b"X-Other: 1\r\n\r\n" + b'{"jsonrpc":"2.0","id":10}\n'
         outs = self._read_all(payload)
-        self.assertEqual(outs[0].kind, S.ReadOutcome.MALFORMED)
-        self.assertEqual(outs[1].kind, S.ReadOutcome.MSG)
+        self.assertEqual(outs[0].kind, S.ReadOutcome.FATAL)
+        self.assertEqual(len(outs), 1, "Fatal 后不得再继续读（否则正文字节被当头部解析）")
 
-    def test_unparseable_content_length_is_malformed(self):
+    def test_unparseable_content_length_is_fatal(self):
+        """Content-Length 存在但不可解析 ⇒ 与缺失同口径，同样 Fatal。
+
+        与上一条同源：`int("12 34")` 失败 ⇒ 长度未知 ⇒ 流位置未确定。
+        """
         payload = b"Content-Length: 12 34\r\n\r\n" + b"{\"jsonrpc\":\"2.0\",\"id\":11}\n"
         outs = self._read_all(payload)
-        self.assertEqual(outs[0].kind, S.ReadOutcome.MALFORMED)
-        self.assertEqual(outs[1].kind, S.ReadOutcome.MSG)
+        self.assertEqual(outs[0].kind, S.ReadOutcome.FATAL)
+        self.assertEqual(len(outs), 1, "Fatal 后不得再继续读")
 
     def test_oversized_content_length_is_fatal(self):
         """超大声明 ⇒ Fatal（body 未消费，继续读只会错位）。"""
@@ -840,9 +850,64 @@ class FramingTests(unittest.TestCase):
         self.assertEqual(outs[0].kind, S.ReadOutcome.FATAL)
 
     def test_oversized_ndjson_line_is_fatal(self):
-        """无终止符的超长 NDJSON 行 ⇒ 不得无界增长（与 Rust 侧同一 DoS 类别）。"""
+        """无终止符的超长 NDJSON 行 ⇒ Fatal（与 Rust 侧同一 DoS 类别）。"""
         outs = self._read_all(b"{" + b"a" * (S.MAX_FRAME_BODY + 10))
         self.assertEqual(outs[0].kind, S.ReadOutcome.FATAL)
+
+    def test_ndjson_limit_is_enforced_incrementally(self):
+        """#451：NDJSON 上限必须**边累积边判**，不能读完整行才判。
+
+        这是本次修复的核心 —— 原实现先 `readline()` 把整行读进内存、之后才比对
+        上限，对一条无终止符的长行等于「先把 GB 级数据吃进内存再报错」，
+        上限只挡得住「已读完」的情况，挡不住资源耗尽。
+
+        本用例用一个**按需供给**的流：只有当读取方真的逐字节来取时才给数据。
+        若实现退化成 `readline()`（一次 readline 就要走完整个流），计数会显示
+        「在超限判定前就把全部数据读完了」⇒ 断言失败。
+
+        反之，若实现是逐字节累积并在超限时**立即返回**，则它绝不该读到超限
+        之后的数据 —— `self.served <= S.MAX_FRAME_BODY + 余量` 即为证据。
+        """
+
+        class _CountingStream:
+            """按 1 字节供给数据，并记录「被读走多少」与「被请求多少次」。"""
+
+            def __init__(self, total):
+                self._buf = bytearray(b"{" + b"a" * total)
+                self.served = 0
+                self.read_calls = 0
+
+            def read(self, n):
+                self.read_calls += 1
+                if n is None or n < 0:
+                    chunk = bytes(self._buf[self.served:])
+                    self.served = len(self._buf)
+                    return chunk
+                chunk = bytes(self._buf[self.served:self.served + n])
+                self.served += len(chunk)
+                return chunk
+
+            def readline(self, *a, **kw):
+                """模拟退化路径：一次性把剩余全部返回（即原实现的readline）。"""
+                self.read_calls += 1
+                chunk = bytes(self._buf[self.served:])
+                self.served = len(self._buf)
+                return chunk
+
+        total = S.MAX_FRAME_BODY + 4096
+        stream = _CountingStream(total)
+        oc = S.read_message(stream)
+
+        self.assertEqual(oc.kind, S.ReadOutcome.FATAL)
+        # ⚠️ 核心断言：判定超限时**不该**已读走超过上限的数据量。
+        # 退化实现会把整个 total 全部读走（≈ 上限 + 4096）才返回；
+        # 增量实现最多读到「上限 + 1 字节」就停。
+        self.assertLessEqual(
+            stream.served,
+            S.MAX_FRAME_BODY + 1,
+            "必须在累积过程中就判定超限，不能读完整个长行再判"
+            f"（实际已读 {stream.served} 字节）",
+        )
 
     def test_empty_stream_is_eof(self):
         outs = self._read_all(b"")

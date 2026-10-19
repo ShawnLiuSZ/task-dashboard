@@ -381,7 +381,13 @@ def _app_version():
 
 GITHUB_API = "https://api.github.com"
 
-# 与 Rust `db.rs::TASK_INSERT_HEAD` 的列清单一致。
+# ⚠️ #451：本清单**不必**与 Rust `db.rs::TASK_INSERT_HEAD`（29 列）完全相同，
+# 只需是其**子集** —— 差集仅限 `parent_issue` / `sub_issues` / `pr_state` 三列：
+# Rust `on_demand::build_task_row` 对它们显式写 `""`，Python 不写则由 schema 默认值
+# `''` 兜底，**语义相同**。`scripts/check-mcp-columns.py` 的 `RUST_EXPLICIT_EMPTY`
+# 登记了这份差集背书，脚本会校验「差集不得超出该名单」。
+# （原注释写「与 Rust 的列清单一致」，与实际不符 —— 本清单只有 26 列。）
+#
 # 实际写入时会与当前库真实存在的列取交集，兼容尚未迁移的老库。
 TASK_INSERT_COLS = (
     "issue_key", "owner", "repo", "number", "title", "url", "issue_state", "ownership",
@@ -1202,53 +1208,109 @@ class ReadOutcome:
         return cls(cls.FATAL, why=why)
 
 
+def _read_byte(stream):
+    """从二进制流读 1 字节；EOF 时返回 ``None``。
+
+    #451：`read_message` 的分帧全部改为**增量按字节**读取（对齐 Rust `mcp.rs`），
+    以便在累积过程中就判定长度上限 —— 用 `readline()` 会先把整行读进内存，
+    对无终止符的长行等于「先OOM 再判超限」，上限形同虚设。
+
+    统一走 `read(1)`（而非 `read(n)` + 缓冲）是因为 `sys.stdin.buffer` /
+    `io.BytesIO` / 测试用流都支持；`TextIO` 不支持 `read(1)`，但本模块的
+    协议输入恒为二进制流。
+    """
+    chunk = stream.read(1)
+    if not chunk:
+        return None
+    if isinstance(chunk, str):
+        # 防御：若传入文本流，按 latin-1 保持字节语义（不改变码点）。
+        chunk = chunk.encode("latin-1", "replace")
+    return chunk
+
+
+def _read_line(stream):
+    """从二进制流读「剩余的一行」（不含已消费的首字节），EOF 且无数据时返回 ``b""``。
+
+    供Content-Length 头部解析使用 —— 那里按行处理是安全的（整行有
+    `MAX_FRAME_HEADER` 上限，且 body 按 Content-Length 精确读取）。
+    """
+    chunk = stream.readline()
+    if not chunk:
+        return b""
+    if isinstance(chunk, str):
+        chunk = chunk.encode("latin-1", "replace")
+    return chunk
+
+
 def read_message(stream):
     """读取一条 JSON-RPC 消息，返回 ``ReadOutcome``。
 
     MCP stdio 规范为换行分隔 JSON；LSP 风格 Content-Length 头作为历史兼容保留。
     首个有效字符判定分帧格式：`{` → NDJSON，否则 → Content-Length。
-    """
-    # 跳过消息间空行，用首行首字符判定分帧格式
-    while True:
-        line = stream.readline()
-        if not line:
-            return ReadOutcome.eof()
-        if isinstance(line, bytes):
-            line = line.decode("utf-8", "replace")
-        if line.strip():
-            break
 
-    if line.lstrip().startswith("{"):
-        if len(line) > MAX_FRAME_BODY:
-            # 与 Rust 侧一致：NDJSON 分支此前无长度上限，无终止符的长行会撑爆内存。
-            return ReadOutcome.fatal(
-                "NDJSON 行超过 %d 字节仍未终止" % MAX_FRAME_BODY
-            )
+    #451：NDJSON 分支改为**增量读取**（对齐 Rust `mcp.rs`）。原实现先
+    `stream.readline()` 把整行读进内存、**之后**才判上限 —— 对一条无换行的
+    长行，会先 OOM 再触发 FATAL ⇒ 上限只挡得住「已读完」的情况，挡不住资源耗尽。
+    """
+    # 跳过消息间空行，用首字节判定分帧格式。
+    # ⚠️ 必须按字节读（`read(1)`）而非 `readline()`：首行同样可能是无终止符的
+    #超长行，用 readline 读它就等于先把整行吃进内存 —— 那正是本函数要修的缺陷。
+    first = _read_byte(stream)
+    while first in (b"\n", b"\r", b" "):
+        # 空白行跳过（消息之间的分隔）；EOF 由 _read_byte 返回 None 表示。
+        if first is None:
+            return ReadOutcome.eof()
+        first = _read_byte(stream)
+    if first is None:
+        return ReadOutcome.eof()
+
+    if first == b"{":
+        # NDJSON：本行剩余部分即完整 JSON（规范禁止消息内嵌换行）。
+        # 逐字节累积并**边累积边判上限**，超限立即 FATAL，内存不膨胀。
+        buf = bytearray(first)
+        while True:
+            b = _read_byte(stream)
+            if b is None or b == b"\n":
+                break  # 末行可能无换行结尾
+            buf += b
+            if len(buf) > MAX_FRAME_BODY:
+                return ReadOutcome.fatal(
+                    "NDJSON 行超过 %d 字节仍未遇到换行" % MAX_FRAME_BODY
+                )
+        line = buf.decode("utf-8", "replace")
         try:
             return ReadOutcome.msg(json.loads(line), NDJSON)
         except ValueError as e:
-            # 该行已完整消费（readline 读到了换行）⇒ 丢弃后能安全地继续读下一条。
+            # 该行已完整消费（读到换行或 EOF）⇒ 丢弃后能安全地继续读下一条。
             return ReadOutcome.malformed("NDJSON 解析失败: %s" % e)
 
+    # Content-Length 分支：首字节已消费，需回填进首行缓冲。
+    #
+    # ⚠️ 头部行仍按**行**读取（readline），不逐字节 —— 头部有MAX_FRAME_HEADER
+    # (8KB) 的整行上限保护，且 body 按 Content-Length 精确读取，不存在无界增长。
+    # 若这里也逐字节，`Content-Length: 123` 会被拆成单字节，`split(":", 1)`
+    # 永远匹配不到 ⇒ 头部解析恒为空。（#451 的一处实现教训：增量只该用在
+    # 「没有长度信息可依」的那条路径上。）
+    first_line = first + _read_line(stream)
     headers = {}
     header_bytes = 0
+    line = first_line
     while True:
         header_bytes += len(line)
         if header_bytes > MAX_FRAME_HEADER:
             return ReadOutcome.fatal(
                 "头部超过 %d 字节仍未终止，无法定位帧边界" % MAX_FRAME_HEADER
             )
-        stripped = line.rstrip("\r\n")
+        stripped = line.rstrip(b"\r\n").decode("utf-8", "replace")
         if stripped == "":
             break
         if ":" in stripped:
             k, v = stripped.split(":", 1)
             headers[k.strip().lower()] = v.strip()
-        line = stream.readline()
-        if not line:
+        nxt = _read_line(stream)
+        if not nxt:
             return ReadOutcome.eof()
-        if isinstance(line, bytes):
-            line = line.decode("utf-8", "replace")
+        line = nxt
 
     raw_length = headers.get("content-length")
     try:
@@ -1256,8 +1318,17 @@ def read_message(stream):
     except (TypeError, ValueError):
         length = None
     if length is None:
-        # 头部已正常收尾（帧边界已知）⇒ 丢弃后继续读下一条是安全的。
-        return ReadOutcome.malformed("Content-Length 头缺失或不可解析")
+        # #451 对齐 Rust `mcp.rs`（#357 已改）：缺 / 不可解析 Content-Length 必须判
+        # **FATAL**，不能是 Malformed。
+        #
+        # 原注释称「头部已正常收尾 ⇒ 帧边界已知，丢弃后继续读下一条是安全的」——
+        # 该推理是错的：缺 Content-Length 恰恰说明**正文长度未知**，流位置并未确定
+        # （头部结束处就是正文的首字节）。按 Malformed 继续读，后续读取会把正文字节
+        # 当头部解析，产出更多垃圾帧。
+        #
+        # Rust 侧早已修正（原实现的对比项 `len == 0` 当时已正确判 Fatal），
+        # Python 侧一直没跟上 ⇒ 双实现分歧。AGENTS.md §8.6 要求两实现一致。
+        return ReadOutcome.fatal("Content-Length 头缺失或不可解析，无法定位正文边界")
     # #345：越界长度必须判 FATAL——body 尚未消费，继续读会把 body 字节当头部解析。
     if length <= 0 or length > MAX_FRAME_BODY:
         return ReadOutcome.fatal(

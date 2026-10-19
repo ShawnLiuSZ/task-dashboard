@@ -241,6 +241,19 @@ def scan(lines: list[str]) -> list[str]:
             if not im:
                 errors.append(f"L{ln}: 列表项不是合法的 `- key: value` 形式")
                 continue
+            # #451：列表项形式的**块标量**必须在 `continue` 之前开启块状态。
+            # `- run: |` 同时满足 `startswith("- ")`，原先在下方 `continue` 处提前退出，
+            # 永远到不了 `parse_kv` 之后的块标量判定 ⇒ 其后每一行脚本体都被
+            # `parse_kv` 判失败、报「不是合法的 key: value 行」。
+            # `- run: |` 是 GitHub Actions 最常用的写法之一，当前仓库 6 个 workflow
+            # 恰好都没用它 ⇒ 潜伏雷（合规 PR 的 CI 会误红）。
+            if im.group("key") in ("run", "if") and im.group("rest").strip() in BLOCK_INDICATORS:
+                in_block, block_indent, block_owner = True, ind, im.group("key")
+                if job is not None and ind == STEP_ITEM_INDENT and step is not None:
+                    # 同 `parse_kv` 分支：块标量起始不 flush_step（`- run: |` 本身就是
+                    # 步骤起始行，flush 只会把它误判成空步骤）。
+                    step.has_run = im.group("key") == "run"
+                continue
             if job is not None and ind == STEP_ITEM_INDENT:
                 flush_step()
                 step = Step(line=ln)

@@ -19,11 +19,19 @@ TaskBoard 有两套 MCP 实现，必须统一读写同一张 SQLite 表：
 3. 校验两侧列集合**逐列相同**（含顺序），否则同一工具在两个实现里返回不同字段；
 4. 兜底扫描 Python 侧残留的旧列名写法（`WHERE key=?` / `FROM tasks WHERE key`）。
 5. (#329) 校验 Python 侧 `ensure_schema::ENSURE_COLUMNS` 覆盖 `SELECT_COLS` 的**每一列**。
+6. (#451) 校验 Python `TASK_INSERT_COLS` 与 Rust `db.rs::TASK_INSERT_HEAD` 的**写入列**一致
+   （差集仅允许「Rust 显式写空串」的几列，由 `RUST_EXPLICIT_EMPTY` 登记背书）。
 
 第 5 条补的是一个反复踩的坑（#169 / #262 / #278 同源）：给 `SELECT_COLS` 加了列却忘了
 在 `ensure_schema` 里补 ALTER，症状只在「Python MCP 首次打开尚未被 App 迁移过的旧库」
 这一条路径上出现（`no such column: xxx`），App 自身完全正常、两侧测试也都测不到。
 原检查只比对 `SELECT_COLS` 字符串，管不到 ALTER 清单。
+
+第 6 条补的是另一个方向的盲区：**写入**列此前从不被比对。#438 修 `created_at` 漂移
+（Python 按需拉取落 `created_at=0`）是人工发现的，脚本当时兜不住 ——
+它只校验 SELECT_COLS 两侧一致，而 `TASK_INSERT_COLS` 缺列完全不在检查范围内。
+写入列漂移比读列更隐蔽：缺列时该列落 schema 默认值，表面无异常，但与 Rust 路径
+落库的行语义不同。
 
 用法：`python3 scripts/check-mcp-columns.py`（CI 里同一条命令）
 """
@@ -119,6 +127,38 @@ def py_insert_cols(py_src: str) -> list[str]:
     return names
 
 
+# Rust `on_demand::build_task_row` 对这几列显式写空串（而非留NULL）。
+# Python 侧不写这些列时由 schema 默认值 `''` 兜底，**语义相同** ——
+# 这正是 `TASK_INSERT_COLS` 可以是 `TASK_INSERT_HEAD` 真子集的原因。
+RUST_EXPLICIT_EMPTY = ("parent_issue", "sub_issues", "pr_state")
+
+
+def rust_insert_cols(db_src: str) -> list[str]:
+    """从 `db.rs::TASK_INSERT_HEAD` 常量里取 Rust 侧的写入列名 (#451)。
+
+    该常量是**跨行** SQL 字面量（`"INSERT INTO tasks\\n  (col, col, ...)\\n  VALUES (?1...)"`），
+    所以不能只匹配单行 —— 必须先取出整个字面量，再从 `INSERT INTO tasks` 与 `VALUES`
+    之间的括号段里按逗号切列名。
+    """
+    m = re.search(
+        r'const\s+TASK_INSERT_HEAD\s*:\s*&str\s*=\s*"([^"]*)"\s*;', db_src, re.DOTALL
+    )
+    if not m:
+        die("db.rs 里找不到 TASK_INSERT_HEAD 常量")
+    sql = m.group(1)
+    cols_blob = re.search(r"INSERT\s+INTO\s+tasks\s*\((.*?)\)\s*VALUES", sql, re.DOTALL)
+    if not cols_blob:
+        die(
+            "TASK_INSERT_HEAD 里找不到 `INSERT INTO tasks (...) VALUES` 结构，"
+            "检查 db.rs 里的 SQL 是否改过格式"
+        )
+    names = [c.strip() for c in cols_blob.group(1).split(",")]
+    names = [c for c in names if c]
+    if not names:
+        die("TASK_INSERT_HEAD 的列清单解析出 0 列，检查 db.rs 里的格式是否改动过")
+    return names
+
+
 def split_cols(blob: str) -> list[str]:
     # Python 侧是多行字符串隐式拼接（每段都带引号），Rust 侧是单个裸字符串。
     # 必须先全局剥掉引号再按逗号切：否则跨行片段会同时含有上一行的收尾引号和
@@ -132,7 +172,8 @@ def split_cols(blob: str) -> list[str]:
 
 
 def main() -> int:
-    db_cols = tasks_columns(read(DB_RS))
+    db_src = read(DB_RS)
+    db_cols = tasks_columns(db_src)
     server_src = read(SERVER_PY)
     py_cols = py_select_cols(server_src)
     rs_cols = rust_select_cols(read(MCP_RS))
@@ -180,6 +221,32 @@ def main() -> int:
             "server.py::ENSURE_COLUMNS 未覆盖 TASK_INSERT_COLS 的列: "
             f"{', '.join(not_ensured_insert)}"
             "（往 TASK_INSERT_COLS 加列时必须同步补 ALTER）"
+        )
+
+    # (#451) Python `TASK_INSERT_COLS` 必须落在 Rust `db.rs::TASK_INSERT_HEAD` 之内。
+    #
+    # 此前脚本只校验 SELECT_COLS 两侧一致 + ENSURE_COLUMNS 覆盖，从不比对**写入**列 ——
+    # #438 修`created_at` 漂移时是人工发现的，脚本兜不住。写入列漂移的后果比读列更隐蔽：
+    # Python 少写一列时该列落schema 默认值，表面无异常，但与 Rust 路径落库的行**语义不同**
+    #（例如 created_at=0 会让「创建于 X 前」显示成 1970 年）。
+    #
+    # 允许的差集仅限 `RUST_EXPLICIT_EMPTY`：Rust 对这几列显式写空串，Python 由 schema
+    # 默认值兜底，语义相同。**超出这个名单的差集一律判失败** —— 那就是真正的漂移。
+    rust_insert = rust_insert_cols(db_src)
+    missing_in_py = [c for c in rust_insert if c not in set(insert_cols)]
+    unexplained = [c for c in missing_in_py if c not in RUST_EXPLICIT_EMPTY]
+    if unexplained:
+        problems.append(
+            "server.py::TASK_INSERT_COLS 缺少 Rust db.rs::TASK_INSERT_HEAD 的列: "
+            f"{', '.join(unexplained)}"
+            f"（若该列在 Rust 侧本就是显式写空串，需登记进 RUST_EXPLICIT_EMPTY；"
+            f"否则按需拉取的 issue 该列会落 schema 默认值，与 Rust 路径不一致）"
+        )
+    extra_in_py = [c for c in insert_cols if c not in set(rust_insert)]
+    if extra_in_py:
+        problems.append(
+            "server.py::TASK_INSERT_COLS 含 Rust db.rs::TASK_INSERT_HEAD 没有的列: "
+            f"{', '.join(extra_in_py)}（两侧写入列清单必须一致）"
         )
 
     # 兜底：旧列名写法（tasks.key 已于 #155 改名 issue_key）。
