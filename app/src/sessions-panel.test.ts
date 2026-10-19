@@ -186,3 +186,49 @@ describe('SessionsPanel 打开后保持刷新（#441）', () => {
     expect(effect).not.toMatch(/\}, \[\]\);$/);
   });
 });
+
+/**
+ * #452 复制高亮键（`copiedKey`）回归。
+ *
+ * 缺陷本体：#438 把选中态 / 卡片 key 统一为 `taskIdentity`（`issueKey@accountId`），
+ * 但 `copiedKey` 漏改了 —— 仍用裸 `issueKey`。
+ *
+ * 聚合视图（`viewMode === 'all'`）下同一 `issueKey` 可来自两个账号，
+ * 两者会共享同一个 `copiedKey` ⇒ 复制其中一条的分支 / 目录 / 会话，
+ * 另一条也错误亮起「已复制」勾。
+ *
+ * 写入点与读取点必须**同口径** —— 少改任一侧都会让勾永远亮不起来（另一种 bug）。
+ */
+describe('SessionsPanel 复制高亮键（#452）', () => {
+  it('copiedKey 的写入点与读取点都用 taskIdentity', () => {
+    // 三处复制入口（branch / dir / session）的写入与读取，全部须用 taskIdentity。
+    // 注意构造 RegExp 时 `}` 无需转义 —— 模板字符串与正则里它都不是特殊字符，
+    // 写成 `\}` 会触发 eslint no-useless-escape。
+    for (const prefix of ['branch', 'dir', 'session']) {
+      expect(sessionsRaw, `${prefix} 的 handleCopy 写入点必须用 taskIdentity`).toMatch(
+        new RegExp(
+          `handleCopy\\(task\\.[a-zA-Z]+!?, \`${prefix}-\\$\\{taskIdentity\\(task\\)}\`\\)`,
+        ),
+      );
+      expect(sessionsRaw, `${prefix} 的 copiedKey 读取点必须用 taskIdentity`).toMatch(
+        new RegExp(`copiedKey === \`${prefix}-\\$\\{taskIdentity\\(task\\)}\``),
+      );
+    }
+  });
+
+  it('copiedKey 不得回退到裸 issueKey（聚合视图跨账号会串号）', () => {
+    // ⚠️ 核心防线：任一处写回 `${prefix}-${task.issueKey}` 都会让两个账号的条目
+    // 共享同一copiedKey。上面两条断言确认了「用了 taskIdentity」，
+    // 这一条堵住「改了一半」的中间态。
+    expect(sessionsRaw).not.toMatch(/`(?:branch|dir|session)-\$\{task\.issueKey\}`/);
+  });
+
+  it('与选中态同口径：卡片 key / 复选框 / 选中判定都用 taskIdentity', () => {
+    // copiedKey 与选中态必须是同一套键，否则会出现「勾亮在 A 条、复制的是 B 条」。
+    expect(sessionsRaw).toMatch(/key=\{taskIdentity\(task\)\}/);
+    expect(sessionsRaw).toMatch(/selectedKeys\.has\(taskIdentity\(task\)\)/);
+    expect(sessionsRaw).toMatch(
+      /const isSelected = selectMode && selectedKeys\.has\(taskIdentity\(task\)\)/,
+    );
+  });
+});
