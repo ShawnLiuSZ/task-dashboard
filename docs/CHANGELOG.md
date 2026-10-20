@@ -6,6 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.5（未发布）— 备忘录卡片页脚永远沉到卡片底部（#460）**
+
+  - **页脚沉底**：正文短的卡片，页脚（优先级标签 + 时间 + 编辑/删除按钮）曾浮在卡片中部、下方留大片空白。根因是 `.note-card` 虽是 `flex column`，但页脚没有 `margin-top: auto` —— 它作为普通 flow 元素紧跟正文，而 grid 布局让同一行卡片**等高对齐**（默认 `align-items: stretch`），于是剩余空间恰好落在页脚**下面**。
+  - **三态同时改**：普通态页脚 `.note-foot`、编辑态 `.note-edit-foot`、删除确认态 `.note-confirm-actions` 全部加 `margin-top: auto`。只改一处会导致同一张卡在三态切换时页脚位置跳变。
+  - **用 `auto` 而非固定 margin**：`auto` 在空间不足时解析为 0 ⇒ 长内容卡片的页脚仍紧随正文、不产生额外间隙；固定 margin（如原先编辑态的 `margin-top: 6px`）会让长内容也多出间隙，且与父级 `gap: 8px` 叠加成 14px。
+  - 该缺陷是 #456（改列表布局）的连带遗漏 —— 当时只把卡片几何对齐了 `.session-card`，没处理「卡片等高时页脚要沉底」。
+  - **反向验证 3/3 捕获**：`.note-foot` 去掉 `auto`（= 缺陷本体）、`.note-edit-foot` 换回固定 `6px`、`.note-card` 退回 `display: block`（`auto` 会静默失效）⇒ 每次 2 条用例失败。
+  - 纯 CSS + 测试改动，后端 / DB schema / MCP / i18n 零改动。
+  - **验证**：`vitest` **325 passed**（原 321）· `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check` 全绿。**渲染复核**：读数「页脚底边到卡片内底边的距离」在短正文 / 长正文 / 编辑态 / 确认态 四种情形下均为 12px（即卡片 padding，贴底）。
+  - 详见 [`issue-460-notes-footer-bottom.md`](./issue-460-notes-footer-bottom.md)
+
 - **v0.7.4（2026-10-20）— 备忘录改为列表展示（#456）**
 
   - **分列改列表**：备忘录面板原为固定四列（优先级 紧急/高/中/低）。分列在此场景纵向聚合价值低 —— 备忘录用完即弃、集中在最近几天，且每列锁死 320px 挤掉了卡片横向空间（同屏放不下多少张）。现改为**列表**，网格参数与「任务会话」面板 `.sessions-list` **完全同参**（`auto-fill minmax(320px, 1fr)`）：1180px 排 3 列、900px（minWidth）降 2 列、窄窗自然单列。

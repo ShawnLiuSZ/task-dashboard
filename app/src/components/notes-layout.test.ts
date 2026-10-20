@@ -166,6 +166,53 @@ describe('记事本列表（网格布局，#456；原 #259 四列）', () => {
   });
 });
 
+describe('卡片页脚永远沉底（#460）', () => {
+  /**
+   * 缺陷本体：`.note-card` 是 flex column，但页脚没有 `margin-top: auto` ⇒
+   * 它作为普通 flow 元素紧跟正文。列表布局（`auto-fill minmax(320px,1fr)`）
+   * 让同一行卡片**等高对齐**，于是正文短的卡片下方留出空白，
+   * 而空隙恰好落在页脚**下面** —— 页脚悬在半空（用户截图实测）。
+   *
+   * `margin-top: auto` 在 flex column 下把剩余空间吸收到该元素之前 ⇒ 页脚贴底；
+   * 空间不足时 auto 解析为 0，不产生额外间隙。
+   */
+  it('三态的底部区都有 margin-top: auto（切换时页脚不跳位）', () => {
+    // 普通态页脚 / 编辑态操作区 / 删除确认态按钮区 —— 三者都是 .note-card 的
+    // 直接子元素，必须**同时**沉底，否则三态之间切换时页脚位置会跳变。
+    for (const sel of ['.note-foot', '.note-edit-foot', '.note-confirm-actions']) {
+      expect(decls(sel), `${sel} 缺 margin-top: auto，页脚不会沉底（#460）`).toMatch(
+        /margin-top\s*:\s*auto/,
+      );
+    }
+  });
+
+  it('沉底靠 margin-top: auto，不靠固定 margin（auto 在空间不足时归0）', () => {
+    // 固定 margin（如原来的 margin-top: 6px）会让**长内容**卡片也多出这段间隙，
+    // 与父级 gap 叠加后间距不一致。
+    expect(decls('.note-foot')).toMatch(/margin-top\s*:\s*auto/);
+    expect(decls('.note-edit-foot')).not.toMatch(/margin-top\s*:\s*\d/);
+  });
+
+  it('前提：.note-card 必须是 flex column —— auto margin 依赖该上下文', () => {
+    // margin-top: auto 只在 flex/grid 容器里吸收剩余空间。若日后把
+    // .note-card 改成 block，该声明静默失效 ⇒ 页脚重新浮在中间。
+    const card = decls('.note-card');
+    expect(card).toMatch(/display\s*:\s*flex/);
+    expect(card).toMatch(/flex-direction\s*:\s*column/);
+  });
+
+  it('三态底部区都是 .note-card 的直接子元素（否则 margin-top:auto 无效）', () => {
+    // 静态断言：确认这些类名直接出现在 .note-card 的 article 内，
+    // 而不是被包在中间层 div 里。
+    for (const cls of ['note-edit-foot', 'note-confirm-actions', 'note-foot']) {
+      const re = new RegExp(
+        `<article[^>]*className="note-card[^"]*"[^>]*>[\\s\\S]*?className="${cls}"`,
+      );
+      expect(re.test(panel), `${cls} 应为 .note-card 的直接子元素`).toBe(true);
+    }
+  });
+});
+
 describe('记事本面板撑满主区（#259）', () => {
   it('面板元素不得挂行内 flex / width —— 行内样式会盖掉样式表的撑满规则', () => {
     // 这是「四列被压成竖条 + 容器横向滚动条」的真正根因：组件曾写

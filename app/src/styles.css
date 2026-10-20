@@ -2551,12 +2551,23 @@ button.unassigned-tag:disabled {
   word-break: break-word;
 }
 
+/* #460：页脚永远沉到卡片底部。
+ *
+ * 缺陷本体：`.note-card` 是 `display: flex; flex-direction: column`，但页脚没有
+ * `margin-top: auto` ⇒ 它作为普通 flow 元素紧跟正文。列表布局
+ * （`auto-fill minmax(320px, 1fr)`）会让同一行卡片**等高对齐**，于是正文短的
+ * 卡片下方留出空白，而空隙恰好落在页脚**下面** —— 页脚悬在半空。
+ *
+ * `margin-top: auto` 在 flex column 下把剩余空间吸收到该元素**之前**，
+ * 于是页脚永远贴底；空间不足时 auto 解析为 0，不会产生额外间隙。
+ */
 .note-foot {
   display: flex;
   align-items: center;
   gap: 8px;
-  /* 窄列（900px 窗口下每列仅 ~90px）时让标签/时间/操作按钮换行，而不是撑宽卡片。 */
+  /* 窄列时让标签/时间/操作按钮换行，而不是撑宽卡片。 */
   flex-wrap: wrap;
+  margin-top: auto;
 }
 
 .note-tag {
@@ -2655,12 +2666,15 @@ button.unassigned-tag:disabled {
   box-shadow: 0 0 0 3px rgba(10, 108, 255, 0.08);
 }
 
+/* #460：编辑态的底部操作区同样沉底（`auto` 会覆盖下面的 margin-top: 6px）——
+ * 否则普通态↔ 编辑态切换时页脚会从卡片底部跳到正文下方。
+ * ⚠️ `gap: 8px` 之外不能再叠加固定 margin，否则间距变成 8 + 6 = 14px。 */
 .note-edit-foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-top: 6px;
+  margin-top: auto;
 }
 
 .note-edit-actions {
@@ -2679,9 +2693,11 @@ button.unassigned-tag:disabled {
   color: var(--text);
 }
 
+/* #460：删除确认态的按钮区同样沉底，保持三态之间页脚位置一致。 */
 .note-confirm-actions {
   display: flex;
   gap: 6px;
+  margin-top: auto;
 }
 
 /* ---------- 小尺寸按钮（记事本编辑 / 删除确认） ---------- */
