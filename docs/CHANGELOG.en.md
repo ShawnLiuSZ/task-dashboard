@@ -2,6 +2,16 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.7.5 (unreleased) — Note card footers always pinned to the card bottom (#460)**
+
+  - **Footer pinned to the bottom**: On cards with short content, the footer (priority label, timestamp, edit/delete buttons) used to float in the middle of the card with a large empty gap below it. The root cause: `.note-card` is `flex column`, but the footer had no `margin-top: auto` — it followed the text as an ordinary flow element, while the grid layout stretches cards in the same row to equal height (`align-items: stretch`), so the leftover space landed *below* the footer.
+  - **All three states fixed**: the normal footer `.note-foot`, the edit bar `.note-edit-foot` and the delete-confirm actions `.note-confirm-actions` all get `margin-top: auto`. Fixing only some would make the footer jump position as a card switches between the three states.
+  - **`auto`, not a fixed margin**: `auto` resolves to 0 when space runs out, so footers on long-content cards still follow the text with no extra gap. A fixed margin (such as the edit bar's previous `margin-top: 6px`) would add a gap on long cards too, and would stack with the parent's `gap: 8px` to 14px.
+  - This was collateral from #456 (the switch to a list layout): the card geometry was aligned with `.session-card`, but "footers must sink when cards are equal height" was not handled.
+  - **Reverse verification caught 3/3 mutations**: removing `auto` from `.note-foot` (the defect itself), restoring a fixed `6px` on `.note-edit-foot`, and reverting `.note-card` to `display: block` (where `auto` fails silently) — each failing 2 assertions.
+  - CSS + tests only; no backend / DB schema / MCP / i18n changes.
+  - **Verification**: `vitest` 325 passed (was 321) · `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check` all green. Render check: the measured distance from the footer's bottom edge to the card's inner bottom edge is 12px (i.e. the card padding, so flush) across short content, long content, the edit state and the delete-confirm state.
+
 - **v0.7.4 (2026-10-20) — Code-review fixes across backend, MCP/CI scripts and frontend, plus a Notes list view (#450 / #451 / #452 / #456)**
 
   - **Notes panel switched from columns to a list (#456)**
