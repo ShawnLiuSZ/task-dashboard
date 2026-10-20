@@ -15,11 +15,17 @@ import panelRaw from './NotesPanel.tsx?raw';
  * 3. **#456**：改为**列表展示** —— 网格参数与「任务会话」面板的 `.sessions-list` 完全同参
  *    （`auto-fill minmax(320px, 1fr)`），不再分列、不再有列头/列体/列宽变量。
  *    优先级从「分列依据」降级为「卡片边框 + 标签色点」的**颜色标记**。
+ * 4. **#462**：再改为**瀑布流**（CSS multi-column）—— 卡片高度自适应内容，
+ *    不再被同行拉齐。布局机制从 grid 换成多列流（`column-count` + `column-gap`
+ *    + `column-fill: balance`），列数由 `@media` 断点写死（`column-count` 是精确值，
+ *    不像 grid 的 auto-fill 会随容器宽度自动降列）。
  *
- * 判定口径（最终）：面板撑满主区且不挂行内宽度；网格与 `.sessions-list` 逐项同参；
- * 列表区是受约束的纵向滚动区；卡片与 `.session-card` 同构且可收缩；旧的分列结构零残留。
+ * 判定口径（最终）：面板撑满主区且不挂行内宽度；列表区是受约束的纵向滚动区；
+ * 卡片与 `.session-card` 同构且可收缩；旧的分列结构零残留；
+ * 瀑布流参数（`column-fill: balance`、无 `column-width`、`break-inside: avoid`、
+ * 卡片 `margin-bottom` 间距、`@media` 列数断点）逐条锁定。
  *
- * ⚠️ 本仓库约定：改被静态断言覆盖的源码必须**同步改这里**（#444 / #450 / #452 / #456 均踩过）。
+ * ⚠️ 本仓库约定：改被静态断言覆盖的源码必须**同步改这里**（#444 / #450 / #452 / #456 / #460 均踩过）。
  *
  * vitest 跑在 node 环境（无 DOM、无布局引擎），无法用渲染断言覆盖，
  * 因此改为对源码做静态断言——与 `styles.test.ts`、`scripts/check-*.py` 同一思路。
@@ -69,17 +75,56 @@ function decls(selector: string): string {
 
 describe('记事本列表（网格布局，#456；原 #259 四列）', () => {
   it('网格参数与「任务会话」面板的 .sessions-list 完全同参', () => {
-    // #456 的核心判定：备忘录与任务会话**用同一套网格**（auto-fill minmax(320px, 1fr)）——
-    // 宽窗口自动排多列、窄窗口降为单列，两者视觉与响应式行为因此完全一致。
+    // #462：改为**瀑布流**（CSS multi-column）—— 不再是 grid。
+    // 原「与 .sessions-list 用同一套网格」的判定已失效：瀑布流是多列流，
+    // 与会话面板的 grid 是**两套不同的布局机制**。
     const list = decls('.notes-list');
-    const sessions = decls('.sessions-list');
-    expect(list).toMatch(
-      /grid-template-columns\s*:\s*repeat\(auto-fill,\s*minmax\(320px,\s*1fr\)\)/,
+    expect(list, '瀑布流不应再用 grid 布局').not.toMatch(/display\s*:\s*grid/);
+    expect(list, '瀑布流不应再有 grid-template-columns').not.toMatch(/grid-template-columns/);
+    expect(list).toMatch(/column-count\s*:\s*3/);
+    expect(list).toMatch(/column-gap\s*:\s*10px/);
+  });
+
+  it('瀑布流关键参数：column-fill: balance 必留，且不得用 column-width', () => {
+    // ⚠️ 两条都是**实测得出**的，勿凭直觉改：
+    // · `column-fill: auto` 会让内容退化成**单列**（多列容器不产生纵向滚动，
+    //   而是把内容横向铺开）⇒ 瀑布流完全失效。必须用默认的 `balance`。
+    // · `column-width` 是「建议」值，浏览器会压缩它以塞进更多列
+    //   （实测 1154px 容器里 `column-count: 3` + `column-width: 320px` 仍排 3 列
+    //   但卡宽 378px —— `column-width` 根本没约束住列宽）⇒ 加了也没用，别加。
+    const list = decls('.notes-list');
+    expect(list, '必须显式写 column-fill: balance').toMatch(/column-fill\s*:\s*balance/);
+    expect(list, 'column-width 无法约束列宽，别加').not.toMatch(/column-width/);
+  });
+
+  it('列数随窗口宽度降级：@media 断点写死（column-count 不随容器自动变）', () => {
+    // `column-count` 是**精确值**，不像 grid 的 auto-fill 会随容器宽度自动降列。
+    // 因此必须用 @media 断点显式改列数，否则窄窗口下仍是 3 列、卡片被挤扁。
+    // 断点参照 Tauri 窗口默认 1180×760 与 minWidth 900。
+    expect(styles, '缺少 ≤1400px 的两列断点').toMatch(
+      /@media\s*\(max-width:\s*1400px\)\s*\{[^}]*\.notes-list\s*\{[^}]*column-count\s*:\s*2/,
     );
-    // 逐项比对，防止日后两者漂移
-    expect(list).toMatch(sessions.match(/grid-template-columns[^;]*;/)![0]);
-    expect(list).toMatch(sessions.match(/gap\s*:\s*10px/)![0]);
-    expect(list).toMatch(sessions.match(/align-content\s*:\s*start/)![0]);
+    expect(styles, '缺少 ≤900px 的单列断点').toMatch(
+      /@media\s*\(max-width:\s*900px\)\s*\{[^}]*\.notes-list\s*\{[^}]*column-count\s*:\s*1/,
+    );
+  });
+
+  it('卡片是多列流的子项：break-inside avoid + margin-bottom 间距', () => {
+    // · `break-inside: avoid` —— 多列流默认会把元素跨列断开，卡片会被切成两半。
+    // · `margin-bottom` —— 多列流里 `column-gap` 只管**列**间距，卡片之间的
+    //   **纵向**间距得靠 margin（原先由 grid 的 `gap: 10px` 承担）。
+    const card = decls('.note-card');
+    expect(card, '卡片可能被切成两半').toMatch(/break-inside\s*:\s*avoid/);
+    expect(card, '卡片纵向间距缺失').toMatch(/margin\s*:\s*0 0 10px/);
+  });
+
+  it('卡片不得用 width: 100% —— 多列流里它相对整个容器而非列宽', () => {
+    // ⚠️ 实测踩过的坑：`width: 100%` 在多列流里解析为相对**整个容器**，
+    // 单列时卡片直接撑到 2688px（容器 900px）⇒ 横向溢出。
+    // 块级子项在多列流里自动占满列宽，用 `width: auto` 即可。
+    const card = decls('.note-card');
+    expect(card, 'width:100% 会撑破容器（多列流里相对整个容器）').not.toMatch(/width\s*:\s*100%/);
+    expect(card).toMatch(/width\s*:\s*auto/);
   });
 
   it('列表容器是受约束的纵向滚动区（flex + min-height 0 + overflow-y auto）', () => {
@@ -99,11 +144,13 @@ describe('记事本列表（网格布局，#456；原 #259 四列）', () => {
     expect(panel, '组件仍在用 note-col').not.toContain('note-col');
     expect(styles, 'styles.css 仍残留 .notes-card-cols 规则').not.toMatch(/\.notes-card-cols\s*\{/);
     expect(styles, 'styles.css 仍残留 .note-col 规则').not.toMatch(/\.note-col\s*\{/);
-    // 列宽变量随之失效：网格列最小宽度已由 minmax(320px,1fr) 定义
+    // 列宽变量随之失效：#462 起列数由 column-count + @media 断点决定
     expect(styles, '--notes-col-w 已随分列移除').not.toMatch(/--notes-col-w/);
   });
 
   it('卡片与 .session-card 同构：背景 / 圆角 / 内边距 / column 布局', () => {
+    // #462：卡片**几何**仍与 `.session-card` 同构（视觉统一），但**布局机制**
+    // 已分家 —— 会话面板是 grid 卡片流，备忘录是多列流瀑布流。
     const card = decls('.note-card');
     const session = decls('.session-card');
     expect(card).toMatch(/display\s*:\s*flex/);
@@ -196,6 +243,8 @@ describe('卡片页脚永远沉底（#460）', () => {
   it('前提：.note-card 必须是 flex column —— auto margin 依赖该上下文', () => {
     // margin-top: auto 只在 flex/grid 容器里吸收剩余空间。若日后把
     // .note-card 改成 block，该声明静默失效 ⇒ 页脚重新浮在中间。
+    // #462：改瀑布流后卡片不再被拉伸（无剩余空间），这条声明暂时空转，
+    // 但保留它 —— 若回退到 grid 等高布局，它立刻重新生效。
     const card = decls('.note-card');
     expect(card).toMatch(/display\s*:\s*flex/);
     expect(card).toMatch(/flex-direction\s*:\s*column/);

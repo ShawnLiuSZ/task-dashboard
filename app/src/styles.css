@@ -2389,17 +2389,59 @@ button.unassigned-tag:disabled {
  *
  * 纵向滚动交给容器自身（面板已 overflow: hidden + flex 列，列表区 flex:1）。
  */
+/* #462：改为**瀑布流**（CSS multi-column），卡片高度自适应内容、不再被同行拉齐。
+ *
+ * 为什么不用原生 `grid-template-rows: masonry`：它只被 Chromium 116+ 支持，
+ * 且生效条件苛刻（必须显式 `grid-template-columns`、容器有确定 height、
+ * 子项无 grid-row / align-self、内部无 position:absolute / contain:layout），
+ * 漏一条就**静默退化为单列**；macOS 的 WKWebView 与 Linux 的 WebKitGTK
+ * 完全不识别该值，`@supports` 恒为 false ⇒ 无法可靠做特性检测。
+ * 本项目三端 webview（WKWebView / WebKitGTK / WebView2）都要求真瀑布流，
+ * 唯一全引擎可用且零 JS 的方案就是 CSS multi-column。
+ *
+ * 关键参数（实测得出，勿凭直觉改）：
+ * · `column-count` 精确控制列数，**不要加 `column-width`** —— 实测 `column-width`
+ *   只是「建议」值，浏览器会压缩它以塞进更多列（1154px 容器里 `column-count: 3`
+ *   + `column-width: 320px` 仍排 3 列但卡宽 378px，说明 `column-width` 根本没
+ *   约束住列宽）。列数改由 `@media` 断点写死。
+ * · `column-fill: balance`（默认）**必须保留** —— 实测 `column-fill: auto` 时
+ *   内容**退化成单列**（瀑布流完全失效），因为 auto 模式下多列容器不产生纵向
+ *   滚动，而是把内容横向铺开。
+ * · 卡片间距用 `margin-bottom`（`column-gap` 只管列间距）。
+ * · `break-inside: avoid` 保证卡片不被切成两半（实测切断数 = 0）。
+ *
+ * ⚠️ **多列流的滚动方向是横向的**，纵向滚动需要容器有确定高度。本项目
+ * `.notes-list` 是 `flex: 1 1 auto` + `min-height: 0` + `overflow-y: auto`
+ * ⇒ 高度由父级（`.notes-panel`，flex column）确定，满足前提。
+ *
+ * 已知取舍（用户已确认）：**列式填充** —— 浏览器先填满一列再换下一列，
+ * 阅读顺序是「读完第一列再读第二列」，与时间倒序的直觉不同。
+ */
 .notes-list {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 10px;
-  align-content: start;
+  /* 从 grid 改为多列流；列数由下方 @media 断点写死。 */
+  column-count: 3;
+  column-gap: 10px;
+  column-fill: balance;
   overflow-y: auto;
   padding: 8px;
   overscroll-behavior: contain;
+}
+
+/* #462：列数随窗口宽度降级（`column-count` 是精确值，不随容器宽度自动变）。
+ * 断点参照 Tauri 窗口默认 1180×760 与 minWidth 900。 */
+@media (max-width: 1400px) {
+  .notes-list {
+    column-count: 2;
+  }
+}
+
+@media (max-width: 900px) {
+  .notes-list {
+    column-count: 1;
+  }
 }
 
 /* #329：后台刷新（增删改后的重查）只做轻量降透明提示，不再整块替换成「加载中」占位。
@@ -2514,12 +2556,20 @@ button.unassigned-tag:disabled {
 /* #456：列表展示后卡片与「任务会话」的 `.session-card` 同构 ——
  * 背景 --surface-2、边框取优先级色（--note-accent，由组件按标签注入），
  * 形状与几何对齐（radius 10px / padding 12px 14px / gap 8px / column 布局）。
- * 边框染色是关键：网格里不再有列头做视觉锚点，优先级全靠卡片边框 + 标签色点传达。 */
+ * 边框染色是关键：网格里不再有列头做视觉锚点，优先级全靠卡片边框 + 标签色点传达。
+ *
+ * #462：改瀑布流后卡片是多列流的**子项**，需额外几处：
+ * · `break-inside: avoid` —— 卡片不被切成两半（多列流默认会跨列断开）。
+ * · `margin-bottom: 10px` —— 多列流里 `column-gap` 只管**列**间距，
+ *   卡片之间的**纵向**间距得靠 margin（原先由 grid 的 `gap: 10px` 承担）。
+ * · ⚠️ **不能用 `width: 100%`** —— 多列流里 `width: 100%` 解析为相对**整个
+ *   容器**而非列宽，实测单列时卡片直接撑到 2688px（容器 900px）⇒ 横向溢出。
+ *   用 `width: auto`（块级子项在多列流里自动占满列宽）。
+ */
 .note-card {
   position: relative;
-  /* 网格列最小 320px，但卡片仍须能收缩：否则子元素（.note-foot）的 min-content
-   * 会把卡片撑宽，进而在 .notes-list（overflow-y: auto ⇒ overflow-x 计算成 auto）
-   * 里长出横向滚动条。 */
+  /* 卡片须能收缩：否则子元素（.note-foot）的 min-content 会把卡片撑宽，
+   * 在 .notes-list（overflow-y: auto ⇒ overflow-x 计算成 auto）里长出横向滚动条。 */
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -2528,6 +2578,10 @@ button.unassigned-tag:disabled {
   border: 1px solid var(--note-accent, var(--border));
   border-radius: 10px;
   padding: 12px 14px;
+  break-inside: avoid;
+  page-break-inside: avoid;
+  width: auto;
+  margin: 0 0 10px;
   transition:
     box-shadow 0.15s,
     border-color 0.15s;
@@ -2560,6 +2614,10 @@ button.unassigned-tag:disabled {
  *
  * `margin-top: auto` 在 flex column 下把剩余空间吸收到该元素**之前**，
  * 于是页脚永远贴底；空间不足时 auto 解析为 0，不会产生额外间隙。
+ *
+ * #462：改为瀑布流后卡片**不再被拉伸**（高度= 内容高度），没有剩余空间可吸收
+ * ⇒ 这条声明在瀑布流下是空转（`auto` 解析为 0）。**保留**它：若日后回退到
+ * grid 等高布局，它立刻重新生效，是一道便宜的保险。
  */
 .note-foot {
   display: flex;
