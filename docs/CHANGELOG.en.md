@@ -2,6 +2,38 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.7.4 (2026-10-20) — Code-review fixes across backend, MCP/CI scripts and frontend, plus a Notes list view (#450 / #451 / #452 / #456)**
+
+  - **Notes panel switched from columns to a list (#456)**
+    - The Notes panel used four fixed columns (priority: urgent / high / medium / low). That grouping has little practical value here — notes are short-lived and cluster in the last few days — while each column locked at 320px squeezed the cards' horizontal space, so few fit on screen.
+    - It is now a **list**, using grid parameters identical to the Task Sessions panel's `.sessions-list` (`auto-fill minmax(320px, 1fr)`): 3 columns at 1180px, 2 columns at 900px (the configured `minWidth`), narrowing naturally on smaller windows.
+    - Cards are structurally identical to `.session-card`: background `--surface-2`, radius 10px, padding `12px 14px`, `flex column` with `gap 8px`.
+    - Priority is now conveyed by a **tinted card border** (`--note-accent`) plus a strengthened label dot (6px → 7px with a matching soft ring). With no column headers left as visual anchors, the card itself has to carry that signal; a full border is easier to scan than a small dot, especially across multiple columns.
+    - Sorting is by creation time descending only; priority no longer affects ordering or organisation. Editing, delete confirmation and the priority toggle flow are unchanged.
+    - Removed dead structures: `.notes-card-cols`, the whole `.note-col*` family, the `--notes-col-w` variable, and 4 `notes.dateGroup.*` i18n keys. A dedicated test asserts no residue — stale CSS (rules that remain but nobody uses) is the easiest leftover after a layout change, and it later misleads anyone adjusting theme variables.
+    - ⚠️ Cards still have no left colour bar: `styles.css` records "user specified: no left colour bar on cards" (#259), and that decision stands — the border tint replaces it.
+    - Verification: `vitest` 321 passed · `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check` (413 keys) / `build` / `check-doc-links` all green. Render check: 1180×760 reads `grid=3 columns`, 900×560 drops to `grid=2 columns`, both with **0 horizontally overflowing elements**.
+    - The grid and card parameters are tested by extracting the actual values out of the `.sessions-list` / `.session-card` rules and comparing, so the two panels cannot silently drift apart.
+  - **Backend account contract, status mapping, migration column, fetch flag (#450)**
+    - Extracted `resolve_session_account_filter` so session listing and task listing share one account resolver, implementing the full #422 three-state encoding (`Some(0)`→aggregate, `Some(n)`→that account, `None`→read `meta.active_account_id`) with a required `> 0` check.
+    - `map_project_status` now matches whole values for both Chinese and English status text (substring matching misjudged e.g. `取消键位置调整` as `取消`).
+    - The tasks v2 rebuild whitelist now carries `work_dir`, so leftover rows keep their working directory instead of losing it.
+    - `outcome_from_affected` reports `Pulled` truthfully instead of always claiming success.
+    - Verification: `cargo test` 202 + 27 passed · `cargo fmt --check` · `cargo clippy -D warnings` (zero warnings) · `vitest` 318 passed, with `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check` / `check-mcp-columns` / `check-doc-links` all green. Reverse verification caught all 3 mutations.
+  - **MCP dual-implementation alignment, workflow false positive, CI blind spots (#451)**
+    - A missing or unparseable `Content-Length` is now fatal rather than malformed: the old reasoning ("the header closed cleanly, so the frame boundary is known") is wrong, because a missing `Content-Length` means the body length is *unknown* — the header's end is the body's first byte. Continuing to read then parses body bytes as headers. The Rust side was fixed in #357; Python had not caught up, and two tests pinned the divergent behaviour as correct.
+    - The NDJSON length limit is now enforced **incrementally**: the old code called `readline()` first and only then compared the length, so a line without a terminator allocated gigabytes before reporting "line too long" — the cap only helped once the data was already read. Bytes are now accumulated and checked as they arrive.
+    - `- run: |` no longer trips the workflow checker's list-item branch, which returned early and so never reached the block-scalar handling, flagging every script line as an invalid `key: value`.
+    - `check-mcp-columns.py` now cross-checks the Python `TASK_INSERT_COLS` list against Rust's `db.rs::TASK_INSERT_HEAD`. The `created_at` drift fixed in #438 was found by hand and had no CI net since; the permitted difference is registered explicitly in `RUST_EXPLICIT_EMPTY` rather than silently allowed.
+    - Added `scripts/test_check_mcp_columns.py` (12 cases) — previously the only one of five check scripts with no regression test, and its failure mode is silent (it stops reporting rather than failing).
+    - Verification: `python3 -m unittest discover -s scripts` 129 passed (was 117) · `mcp_server.test_server` 60 passed (was 59) · all four check scripts green. Reverse verification caught all 3 mutations.
+  - **Stale request replay, copied-state cross-talk (#452)**
+    - `coalescedLoad` now discards the queued parameters when `exec` throws. Previously the leftover `pending` was left for "the next call to consume", but it held parameters from an **earlier** request: A running → B queued → A throws (B remains) → C starts a new run → the loop picks up B and runs it again, so state can end up overwritten by the older filter — surfacing as "switched to account C but showing account B data".
+    - The Sessions panel's "copied" check now keys on `taskIdentity` (`issueKey@accountId`) instead of a bare `issueKey`; #438 unified selection state and card keys but missed this one. In the aggregated view two accounts can share an `issueKey`, so copying a branch or directory in one row lit the checkmark on the other.
+    - Write and read sites must change together: changing only one leaves the checkmark permanently unlit, which is harder to notice than cross-talk. Tests assert both sides, plus a guard against partially reverting to a bare `issueKey`.
+    - Verification: `vitest` 324 passed · `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check` all green. Reverse verification caught both mutations.
+  - Zero DB schema / SQL changes across the whole release. MCP tool set and `SELECT_COLS` (29 columns) unchanged.
+
 - **v0.7.3 (2026-10-16) — Notes creation moved to top-bar Modal (#447)**
 
   - **Entry moved**: A "New note" button is added to the top bar, to the right of the task count; clicking it opens a Modal.
