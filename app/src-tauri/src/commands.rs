@@ -30,6 +30,15 @@ pub struct Task {
     pub pr_url: String,
     /// #435：PR 合并状态（`merged`/`open`/`closed`/空串=未知）。
     pub pr_state: String,
+    /// #467：该 issue 关联的**全部** PR（`task_prs` 关系表）。
+    ///
+    /// 与 `pr_number` / `pr_url` / `pr_state` 三列并存：后者是「主 PR」
+    /// （列表首元素），保持旧契约不变；本字段承载完整的一对多关系。
+    ///
+    /// ⚠️ **不来自 `tasks` 表的 SELECT**（`tasks` 表零改动 ⇒ `TASK_SELECT_COLUMNS`
+    /// 与 `task_mapper` 的位置索引完全不动，避开 #285 的越界事故），
+    /// 而是在行读出后按 `(account_id, issue_key)` 批量回填。
+    pub prs: Vec<crate::common::PrRef>,
     pub branch: String,
     /// #193：agent 工作分支（record_session 写入，与同步的 PR branch 分离）。
     pub work_branch: String,
@@ -132,7 +141,53 @@ fn task_mapper(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         created_at: r.get(28)?,
         // #435：追加末尾列，对应 `TASK_SELECT_COLUMNS` 的第 30 项（索引 29）。
         pr_state: r.get(29)?,
+        // #467：多 PR 关联不来自 tasks 表（该表零改动）⇒ 此处先置空，
+        // 由调用方按 `(account_id, issue_key)` 批量回填（见 `attach_task_prs`）。
+        prs: Vec::new(),
     })
+}
+
+/// #467：把 `task_prs` 关系表里的多 PR 关联回填到任务列表。
+///
+/// 一次性取回整批关联行后在内存里匹配 ⇒ O(1) 查表，不产生 N+1 查询
+/// （看板一次渲染几百张卡，逐条查会明显拖慢）。
+///
+/// ⚠️ 匹配键是 `(account_id, issue_key)` 而非单独的 `issue_key`：
+/// issue_key 的值是 `repo#number`（不含 owner），多账号下会重复
+/// ⇒ 只按 issue_key 匹配会把 A 账号的 PR 关联挂到 B 账号的同号 issue 上。
+///
+/// **回退语义**：`task_prs` 里没有该 issue 的行时，若 `tasks.pr_number > 0`
+/// 则用主 PR 三元组合成一条 —— `prs` 数组的语义因此统一为「该 issue 关联的
+/// **全部** PR（含主 PR）」，前端不必再区分「单值列」与「数组」。
+/// 存量库在首次同步前 `task_prs` 是空的，这一步保证 PR 徽章不消失。
+fn attach_task_prs(
+    conn: &Connection,
+    tasks: &mut [Task],
+    account_id: Option<i64>,
+) -> Result<(), String> {
+    if tasks.is_empty() {
+        return Ok(());
+    }
+    let map = crate::db::load_all_task_prs(conn, account_id)?;
+    for t in tasks.iter_mut() {
+        let list = map.get(&(t.account_id, t.issue_key.clone()));
+        t.prs = match list {
+            Some(l) if !l.is_empty() => l.clone(),
+            _ => {
+                // 回退到主 PR（存量行 / 首次同步前 task_prs 为空）。
+                if t.pr_number > 0 && !t.pr_url.is_empty() {
+                    vec![crate::common::PrRef {
+                        number: t.pr_number,
+                        url: t.pr_url.clone(),
+                        state: t.pr_state.clone(),
+                    }]
+                } else {
+                    Vec::new()
+                }
+            }
+        };
+    }
+    Ok(())
 }
 
 /// 读取 `meta.active_account_id`；缺失或非法为 0。
@@ -247,6 +302,10 @@ fn rows_to_tasks(
     for r in rows {
         out.push(r.map_err(|e| e.to_string())?);
     }
+    // #467：回填多 PR 关联（`task_prs` 表）。
+    // `account_id` 已是本查询的账号口径（None = 聚合全部账号），
+    // 与上面的 WHERE 条件**严格一致** ⇒ 读到的关联与读到的任务同账号。
+    attach_task_prs(conn, &mut out, account_id)?;
     Ok(out)
 }
 
@@ -447,6 +506,8 @@ pub fn list_active_sessions(
             result.push(t);
         }
     }
+    // #467：回填多 PR 关联（会话面板复用 TaskCard 渲染，同样要显示 PR 徽章）。
+    attach_task_prs(&conn, &mut result, account_filter)?;
     Ok(result)
 }
 

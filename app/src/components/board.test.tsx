@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import Board, { groupTasksByCustomColumns, resolveBoardView } from './Board';
 import TaskCard from './TaskCard';
 import { I18nProvider } from '../i18n';
-import type { AccountColumn, ProjectStatus, Task } from '../types';
+import type { AccountColumn, PrRef, ProjectStatus, Task } from '../types';
 
 // 固定中文文案，避免 node 环境下 auto 模式解析不确定（navigator.language 不可用）。
 beforeEach(() => {
@@ -37,6 +37,7 @@ function mkTask(partial: Partial<Task> & { issueKey: string }): Task {
     prNumber: 0,
     prUrl: '',
     prState: '', // #435
+    prs: [], // #467
     branch: '',
     workBranch: '',
     workDir: '',
@@ -425,6 +426,89 @@ describe('TaskCard PR 行与合并状态（#435）', () => {
         <TaskCard task={mkTask({ issueKey: 'a' })} active={false} onSelectKey={noop} />
       </I18nProvider>,
     );
+    expect(html).not.toContain('pr-row');
+  });
+});
+
+describe('TaskCard 多 PR 关联（#467）', () => {
+  const multiPrCard = (prs: PrRef[]) =>
+    renderToStaticMarkup(
+      <I18nProvider>
+        <TaskCard
+          task={mkTask({
+            issueKey: 'a',
+            prNumber: prs[0]?.number ?? 0,
+            prUrl: prs[0]?.url ?? '',
+            prState: prs[0]?.state ?? '',
+            prs,
+            assignees: 'alice',
+          })}
+          active={false}
+          onSelectKey={noop}
+        />
+      </I18nProvider>,
+    );
+
+  it('同一 issue 的多个 PR 全部渲染（改造前只保留第一个）', () => {
+    const html = multiPrCard([
+      { number: 101, url: 'https://github.com/o/r/pull/101', state: 'open' },
+      { number: 102, url: 'https://github.com/o/r/pull/102', state: 'merged' },
+      { number: 103, url: 'https://github.com/o/r/pull/103', state: 'closed' },
+    ]);
+    expect(html).toContain('PR #101');
+    expect(html).toContain('PR #102');
+    expect(html).toContain('PR #103');
+    // 三个状态徽章各一份
+    expect(html).toContain('pr-state-open');
+    expect(html).toContain('pr-state-merged');
+    expect(html).toContain('pr-state-closed');
+    // 三个链接都在同一行里
+    expect(html.match(/pr-item/g) ?? []).toHaveLength(3);
+  });
+
+  it('每个 PR 的链接指向各自的 URL（不串号）', () => {
+    const html = multiPrCard([
+      { number: 101, url: 'https://github.com/o/r/pull/101', state: 'open' },
+      { number: 102, url: 'https://github.com/o/r/pull/102', state: 'merged' },
+    ]);
+    expect(html).toContain('href="https://github.com/o/r/pull/101"');
+    expect(html).toContain('href="https://github.com/o/r/pull/102"');
+  });
+
+  it('状态未知的 PR 仍渲染链接但不显示徽章', () => {
+    const html = multiPrCard([
+      { number: 101, url: 'https://github.com/o/r/pull/101', state: '' },
+      { number: 102, url: 'https://github.com/o/r/pull/102', state: 'merged' },
+    ]);
+    expect(html).toContain('PR #101');
+    // 只有第二个 PR 有徽章
+    expect(html.match(/pr-state-/g) ?? []).toHaveLength(1);
+  });
+
+  it('prs 为空但单值字段有值时回退渲染主 PR（存量行不丢徽章）', () => {
+    // ⚠️ `prs: []` + `prNumber > 0` 的组合：若实现按「字段存在」判断，
+    // 会渲染出空的 PR 行，把原本可见的 PR 链接弄丢。
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <TaskCard
+          task={mkTask({
+            issueKey: 'a',
+            prNumber: 321,
+            prUrl: 'https://github.com/o/r/pull/321',
+            prState: 'merged',
+            prs: [],
+          })}
+          active={false}
+          onSelectKey={noop}
+        />
+      </I18nProvider>,
+    );
+    expect(html).toContain('PR #321');
+    expect(html).toContain('pr-state-merged');
+  });
+
+  it('无任何 PR 关联时不渲染 PR 行', () => {
+    const html = multiPrCard([]);
     expect(html).not.toContain('pr-row');
   });
 });

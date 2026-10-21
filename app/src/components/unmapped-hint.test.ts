@@ -21,6 +21,7 @@ function mkTask(projectStatus: string): Task {
     prNumber: 0,
     prUrl: '',
     prState: '', // #435
+    prs: [], // #467
     branch: '',
     workBranch: '',
     workDir: '',

@@ -287,6 +287,29 @@ def ensure_schema(c):
         "CREATE INDEX IF NOT EXISTS idx_sessions_issue "
         "ON sessions(account_id, issue_key)"
     )
+    # #467：task_prs 表（issue ↔ 多 PR 关系）。Python MCP 是**独立进程**、不走 Rust 的
+    # `db::open_db`，故必须自建表 —— 与 Rust `db.rs::SCHEMA` 的定义保持一致。
+    # 唯一键含 `pr_url`：跨仓库 PR 的编号可能与本仓库 PR 撞号
+    # （`parse_issue_refs` 把 `owner/repo#N` 归一化为 `repo#N`，不带 owner）。
+    # `account_id` 必须在键里：issue_key（`repo#number`）在多账号下会重复。
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_prs (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          account_id  INTEGER NOT NULL,
+          issue_key   TEXT NOT NULL,
+          pr_number   INTEGER NOT NULL,
+          pr_url      TEXT NOT NULL DEFAULT '',
+          pr_state    TEXT NOT NULL DEFAULT '',
+          updated_at  INTEGER NOT NULL DEFAULT 0,
+          UNIQUE(account_id, issue_key, pr_number, pr_url)
+        )
+        """
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_prs_issue "
+        "ON task_prs(account_id, issue_key)"
+    )
     # #427：把 tasks 三列里的活跃会话搬进 sessions（与 Rust MIGRATE_DATA_FIXES
     # 第 3 条同语义）。INSERT OR IGNORE 保证幂等。
     c.execute(
@@ -323,6 +346,49 @@ def conn():
 
 def rows_to_dicts(rows):
     return [dict(r) for r in rows]
+
+
+def _attach_prs(rows):
+    """#467：给每个任务行补上该 issue 关联的**全部** PR（`task_prs` 关系表）。
+
+    `tasks` 表的 `pr_number` / `pr_url` / `pr_state` 是**主 PR**（列表首元素），
+    保持旧契约不变；本函数追加 `prs` 数组承载完整的一对多关系
+    （与 Rust 侧 `mcp.rs::attach_prs` 语义一致）。
+
+    ⚠️ 匹配键是 `(account_id, issue_key)`：issue_key 的值是 `repo#number`（不含 owner），
+    多账号下会重复 ⇒ 只按 issue_key 匹配会把 A 账号的 PR 关联挂到 B 账号的同号 issue 上。
+
+    一次性取回整表关联行后在内存里匹配 ⇒ 无 N+1 查询。
+    """
+    if not rows:
+        return rows
+    try:
+        pr_rows = conn().execute(
+            "SELECT account_id, issue_key, pr_number, pr_url, pr_state "
+            "FROM task_prs ORDER BY pr_number ASC"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # 老库里没有 task_prs 表（Python MCP 先于 App 跑过）⇒ 回退到主 PR。
+        pr_rows = []
+    grouped = {}
+    for acct, key, num, url, state in pr_rows:
+        grouped.setdefault((acct, key), []).append(
+            {"number": num, "url": url, "state": state}
+        )
+    for r in rows:
+        key = (r.get("account_id"), r.get("issue_key"))
+        lst = grouped.get(key, [])
+        if not lst:
+            # 回退到主 PR（存量行 / 首次同步前 task_prs 为空）⇒ prs 数组语义统一为
+            # 「该 issue 关联的全部 PR（含主 PR）」，与 Rust 侧口径一致。
+            num = r.get("pr_number") or 0
+            url = r.get("pr_url") or ""
+            if num > 0 and url:
+                lst = [
+                    {"number": num, "url": url, "state": r.get("pr_state") or ""}
+                ]
+        r["prs"] = lst
+    return rows
 
 
 def _is_custom_column(key, status):
@@ -724,7 +790,8 @@ def tool_list_my_tasks(status=None, ownership=None):
     if wheres:
         sql += " WHERE " + " AND ".join(wheres)
     sql += " ORDER BY candidate_done ASC, status ASC, updated_at DESC"
-    return rows_to_dicts(conn().execute(sql, params).fetchall())
+    # #467：补上每个 issue 关联的全部 PR（`task_prs` 关系表）。
+    return _attach_prs(rows_to_dicts(conn().execute(sql, params).fetchall()))
 
 
 def tool_get_task_status(issue):
@@ -733,7 +800,12 @@ def tool_get_task_status(issue):
         f"SELECT {SELECT_COLS} FROM tasks WHERE issue_key=?", (key,)
     ).fetchone()
     if row:
-        return {"found": True, "issue_key": key, **dict(row)}
+        # #467：补上该 issue 关联的全部 PR（`task_prs` 关系表）。
+        return {
+            "found": True,
+            "issue_key": key,
+            **_attach_prs([dict(row)])[0],
+        }
     # v0.4.1 (#250)：本地未命中 → 按需拉取后再查一次。
     # 读路径保持「永远能回答」的旧契约：账号缺失 / 网络失败 / DB 异常都降级为
     # found=False + reason，不把读操作变成异常。
@@ -750,7 +822,8 @@ def tool_get_task_status(issue):
                 "found": True,
                 "issue_key": key,
                 "pulled": outcome == "pulled",
-                **dict(row),
+                # #467：补上该 issue 关联的全部 PR（`task_prs` 关系表）。
+                **_attach_prs([dict(row)])[0],
             }
     if outcome == "remote_missing":
         reason_text = f"本地无此任务，且{reason}"

@@ -6,6 +6,20 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.6（未发布）— 同一个 issue 支持关联多个 PR（#467）**
+
+  - **同一 issue 的多个 PR 全部可见**：改造前同步层用 `pr_map.entry(rk).or_insert(...)` 构建 PR↔issue 映射 ⇒ 同一个 issue 被多个 PR 引用时**只有第一个入表，其余静默丢弃**（无日志、无报错）；数据层 `tasks.pr_number` / `pr_url` / `pr_state` 也是单值列。现新增独立关系表 `task_prs` 承载完整的一对多关系，卡片 PR 行与详情面板都会**逐个渲染全部关联 PR**。
+  - **方案：独立关系表，`tasks` 表零改动**（刻意避开本仓反复踩坑的两处）：① `tasks` 新列必须写在 `migrate_tasks_v2_rebuild`（物理重建、写死列白名单）**之后**，否则被丢；② `mcp.rs::row_to_value` / `server.py` / `commands.rs::task_mapper` 三处**位置索引**绑定任一处漏改 ⇒ `Row::get(N)` 越界 ⇒ 整个 `list_tasks` 报错 ⇒ 前端空看板（#285 的真实事故）。独立表让 `tasks` 零改动 ⇒ 这两个坑一个都不碰。
+  - **存量 100% 兼容**：`tasks.pr_number` / `pr_url` / `pr_state` / `branch` 四列保留为「**主 PR**」，取值 = 列表**首元素** = 改造前 `or_insert` 保留的那个 ⇒ **逐位相同**，旧 UI / 旧 MCP 契约 / 存量数据全部不变。唯一键含 `pr_url`（跨仓库 PR 编号会撞号 —— `parse_issue_refs` 把 `owner/repo#N` 归一化为 `repo#N`，不带 owner）与 `account_id`（issue_key 是 `repo#number`，多账号下会重复 ⇒ 否则 A 账号的 PR 会挂到 B 账号的同号 issue 上）。
+  - **不需要 bump `SCHEMA_VERSION`、不需要写迁移**：新表用 `CREATE TABLE IF NOT EXISTS` 放进 `SCHEMA`，而 `open_db` 每次都无条件执行 `execute_batch(SCHEMA)` ⇒ **老库自动补齐**（与 `sessions` 表同款先例）；单测 `legacy_db_gets_task_prs_table_automatically` 守住这条不变量。
+  - **「拉取失败保留既有值」语义同样适用于新表**：PR 列表拉取失败时**跳过** `task_prs` 的写入 ⇒ 一次网络抖动不会把看板上的 PR 徽章全清掉。靠 `TaskUpsert::pr_fetch_ok` 区分「拉取成功但确实无关联」与「拉取失败」（两者都表现为空列表，无法靠列表本身区分）。
+  - **读路径三处统一**（看板 / Rust MCP / Python MCP）：`prs` 数组语义统一为「该 issue 关联的**全部** PR（含主 PR）」，`task_prs` 无行时回退到主 PR（存量库首次同步前 `task_prs` 为空，徽章不会消失）。一次性取回整批关联行后在内存里匹配 ⇒ **无 N+1 查询**；匹配键是 `(account_id, issue_key)` 而非单独的 issue_key。
+  - **前端**：卡片 PR 行改为遍历 `task.prs` 渲染（`.pr-item`，一行内可换行），详情面板每个 PR 一组「打开 / 复制」按钮（`.pr-btn-group`）。⚠️ 判据用「`prs` **非空**」而非「`prs` 字段存在」—— 后者在 `prs: []` 且 `prNumber > 0`（存量行）时会渲染出**空**的 PR 行，把原本可见的 PR 链接弄丢（这条由既有 #435 测试当场抓出并修正）。
+  - **回归防线**：`scripts/check-mcp-columns.py` 新增第 7 条检查 —— Python MCP 是**独立进程**、不走 Rust 的 `open_db`，其 `ensure_schema` 必须自建 `task_prs`，漏建 ⇒ Python MCP 读路径 `no such table: task_prs` ⇒ 整个工具报错，而 App 自身正常、两侧单测都测不到（与 #169/#262/#278 同源的盲区）；附带校验两侧列名一致（列名拼错 ⇒ 建表成功但查列报 `no such column`）。
+  - **验证**：`vitest` **347 passed**（原 342）· `cargo test --lib` **216 passed**（原 212）· `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check` / `build` / `cargo fmt` / `cargo clippy -D warnings` / `check-mcp-columns` / `check-versions` / `check-doc-links` 全绿。**端到端**（真实 PAT + 生产库快照 `VACUUM INTO`，绝不改写生产库）跑一次真实同步：确认 `task_prs` 落库且**真实存在关联 ≥2 个 PR 的 issue**；**MCP 双侧**对同一 issue 返回**完全一致**的 `prs` 数组（765 任务全部带 `prs`，361 个有主 PR 的存量行正确回退）。
+  - **反向验证 2/2 捕获**：删掉 Python 侧 `task_prs` 建表语句、Python 侧列名改成 `number/url/state` ⇒ 各 1 条检查精准失败。
+  - 详见 [`issue-467-multi-pr.md`](./issue-467-multi-pr.md)
+
 - **v0.7.6（未发布）— 备忘录不跨列切断 + 看板限高滚动 + 查看全文弹窗（#465）**
 
   - **同一条备忘录不再被劈成两列**：#462 的瀑布流把「限高 + 滚动」和多列容器**合在同一元素**上，而多列流的**列高 = 容器高度** ⇒ 卡片比列高更高时浏览器只能跨列断开（用户截图：一条 30+ 行的记录被劈成左右两半，读起来像两条不同的记录）。现将**滚动宿主与列容器分离**：新增 `.notes-scroll` 承担限高与纵向滚动，`.notes-list`（多列容器）高度**自适应内容** ⇒ 列高由内容自然决定，`break-inside: avoid` **恒生效**。

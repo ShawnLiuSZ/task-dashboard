@@ -44,6 +44,20 @@ function TaskCard({ task, active, onSelectKey, repoIndex, showGhStatus }: Props)
   /** #237：issue 创建人；空 / 纯空白一律不渲染该行（老数据同步前不留空标签行）。
       用 `|| ""` 兜底：该字段是与前端同批发布的新列，防旧后端返回缺字段时整板崩掉。 */
   const creator = (task.author || '').trim();
+  /** #467：该 issue 关联的**全部** PR。
+   *
+   * 后端已把「主 PR」也放进 `prs` 数组（含存量回退），故正常路径直接用 `task.prs`。
+   * 回退：`prs` 为空但单值三字段有值时（老后端 / 手工构造的数据）退回单值 ⇒
+   * PR 徽章不会因字段缺失而消失。
+   *
+   * ⚠️ 用「`prs` **非空**」而非「`prs` 字段存在」作判据：后者在 `prs: []`
+   * 且 `prNumber > 0` 时会渲染出**空**的 PR 行，把原本可见的 PR 链接弄丢。 */
+  const prList =
+    Array.isArray(task.prs) && task.prs.length > 0
+      ? task.prs
+      : task.prNumber > 0 && task.prUrl
+        ? [{ number: task.prNumber, url: task.prUrl, state: task.prState || '' }]
+        : [];
   // #214：认领确认框与防重提交（成功靠后端 TASKS_CHANGED_EVENT 触发 App 重查）。
   const [confirmClaim, setConfirmClaim] = useState(false);
   const [claiming, setClaiming] = useState(false);
@@ -172,26 +186,34 @@ function TaskCard({ task, active, onSelectKey, repoIndex, showGhStatus }: Props)
 
       {/* #435：PR 与其合并状态，在「分配人」下方独立成行（原先挤在底部时间行里，
           位置靠下不易发现，且与「新评论」混在一行）。状态未知（prState 为空串）
-          时只渲染链接、不渲染徽章 —— 空串是常态（存量行 + 超过 3 页的老 PR 拉不到）。*/}
-      {task.prNumber > 0 && task.prUrl && (
+          时只渲染链接、不渲染徽章 —— 空串是常态（存量行 + 超过 3 页的老 PR 拉不到）。
+
+          #467：同一 issue 可关联**多个** PR ⇒ 改为遍历 `task.prs` 渲染。
+          `prs` 数组语义是「全部关联 PR（含主 PR）」，后端已做存量回退，
+          故这里不需要再判断 `prNumber`。*/}
+      {prList.length > 0 && (
         <div className="meta-row pr-row">
-          <a
-            className="pr-link"
-            title={t('card.prTitle')}
-            href={task.prUrl}
-            onClick={(e) => openLink(task.prUrl, e)}
-          >
-            🔗 PR #{task.prNumber}
-          </a>
-          {task.prState !== '' && (
-            <span className={`pr-state pr-state-${task.prState}`} title={t('card.prStateTitle')}>
-              {task.prState === 'merged'
-                ? t('card.prStateMerged')
-                : task.prState === 'open'
-                  ? t('card.prStateOpen')
-                  : t('card.prStateClosed')}
+          {prList.map((pr) => (
+            <span key={`${pr.number}-${pr.url}`} className="pr-item">
+              <a
+                className="pr-link"
+                title={t('card.prTitle')}
+                href={pr.url}
+                onClick={(e) => openLink(pr.url, e)}
+              >
+                🔗 PR #{pr.number}
+              </a>
+              {pr.state !== '' && (
+                <span className={`pr-state pr-state-${pr.state}`} title={t('card.prStateTitle')}>
+                  {pr.state === 'merged'
+                    ? t('card.prStateMerged')
+                    : pr.state === 'open'
+                      ? t('card.prStateOpen')
+                      : t('card.prStateClosed')}
+                </span>
+              )}
             </span>
-          )}
+          ))}
         </div>
       )}
 

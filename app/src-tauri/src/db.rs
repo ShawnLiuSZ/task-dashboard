@@ -166,6 +166,39 @@ CREATE INDEX IF NOT EXISTS idx_tasks_account ON tasks(account_id);
 -- 执行本 SCHEMA 时 issue_key 列尚不存在，顶层 CREATE INDEX 会导致 batch 失败。
 -- 该索引由 open_db 末尾的幂等创建 + v2 重建函数负责（见下）。
 
+-- #467：一个 issue 可关联**多个** PR（同一 issue 被多个 PR 引用）。
+--
+-- 此前 `tasks.pr_number` / `pr_url` 是单值列 ⇒ 第二个 PR 被 `or_insert` 静默丢弃
+-- （见 `sync.rs` 的 pr_map 构建）。本表承载完整的一对多关系，
+-- 而 `tasks.pr_*` 三列保留为「**主 PR**」（本轮命中的第一个），存量行为与
+-- 旧 UI / 旧 MCP 契约**完全不变**。
+--
+-- ⚠️ 刻意做成**独立表**而非给 `tasks` 加 JSON 列：
+--   ① `tasks` 表零改动 ⇒ 避开「新列必须写在 `migrate_tasks_v2_rebuild` 之后」的
+--      顺序硬约束，也不动 `mcp.rs` / `server.py` / `commands.rs` 三处位置绑定
+--      （改错一列 ⇒ 整个 `list_tasks` 报错 ⇒ 前端空看板，#285 的真实事故）；
+--   ② `CREATE TABLE IF NOT EXISTS` 放在 SCHEMA 里 ⇒ `execute_batch(SCHEMA)` 每次
+--      `open_db` 无条件执行 ⇒ **老库自动补齐，无需 bump `SCHEMA_VERSION`、
+--      无需写迁移**（与 `sessions` 表同款先例，见 `SESSIONS_DDL`）。
+--
+-- 唯一键含 `pr_url`：跨仓库 PR 的编号可能与本仓库 PR 撞号
+-- （`parse_issue_refs` 把 `owner/repo#N` 归一化为 `repo#N`，不带 owner），
+-- 只用 `pr_number` 会误判冲突。`account_id` 必须在键里：issue_key（`repo#number`）
+-- 在多账号下会重复（与 tasks 表现一致）。
+CREATE TABLE IF NOT EXISTS task_prs (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id  INTEGER NOT NULL,
+  issue_key   TEXT NOT NULL,
+  pr_number   INTEGER NOT NULL,
+  pr_url      TEXT NOT NULL DEFAULT '',
+  -- PR 合并状态（`merged`/`open`/`closed`/空串=未知），口径与 tasks.pr_state 一致。
+  pr_state    TEXT NOT NULL DEFAULT '',
+  updated_at  INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(account_id, issue_key, pr_number, pr_url)
+);
+-- 按 issue 查全部关联 PR（看板渲染 / MCP 返回多 PR 列表）。
+CREATE INDEX IF NOT EXISTS idx_task_prs_issue ON task_prs(account_id, issue_key);
+
 CREATE TABLE IF NOT EXISTS label_mappings (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   org         TEXT NOT NULL,
@@ -1231,6 +1264,11 @@ pub fn delete_account(conn: &Connection, id: i64) -> Result<(), String> {
     // 1. 删除 tasks
     tx.execute("DELETE FROM tasks WHERE account_id = ?1", [id])
         .map_err(|e| format!("删除 tasks 失败: {e}"))?;
+    // 1b. 删除 task_prs（#467：issue↔多 PR 关系表）。
+    // 必须一并清理 —— 否则删账号后残留的关联行会被「聚合全部账号」视图读到，
+    // 表现为「已删除的账号的 PR 关联仍显示在别人的卡片上」。
+    tx.execute("DELETE FROM task_prs WHERE account_id = ?1", [id])
+        .map_err(|e| format!("删除 task_prs 失败: {e}"))?;
     // 2. 删除 projects
     tx.execute("DELETE FROM projects WHERE account_id = ?1", [id])
         .map_err(|e| format!("删除 projects 失败: {e}"))?;
@@ -2026,6 +2064,19 @@ pub struct TaskUpsert {
     pub pr_url: String,
     /// #435：PR 合并状态（`merged`/`open`/`closed`/空串=未知）。
     pub pr_state: String,
+    /// #467：该 issue 关联的**全部** PR（写入独立的 `task_prs` 表）。
+    ///
+    /// 与 `pr_number` / `pr_url` / `pr_state` 三列并存：后者是「主 PR」
+    /// （列表首元素），保持旧契约不变；本字段承载完整的一对多关系。
+    ///
+    /// **空列表有两种含义，必须区分**：
+    /// - 「拉取成功且确实没有关联 PR」⇒ 写入阶段应清空该 issue 的既有 `task_prs` 行；
+    /// - 「PR 列表拉取失败」⇒ 写入阶段应**跳过**（保留既有关联）。
+    ///
+    /// 区分靠 [`TaskUpsert::pr_fetch_ok`]，不靠列表是否为空 —— 后者无法区分二者。
+    pub prs: Vec<crate::common::PrRef>,
+    /// #467：本轮 PR 列表是否拉取成功。`false` ⇒ `prs` 无意义，写入阶段保留既有值。
+    pub pr_fetch_ok: bool,
     pub branch: String,
     /// #278：父 issue（JSON 对象串 `{"number","title","url"}`），无父为空串。
     pub parent_issue: String,
@@ -2151,6 +2202,127 @@ pub fn write_task(
         ],
     )
     .map_err(|e| format!("写入任务失败: {e}"))
+}
+
+// ============================================================================
+// #467：issue ↔ 多 PR 关系表（task_prs）
+// ============================================================================
+
+/// 写入某 issue 的**全部**关联 PR（全量替换语义）。
+///
+/// ⚠️ **全量替换**是这个 API 的核心契约：调用方在一次同步里拿到的是该 issue 的
+/// 完整 PR 列表，语义上「先删旧的、再写新的」。若 PR 关联被解除（PR 正文里的
+/// 关闭关键词被删掉），本次传入空列表 ⇒ 该 issue 的关联行被清空 ⇒ 读端不再显示
+/// 过期 PR。
+///
+/// 写入策略用 `INSERT ... ON CONFLICT DO UPDATE`：同一 PR 在一次同步里可能被
+/// `parse_issue_refs` 命中多次（正文里写了 `Fixes #1` 又在末尾重复 `#1`），
+/// 去重后仍可能撞同一唯一键 ⇒ 冲突时更新状态而不是报错。
+pub fn write_task_prs(
+    conn: &Connection,
+    account_id: i64,
+    issue_key: &str,
+    prs: &[crate::common::PrRef],
+    now: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM task_prs WHERE account_id = ?1 AND issue_key = ?2",
+        rusqlite::params![account_id, issue_key],
+    )
+    .map_err(|e| format!("清理任务 PR 关联失败: {e}"))?;
+    for pr in prs {
+        conn.execute(
+            "INSERT INTO task_prs (account_id, issue_key, pr_number, pr_url, pr_state, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(account_id, issue_key, pr_number, pr_url)
+             DO UPDATE SET pr_state = excluded.pr_state, updated_at = excluded.updated_at",
+            rusqlite::params![account_id, issue_key, pr.number, pr.url, pr.state, now],
+        )
+        .map_err(|e| format!("写入任务 PR 关联失败: {e}"))?;
+    }
+    Ok(())
+}
+
+/// 读取某 issue 的全部关联 PR（按编号升序）。
+///
+/// 读端只取展示必需的三件套（编号 / 网页链接 / 合并状态），与 `tasks.pr_*`
+/// 的口径完全一致 ⇒ 空串状态同样是「未知」而非异常。
+pub fn load_task_prs(
+    conn: &Connection,
+    account_id: i64,
+    issue_key: &str,
+) -> Result<Vec<crate::common::PrRef>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT pr_number, pr_url, pr_state FROM task_prs
+             WHERE account_id = ?1 AND issue_key = ?2
+             ORDER BY pr_number ASC",
+        )
+        .map_err(|e| format!("读取任务 PR 关联失败: {e}"))?;
+    let rows = stmt
+        .query_map(rusqlite::params![account_id, issue_key], |r| {
+            Ok(crate::common::PrRef {
+                number: r.get(0)?,
+                url: r.get(1)?,
+                state: r.get(2)?,
+            })
+        })
+        .map_err(|e| format!("遍历任务 PR 关联失败: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取任务 PR 关联行失败: {e}"))?);
+    }
+    Ok(out)
+}
+
+/// 一次性读取关联 PR，返回 `(account_id, issue_key) → PR 列表`。
+///
+/// 看板一次要渲染几百张卡 ⇒ 逐 issue 查询会变成 N+1。这里一次性取回整账号的
+/// 关联行，在内存里分组。
+///
+/// ⚠️ **键必须是 `(account_id, issue_key)` 而非单独的 `issue_key`**：
+/// issue_key 的值是 `repo#number`（不含 owner），在多账号下会重复
+/// （与 tasks 表表现一致）⇒ 只按 issue_key 分组会把 A 账号的 PR 关联
+/// 错误地挂到 B 账号的同号 issue 上。
+///
+/// `account_id = None` ⇒ 全部账号（聚合视图）。
+pub fn load_all_task_prs(
+    conn: &Connection,
+    account_id: Option<i64>,
+) -> Result<HashMap<(i64, String), Vec<crate::common::PrRef>>, String> {
+    let (sql, bind): (&str, Vec<i64>) = match account_id {
+        Some(id) => (
+            "SELECT account_id, issue_key, pr_number, pr_url, pr_state FROM task_prs
+             WHERE account_id = ?1 ORDER BY pr_number ASC",
+            vec![id],
+        ),
+        None => (
+            "SELECT account_id, issue_key, pr_number, pr_url, pr_state FROM task_prs
+             ORDER BY pr_number ASC",
+            Vec::new(),
+        ),
+    };
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| format!("读取 PR 关联失败: {e}"))?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(bind), |r| {
+            Ok((
+                (r.get::<_, i64>(0)?, r.get::<_, String>(1)?),
+                crate::common::PrRef {
+                    number: r.get(2)?,
+                    url: r.get(3)?,
+                    state: r.get(4)?,
+                },
+            ))
+        })
+        .map_err(|e| format!("遍历 PR 关联失败: {e}"))?;
+    let mut out: HashMap<(i64, String), Vec<crate::common::PrRef>> = HashMap::new();
+    for r in rows {
+        let (k, v) = r.map_err(|e| format!("读取 PR 关联行失败: {e}"))?;
+        out.entry(k).or_default().push(v);
+    }
+    Ok(out)
 }
 
 // ============================================================================
@@ -2863,6 +3035,179 @@ mod tests {
             None,
             "SCHEMA 内联的 sessions DDL 与 SESSIONS_DDL 常量已漂移"
         );
+    }
+
+    // ============================================================================
+    // #467：issue ↔ 多 PR 关系表（task_prs）
+    // ============================================================================
+
+    fn pr(n: i64, url: &str, state: &str) -> crate::common::PrRef {
+        crate::common::PrRef {
+            number: n,
+            url: url.to_string(),
+            state: state.to_string(),
+        }
+    }
+
+    /// #467：同一 issue 关联多个 PR 时**全部**落库（改造前只有第一个 PR 能落库）。
+    #[test]
+    fn task_prs_stores_multiple_prs_for_one_issue() {
+        let conn = open_db(std::path::Path::new(":memory:")).expect("open_db");
+        write_task_prs(
+            &conn,
+            1,
+            "o/r#10",
+            &[
+                pr(101, "https://github.com/o/r/pull/101", "open"),
+                pr(102, "https://github.com/o/r/pull/102", "merged"),
+                pr(103, "https://github.com/o/r/pull/103", ""),
+            ],
+            1000,
+        )
+        .unwrap();
+        let got = load_task_prs(&conn, 1, "o/r#10").unwrap();
+        assert_eq!(got.len(), 3, "三个 PR 应全部落库，而不是只留第一个");
+        assert_eq!(
+            got.iter().map(|p| p.number).collect::<Vec<_>>(),
+            vec![101, 102, 103],
+            "应按 PR 编号升序返回"
+        );
+        assert_eq!(got[1].state, "merged");
+        assert_eq!(got[2].state, "", "状态未知是常态，应保留空串而非丢字段");
+    }
+
+    /// #467：全量替换语义 —— 关联被解除（PR 正文删掉关闭关键词）后旧行必须消失。
+    #[test]
+    fn task_prs_replaces_previous_rows() {
+        let conn = open_db(std::path::Path::new(":memory:")).expect("open_db");
+        write_task_prs(
+            &conn,
+            1,
+            "o/r#10",
+            &[pr(101, "https://github.com/o/r/pull/101", "open")],
+            1000,
+        )
+        .unwrap();
+        // 第二轮：PR 列表为空 ⇒ 该 issue 不再有关联 PR。
+        write_task_prs(&conn, 1, "o/r#10", &[], 2000).unwrap();
+        let got = load_task_prs(&conn, 1, "o/r#10").unwrap();
+        assert!(got.is_empty(), "全量替换：旧关联行必须被清掉");
+    }
+
+    /// #467：重复写入同一 PR（正文里被多次命中）不应产生重复行。
+    #[test]
+    fn task_prs_dedups_same_pr() {
+        let conn = open_db(std::path::Path::new(":memory:")).expect("open_db");
+        let one = pr(101, "https://github.com/o/r/pull/101", "open");
+        write_task_prs(&conn, 1, "o/r#10", &[one.clone(), one], 1000).unwrap();
+        let got = load_task_prs(&conn, 1, "o/r#10").unwrap();
+        assert_eq!(got.len(), 1, "同一 PR 重复命中只应留一行");
+    }
+
+    /// #467：多账号下同一 issue_key（`repo#number` 不含 owner）**不得**串号。
+    /// A 账号的 PR 关联不能被 B 账号读到。
+    #[test]
+    fn task_prs_isolated_by_account() {
+        let conn = open_db(std::path::Path::new(":memory:")).expect("open_db");
+        write_task_prs(
+            &conn,
+            1,
+            "o/r#10",
+            &[pr(101, "https://github.com/o/r/pull/101", "open")],
+            1000,
+        )
+        .unwrap();
+        write_task_prs(
+            &conn,
+            2,
+            "o/r#10",
+            &[pr(201, "https://github.com/other/r/pull/201", "merged")],
+            1000,
+        )
+        .unwrap();
+        let a = load_task_prs(&conn, 1, "o/r#10").unwrap();
+        let b = load_task_prs(&conn, 2, "o/r#10").unwrap();
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].number, 101, "账号 1 只应看到自己的 PR");
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].number, 201, "账号 2 只应看到自己的 PR");
+
+        // 批量读取按 (account_id, issue_key) 分组，同样不得串号。
+        let all = load_all_task_prs(&conn, None).unwrap();
+        assert_eq!(all.get(&(1, "o/r#10".to_string())).unwrap().len(), 1);
+        assert_eq!(all.get(&(2, "o/r#10".to_string())).unwrap().len(), 1);
+        assert_eq!(all.get(&(1, "o/r#10".to_string())).unwrap()[0].number, 101);
+    }
+
+    /// #467：老库（没有 task_prs 表）首次打开应**自动补齐**该表 + 索引。
+    ///
+    /// 这是「不 bump `SCHEMA_VERSION`、不写迁移」方案成立的前提 ——
+    /// 若 `CREATE TABLE IF NOT EXISTS` 没被 `execute_batch(SCHEMA)` 执行到，
+    /// 老库上的读路径会直接 `no such table: task_prs` ⇒ 整个看板报错。
+    #[test]
+    fn legacy_db_gets_task_prs_table_automatically() {
+        let path = tmp_db_guarded("task-prs-legacy");
+        {
+            let conn = Connection::open(&path).unwrap();
+            // 造一个「有 tasks、但没有 task_prs」的库。
+            conn.execute_batch(SCHEMA).unwrap();
+            conn.execute_batch(
+                "DROP TABLE task_prs;
+                 DROP INDEX IF EXISTS idx_task_prs_issue;",
+            )
+            .unwrap();
+            let t: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_prs'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(t, 0, "前置条件：task_prs 表应已被删掉");
+        }
+        // 重新打开 ⇒ SCHEMA 自动补齐。
+        {
+            let conn = open_db(&path).expect("open_db 应成功");
+            let t: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_prs'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(t, 1, "老库首次打开必须自动建出 task_prs 表");
+            let i: i64 = conn
+                .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_task_prs_issue'", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(i, 1, "老库首次打开必须自动建出 idx_task_prs_issue 索引");
+            // 补齐后读路径可用。
+            write_task_prs(&conn, 1, "o/r#1", &[pr(1, "u", "open")], 1).unwrap();
+            assert_eq!(load_task_prs(&conn, 1, "o/r#1").unwrap().len(), 1);
+        }
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #467：删账号必须级联清理 task_prs（否则残留行会被聚合视图读到）。
+    #[test]
+    fn delete_account_cascades_task_prs() {
+        let conn = open_db(std::path::Path::new(":memory:")).expect("open_db");
+        conn.execute(
+            "INSERT INTO accounts (id, label, login, org, pat_token, is_default, created_at)
+             VALUES (7, 'l', 'l', 'org', 't', 1, 1)",
+            [],
+        )
+        .unwrap();
+        write_task_prs(&conn, 7, "o/r#10", &[pr(101, "u", "open")], 1).unwrap();
+        assert_eq!(load_task_prs(&conn, 7, "o/r#10").unwrap().len(), 1);
+        delete_account(&conn, 7).expect("删除账号");
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM task_prs WHERE account_id = 7",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0, "删账号后不得残留 PR 关联行");
     }
 
     /// #427：`open_db` 必须在**新库**里建出 sessions 表 + 两个索引。

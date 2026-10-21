@@ -79,6 +79,23 @@ pub struct IssueLink {
     pub url: String,
 }
 
+/// #467：一个 issue 关联的**一个** PR（同一 issue 可关联多个 PR）。
+///
+/// 与 [`IssueLink`] 同款设计：只缓存展示必需的三件套（编号 / 网页链接 / 合并状态），
+/// 不存 `title` / `head_ref` / 时间戳等会漂移的字段 —— 避免一次同步延迟就把
+/// 过期信息呈现给用户。
+///
+/// 状态口径与 `tasks.pr_state` 完全一致：`merged` / `open` / `closed`，
+/// **空串 = 未知**（不是异常：`state=all` 只拉 3 页，超大仓库的老 PR 拉不到；
+/// 存量行在 #435 之前也没有该值）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrRef {
+    pub number: i64,
+    pub url: String,
+    /// PR 合并状态（`merged` / `open` / `closed` / 空串=未知）。
+    pub state: String,
+}
+
 /// #278：一条 issue 的父子关系（GraphQL `parent` / `subIssues` 的落库形态）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IssueLinks {
