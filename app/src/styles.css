@@ -2232,6 +2232,10 @@ button.unassigned-tag:disabled {
   flex-direction: column;
   background: var(--bg);
   overflow: hidden;
+  /* #465：作为「查看全文」Modal 遮罩的宿主 —— `.modal-mask` 是
+   * `position: absolute; inset: 0`，没有定位祖先时会回退到视口，
+   * 遮罩会盖住整个窗口（包括顶栏）。面板自身定位 ⇒ 遮罩只覆盖面板区域。 */
+  position: relative;
 }
 
 /* #287：任务会话列表视图（独立面板）。 */
@@ -2416,17 +2420,54 @@ button.unassigned-tag:disabled {
  *
  * 已知取舍（用户已确认）：**列式填充** —— 浏览器先填满一列再换下一列，
  * 阅读顺序是「读完第一列再读第二列」，与时间倒序的直觉不同。
+ *
+ * #465：**滚动宿主与列容器分离** —— 这条是「同一条备忘录不被劈成两列」的技术核心。
+ *
+ * 缺陷本体：多列流的**列高 = 多列容器的高度**。若多列容器自身既被限高
+ * （`max-height`）又承担纵向滚动（`overflow-y: auto`），则：
+ * ① 列高被锁死 ⇒ `break-inside: avoid` 只在「卡片高 < 列高」时才生效，
+ *    卡片更高时浏览器**只能**把它跨列断开（用户截图：一条 30+ 行的记录
+ *    被劈成左右两半，读起来像两条不同的备忘录）；
+ * ② 纵向**根本不滚动** —— 多列容器在确定高度下只把内容横向铺开
+ *    （实测 1440px 视口下横向溢出 3338px、纵向 scrollable=false）。
+ *
+ * 解法（**实测得出**，Blink + WebKit 双引擎一致）：
+ * · `.notes-scroll`（新，滚动宿主）：`flex: 1 1 auto` + `min-height: 0`
+ *   + `max-height: 520px` + `overflow-y: auto` ⇒ 承担**限高 + 纵向滚动**。
+ * · `.notes-list`（列容器）：高度**自适应内容**（不设 height/max-height）⇒
+ *   多列流按内容自然分配列高，`break-inside: avoid` **恒生效**
+ *   （实测 1/2/3/4/7/20 张卡、含 32 行与 100 行超长卡，切断数恒为 0）。
+ *
+ * ⚠️ 别把 `max-height` / `overflow-y` 加回 `.notes-list` —— 那会同时踩中
+ * 上面两条缺陷（切断 + 不滚动）。
  */
 .notes-list {
-  flex: 1 1 auto;
   min-width: 0;
-  min-height: 0;
+  /* 高度自适应内容：列高由内容自然决定 ⇒ 卡片恒不跨列。 */
+  height: auto;
   /* 从 grid 改为多列流；列数由下方 @media 断点写死。 */
   column-count: 3;
   column-gap: 10px;
   column-fill: balance;
-  overflow-y: auto;
   padding: 8px;
+}
+
+/* #465：滚动宿主 —— 承担「看板固定最大高度 + 纵向滚动条」。
+ *
+ * 限高 520px 的来历：Tauri 窗口默认 1180×760、minHeight 560 ⇒ 主区最小约 516px，
+ * 扣掉工具行 41px ⇒ 列表区最小约 475px < 520px ⇒ 极窄窗口下由 flex 分配
+ * （min-height: 0）接管，滚动区进一步变小但**始终可滚**。
+ *
+ * `overflow-x: hidden`：多列容器宽度确定 ⇒ 列数固定 ⇒ 理论上不会横向溢出；
+ * 这里兜底防止任何意外（`overflow-y: auto` 会让 overflow-x 计算成 auto）。
+ */
+.notes-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  max-height: 520px;
+  overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
 }
 
@@ -2569,7 +2610,7 @@ button.unassigned-tag:disabled {
 .note-card {
   position: relative;
   /* 卡片须能收缩：否则子元素（.note-foot）的 min-content 会把卡片撑宽，
-   * 在 .notes-list（overflow-y: auto ⇒ overflow-x 计算成 auto）里长出横向滚动条。 */
+   * 在 .notes-scroll（overflow-y: auto ⇒ overflow-x 计算成 auto）里长出横向滚动条。 */
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -2595,14 +2636,116 @@ button.unassigned-tag:disabled {
 }
 
 /* #456：卡片改为 column 布局 + gap 8px（与 .session-card 同参）后，
- * 原来给页脚留的 margin-bottom 4px 会变成额外间距 ⇒ 归零。 */
+ * 原来给页脚留的 margin-bottom 4px 会变成额外间距 ⇒ 归零。
+ *
+ * #465：正文**折叠**（`-webkit-line-clamp`）—— 卡片里只显示前若干行，
+ * 完整内容由右上角「查看」按钮的 Modal 承载。
+ *
+ * 为何折叠（而不是让正文无限长）：多列流里一张卡片越高，它所在那列就越长，
+ * 卡片高度差过大时三列底部会严重参差，瀑布流看起来像「一列很长、两列很短」。
+ * 折叠后所有卡片高度收敛，列高均衡。
+ *
+ * 为何用 `-webkit-line-clamp` 而不是 `max-height` + `overflow: hidden`：
+ * 后者是**硬切**（第 N 行被切成半行、无任何提示，用户以为内容就这么长）；
+ * 前者会补一个省略号，明确告知「还有更多」。
+ *
+ * ⚠️ `-webkit-line-clamp` 必须配合 `display: -webkit-box` +
+ * `-webkit-box-orient: vertical`，且**会让 float 失效**（按钮会跑到左上角独占
+ * 一行）⇒ 「查看」按钮不能用 float 绕排，只能绝对定位（见 `.note-view-btn`）。
+ *
+ * `padding-right: 30px`：给右上角按钮**预留**位置。按钮绝对定位在卡片右上角，
+ * 若正文顶到最右，首行会被按钮压住（实测 20 张卡中 1 张压字）⇒ 正文整体
+ * 右侧留白 30px，按钮落在留白里，恒不压字。
+ */
 .note-content {
   margin: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 9;
+  overflow: hidden;
+  /* 给右上角「查看」按钮留位（按钮 22px + 右边距 8px）。 */
+  padding-right: 30px;
   font-size: 0.8125rem;
   line-height: 1.6;
   color: var(--text);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* #465：卡片右上角「查看全文」按钮。
+ * 绝对定位（不占布局高度）—— 否则每张卡片都多出一行，瀑布流明显变高。
+ * 默认半透明常驻（不是 hover 才出现)：内容被折叠时，用户必须一眼看到
+ * 「还有全文」的入口，hover 才显现等于藏起来。
+ *
+ * ⚠️ 位置在**卡片**右上角（`.note-card` 是 `position: relative`），
+ * 且正文已预留 `padding-right: 30px` ⇒ 按钮恒不压住正文（实测 0 张卡压字）。
+ */
+.note-view-btn {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--text-3);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.note-view-btn:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* #465：查看全文弹窗 —— 挂在 .notes-panel 内部（面板是遮罩宿主）。
+ * 宽度比通用 .modal (520px) 略宽：备忘录正文常有较长的行。
+ */
+.note-viewer-mask {
+  z-index: 30;
+}
+
+.note-viewer-modal {
+  width: 640px;
+  max-width: calc(100% - 48px);
+}
+
+.note-viewer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.note-viewer-head .modal-title {
+  margin: 0;
+}
+
+/* 全文保留换行；超长时弹窗内部滚动（.modal 已有 overflow-y: auto）。 */
+.note-viewer-content {
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--surface-2);
+  border: 1px solid var(--note-accent, var(--border));
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.note-viewer-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 /* #460：页脚永远沉到卡片底部。

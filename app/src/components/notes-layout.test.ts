@@ -129,12 +129,44 @@ describe('记事本列表（网格布局，#456；原 #259 四列）', () => {
 
   it('列表容器是受约束的纵向滚动区（flex + min-height 0 + overflow-y auto）', () => {
     // flex 子项的 auto 最小高度会阻止收缩 ⇒ 没有 min-height:0 时滚动条会落到可视区之外。
-    const d = decls('.notes-list');
+    //
+    // #465：滚动宿主已从 `.notes-list` **拆到 `.notes-scroll`** ——
+    // 多列容器若同时限高 + 滚动，列高会被锁死 ⇒ `break-inside: avoid` 失效
+    // （同一条备忘录被劈成两列）且纵向根本不滚动（只横向铺开）。
+    const d = decls('.notes-scroll');
     expect(d).toMatch(/flex\s*:\s*1\s+1\s+auto/);
     expect(d).toMatch(/min-height\s*:\s*0/);
     expect(d).toMatch(/overflow-y\s*:\s*auto/);
     // 滚到头后不再向父级链式滚动
     expect(d).toMatch(/overscroll-behavior\s*:\s*contain/);
+    // 「看板固定最大高度」：滚动区有明确上限
+    expect(d).toMatch(/max-height\s*:\s*520px/);
+  });
+
+  it('多列容器（.notes-list）不得限高、不得自带滚动（#465 核心约束）', () => {
+    // ⚠️ 这条是 #465 的技术核心，改动前务必读 styles.css 里 `.notes-list` 的注释。
+    //
+    // 若 `.notes-list`（多列容器）自己带 `max-height` 或 `overflow-y: auto`：
+    // ① 列高 = 容器高度被锁死 ⇒ 卡片比列高更高时浏览器只能跨列断开
+    //    （用户截图：一条备忘录被劈成左右两半）；
+    // ② 多列容器在确定高度下只把内容**横向**铺开 ⇒ 纵向根本不滚动
+    //    （实测 1440px 视口：横向溢出 3338px、scrollable=false）。
+    const d = decls('.notes-list');
+    expect(d, '多列容器不得限高（列高被锁死 ⇒ 卡片跨列断开）').not.toMatch(/max-height/);
+    expect(d, '多列容器不得自带滚动（会退化成横向铺开）').not.toMatch(/overflow-y/);
+    expect(d, '多列容器不得横向滚动').not.toMatch(/overflow-x/);
+    // 高度自适应内容 —— 列高由内容自然决定 ⇒ break-inside: avoid 恒生效
+    expect(d).toMatch(/height\s*:\s*auto/);
+  });
+
+  it('滚动宿主与多列容器是两层（组件里必须有 .notes-scroll 包裹 .notes-list）', () => {
+    // 结构断言：`.notes-scroll` 必须**包住** `.notes-list`（滚动在外、列容器在内）。
+    // 若两者合一（只留 .notes-list），会同时踩中上面两条缺陷。
+    const scrollIdx = panel.indexOf('className="notes-scroll"');
+    const listIdx = panel.indexOf('className="notes-list"');
+    expect(scrollIdx, 'NotesPanel.tsx 中找不到 .notes-scroll').toBeGreaterThan(-1);
+    expect(listIdx, 'NotesPanel.tsx 中找不到 .notes-list').toBeGreaterThan(-1);
+    expect(scrollIdx, '.notes-scroll 应在 .notes-list 之前（外层）').toBeLessThan(listIdx);
   });
 
   it('旧的分列结构已彻底移除（.notes-card-cols / .note-col* 一族）', () => {
@@ -210,6 +242,63 @@ describe('记事本列表（网格布局，#456；原 #259 四列）', () => {
 
   it('空列表有占位提示（原来只有 loading 分支，空列表会渲染空白）', () => {
     expect(panel).toContain('sortedNotes.length === 0');
+  });
+});
+
+describe('备忘录折叠 + 查看全文按钮（#465）', () => {
+  /**
+   * 需求（用户截图）：
+   * ① 同一条备忘录不能被劈成两列；
+   * ② 看板固定最大高度 + 滚动条；
+   * ③ 每张卡片右上角加「查看」按钮，弹 Modal 看全文。
+   *
+   * ① 由布局机制解决（多列容器高度自适应 ⇒ `break-inside: avoid` 恒生效），
+   *    见上一组「多列容器不得限高」断言。
+   * ③ 由「正文折叠 + 右上角按钮 + Modal」实现。
+   */
+  it('正文折叠：line-clamp + 省略号（不是硬切）', () => {
+    // `-webkit-line-clamp` 必须配合 `display: -webkit-box` +
+    // `-webkit-box-orient: vertical` 三件套，缺一个就不生效。
+    // 不用 `max-height` + `overflow: hidden`：那是硬切（第 N 行被切成半行，
+    // 无任何提示，用户以为内容就这么多）。
+    const c = decls('.note-content');
+    expect(c).toMatch(/display\s*:\s*-webkit-box/);
+    expect(c).toMatch(/-webkit-box-orient\s*:\s*vertical/);
+    expect(c).toMatch(/-webkit-line-clamp\s*:\s*9/);
+    expect(c).toMatch(/overflow\s*:\s*hidden/);
+  });
+
+  it('正文右侧为查看按钮预留 30px（按钮恒不压住正文文字）', () => {
+    // 实测：按钮绝对定位在卡片右上角，正文若顶到最右会被压住
+    // （20 张卡中 1 张压字）⇒ 正文整体右侧留白，按钮落在留白里。
+    expect(decls('.note-content')).toMatch(/padding-right\s*:\s*30px/);
+  });
+
+  it('查看按钮在卡片右上角且绝对定位（不占布局高度）', () => {
+    const b = decls('.note-view-btn');
+    expect(b).toMatch(/position\s*:\s*absolute/);
+    expect(b).toMatch(/top\s*:\s*8px/);
+    expect(b).toMatch(/right\s*:\s*10px/);
+    // 卡片是定位祖先（否则按钮会相对更外层定位）
+    expect(decls('.note-card')).toMatch(/position\s*:\s*relative/);
+  });
+
+  it('组件渲染了查看按钮并绑定查看态（点击 → 打开 Modal）', () => {
+    expect(panel).toContain('className="note-view-btn"');
+    expect(panel).toContain('setViewingId(note.id)');
+    // 查看态派生：找不到该条（被删/刷新后）就不渲染 Modal
+    expect(panel).toContain('notes.find((n) => n.id === viewingId)');
+    // Modal 挂在面板内部（面板是 position:relative 的遮罩宿主）
+    expect(panel).toContain('<NoteViewerModal');
+    expect(panel).toContain('note={viewingNote}');
+  });
+
+  it('查看 Modal 存在且展示完整正文（不折叠）', () => {
+    // Modal 正文与卡片正文的折叠规则相反：这里必须完整呈现。
+    expect(decls('.note-viewer-content')).not.toMatch(/-webkit-line-clamp/);
+    expect(decls('.note-viewer-content')).not.toMatch(/max-height/);
+    // 保留换行
+    expect(decls('.note-viewer-content')).toMatch(/white-space\s*:\s*pre-wrap/);
   });
 });
 

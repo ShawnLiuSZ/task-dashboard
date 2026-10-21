@@ -6,6 +6,20 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.6（未发布）— 备忘录不跨列切断 + 看板限高滚动 + 查看全文弹窗（#465）**
+
+  - **同一条备忘录不再被劈成两列**：#462 的瀑布流把「限高 + 滚动」和多列容器**合在同一元素**上，而多列流的**列高 = 容器高度** ⇒ 卡片比列高更高时浏览器只能跨列断开（用户截图：一条 30+ 行的记录被劈成左右两半，读起来像两条不同的记录）。现将**滚动宿主与列容器分离**：新增 `.notes-scroll` 承担限高与纵向滚动，`.notes-list`（多列容器）高度**自适应内容** ⇒ 列高由内容自然决定，`break-inside: avoid` **恒生效**。
+  - **看板固定最大高度 + 纵向滚动条**：`overflow-y: auto` 移到祖先容器后，多列流在确定高度下「只横向铺开、纵向不滚」的缺陷同步消失（实测 1440px 视口：修正前横向溢出 3338px、纵向 `scrollable=false`、实际摊成 10 列；修正后横向溢出 -8px、纵向可滚、实测 3 列）。
+  - **卡片右上角加「查看」按钮，弹 Modal 看全文**：新组件 `NoteViewerModal`，完整保留换行、显示优先级色点与绝对时间戳，Esc / 点遮罩关闭。挂在 `.notes-panel` 内部渲染（面板是 `position: relative` 的遮罩宿主；挂到 App 层会被 `.main-content` 的 `overflow: hidden` 裁掉）。
+  - **正文折叠而非硬切**：卡片正文用 `-webkit-line-clamp: 9` 只显示前 9 行 + **省略号**，明确告知「还有更多」；不用 `max-height` + `overflow: hidden`（硬切会把第 N 行切成半行、无任何提示，用户以为内容就这么长）。折叠同时让所有卡片高度收敛，多列流的三列底部不会严重参差。
+  - **按钮恒不压住正文**：正文整体右侧预留 `padding-right: 30px`，右上角按钮落在留白里（4 个变体实测：直接绝对定位会压住 1 张卡的首行文字）。
+  - ⚠️ **实测得出的硬约束（勿凭直觉改）**：① **不要**把 `max-height` / `overflow-y` 加回 `.notes-list` —— 那会同时踩中「卡片跨列断开」与「纵向不滚动」两条缺陷；② `-webkit-line-clamp` 必须三件套齐全（`display: -webkit-box` + `-webkit-box-orient: vertical` + `-webkit-line-clamp: N`），缺一个就不生效；③ `-webkit-box` 会让 **float 失效** ⇒ 查看按钮不能用 float 绕排，只能绝对定位。
+  - 零 JS，保留 #462 的多列流与「列式填充」阅读顺序、紧凑瀑布流观感。
+  - 纯前端改动（CSS + TSX + 测试 + i18n），后端 / DB schema / MCP / i18n 语种零改动。
+  - **验证**：`vitest` **342 passed**（原 329）· `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check` / `build` 全绿。**渲染复核**用**真实构建产物 CSS** + 复刻 DOM，**Blink 与 WebKit（≈ macOS WKWebView）双引擎**、1440×900 视口、20 张卡（含 32 行与 100 行超长卡）：**跨列切断数恒为 0**、横向溢出 -8px、纵向可滚（`scrollClientH=520`）、按钮压字 **0 张卡**；场景矩阵（1/2/3/4/7/20 张卡）断裂数同样恒为 0。
+  - **反向验证 5/5 捕获**：去掉 `.notes-list` 的 `height: auto`、给 `.notes-list` 加回 `max-height`+`overflow-y`、去掉正文的 `padding-right: 30px`、折叠退回硬切、组件去掉 `.notes-scroll` 包裹层 ⇒ 各 1 条用例精准失败。
+  - 详见 [`issue-465-notes-no-split-modal.md`](./issue-465-notes-no-split-modal.md)
+
 - **v0.7.5（2026-10-21）— 备忘录改为瀑布流（#462）**
 
   - **卡片高度自适应**：#456 的列表布局用 CSS Grid，同行卡片**等高对齐**（grid 默认 `align-items: stretch`），短内容卡片下方留出空白、版面参差。现改为**瀑布流**（CSS multi-column），卡片高度随内容自适应。
