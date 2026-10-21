@@ -1159,11 +1159,27 @@ button.unassigned-tag:disabled {
   white-space: nowrap;
 }
 
-/* #435：PR 独立行（分配人下方）+ 合并状态徽章。 */
+/* #435：PR 独立行（分配人下方）+ 合并状态徽章。
+   #467：同一 issue 可关联多个 PR ⇒ 一行内多个 PR 条目，
+   用 flex + wrap 让 PR 多时换行，而不是撑破卡片宽度。 */
 .pr-row {
   margin-top: 4px;
   align-items: center;
   gap: 6px;
+  display: flex;
+  flex-wrap: wrap;
+}
+.pr-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+/* 详情面板里每个 PR 的「打开 / 复制」按钮成对出现，组间留出间距。 */
+.pr-btn-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .pr-state {
   font-size: 10px;

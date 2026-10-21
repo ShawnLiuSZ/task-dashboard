@@ -261,6 +261,53 @@ fn match_close_keyword(text: &str, pos: usize) -> Option<usize> {
     None
 }
 
+/// #467：同步期内部的 PR 条目（比对外的 [`crate::common::PrRef`] 多一个 `head_ref`）。
+///
+/// `head_ref` 是 PR 的源分支名（`tasks.branch` 列存的就是它）—— 它是**任务属性**
+/// 而非 PR 的展示属性，所以只对「主 PR」有意义，不进对外的 `PrRef` 结构。
+#[derive(Debug, Clone)]
+struct PrEntry {
+    number: i64,
+    url: String,
+    head_ref: String,
+    state: String,
+}
+
+/// #467：构建「issue_key → 关联 PR 列表」的映射。
+///
+/// **改造前的行为**是单值（`or_insert`）⇒ 同一 issue 被多个 PR 引用时，
+/// **只有第一个 PR 入表，其余静默丢弃** —— 这是 #467 的根因。
+///
+/// **列表顺序** = PR 出现顺序（`prs` 的遍历顺序：仓库名升序，仓库内 GitHub pulls
+/// API 默认按 created desc）。**首元素即「主 PR」** ⇒ `tasks.pr_number` /
+/// `pr_url` / `pr_state` / `branch` 四列的取值与改造前 `or_insert` 的结果
+/// **逐位相同** ⇒ 存量数据与旧 UI / 旧 MCP 行为零变化。
+///
+/// **去重**：同一个 PR 可能被正文多次命中（`Fixes #1` 之后结尾又写 `#1`），
+/// 不去重会让 `task_prs` 出现重复行、主 PR 选取拿到重复项。
+fn build_pr_map(prs: &[crate::github::RawPr]) -> std::collections::HashMap<String, Vec<PrEntry>> {
+    let mut pr_map: std::collections::HashMap<String, Vec<PrEntry>> =
+        std::collections::HashMap::new();
+    for pr in prs {
+        for rk in parse_issue_refs(&pr.body, &pr.repo) {
+            let list = pr_map.entry(rk).or_default();
+            if list
+                .iter()
+                .any(|e| e.number == pr.number && e.url == pr.url)
+            {
+                continue;
+            }
+            list.push(PrEntry {
+                number: pr.number,
+                url: pr.url.clone(),
+                head_ref: pr.head_ref.clone(),
+                state: pr.state.clone(),
+            });
+        }
+    }
+    pr_map
+}
+
 /// 从文本（PR 正文）里提取 issue 引用，返回 `repo#number` 形式的键。
 /// 支持两种形式：
 /// - `#123`：归属 PR 所在仓库（即传入的 `default_repo`）
@@ -694,19 +741,8 @@ fn sync_account_inner(
             (Vec::new(), false)
         }
     };
-    // #435：元组扩到 4 位，末位为 PR 合并状态（`merged`/`open`/`closed`/空串=未知）。
-    let mut pr_map: std::collections::HashMap<String, (i64, String, String, String)> =
-        std::collections::HashMap::new();
-    for pr in &prs {
-        for rk in parse_issue_refs(&pr.body, &pr.repo) {
-            pr_map.entry(rk).or_insert((
-                pr.number,
-                pr.url.clone(),
-                pr.head_ref.clone(),
-                pr.state.clone(),
-            ));
-        }
-    }
+    // #467：同一 issue 可被多个 PR 引用 ⇒ 映射的值是**列表**而非单值。
+    let pr_map = build_pr_map(&prs);
 
     // 项目中发现的 issue 已在上面并行拉取时合并到 project_issues（去重：搜索源已有的跳过）。
     // 这确保「项目中有但用户非 assignee/author/mentions/commenter」的 issue 也能上板。
@@ -853,10 +889,38 @@ fn sync_account_inner(
         // 单独存 `work_branch`，同步完全不碰 work_branch）。
         // #435：新增 `pr_state`，同样遵守「拉取失败保留既有值」的既有语义 ——
         // 网络抖动不该把已知的「已合并」误降级成未知。
-        let (pr_number, pr_url, branch, pr_state): (i64, String, String, String) = if pr_fetch_ok {
+        //
+        // #467：同一 issue 可关联**多个** PR。
+        // - `pr_number` / `pr_url` / `pr_state` / `branch` 四列仍取**主 PR**
+        //   （列表首元素）⇒ 与改造前的 `or_insert` 结果逐位相同，存量行为零变化；
+        // - `pr_refs` 是完整关联列表，写入独立的 `task_prs` 表 ⇒ 多 PR 不再丢失。
+        // 「拉取失败保留既有值」的语义同样适用于 `pr_refs`：失败时置空，
+        // 写入阶段据此**跳过**对 `task_prs` 的清理（不清空既有关联）。
+        let (pr_number, pr_url, branch, pr_state, pr_refs): (
+            i64,
+            String,
+            String,
+            String,
+            Vec<crate::common::PrRef>,
+        ) = if pr_fetch_ok {
             match pr_map.get(&key) {
-                Some((n, u, b, st)) => (*n, u.clone(), b.clone(), st.clone()),
-                None => (0, String::new(), String::new(), String::new()),
+                Some(list) if !list.is_empty() => {
+                    let main = &list[0];
+                    (
+                        main.number,
+                        main.url.clone(),
+                        main.head_ref.clone(),
+                        main.state.clone(),
+                        list.iter()
+                            .map(|e| crate::common::PrRef {
+                                number: e.number,
+                                url: e.url.clone(),
+                                state: e.state.clone(),
+                            })
+                            .collect(),
+                    )
+                }
+                _ => (0, String::new(), String::new(), String::new(), Vec::new()),
             }
         } else {
             (
@@ -864,6 +928,7 @@ fn sync_account_inner(
                 existing_pr_url.to_string(),
                 existing_branch.to_string(),
                 existing_pr_state.to_string(),
+                Vec::new(),
             )
         };
 
@@ -925,6 +990,10 @@ fn sync_account_inner(
             pr_url,
             // #435：PR 合并状态（`merged`/`open`/`closed`/空串=未知）。
             pr_state,
+            // #467：完整的多 PR 关联（写入独立的 `task_prs` 表）。
+            // `pr_fetch_ok=false` 时本列表为空且写入阶段会跳过清理 ⇒ 保留既有关联。
+            prs: pr_refs,
+            pr_fetch_ok,
             branch,
             parent_issue,
             sub_issues,
@@ -959,6 +1028,14 @@ fn sync_account_inner(
             // v0.4.1 (#250)：写入走 db::write_task（与「按需拉取单个 issue」共用同一份
             // 列清单与参数绑定）。同步路径是权威数据 → Upsert（冲突则覆盖）。
             crate::db::write_task(&tx, row, now, crate::db::TaskWriteMode::Upsert)?;
+
+            // #467：写该 issue 的**全部**关联 PR（全量替换语义）。
+            // ⚠️ 仅在「PR 列表拉取成功」时执行 —— 拉取失败必须保留既有关联，
+            // 否则一次网络抖动就会把看板上的 PR 徽章全部清掉
+            // （与 `tasks.pr_*` 三列的既有「拉取失败保留既有值」语义一致）。
+            if row.pr_fetch_ok {
+                crate::db::write_task_prs(&tx, row.account_id, &row.issue_key, &row.prs, now)?;
+            }
 
             if row.exists {
                 updated += 1;
@@ -1463,6 +1540,101 @@ mod tests {
         );
     }
 
+    /// #467 端到端：真实同步后 `task_prs` 必须落库，且**多 PR 的 issue 全部保留**。
+    ///
+    /// 与 `test_headless_sync_pr_linkage` 同样只跑**临时副本**，绝不改生产库。
+    /// 额外断言：
+    /// ① `task_prs` 行数 ≥ `tasks.pr_number > 0` 的行数（每个有主 PR 的 issue 至少一行）；
+    /// ② 存在**同一个 issue 关联 ≥2 个 PR** 的行（多 PR 真的落库了，而不是仍然只有一个）；
+    /// ③ `task_prs` 的 PR 编号与该 issue 的主 PR（`tasks.pr_number`）一致（口径不漂）。
+    #[test]
+    #[ignore = "需要真实 GitHub PAT；跑法：cargo test --lib test_headless_multi_pr -- --ignored --nocapture"]
+    fn test_headless_multi_pr() {
+        let prod = std::path::Path::new(
+            "/Users/liushizhao/Library/Application Support/com.shawnliu.taskboard/taskboard.db",
+        );
+        assert!(prod.exists(), "生产库应已存在（先运行过一次 App 同步）");
+        let tmp =
+            std::env::temp_dir().join(format!("taskboard_multi_pr_test_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let src = Connection::open(prod).expect("打开生产库（只读快照）");
+            src.execute("VACUUM INTO ?1", [tmp.to_string_lossy().as_ref()])
+                .expect("VACUUM INTO 快照失败");
+        }
+        let conn = db::open_db(&tmp).expect("open_db 快照库");
+        run(&conn, "manual").expect("同步应成功");
+
+        // ① 有主 PR 的 issue 至少要有一行关联。
+        //
+        // ⚠️ 这里比的是「**本轮同步覆盖到的** issue」：`tasks.pr_number` 对**陈旧任务**
+        // （已关闭 / 不再与我相关，本轮不在 pending 里）保留存量值，而它们的
+        // `task_prs` 行要么保留上一轮的、要么从未有过 ⇒ 直接比全表会误报。
+        let covered_with_pr: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM (
+                   SELECT DISTINCT t.account_id, t.issue_key
+                   FROM tasks t JOIN task_prs p
+                     ON p.account_id = t.account_id AND p.issue_key = t.issue_key
+                   WHERE t.pr_number > 0
+                 )",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let prs_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM task_prs", [], |r| r.get(0))
+            .unwrap();
+        crate::tlog!("[test] 有主 PR 且已覆盖的 issue={covered_with_pr} task_prs 行数={prs_rows}");
+        assert!(
+            prs_rows >= covered_with_pr,
+            "task_prs 行数({prs_rows}) 应 ≥ 已覆盖且有主 PR 的 issue 数({covered_with_pr})"
+        );
+
+        // ② 存在多 PR 的 issue（这是 #467 的核心诉求）。
+        let multi: Vec<(String, i64)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT issue_key, COUNT(*) AS n FROM task_prs
+                     GROUP BY account_id, issue_key HAVING n >= 2 ORDER BY n DESC LIMIT 5",
+                )
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                .unwrap();
+            rows.map(|r| r.unwrap()).collect()
+        };
+        crate::tlog!("[test] 多 PR 的 issue（前 5）: {multi:?}");
+        assert!(
+            !multi.is_empty(),
+            "期望至少 1 个 issue 关联 ≥2 个 PR（#467 的核心：多 PR 不能再被丢弃）"
+        );
+
+        // ③ 口径不漂：**凡是 task_prs 里有行的 issue**，其主 PR（tasks.pr_number）
+        //    必须也在关联列表里。
+        //    （陈旧任务不在此列 —— 它们的 tasks.pr_number 是存量值，本轮未覆盖。）
+        let mismatch: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks t
+                 WHERE t.pr_number > 0
+                   AND EXISTS (
+                     SELECT 1 FROM task_prs p
+                     WHERE p.account_id = t.account_id AND p.issue_key = t.issue_key
+                   )
+                   AND NOT EXISTS (
+                     SELECT 1 FROM task_prs p
+                     WHERE p.account_id = t.account_id AND p.issue_key = t.issue_key
+                       AND p.pr_number = t.pr_number
+                   )",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(mismatch, 0, "主 PR 必须出现在 task_prs 关联列表中");
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
     // ===== 纯函数单元测试（不依赖网络） ==============================
 
     #[test]
@@ -1727,6 +1899,82 @@ mod tests {
         assert!(parse_issue_refs("prefixfixed #5", "def").is_empty());
         // notresolved 不是关键词
         assert!(parse_issue_refs("notresolved #5", "def").is_empty());
+    }
+
+    // ===== #467：同一 issue 关联多个 PR ================================
+
+    fn raw_pr(number: i64, body: &str, state: &str) -> crate::github::RawPr {
+        crate::github::RawPr {
+            repo: "r".to_string(),
+            repo_owner: "o".to_string(),
+            number,
+            url: format!("https://github.com/o/r/pull/{number}"),
+            body: body.to_string(),
+            head_ref: format!("feat/{number}"),
+            state: state.to_string(),
+        }
+    }
+
+    /// #467 根因回归：同一 issue 被多个 PR 引用时，**全部** PR 都要入映射。
+    /// 改造前用 `or_insert` ⇒ 只有第一个 PR，其余静默丢弃。
+    #[test]
+    fn build_pr_map_keeps_all_prs_of_one_issue() {
+        let prs = vec![
+            raw_pr(101, "Closes #10", "merged"),
+            raw_pr(102, "Fixes #10", "open"),
+            raw_pr(103, "Refs #20", "closed"),
+        ];
+        let map = build_pr_map(&prs);
+        let list = map.get("r#10").expect("r#10 应有 PR 关联");
+        assert_eq!(list.len(), 2, "同一 issue 的两个 PR 都必须保留");
+        assert_eq!(
+            list.iter().map(|e| e.number).collect::<Vec<_>>(),
+            vec![101, 102],
+            "顺序 = PR 出现顺序（首元素即主 PR）"
+        );
+        assert_eq!(list[0].state, "merged");
+        assert_eq!(list[1].state, "open");
+        // 另一个 issue 不受影响。
+        assert_eq!(map.get("r#20").unwrap().len(), 1);
+    }
+
+    /// #467：主 PR 必须是**第一个**命中者 ⇒ `tasks.pr_*` 四列的取值与改造前
+    /// `or_insert` 的结果逐位相同（存量行为零变化）。
+    #[test]
+    fn build_pr_map_primary_pr_matches_legacy_or_insert() {
+        let prs = vec![
+            raw_pr(101, "Closes #10", "merged"),
+            raw_pr(102, "Fixes #10", "open"),
+        ];
+        let map = build_pr_map(&prs);
+        let list = map.get("r#10").unwrap();
+        let main = &list[0];
+        assert_eq!(
+            main.number, 101,
+            "主 PR = 第一个命中者（与旧 or_insert 一致）"
+        );
+        assert_eq!(main.head_ref, "feat/101", "branch 取主 PR 的 head.ref");
+    }
+
+    /// #467：同一 PR 被正文多次命中（`Fixes #1` + 结尾 `#1`）只应入表一次。
+    #[test]
+    fn build_pr_map_dedups_repeated_refs_in_same_pr() {
+        let prs = vec![raw_pr(101, "Fixes #10\n\n又见 #10", "open")];
+        let map = build_pr_map(&prs);
+        assert_eq!(
+            map.get("r#10").unwrap().len(),
+            1,
+            "同一 PR 重复命中只留一条"
+        );
+    }
+
+    /// #467：一个 PR 关联多个 issue ⇒ 每个 issue 各得一条关联。
+    #[test]
+    fn build_pr_map_one_pr_many_issues() {
+        let prs = vec![raw_pr(101, "Closes #10\nFixes #20", "open")];
+        let map = build_pr_map(&prs);
+        assert_eq!(map.get("r#10").unwrap().len(), 1);
+        assert_eq!(map.get("r#20").unwrap().len(), 1);
     }
 
     // ===== accounts + 多账号视图的纯逻辑校验 ==========================

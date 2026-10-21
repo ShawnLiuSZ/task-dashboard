@@ -90,6 +90,46 @@ def tasks_columns(db_src: str) -> list[str]:
     return cols
 
 
+def table_columns_of(src: str, table: str) -> set[str] | None:
+    """从 `CREATE TABLE IF NOT EXISTS <table> (...)` 块里取列名集合。
+
+    与 [`tasks_columns`] 同款解析（跳过注释行与表级约束行），
+    但返回集合且**找不到表时返回 None**（而不是 die）——
+    用于「这张表应该存在但缺失」的检查，缺失本身就是要报告的问题。
+
+    ⚠️ 两侧 SQL 的收尾形态不同，必须**逐行扫描**到「以 `)` 开头的行」为止，
+    不能用 `find("\\n)")` 之类的字面量查找：
+    - Rust 侧（`db.rs::SCHEMA`）：`)` 后带分号（`);`）；
+    - Python 侧（`server.py::ensure_schema`）：三引号字符串里只有 `)`。
+    用字面量查找会在 Python 侧一路匹配到文件后面的无关代码 ⇒
+    把几百行源码当成「列名」⇒ 报出荒谬的差异清单。
+    """
+    marker = f"CREATE TABLE IF NOT EXISTS {table} ("
+    start = src.find(marker)
+    if start == -1:
+        return None
+    body = src[start + len(marker) :]
+
+    cols: set[str] = set()
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith(")"):
+            break  # 表定义结束
+        if line.startswith("--"):
+            continue
+        low = line.lower()
+        if low.startswith(_CONSTRAINT_PREFIXES):
+            continue
+        name = line.split()[0]
+        if name.endswith(","):
+            name = name[:-1]
+        if name:
+            cols.add(name)
+    return cols or None
+
+
 def py_select_cols(py_src: str) -> list[str]:
     m = re.search(r"SELECT_COLS\s*=\s*\((.*?)\)", py_src, re.DOTALL)
     if not m:
@@ -248,6 +288,38 @@ def main() -> int:
             "server.py::TASK_INSERT_COLS 含 Rust db.rs::TASK_INSERT_HEAD 没有的列: "
             f"{', '.join(extra_in_py)}（两侧写入列清单必须一致）"
         )
+
+    # (#467) `task_prs` 关系表：Rust `db.rs::SCHEMA` 与 Python `ensure_schema`
+    # 必须**都**建出这张表，且列名一致。
+    #
+    # 这条检查补的是一个**可达**故障（不是防御性冗余）：Python MCP 是独立进程、
+    # 不走 Rust 的 `db::open_db`，它的 `ensure_schema` 必须自建 `task_prs`；
+    # 漏建 ⇒ Python MCP 读路径 `no such table: task_prs` ⇒ 整个工具报错。
+    # 而 App 自身完全正常（Rust 侧由 SCHEMA 建表），两侧单测都测不到 ——
+    # 与 #169/#262/#278 同源的盲区。
+    #
+    # 附带校验列名一致：Rust 侧写 `pr_number` / `pr_url` / `pr_state`，
+    # Python 侧若拼错成 `number` / `url` / `state` ⇒ 建表成功但查列时报
+    # `no such column`，同样是「表在、读不通」的隐蔽失败。
+    rust_prs_cols = table_columns_of(db_src, "task_prs")
+    py_prs_cols = table_columns_of(server_src, "task_prs")
+    if rust_prs_cols is None:
+        problems.append("db.rs::SCHEMA 里找不到 task_prs 表定义（#467 的关系表）")
+    if py_prs_cols is None:
+        problems.append(
+            "server.py::ensure_schema 里找不到 task_prs 的建表语句"
+            "（Python MCP 是独立进程、不走 Rust 的 open_db，必须自建这张表；"
+            "漏建 ⇒ Python MCP 读路径报 no such table: task_prs）"
+        )
+    if rust_prs_cols is not None and py_prs_cols is not None:
+        only_rust = rust_prs_cols - py_prs_cols
+        only_py = py_prs_cols - rust_prs_cols
+        if only_rust or only_py:
+            problems.append(
+                "task_prs 表的列名两侧不一致"
+                f"（仅 Rust db.rs: {sorted(only_rust) or '无'}；"
+                f"仅 Python server.py: {sorted(only_py) or '无'}）"
+            )
 
     # 兜底：旧列名写法（tasks.key 已于 #155 改名 issue_key）。
     # 跳过注释行——说明性注释里会故意写出 `WHERE key=?` 这个反例。

@@ -185,7 +185,75 @@ fn tool_list(
     for r in rows {
         out.push(r.map_err(|e| e.to_string())?);
     }
+    // #467：给每行补上该 issue 关联的**全部** PR（`task_prs` 关系表）。
+    attach_prs(conn, &mut out)?;
     Ok(Value::Array(out))
+}
+
+/// #467：把 `task_prs` 关系表里的多 PR 关联注入到返回给 agent 的对象里。
+///
+/// `tasks` 表的 `pr_number` / `pr_url` / `pr_state` 是**主 PR**（列表首元素），
+/// 保持旧契约不变；本函数追加 `prs` 数组承载完整的一对多关系。
+///
+/// ⚠️ 匹配键是 `(account_id, issue_key)`：issue_key 的值是 `repo#number`（不含 owner），
+/// 多账号下会重复 ⇒ 只按 issue_key 匹配会把 A 账号的 PR 关联挂到 B 账号的同号 issue 上。
+///
+/// 一次性取回整表关联行后在内存里匹配 ⇒ 无 N+1 查询。
+///
+/// **回退语义**：`task_prs` 无该 issue 的行时，若 `pr_number > 0` 则用主 PR
+/// 组成一条 ⇒ `prs` 数组语义统一为「该 issue 关联的**全部** PR（含主 PR）」，
+/// 且与 GUI 侧（`commands.rs::attach_task_prs`）口径一致。
+fn attach_prs(conn: &Connection, rows: &mut [Value]) -> Result<(), String> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let map = crate::db::load_all_task_prs(conn, None)?;
+    for row in rows.iter_mut() {
+        let (acct, key, main) = match row {
+            Value::Object(m) => (
+                m.get("account_id").and_then(|v| v.as_i64()).unwrap_or(0),
+                m.get("issue_key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                (
+                    m.get("pr_number").and_then(|v| v.as_i64()).unwrap_or(0),
+                    m.get("pr_url")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    m.get("pr_state")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                ),
+            ),
+            _ => (0, String::new(), (0, String::new(), String::new())),
+        };
+        let mut list = map.get(&(acct, key)).cloned().unwrap_or_default();
+        if list.is_empty() && main.0 > 0 && !main.1.is_empty() {
+            // 回退到主 PR（存量行 / 首次同步前 task_prs 为空）。
+            list.push(crate::common::PrRef {
+                number: main.0,
+                url: main.1,
+                state: main.2,
+            });
+        }
+        let arr: Vec<Value> = list
+            .into_iter()
+            .map(|p| {
+                json!({
+                    "number": p.number,
+                    "url": p.url,
+                    "state": p.state,
+                })
+            })
+            .collect();
+        if let Value::Object(m) = row {
+            m.insert("prs".into(), Value::Array(arr));
+        }
+    }
+    Ok(())
 }
 
 /// 按主键查一行任务（给 `get_task_status` 用）。
@@ -196,14 +264,19 @@ fn fetch_task_row(conn: &Connection, key: &str) -> Result<Option<Value>, String>
             "SELECT {SELECT_COLS} FROM tasks WHERE issue_key = ?1"
         ))
         .map_err(|e| e.to_string())?;
-    let mut rows = stmt
+    let rows = stmt
         .query_map([key], row_to_value)
         .map_err(|e| e.to_string())?;
-    match rows.next() {
-        Some(Ok(v)) => Ok(Some(v)),
-        Some(Err(e)) => Err(e.to_string()),
-        None => Ok(None),
+    let mut found: Vec<Value> = Vec::new();
+    for r in rows {
+        found.push(r.map_err(|e| e.to_string())?);
     }
+    if found.is_empty() {
+        return Ok(None);
+    }
+    // #467：补上该 issue 关联的全部 PR（`task_prs` 关系表）。
+    attach_prs(conn, &mut found)?;
+    Ok(found.into_iter().next())
 }
 
 /// 把「按需拉取」的结果翻译成给 agent 的错误文案（仍不可用时）。
@@ -996,6 +1069,8 @@ mod tests {
     use rusqlite::Connection;
 
     /// 建一张覆盖 SELECT_COLS 全部 29 列的最小 tasks 表（内存库）。
+    ///
+    /// #467：另建 `task_prs` 关系表 —— `attach_prs` 会查它，缺表会让读路径整体报错。
     fn test_conn() -> Connection {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch(
@@ -1007,6 +1082,16 @@ mod tests {
                 session_at INTEGER, handoff TEXT, candidate_done INTEGER, account_id INTEGER,
                 updated_at INTEGER, parent_issue TEXT, sub_issues TEXT, created_at INTEGER,
                 pr_state TEXT
+            );
+            CREATE TABLE task_prs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id INTEGER NOT NULL,
+                issue_key TEXT NOT NULL,
+                pr_number INTEGER NOT NULL,
+                pr_url TEXT NOT NULL DEFAULT '',
+                pr_state TEXT NOT NULL DEFAULT '',
+                updated_at INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(account_id, issue_key, pr_number, pr_url)
             );",
         )
         .unwrap();
@@ -1130,6 +1215,148 @@ mod tests {
         let missing = tool_get(&c, "nope#999").unwrap();
         assert_eq!(missing["found"].as_bool(), Some(false));
         assert_eq!(missing["issue_key"].as_str(), Some("nope#999"));
+    }
+
+    // ── #467：多 PR 关联注入 ───────────────────────────────────────────
+
+    fn insert_task_prs(
+        conn: &Connection,
+        account_id: i64,
+        issue_key: &str,
+        rows: &[(i64, &str, &str)],
+    ) {
+        for (num, url, state) in rows {
+            conn.execute(
+                "INSERT INTO task_prs (account_id, issue_key, pr_number, pr_url, pr_state, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+                rusqlite::params![account_id, issue_key, num, url, state],
+            )
+            .unwrap();
+        }
+    }
+
+    /// #467：`list_my_tasks` 必须返回该 issue 关联的**全部** PR。
+    #[test]
+    fn list_my_tasks_returns_all_prs() {
+        let c = test_conn();
+        insert_sample(&c);
+        insert_task_prs(
+            &c,
+            1,
+            "fad-backend#1247",
+            &[
+                (
+                    101,
+                    "https://github.com/FoodsUp-Inc/fad-backend/pull/101",
+                    "merged",
+                ),
+                (
+                    102,
+                    "https://github.com/FoodsUp-Inc/fad-backend/pull/102",
+                    "open",
+                ),
+            ],
+        );
+        let out = tool_list(&c, None, None).unwrap();
+        let arr = out.as_array().unwrap();
+        let prs = arr[0]["prs"].as_array().expect("prs 应为数组");
+        assert_eq!(prs.len(), 2, "两个关联 PR 都必须返回");
+        assert_eq!(prs[0]["number"].as_i64(), Some(101));
+        assert_eq!(prs[0]["state"].as_str(), Some("merged"));
+        assert_eq!(prs[1]["number"].as_i64(), Some(102));
+        assert_eq!(prs[1]["state"].as_str(), Some("open"));
+        // 主 PR 三列保持不变（旧契约）。
+        assert_eq!(arr[0]["pr_number"].as_i64(), Some(42));
+    }
+
+    /// #467：`get_task_status` 同样要带 `prs` 数组。
+    #[test]
+    fn get_task_status_returns_all_prs() {
+        let c = test_conn();
+        insert_sample(&c);
+        insert_task_prs(
+            &c,
+            1,
+            "fad-backend#1247",
+            &[
+                (
+                    101,
+                    "https://github.com/FoodsUp-Inc/fad-backend/pull/101",
+                    "merged",
+                ),
+                (
+                    102,
+                    "https://github.com/FoodsUp-Inc/fad-backend/pull/102",
+                    "open",
+                ),
+            ],
+        );
+        let out = tool_get(&c, "fad-backend#1247").unwrap();
+        let prs = out["prs"].as_array().expect("prs 应为数组");
+        assert_eq!(prs.len(), 2);
+    }
+
+    /// #467 存量回退：`task_prs` 无行但 `tasks.pr_number > 0` 时，
+    /// `prs` 数组回退成主 PR 一条 ⇒ 语义统一为「全部关联 PR（含主 PR）」，
+    /// 且 GUI 侧（`commands.rs::attach_task_prs`）口径一致。
+    #[test]
+    fn prs_falls_back_to_primary_pr_for_legacy_rows() {
+        let c = test_conn();
+        insert_sample(&c);
+        // 不写 task_prs ⇒ 模拟存量行（首次同步前）。
+        let out = tool_list(&c, None, None).unwrap();
+        let arr = out.as_array().unwrap();
+        let prs = arr[0]["prs"].as_array().expect("prs 应为数组");
+        assert_eq!(prs.len(), 1, "存量行应回退成主 PR 一条");
+        assert_eq!(prs[0]["number"].as_i64(), Some(42));
+        assert_eq!(prs[0]["url"].as_str(), Some("www.pr"));
+        assert_eq!(prs[0]["state"].as_str(), Some("merged"));
+    }
+
+    /// #467：多账号下同一 issue_key 的 PR 关联**不得串号**。
+    #[test]
+    fn prs_are_isolated_by_account() {
+        let c = test_conn();
+        insert_sample(&c);
+        // 账号 2 也有同号 issue（issue_key 不含 owner ⇒ 可重复）。
+        // ⚠️ 必须给**所有**被 SELECT 的列赋值：`row_to_value` 用 `r.get::<String>`,
+        // 任何一列为 NULL 都会让整个读路径报「Invalid column type Null」。
+        c.execute(
+            "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
+                                ownership, status, project_status, assignees, mentioned,
+                                latest_comment_url, pr_number, pr_url, branch, work_branch,
+                                work_dir, session_id, session_agent, session_at, handoff,
+                                candidate_done, account_id, updated_at, parent_issue,
+                                sub_issues, created_at, pr_state)
+             VALUES ('fad-backend#1247', 'Other', 'fad-backend', 1247, 'x', 'u', 'open',
+                     'notassignee', 'todo', '', '', 0,
+                     '', 7, 'other.pr', '', '', '',
+                     NULL, NULL, NULL, '',
+                     0, 2, 1700000200, '',
+                     '', 0, 'open')",
+            [],
+        )
+        .unwrap();
+        insert_task_prs(&c, 1, "fad-backend#1247", &[(101, "u1", "merged")]);
+        insert_task_prs(&c, 2, "fad-backend#1247", &[(201, "u2", "open")]);
+        let out = tool_list(&c, None, None).unwrap();
+        let arr = out.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        let a1 = arr[0]["prs"].as_array().unwrap();
+        let a2 = arr[1]["prs"].as_array().unwrap();
+        // 账号 1 的行拿账号 1 的 PR，账号 2 的行拿账号 2 的 PR。
+        let nums1: Vec<i64> = a1.iter().map(|v| v["number"].as_i64().unwrap()).collect();
+        let nums2: Vec<i64> = a2.iter().map(|v| v["number"].as_i64().unwrap()).collect();
+        assert!(nums1.contains(&101), "账号 1 应看到 PR 101，实际 {nums1:?}");
+        assert!(
+            !nums1.contains(&201),
+            "账号 1 不得看到账号 2 的 PR，实际 {nums1:?}"
+        );
+        assert!(nums2.contains(&201), "账号 2 应看到 PR 201，实际 {nums2:?}");
+        assert!(
+            !nums2.contains(&101),
+            "账号 2 不得看到账号 1 的 PR，实际 {nums2:?}"
+        );
     }
 
     // ── v0.4.1 (#250)：未命中时的按需拉取契约 ──────────────────────────────

@@ -45,6 +45,20 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
   // 不跟随 custom 列展示方式。
   const currentProjectStatus =
     task.issueState === 'closed' ? 'done' : task.projectStatus?.trim() || 'unclassified';
+  /** #467：该 issue 关联的**全部** PR（含主 PR）。
+   *
+   * 后端已把「主 PR」也放进 `prs` 数组（含存量回退），故正常路径直接用 `task.prs`。
+   * 回退：`prs` 为空但单值三字段有值时（老后端 / 手工构造的数据）退回单值 ⇒
+   * PR 按钮不会因字段缺失而消失。
+   *
+   * ⚠️ 用「`prs` **非空**」而非「`prs` 字段存在」作判据：后者在 `prs: []`
+   * 且 `prNumber > 0` 时会渲染出**空**的按钮组，把原本可见的 PR 入口弄丢。 */
+  const prList =
+    Array.isArray(task.prs) && task.prs.length > 0
+      ? task.prs
+      : task.prNumber > 0 && task.prUrl
+        ? [{ number: task.prNumber, url: task.prUrl, state: task.prState || '' }]
+        : [];
   // 选项 = projectStatuses 名称；当前值不在其中时前置，保证永远可见且默认选中。
   const projectStatusOptions = useMemo(() => {
     const names = (projectStatuses ?? []).map((ps) => ps.name);
@@ -244,16 +258,21 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
           <button className="btn ghost" onClick={() => copyToClipboard(task.url, 'url')}>
             {copiedKey === 'url' ? t('btn.copied') : t('btn.copy')}
           </button>
-          {task.prNumber > 0 && task.prUrl && (
-            <>
-              <button className="btn" onClick={() => openExternal(task.prUrl)}>
-                PR #{task.prNumber}
+          {/* #467：同一 issue 可关联**多个** PR ⇒ 逐个渲染「打开 / 复制」按钮。
+              `prs` 数组含主 PR（后端已做存量回退），无关联时为空数组。 */}
+          {prList.map((pr) => (
+            <span key={`${pr.number}-${pr.url}`} className="pr-btn-group">
+              <button className="btn" onClick={() => openExternal(pr.url)}>
+                PR #{pr.number}
               </button>
-              <button className="btn ghost" onClick={() => copyToClipboard(task.prUrl, 'pr')}>
-                {copiedKey === 'pr' ? t('btn.copied') : t('btn.copy')}
+              <button
+                className="btn ghost"
+                onClick={() => copyToClipboard(pr.url, `pr-${pr.number}`)}
+              >
+                {copiedKey === `pr-${pr.number}` ? t('btn.copied') : t('btn.copy')}
               </button>
-            </>
-          )}
+            </span>
+          ))}
           {task.latestCommentUrl && (
             <button className="btn" onClick={() => openExternal(task.latestCommentUrl)}>
               {t('detail.latestComment')}

@@ -46,6 +46,14 @@ export interface IssueLink {
   url: string;
 }
 
+/** #467：一个 issue 关联的**一个** PR（同一 issue 可关联多个 PR）。 */
+export interface PrRef {
+  number: number;
+  url: string;
+  /** PR 合并状态 `'merged'` / `'open'` / `'closed'`；空串 = 未知（不显示徽章）。 */
+  state: string;
+}
+
 export interface Task {
   issueKey: string;
   owner: string;
@@ -66,6 +74,14 @@ export interface Task {
   prUrl: string;
   /** #435：PR 合并状态 `'merged'` / `'open'` / `'closed'`；空串 = 未知（不显示徽章）。 */
   prState: string;
+  /**
+   * #467：该 issue 关联的**全部** PR（含主 PR）。
+   *
+   * `prNumber` / `prUrl` / `prState` 三者是「主 PR」（列表首元素），保留是为了
+   * 不破坏既有契约；本数组承载完整的一对多关系，UI 应优先读它。
+   * 无关联 PR 时为空数组。
+   */
+  prs: PrRef[];
   branch: string;
   /** #193：agent 工作分支（record_session 写入，与同步的 PR branch 分离）。 */
   workBranch: string;

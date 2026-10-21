@@ -327,6 +327,11 @@ fn build_task_row(
         // #435：按需拉取只拿单个 issue 的 REST 数据，无关联 PR ⇒ 状态未知。
         pr_state: String::new(),
         pr_url: String::new(),
+        // #467：按需拉取同样拿不到关联 PR（PR 关联来自仓库级 pulls 列表）⇒ 空列表。
+        // `pr_fetch_ok=false` ⇒ 写入阶段**跳过** `task_prs`，保留既有关联不被清空
+        // （该路径用 `InsertIfAbsent`，理论上不会覆盖既有行，但语义上仍需明确）。
+        prs: Vec::new(),
+        pr_fetch_ok: false,
         branch: String::new(),
         parent_issue: String::new(),
         sub_issues: String::new(),
