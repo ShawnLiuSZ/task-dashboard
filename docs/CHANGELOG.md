@@ -6,7 +6,7 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **v0.7.5（未发布）— 备忘录改为瀑布流（#462）**
+- **v0.7.5（2026-10-21）— 备忘录改为瀑布流（#462）**
 
   - **卡片高度自适应**：#456 的列表布局用 CSS Grid，同行卡片**等高对齐**（grid 默认 `align-items: stretch`），短内容卡片下方留出空白、版面参差。现改为**瀑布流**（CSS multi-column），卡片高度随内容自适应。
   - **为什么不用原生 `grid-template-rows: masonry`**：只被 Chromium 116+ 支持，且生效条件苛刻（须显式 `grid-template-columns`、容器有确定 height、子项无 `grid-row`/`align-self`、内部无 `position:absolute`/`contain:layout`），漏一条就**静默退化为单列**；macOS 的 WKWebView 与 Linux 的 WebKitGTK 完全不识别，`@supports` 恒为 false ⇒ 无法可靠做特性检测。CSS multi-column 是唯一全引擎可用且零 JS 的方案。
@@ -20,7 +20,7 @@
   - **反向验证 3/3 捕获**：`column-fill` 改 `auto`、卡片 `width` 改 `100%`、删掉 ≤900px 断点 ⇒ 各 1 条用例失败。
   - 详见 [`issue-462-notes-masonry.md`](./issue-462-notes-masonry.md)
 
-- **v0.7.5（未发布）— 备忘录卡片页脚永远沉到卡片底部（#460）**
+- **v0.7.5（2026-10-21）— 备忘录卡片页脚永远沉到卡片底部（#460）**
 
   - **页脚沉底**：正文短的卡片，页脚（优先级标签 + 时间 + 编辑/删除按钮）曾浮在卡片中部、下方留大片空白。根因是 `.note-card` 虽是 `flex column`，但页脚没有 `margin-top: auto` —— 它作为普通 flow 元素紧跟正文，而 grid 布局让同一行卡片**等高对齐**（默认 `align-items: stretch`），于是剩余空间恰好落在页脚**下面**。
   - **三态同时改**：普通态页脚 `.note-foot`、编辑态 `.note-edit-foot`、删除确认态 `.note-confirm-actions` 全部加 `margin-top: auto`。只改一处会导致同一张卡在三态切换时页脚位置跳变。

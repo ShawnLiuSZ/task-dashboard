@@ -2,7 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **v0.7.5 (unreleased) — Notes panel switched to a masonry layout (#462)**
+- **v0.7.5 (2026-10-21) — Notes panel switched to a masonry layout (#462)**
 
   - **Card height follows content**: the #456 list layout used CSS Grid, which stretches cards in the same row to equal height (grid's default `align-items: stretch`), leaving empty space under short cards and making the board look ragged. It is now a **masonry layout** (CSS multi-column), where each card is exactly as tall as its content.
   - **Why not native `grid-template-rows: masonry`**: it is only supported by Chromium 116+, and even there the conditions are strict (an explicit `grid-template-columns`, a definite container `height`, no `grid-row`/`align-self` on children, no `position:absolute`/`contain:layout` inside). Miss any one and it **silently degrades to a single column** with no error and no log. macOS's WKWebView and Linux's WebKitGTK do not recognise the value at all, so `@supports` is permanently false there and feature detection is unreliable. CSS multi-column is the only approach that works on every engine with zero JavaScript.
@@ -16,7 +16,7 @@
   - **Reverse verification caught 3/3 mutations**: changing `column-fill` to `auto`, changing the card `width` to `100%`, and deleting the ≤900px breakpoint each failed one assertion.
   - See [`issue-462-notes-masonry.md`](./issue-462-notes-masonry.md)
 
-- **v0.7.5 (unreleased) — Note card footers always pinned to the card bottom (#460)**
+- **v0.7.5 (2026-10-21) — Note card footers always pinned to the card bottom (#460)**
 
   - **Footer pinned to the bottom**: On cards with short content, the footer (priority label, timestamp, edit/delete buttons) used to float in the middle of the card with a large empty gap below it. The root cause: `.note-card` is `flex column`, but the footer had no `margin-top: auto` — it followed the text as an ordinary flow element, while the grid layout stretches cards in the same row to equal height (`align-items: stretch`), so the leftover space landed *below* the footer.
   - **All three states fixed**: the normal footer `.note-foot`, the edit bar `.note-edit-foot` and the delete-confirm actions `.note-confirm-actions` all get `margin-top: auto`. Fixing only some would make the footer jump position as a card switches between the three states.
