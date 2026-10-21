@@ -878,6 +878,11 @@ fn base_task_upsert(parent_issue: String, sub_issues: String, exists: bool) -> d
         pr_number: 0,
         pr_url: String::new(),
         pr_state: String::new(), // #435
+        // #467：多 PR 关联（写入独立的 task_prs 表）。
+        // 本 fixture 不涉及 PR 关联 ⇒ 空列表 + `pr_fetch_ok=false`
+        // （写入阶段据此跳过 task_prs，保留既有关联）。
+        prs: Vec::new(),
+        pr_fetch_ok: false,
         branch: String::new(),
         parent_issue,
         sub_issues,
