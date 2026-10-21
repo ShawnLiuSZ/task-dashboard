@@ -12,6 +12,7 @@ import type { CSSProperties } from 'react';
 import { api } from '../api';
 import { useT } from '../i18n';
 import type { Note } from '../types';
+import NoteViewerModal from './NoteViewerModal';
 
 type NoteLabel = Note['label'];
 
@@ -66,6 +67,8 @@ const ICON = {
   close: 'M6 6l12 12 M18 6L6 18',
   download: 'M12 3v12 M7 10l5 5 5-5 M5 21h14',
   upload: 'M12 15V3 M7 8l5-5 5 5 M5 21h14',
+  /** #465：查看全文（放大镜）。 */
+  zoom: 'M11 4a7 7 0 100 14 7 7 0 000-14z M20 20l-4-4',
 };
 
 /* ---------- 时间格式化（v0.3.49 #148：文案走 i18n） ---------- */
@@ -137,6 +140,8 @@ export default forwardRef<NotesPanelRef>(function NotesPanel(_props, ref) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  /** #465：正在「查看全文」的备忘录 id —— 非 null 时弹出查看 Modal。 */
+  const [viewingId, setViewingId] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const editRef = useAutoSize(editDraft, editingId !== null);
@@ -172,6 +177,13 @@ export default forwardRef<NotesPanelRef>(function NotesPanel(_props, ref) {
   // 优先级既不再分列也不再参与排序，仅作为**卡片上的颜色标记**存在
   // （`--note-accent` + `.note-tag` 色点），切换优先级的交互链路完全不变。
   const sortedNotes = useMemo(() => [...notes].sort((a, b) => b.createdAt - a.createdAt), [notes]);
+
+  // #465：正在查看的备忘录。列表刷新后该条可能已被删除 ⇒ 找不到就当作没打开
+  // （Modal 自动消失，而不是渲染一个空壳）。
+  const viewingNote = useMemo(
+    () => (viewingId === null ? null : (notes.find((n) => n.id === viewingId) ?? null)),
+    [notes, viewingId],
+  );
 
   const renderNoteCard = (note: Note) => {
     const opt = labelOf(labels, note.label);
@@ -246,7 +258,23 @@ export default forwardRef<NotesPanelRef>(function NotesPanel(_props, ref) {
     }
     return (
       <article key={note.id} className="note-card" style={accent}>
+        {/* #465：正文**折叠**（`.note-content` 的 `-webkit-line-clamp: 9`）——
+            卡片里只显示前 9 行 + 省略号，完整内容走右上角「查看」按钮的 Modal。
+            折叠而非全展开的原因：多列流里卡片越高该列越长，高度差过大时
+            三列底部严重参差，瀑布流看起来像「一列很长、两列很短」。 */}
         <p className="note-content">{note.content}</p>
+        {/* #465：右上角「查看全文」按钮。绝对定位，不占布局高度（否则每张卡片
+            都多出一行，瀑布流会明显变高）；正文已预留 padding-right 让位，
+            按钮恒不压住文字。 */}
+        <button
+          type="button"
+          className="note-view-btn"
+          title={t('notes.viewTruncated')}
+          aria-label={t('notes.viewTitle')}
+          onClick={() => setViewingId(note.id)}
+        >
+          <Icon d={ICON.zoom} size={13} />
+        </button>
         <footer className="note-foot">
           <button
             type="button"
@@ -455,16 +483,30 @@ export default forwardRef<NotesPanelRef>(function NotesPanel(_props, ref) {
 
       {/* #456：列表展示 —— 网格容器与「任务会话」面板的 `.sessions-list` 同参
           （auto-fill minmax(320px, 1fr)：宽窗口自动排多列，窄窗口降为单列）。
-          优先级颜色完全由卡片承载（`--note-accent` + `.note-tag` 色点），列不再存在。 */}
-      <div className="notes-list" aria-busy={refreshing || undefined}>
-        {loading ? (
-          <div className="notes-placeholder">{t('notes.loading')}</div>
-        ) : sortedNotes.length === 0 ? (
-          <div className="notes-placeholder">{t('notes.colEmpty')}</div>
-        ) : (
-          sortedNotes.map(renderNoteCard)
-        )}
+          优先级颜色完全由卡片承载（`--note-accent` + `.note-tag` 色点），列不再存在。
+          #462：改为多列流瀑布流（`column-count` + `column-fill: balance`）。
+
+          #465：**滚动宿主与列容器分离** —— `.notes-scroll` 承担「固定最大高度 +
+          纵向滚动条」，`.notes-list`（多列容器）高度自适应内容。
+          两者合一（同一个元素既限高又滚动）会让多列流的列高被锁死 ⇒
+          `break-inside: avoid` 失效（同一条备忘录被劈成两列）且纵向根本不滚动。 */}
+      <div className="notes-scroll">
+        <div className="notes-list" aria-busy={refreshing || undefined}>
+          {loading ? (
+            <div className="notes-placeholder">{t('notes.loading')}</div>
+          ) : sortedNotes.length === 0 ? (
+            <div className="notes-placeholder">{t('notes.colEmpty')}</div>
+          ) : (
+            sortedNotes.map(renderNoteCard)
+          )}
+        </div>
       </div>
+
+      {/* #465：查看全文 Modal。挂在面板**内部**（而非 App 层）——
+          `.notes-panel` 是 `position: relative` 的遮罩宿主，Modal 在此渲染
+          才能覆盖整个面板区域；挂到 App 层会被 `.main-content` 的
+          `overflow: hidden` 裁掉。 */}
+      {viewingNote && <NoteViewerModal note={viewingNote} onClose={() => setViewingId(null)} />}
     </aside>
   );
 });
