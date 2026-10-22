@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest';
 // 而 CI（`npm ci` + `tsc --noEmit`）里并没有该类型包，会报 TS2307。
 import stylesRaw from '../styles.css?raw';
 import panelRaw from './NotesPanel.tsx?raw';
+// #470：useAutoSize 抽到公共 util，编辑弹窗另立组件 —— 断言改指向新位置。
+import autoSizeRaw from '../utils/useAutoSize.ts?raw';
+import editorModalRaw from './NoteEditorModal.tsx?raw';
+import composerModalRaw from './NoteComposerModal.tsx?raw';
 
 /**
  * 记事本列表布局回归测试（#259 建立，#456 改列表）。
@@ -35,6 +39,9 @@ import panelRaw from './NotesPanel.tsx?raw';
 const styles = stylesRaw.replace(/\/\*[\s\S]*?\*\//g, '');
 // TSX 同理：注释里提到 addColCollapsed 不应算作「四列依赖创建列状态」。
 const panel = panelRaw.replace(/\/\*[\s\S]*?\*\//g, '');
+// #470：编辑弹窗源码（同样剥注释，避免注释里提到类名被命中）。
+const editorModal = editorModalRaw.replace(/\/\*[\s\S]*?\*\//g, '');
+const composerModal = composerModalRaw.replace(/\/\*[\s\S]*?\*\//g, '');
 
 /**
  * 取出「作用于某元素的全部声明块」。
@@ -302,6 +309,55 @@ describe('备忘录折叠 + 查看全文按钮（#465）', () => {
   });
 });
 
+describe('编辑搬进弹窗（#470）', () => {
+  /**
+   * 改造前：点铅笔 ⇒ **原卡片**变成 textarea（行内编辑）。同一屏里混着
+   * 「高耸的编辑中卡片」与「折叠 9 行的只读卡片」，高度差一个数量级 ⇒
+   * 瀑布流（列高由内容决定）的列底严重参差。
+   *
+   * 改造后：编辑也在弹窗里做 ⇒ 卡片**永远只有一种形态**（折叠只读）。
+   */
+  it('铅笔按钮打开编辑弹窗（不再是行内编辑）', () => {
+    expect(panel).toContain('setEditingId(note.id)');
+    // 不得再有「把内容塞进草稿 + 切到编辑态」的行内编辑路径
+    expect(panel).not.toContain('setEditDraft');
+  });
+
+  it('编辑弹窗挂在面板内部（与查看弹窗同一遮罩宿主）', () => {
+    expect(panel).toContain('<NoteEditorModal');
+    expect(panel).toContain('note={editingNote}');
+    // 编辑态派生：找不到该条（被删/刷新后）就不渲染弹窗
+    expect(panel).toContain('notes.find((n) => n.id === editingId)');
+  });
+
+  it('编辑弹窗的编辑框不折叠（可编辑全文）', () => {
+    // 与查看弹窗同理：折叠只发生在卡片上，弹窗内必须完整可编辑。
+    expect(decls('.note-editor-textarea')).not.toMatch(/-webkit-line-clamp/);
+    expect(decls('.note-editor-textarea')).toMatch(/white-space\s*:\s*pre-wrap/);
+    // 遮罩与查看弹窗同级（30）⇒ 两弹窗的层级一致
+    expect(decls('.note-editor-mask')).toMatch(/z-index\s*:\s*30/);
+  });
+
+  it('useAutoSize 是公共实现：两个弹窗都从 utils 引入，不得再有重复副本', () => {
+    // 改造前 useAutoSize 在 NotesPanel.tsx 与 NoteComposerModal.tsx 各有一份
+    // **重复实现**。#470 抽到 utils/useAutoSize.ts ⇒ 两个弹窗都从公共模块引入。
+    expect(editorModal).toContain("from '../utils/useAutoSize'");
+    expect(composerModal).toContain("from '../utils/useAutoSize'");
+    // 两边都不得再本地定义一份
+    expect(editorModal).not.toMatch(/function useAutoSize/);
+    expect(composerModal).not.toMatch(/function useAutoSize/);
+    // 面板里也不再有
+    expect(panel).not.toMatch(/function useAutoSize/);
+  });
+
+  it('编辑弹窗保留换行与可编辑高度（不是硬切）', () => {
+    // 不用 max-height + overflow:hidden 硬切（会把第 N 行切成半行），
+    // 改成 textarea 自身滚动 + 可纵向拉伸。
+    expect(decls('.note-editor-textarea')).toMatch(/overflow-y\s*:\s*auto/);
+    expect(decls('.note-editor-textarea')).toMatch(/resize\s*:\s*vertical/);
+  });
+});
+
 describe('卡片页脚永远沉底（#460）', () => {
   /**
    * 缺陷本体：`.note-card` 是 flex column，但页脚没有 `margin-top: auto` ⇒
@@ -312,10 +368,12 @@ describe('卡片页脚永远沉底（#460）', () => {
    * `margin-top: auto` 在 flex column 下把剩余空间吸收到该元素之前 ⇒ 页脚贴底；
    * 空间不足时 auto 解析为 0，不产生额外间隙。
    */
-  it('三态的底部区都有 margin-top: auto（切换时页脚不跳位）', () => {
-    // 普通态页脚 / 编辑态操作区 / 删除确认态按钮区 —— 三者都是 .note-card 的
-    // 直接子元素，必须**同时**沉底，否则三态之间切换时页脚位置会跳变。
-    for (const sel of ['.note-foot', '.note-edit-foot', '.note-confirm-actions']) {
+  it('各态的底部区都有 margin-top: auto（切换时页脚不跳位）', () => {
+    // 普通态页脚 / 删除确认态按钮区 —— 两者都是 .note-card 的直接子元素，
+    // 必须**同时**沉底，否则两态之间切换时页脚位置会跳变。
+    // #470：原「行内编辑态」的操作区（.note-edit-foot）已随编辑搬进
+    // NoteEditorModal 一并移除 ⇒ 卡片从三态变两态。
+    for (const sel of ['.note-foot', '.note-confirm-actions']) {
       expect(decls(sel), `${sel} 缺 margin-top: auto，页脚不会沉底（#460）`).toMatch(
         /margin-top\s*:\s*auto/,
       );
@@ -326,7 +384,7 @@ describe('卡片页脚永远沉底（#460）', () => {
     // 固定 margin（如原来的 margin-top: 6px）会让**长内容**卡片也多出这段间隙，
     // 与父级 gap 叠加后间距不一致。
     expect(decls('.note-foot')).toMatch(/margin-top\s*:\s*auto/);
-    expect(decls('.note-edit-foot')).not.toMatch(/margin-top\s*:\s*\d/);
+    expect(decls('.note-confirm-actions')).not.toMatch(/margin-top\s*:\s*\d/);
   });
 
   it('前提：.note-card 必须是 flex column —— auto margin 依赖该上下文', () => {
@@ -339,15 +397,26 @@ describe('卡片页脚永远沉底（#460）', () => {
     expect(card).toMatch(/flex-direction\s*:\s*column/);
   });
 
-  it('三态底部区都是 .note-card 的直接子元素（否则 margin-top:auto 无效）', () => {
+  it('各态底部区都是 .note-card 的直接子元素（否则 margin-top:auto 无效）', () => {
     // 静态断言：确认这些类名直接出现在 .note-card 的 article 内，
     // 而不是被包在中间层 div 里。
-    for (const cls of ['note-edit-foot', 'note-confirm-actions', 'note-foot']) {
+    for (const cls of ['note-confirm-actions', 'note-foot']) {
       const re = new RegExp(
         `<article[^>]*className="note-card[^"]*"[^>]*>[\\s\\S]*?className="${cls}"`,
       );
       expect(re.test(panel), `${cls} 应为 .note-card 的直接子元素`).toBe(true);
     }
+  });
+
+  it('#470：行内编辑态已移除（编辑搬进弹窗，卡片只剩两态）', () => {
+    // 卡片不得再出现编辑态分支 ⇒ 列表里永远只有「折叠只读」一种卡片形态，
+    // 高度收敛、瀑布流列高一致。
+    expect(panel).not.toContain('note-card editing');
+    expect(panel).not.toContain('className="note-textarea"');
+    // .note-edit-foot / .note-edit-actions 的样式也应一并清掉
+    expect(styles).not.toMatch(/\.note-edit-foot/);
+    expect(styles).not.toMatch(/\.note-edit-actions/);
+    expect(styles).not.toMatch(/\.note-card\.editing/);
   });
 });
 
@@ -420,10 +489,13 @@ describe('整行页头移除，导入/导出保留在面板工具行（#447）',
 
 describe('记事本编辑文本框自适应高度（#322）', () => {
   // vitest 无布局引擎，scrollHeight 恒为 0，无法用渲染断言覆盖；沿用「源码静态断言」。
+  //
+  // #470：hook 从 `NotesPanel.tsx` 抽到 `utils/useAutoSize.ts`（行内编辑搬进
+  // NoteEditorModal 后，面板与弹窗都要用它 ⇒ 抽公共模块避免重复实现）。
   it('useAutoSize 用 useLayoutEffect 做高度测量（绘制前同步，修复进入编辑态不撑高）', () => {
-    const m = panel.match(/function useAutoSize[\s\S]*?\n\}/);
-    expect(m, 'NotesPanel.tsx 中找不到 useAutoSize 定义').toBeTruthy();
-    // 进入编辑态时 textarea 与 editDraft 同帧挂载，被动 useEffect 的初始测量会被
+    const m = autoSizeRaw.match(/export function useAutoSize[\s\S]*?\n\}/);
+    expect(m, 'utils/useAutoSize.ts 中找不到 useAutoSize 定义').toBeTruthy();
+    // 进入编辑态时 textarea 与内容同帧挂载，被动 useEffect 的初始测量会被
     // overflow-y:auto 列容器的滚动/绘制时序干扰，框体停在 min-height(42px)。
     // 必须在 DOM 变更后、绘制前用 useLayoutEffect 同步量高。
     expect(m![0]).toContain('useLayoutEffect');
@@ -433,14 +505,19 @@ describe('记事本编辑文本框自适应高度（#322）', () => {
     );
   });
 
-  it('进入编辑态主动测量：useAutoSize 接收 active 参数且依赖 editingId', () => {
-    const m = panel.match(/function useAutoSize[\s\S]*?\n\}/);
+  it('进入编辑态主动测量：useAutoSize 接收 active 参数', () => {
+    const m = autoSizeRaw.match(/export function useAutoSize[\s\S]*?\n\}/);
     // active 标志让 hook 在进入编辑态那一帧（而非仅 value 变化时）重测，
     // 确保「挂载即预填长内容」也能被量到。
-    expect(m![0]).toContain('active: boolean');
+    expect(m![0]).toContain('active = true');
     expect(m![0]).toContain('active');
-    // 编辑 textarea 把 editingId !== null 作为 active 传入，并把返回的 ref 挂上
-    expect(panel).toContain('useAutoSize(editDraft, editingId !== null)');
-    expect(panel).toContain('ref={editRef.ref}');
+    // 依赖里必须带 active，否则 active 翻转不会触发重测
+    expect(m![0]).toMatch(/\[value,\s*active,\s*resize\]/);
+  });
+
+  it('编辑弹窗把 ref 挂到 textarea 上并传入 active', () => {
+    expect(editorModal).toContain('useAutoSize(draft, true)');
+    expect(editorModal).toContain('ref={textareaRef}');
+    expect(editorModal).toContain('className="note-textarea note-editor-textarea"');
   });
 });

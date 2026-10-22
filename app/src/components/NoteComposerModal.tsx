@@ -1,7 +1,8 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useT } from '../i18n';
 import { useEscLayer } from '../utils/useEscLayer';
+import { useAutoSize } from '../utils/useAutoSize';
 import type { Note } from '../types';
 
 type NoteLabel = Note['label'];
@@ -22,20 +23,7 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** 自适应高度文本域：默认一行，随内容增长，上限 260px。 */
-function useAutoSize(value: string) {
-  const ref = useRef<HTMLTextAreaElement | null>(null);
-  const resize = useCallback(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
-  }, []);
-  useLayoutEffect(() => {
-    resize();
-  }, [value, resize]);
-  return ref;
-}
+/** #470：自适应高度 hook 已抽到 `utils/useAutoSize.ts`（与编辑弹窗共用）。 */
 
 function LabelPicker({ value, onChange }: { value: NoteLabel; onChange: (l: NoteLabel) => void }) {
   const t = useT();

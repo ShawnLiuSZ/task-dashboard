@@ -2764,6 +2764,87 @@ button.unassigned-tag:disabled {
   margin-top: 12px;
 }
 
+/* #470：编辑 Modal —— 与查看 Modal 同挂在 .notes-panel 内部。
+ *
+ * 宽度同查看弹窗（640px）：备忘录正文常有较长的行，窄了编辑时要频繁换行。
+ * 遮罩 z-index 同查看弹窗（30）⇒ 两弹窗不会互相压不住。
+ */
+.note-editor-mask {
+  z-index: 30;
+}
+
+.note-editor-modal {
+  width: 640px;
+  max-width: calc(100% - 48px);
+}
+
+.note-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.note-editor-head .modal-title {
+  margin: 0;
+}
+
+/* 编辑框：完整正文，**不折叠**（折叠只发生在卡片上）。
+ * 最小高度 180px 让短内容也有可点击的编辑面；最大高度交给弹窗自身滚动。 */
+.note-editor-textarea {
+  display: block;
+  width: 100%;
+  min-height: 180px;
+  max-height: 420px;
+  padding: 10px 12px;
+  border: 1px solid var(--note-accent, var(--border));
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  resize: vertical;
+  overflow-y: auto;
+}
+
+.note-editor-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(10, 108, 255, 0.1);
+}
+
+.note-editor-textarea::placeholder {
+  color: var(--text-3);
+}
+
+.note-editor-modal .note-error {
+  margin-top: 12px;
+}
+
+.note-editor-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* 操作区：左侧提示（⌘/Ctrl + Enter 保存 · Esc 取消），右侧取消/保存。 */
+.note-editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.note-editor-buttons {
+  display: inline-flex;
+  gap: 8px;
+}
+
 /* #460：页脚永远沉到卡片底部。
  *
  * 缺陷本体：`.note-card` 是 `display: flex; flex-direction: column`，但页脚没有
@@ -2877,26 +2958,11 @@ button.unassigned-tag:disabled {
 
 /* ---------- 编辑 / 删除确认态 ---------- */
 
-.note-card.editing,
+/* #470：行内编辑态已移除（编辑搬进 NoteEditorModal）⇒ 卡片只剩
+ * 「折叠只读」与「删除确认」两态，`.note-card.editing` 不再需要。 */
 .note-card.confirming {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(10, 108, 255, 0.08);
-}
-
-/* #460：编辑态的底部操作区同样沉底（`auto` 会覆盖下面的 margin-top: 6px）——
- * 否则普通态↔ 编辑态切换时页脚会从卡片底部跳到正文下方。
- * ⚠️ `gap: 8px` 之外不能再叠加固定 margin，否则间距变成 8 + 6 = 14px。 */
-.note-edit-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: auto;
-}
-
-.note-edit-actions {
-  display: inline-flex;
-  gap: 6px;
 }
 
 .note-hint {
@@ -2910,14 +2976,14 @@ button.unassigned-tag:disabled {
   color: var(--text);
 }
 
-/* #460：删除确认态的按钮区同样沉底，保持三态之间页脚位置一致。 */
+/* #460：删除确认态的按钮区同样沉底，保持各态之间页脚位置一致。 */
 .note-confirm-actions {
   display: flex;
   gap: 6px;
   margin-top: auto;
 }
 
-/* ---------- 小尺寸按钮（记事本编辑 / 删除确认） ---------- */
+/* ---------- 小尺寸按钮（记事本删除确认） ---------- */
 .btn.small {
   padding: 3px 10px;
   font-size: 11px;

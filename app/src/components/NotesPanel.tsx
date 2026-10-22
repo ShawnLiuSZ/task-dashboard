@@ -3,7 +3,6 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -12,6 +11,7 @@ import type { CSSProperties } from 'react';
 import { api } from '../api';
 import { useT } from '../i18n';
 import type { Note } from '../types';
+import NoteEditorModal from './NoteEditorModal';
 import NoteViewerModal from './NoteViewerModal';
 
 type NoteLabel = Note['label'];
@@ -96,27 +96,6 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/**
- * 自适应高度的文本域：默认一行，随内容增长，上限 260px。
- * #322：改用 useLayoutEffect（DOM 变更后、绘制前同步测量），并在进入编辑态
- * （active=true）那一帧主动重测——否则挂载即预填长内容时，被动 useEffect 的
- * 初始测量会被 overflow-y:auto 列容器的滚动/绘制时序干扰，框体停在 min-height(42px)，
- * 只有继续输入（下一帧 value 变化）才撑开。
- */
-function useAutoSize(value: string, active: boolean) {
-  const ref = useRef<HTMLTextAreaElement | null>(null);
-  const resize = useCallback(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
-  }, []);
-  useLayoutEffect(() => {
-    resize();
-  }, [value, active, resize]);
-  return { ref, resize };
-}
-
 export interface NotesPanelRef {
   /** #447：供顶栏创建 Modal 保存后主动刷新备忘录列表。 */
   reload: () => void;
@@ -133,18 +112,21 @@ export default forwardRef<NotesPanelRef>(function NotesPanel(_props, ref) {
   /** #329：后台刷新（增删改后的重查）——不替换内容，只做轻量反馈。 */
   const [refreshing, setRefreshing] = useState(false);
   const loadedOnce = useRef(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editDraft, setEditDraft] = useState('');
-  const [saving, setSaving] = useState(false);
   const [confirmId, setConfirmId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   /** #465：正在「查看全文」的备忘录 id —— 非 null 时弹出查看 Modal。 */
   const [viewingId, setViewingId] = useState<number | null>(null);
+  /**
+   * #470：正在「编辑」的备忘录 id —— 非 null 时弹出**编辑 Modal**。
+   *
+   * 改造前这里是「行内编辑态」：点铅笔 ⇒ **原卡片**变成 textarea。同一屏里
+   * 混着「高耸的编辑中卡片」与「折叠 9 行的只读卡片」，高度差一个数量级，
+   * 瀑布流的列高被单张高卡片拉长。现在编辑也进弹窗 ⇒ 卡片**永远只有一种形态**。
+   */
+  const [editingId, setEditingId] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  const editRef = useAutoSize(editDraft, editingId !== null);
 
   const loadNotes = useCallback(async () => {
     // #329：区分「首屏加载」与「后台刷新」。原先每次重查都把 loading 置真，
@@ -185,6 +167,12 @@ export default forwardRef<NotesPanelRef>(function NotesPanel(_props, ref) {
     [notes, viewingId],
   );
 
+  // #470：正在编辑的备忘录（同样处理「刷新后已被删除」）。
+  const editingNote = useMemo(
+    () => (editingId === null ? null : (notes.find((n) => n.id === editingId) ?? null)),
+    [notes, editingId],
+  );
+
   const renderNoteCard = (note: Note) => {
     const opt = labelOf(labels, note.label);
     const accent = { '--note-accent': opt.color } as CSSProperties;
@@ -207,55 +195,9 @@ export default forwardRef<NotesPanelRef>(function NotesPanel(_props, ref) {
         </article>
       );
     }
-    if (editingId === note.id) {
-      return (
-        <article key={note.id} className="note-card editing" style={accent}>
-          <textarea
-            ref={editRef.ref}
-            className="note-textarea"
-            value={editDraft}
-            rows={1}
-            autoFocus
-            onChange={(e) => setEditDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                e.preventDefault();
-                setEditingId(null);
-                setEditDraft('');
-              }
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                void handleSave();
-              }
-            }}
-          />
-          <div className="note-edit-foot">
-            <span className="note-hint">{t('notes.editHint')}</span>
-            <div className="note-edit-actions">
-              <button
-                type="button"
-                className="btn small ghost"
-                onClick={() => {
-                  setEditingId(null);
-                  setEditDraft('');
-                }}
-                disabled={saving}
-              >
-                {t('btn.cancel')}
-              </button>
-              <button
-                type="button"
-                className="btn small primary"
-                onClick={() => void handleSave()}
-                disabled={saving || !editDraft.trim()}
-              >
-                {saving ? t('notes.saving') : t('btn.save')}
-              </button>
-            </div>
-          </div>
-        </article>
-      );
-    }
+    // #470：原先这里有「行内编辑态」分支（卡片变成 textarea）。编辑已搬进
+    // NoteEditorModal ⇒ 卡片**永远只呈现折叠只读这一种形态**，列表高度收敛、
+    // 瀑布流列高一致。
     return (
       <article key={note.id} className="note-card" style={accent}>
         {/* #465：正文**折叠**（`.note-content` 的 `-webkit-line-clamp: 9`）——
@@ -297,10 +239,7 @@ export default forwardRef<NotesPanelRef>(function NotesPanel(_props, ref) {
               type="button"
               className="note-tool"
               title={t('notes.editTitle')}
-              onClick={() => {
-                setEditingId(note.id);
-                setEditDraft(note.content);
-              }}
+              onClick={() => setEditingId(note.id)}
             >
               <Icon d={ICON.pencil} size={13} />
             </button>
@@ -318,24 +257,16 @@ export default forwardRef<NotesPanelRef>(function NotesPanel(_props, ref) {
     );
   };
 
-  const handleSave = useCallback(async () => {
-    if (editingId === null) return;
-    const content = editDraft.trim();
-    if (!content) return;
-    setSaving(true);
-    try {
-      await api.updateNote(editingId, content);
-      setEditingId(null);
-      setEditDraft('');
+  // #470：保存由**编辑弹窗**发起（弹窗内持有草稿与「保存中」状态）。
+  // 面板这边只负责落库 + 刷新列表；抛错则由弹窗展示错误、保持在编辑态。
+  const handleSave = useCallback(
+    async (id: number, content: string) => {
+      await api.updateNote(id, content);
       setError(null);
       await loadNotes();
-    } catch (e) {
-      console.error('更新记事失败:', e);
-      setError(t('notes.saveFailed', { error: errText(e) }));
-    } finally {
-      setSaving(false);
-    }
-  }, [editingId, editDraft, loadNotes, t]);
+    },
+    [loadNotes],
+  );
 
   const handleDelete = useCallback(
     async (id: number) => {
@@ -507,6 +438,20 @@ export default forwardRef<NotesPanelRef>(function NotesPanel(_props, ref) {
           才能覆盖整个面板区域；挂到 App 层会被 `.main-content` 的
           `overflow: hidden` 裁掉。 */}
       {viewingNote && <NoteViewerModal note={viewingNote} onClose={() => setViewingId(null)} />}
+
+      {/* #470：编辑 Modal。与查看 Modal 同挂在面板内部（同一遮罩宿主）。
+          弹窗内是**完整正文**的多行编辑框（不折叠）+ 保存/取消；
+          ⌘/Ctrl + Enter 保存，Esc 取消编辑（丢弃草稿）。 */}
+      {editingNote && (
+        <NoteEditorModal
+          note={editingNote}
+          onClose={() => setEditingId(null)}
+          onSave={async (content) => {
+            await handleSave(editingNote.id, content);
+            setEditingId(null);
+          }}
+        />
+      )}
     </aside>
   );
 });

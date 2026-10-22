@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.7（未发布）— 备忘录编辑改为在 Modal 弹窗中完成（#470）**
+
+  - **编辑不再在原卡片上就地修改**：改造前「查看」进弹窗、**「编辑」留在卡片上** —— 点铅笔 ⇒ 原卡片变成 textarea 行内编辑。于是同一屏里混着两种高度差一个数量级的卡片：只读态被 `-webkit-line-clamp: 9` 折叠（约 9 行封顶），编辑态的 textarea 不受折叠约束、经 `useAutoSize` 可长到 **260px**（约 16 行）。现新增 `NoteEditorModal`，铅笔按钮改为**打开编辑弹窗** ⇒ 卡片**永远只有「折叠只读」这一种形态**。
+  - **为什么必须搬进弹窗（不只是为了好看）**：#462/#465 已定案的布局是 CSS multi-column 瀑布流，`.notes-list` 高度自适应内容 ⇒ **列高 = 该列最高卡片的高度**。纯阅读时这是优点（底部参差小），但一张 260px 的编辑中卡片会把**整列**撑到 260px、其余卡片在该列底部留大片空白 ⇒ 三列高度差被放大，滚动时视线在「一张特别高的卡」与「一列短卡」之间来回跳。
+  - **编辑弹窗内容**：完整正文的多行 `textarea`（**不折叠** —— 折叠只发生在卡片上，弹窗内若也折叠就没法编辑全文）+ 优先级色点 + 绝对时间戳 + 取消/保存按钮。⌘/Ctrl + Enter 保存，**Esc 取消编辑**（丢弃草稿、不落库）。
+  - **与查看弹窗分工**：`NoteViewerModal`（#465）仍为**只读**全文，行为不变；两者并列挂在 `.notes-panel` **内部**（面板是 `position: relative` 的遮罩宿主）—— 挂到 App 层会被 `.main-content` 的 `overflow: hidden` 裁掉。Esc 走 window 级分层（`useWindowEscLayer`，#344），保证与其它弹窗的 Esc 不打架。
+  - **草稿与错误态在弹窗内**：弹窗自己持有 `draft` / `saving` / `error` ⇒ 保存失败时**保持在编辑态**并展示错误（草稿不丢）；面板只负责「落库 + 刷新列表」。
+  - **`useAutoSize` 抽到 `utils/useAutoSize.ts`**：原先 `NotesPanel.tsx` 与 `NoteComposerModal.tsx` 各有一份**重复实现**，改造后编辑弹窗与新建弹窗都要用 ⇒ 抽公共模块。`#322` 的教训保留：必须用 `useLayoutEffect`（DOM 变更后、绘制前同步测量），不能用被动的 `useEffect`（其初始测量会被 `overflow-y:auto` 容器的滚动/绘制时序干扰，框体停在 `min-height`）。
+  - 纯前端改动（CSS + TSX + 测试 + i18n），后端 / DB schema / MCP 零改动。
+  - **验证**：`vitest` **362 passed**（原 347）· `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check`（418 key）/ `build` 全绿。
+  - 详见 [`issue-470-note-edit-modal.md`](./issue-470-note-edit-modal.md)
+
 - **v0.7.6（2026-10-22）— 同一个 issue 支持关联多个 PR（#467）**
 
   - **同一 issue 的多个 PR 全部可见**：改造前同步层用 `pr_map.entry(rk).or_insert(...)` 构建 PR↔issue 映射 ⇒ 同一个 issue 被多个 PR 引用时**只有第一个入表，其余静默丢弃**（无日志、无报错）；数据层 `tasks.pr_number` / `pr_url` / `pr_state` 也是单值列。现新增独立关系表 `task_prs` 承载完整的一对多关系，卡片 PR 行与详情面板都会**逐个渲染全部关联 PR**。
