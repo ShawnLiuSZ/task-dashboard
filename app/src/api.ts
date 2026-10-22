@@ -21,6 +21,7 @@ import type {
   SyncLog,
   SyncResult,
   Task,
+  TaskComment,
   UpdateProgress,
   ViewMode,
 } from './types';
@@ -142,6 +143,10 @@ export const api = {
   // #422：传 accountId 以按账号过滤会话（Some(0)⇒聚合全部 / None⇒后端读 meta）。
   listActiveSessions: (accountId?: number | null) =>
     invoke<Task[]>('list_active_sessions', { accountId: accountId ?? null }),
+  // #472：按需列出某 issue 的全部评论链接（**倒序：最新在前**）。
+  // ⚠️ 必须带 accountId —— issueKey 是 `repo#number`（不含 owner），多账号下会重复。
+  listTaskComments: (issueKey: string, accountId: number) =>
+    invoke<TaskComment[]>('list_task_comments', { issueKey, accountId }),
   addNote: (content: string, label?: string) =>
     invoke<Note>('add_note', { content, label: label ?? null }),
   updateNote: (id: number, content: string) => invoke<Note>('update_note', { id, content }),

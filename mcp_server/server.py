@@ -310,6 +310,32 @@ def ensure_schema(c):
         "CREATE INDEX IF NOT EXISTS idx_task_prs_issue "
         "ON task_prs(account_id, issue_key)"
     )
+    # #472：task_comments 表（issue ↔ 多评论关系）。与 task_prs 同款理由 ——
+    # Python MCP 是**独立进程**、不走 Rust 的 `db::open_db`，故必须自建表，
+    # 与 Rust `db.rs::SCHEMA` 的定义保持一致（列名逐列一致由
+    # `scripts/check-mcp-columns.py` 校验）。
+    # 唯一键含 `comment_url`：`account_id` 必须在键里 —— issue_key（`repo#number`）
+    # 在多账号下会重复（与 tasks 表现一致）。
+    # `created_at` 存 Unix 秒（INTEGER）⇒ 读端直接 `ORDER BY created_at DESC` 做倒序。
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_comments (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          account_id  INTEGER NOT NULL,
+          issue_key   TEXT NOT NULL,
+          comment_id  INTEGER NOT NULL DEFAULT 0,
+          comment_url TEXT NOT NULL,
+          author      TEXT NOT NULL DEFAULT '',
+          created_at  INTEGER NOT NULL DEFAULT 0,
+          updated_at  INTEGER NOT NULL DEFAULT 0,
+          UNIQUE(account_id, issue_key, comment_url)
+        )
+        """
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_comments_issue "
+        "ON task_comments(account_id, issue_key, created_at DESC)"
+    )
     # #427：把 tasks 三列里的活跃会话搬进 sessions（与 Rust MIGRATE_DATA_FIXES
     # 第 3 条同语义）。INSERT OR IGNORE 保证幂等。
     c.execute(

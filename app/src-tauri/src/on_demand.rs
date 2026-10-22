@@ -332,6 +332,12 @@ fn build_task_row(
         // （该路径用 `InsertIfAbsent`，理论上不会覆盖既有行，但语义上仍需明确）。
         prs: Vec::new(),
         pr_fetch_ok: false,
+        // #472：按需拉取同样拿不到评论列表（评论来自 comments 接口，本路径只取
+        // 单 issue 的 REST 数据）⇒ 空列表。
+        // `comments_fetch_ok=false` ⇒ 写入阶段**跳过** `task_comments`，
+        // 保留既有关联不被清空（同 `pr_fetch_ok` 的语义）。
+        comments: Vec::new(),
+        comments_fetch_ok: false,
         branch: String::new(),
         parent_issue: String::new(),
         sub_issues: String::new(),

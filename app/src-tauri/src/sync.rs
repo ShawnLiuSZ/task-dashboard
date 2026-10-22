@@ -273,6 +273,36 @@ struct PrEntry {
     state: String,
 }
 
+/// #472：把 GitHub 拉到的评论列表转成落库用的 [`crate::common::CommentRef`] 列表，
+/// 并挑出「最新一条」的链接（`tasks.latest_comment_url` 单值列的值）。
+///
+/// 抽成独立**纯函数**是为了让它可被单测覆盖 —— 同步主路径需要真实网络，
+/// 单测里跑不通（与 `build_pr_map` 同样的取舍）。
+///
+/// **最新一条**的判据：`created_at` 最大者。
+/// ⚠️ 全部 `created_at` 都是 0（字段缺失 / 解析失败）时，`max_by_key` 取**末位**
+/// —— GitHub comments API 按 `created_at` **升序**返回 ⇒ 末位即最新 ⇒
+/// 与「按 API 顺序取最后一条」的老行为一致。
+fn comments_to_refs(
+    list: &[crate::github::RawComment],
+) -> (Vec<crate::common::CommentRef>, String) {
+    let refs = list
+        .iter()
+        .map(|c| crate::common::CommentRef {
+            id: c.id,
+            url: c.url.clone(),
+            author: c.author.clone(),
+            created_at: c.created_at,
+        })
+        .collect();
+    let newest = list
+        .iter()
+        .max_by_key(|c| c.created_at)
+        .map(|c| c.url.clone())
+        .unwrap_or_default();
+    (refs, newest)
+}
+
 /// #467：构建「issue_key → 关联 PR 列表」的映射。
 ///
 /// **改造前的行为**是单值（`or_insert`）⇒ 同一 issue 被多个 PR 引用时，
@@ -933,26 +963,58 @@ fn sync_account_inner(
         };
 
         // 新评论链接：仅当评论数较上次增加且预算充足时回源拉取（控制 API 调用量）。
-        let (comments_count, latest_comment_url): (i64, String) =
-            if t.comments > existing_comments as u64 && comment_budget > 0 {
-                match client.fetch_comments(&t.repo, t.number, &t.repo_owner) {
-                    Ok(Some(url)) => {
-                        comment_budget -= 1;
-                        std::thread::sleep(Duration::from_millis(80));
-                        (t.comments as i64, url)
-                    }
-                    Ok(None) => {
-                        comment_budget -= 1;
-                        (t.comments as i64, existing_comment_url.to_string())
-                    }
-                    Err(e) => {
-                        crate::tlog!("[sync] 拉取评论失败，跳过: {}#{}: {}", t.repo, t.number, e);
-                        (existing_comments, existing_comment_url.to_string())
-                    }
+        //
+        // #472：改造前这里只拿得到**最新一条**评论的链接
+        // （`fetch_comments` 内部 `.next_back()`）⇒ 其余评论的链接**全部丢弃**，
+        // 详情面板只能给「最新评论」一个入口。现在一次性取回**全部**评论，
+        // 写入独立关系表 `task_comments`（一对多），详情面板**倒序**列出。
+        //
+        // `latest_comment_url` 单值列**保持不变**（卡片跳转 + MCP 契约依赖它），
+        // 取本轮列表里**最新**的那条（GitHub 按 created_at 升序返回）。
+        let (comments_count, latest_comment_url, comments, comments_fetch_ok): (
+            i64,
+            String,
+            Vec<crate::common::CommentRef>,
+            bool,
+        ) = if t.comments > existing_comments as u64 && comment_budget > 0 {
+            match client.fetch_comments(&t.repo, t.number, &t.repo_owner) {
+                Ok(Some(list)) if !list.is_empty() => {
+                    comment_budget -= 1;
+                    std::thread::sleep(Duration::from_millis(80));
+                    let (refs, newest) = comments_to_refs(&list);
+                    (t.comments as i64, newest, refs, true)
                 }
-            } else {
-                (existing_comments, existing_comment_url.to_string())
-            };
+                Ok(_) => {
+                    // 没有评论（`Ok(None)`）或空列表 ⇒ 保留既有值，**不清空**关联。
+                    // ⚠️ 触发条件是「评论数较上次增加」，此时拿到空列表属自相矛盾
+                    // （GitHub 说有评论、API 却返回空）⇒ 保守起见按「没拉到」处理。
+                    comment_budget -= 1;
+                    (
+                        t.comments as i64,
+                        existing_comment_url.to_string(),
+                        Vec::new(),
+                        false,
+                    )
+                }
+                Err(e) => {
+                    crate::tlog!("[sync] 拉取评论失败，跳过: {}#{}: {}", t.repo, t.number, e);
+                    (
+                        existing_comments,
+                        existing_comment_url.to_string(),
+                        Vec::new(),
+                        false,
+                    )
+                }
+            }
+        } else {
+            // 本轮没回源（评论数没涨 / 预算用尽）⇒ 保留既有评论关联行。
+            (
+                existing_comments,
+                existing_comment_url.to_string(),
+                Vec::new(),
+                false,
+            )
+        };
 
         // #278：父子关系。仅当该仓库的整组拉取成功时更新；失败则保留既有值
         // （与 PR 关联同款取舍，避免一次网络抖动把已有关联清空）。
@@ -994,6 +1056,10 @@ fn sync_account_inner(
             // `pr_fetch_ok=false` 时本列表为空且写入阶段会跳过清理 ⇒ 保留既有关联。
             prs: pr_refs,
             pr_fetch_ok,
+            // #472：完整的多评论关联（写入独立的 `task_comments` 表）。
+            // `comments_fetch_ok=false` 时本列表为空且写入阶段会跳过清理 ⇒ 保留既有关联。
+            comments,
+            comments_fetch_ok,
             branch,
             parent_issue,
             sub_issues,
@@ -1035,6 +1101,20 @@ fn sync_account_inner(
             // （与 `tasks.pr_*` 三列的既有「拉取失败保留既有值」语义一致）。
             if row.pr_fetch_ok {
                 crate::db::write_task_prs(&tx, row.account_id, &row.issue_key, &row.prs, now)?;
+            }
+
+            // #472：写该 issue 的**全部**评论（全量替换语义）。
+            // ⚠️ 仅在「评论列表拉取成功」时执行 —— 拉取失败必须保留既有关联，
+            // 否则一次网络抖动就会把详情面板里的评论链接全部清掉
+            // （与 `task_prs` / `tasks.pr_*` 的既有「拉取失败保留既有值」语义一致）。
+            if row.comments_fetch_ok {
+                crate::db::write_task_comments(
+                    &tx,
+                    row.account_id,
+                    &row.issue_key,
+                    &row.comments,
+                    now,
+                )?;
             }
 
             if row.exists {
@@ -1975,6 +2055,62 @@ mod tests {
         let map = build_pr_map(&prs);
         assert_eq!(map.get("r#10").unwrap().len(), 1);
         assert_eq!(map.get("r#20").unwrap().len(), 1);
+    }
+
+    // ===== #472：评论列表 → 落库列表 + 最新一条 ==========================
+
+    fn raw_comment(id: i64, url: &str, author: &str, created_at: i64) -> crate::github::RawComment {
+        crate::github::RawComment {
+            id,
+            url: url.to_string(),
+            author: author.to_string(),
+            created_at,
+        }
+    }
+
+    /// #472：拉到的**全部**评论都要进落库列表（改造前只有最新一条能落库）。
+    #[test]
+    fn comments_to_refs_keeps_every_comment() {
+        let list = vec![
+            raw_comment(1, "u1", "alice", 100),
+            raw_comment(2, "u2", "bob", 200),
+            raw_comment(3, "u3", "carol", 300),
+        ];
+        let (refs, _newest) = super::comments_to_refs(&list);
+        assert_eq!(refs.len(), 3, "三条评论都必须进落库列表");
+        assert_eq!(
+            refs.iter().map(|c| c.url.as_str()).collect::<Vec<_>>(),
+            vec!["u1", "u2", "u3"],
+            "落库顺序保持 API 返回顺序（倒序由读端 SQL 负责）"
+        );
+        assert_eq!(refs[1].author, "bob", "作者要一并带上");
+        assert_eq!(refs[2].created_at, 300, "创建时间要一并带上（倒序的依据）");
+    }
+
+    /// #472：`latest_comment_url` 单值列取**最新**那条（`created_at` 最大者）。
+    #[test]
+    fn comments_to_refs_picks_the_newest_as_latest() {
+        // 故意让 API 顺序与时间顺序不一致（真实 API 按时间升序，但这里验证的是
+        // 「按 created_at 取最大」而非「按位置取最后」）。
+        let list = vec![
+            raw_comment(3, "u3", "carol", 300),
+            raw_comment(1, "u1", "alice", 100),
+            raw_comment(2, "u2", "bob", 200),
+        ];
+        let (_refs, newest) = super::comments_to_refs(&list);
+        assert_eq!(newest, "u3", "最新一条必须按 created_at 最大取，而非按位置");
+    }
+
+    /// #472：全部 `created_at` 未知（= 0）时，取**末位** ——
+    /// GitHub 按升序返回 ⇒ 末位即最新 ⇒ 与老行为（「取最后一条」）一致。
+    #[test]
+    fn comments_to_refs_falls_back_to_last_when_timestamp_unknown() {
+        let list = vec![
+            raw_comment(1, "u1", "alice", 0),
+            raw_comment(2, "u2", "bob", 0),
+        ];
+        let (_refs, newest) = super::comments_to_refs(&list);
+        assert_eq!(newest, "u2", "时间全未知时取末位（API 顺序的最后一条）");
     }
 
     // ===== accounts + 多账号视图的纯逻辑校验 ==========================

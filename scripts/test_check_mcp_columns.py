@@ -158,5 +158,59 @@ class ScriptRunTests(unittest.TestCase):
         self.assertEqual(rc, 0, f"当前仓库应通过校验，实际输出:\n{buf.getvalue()}")
 
 
+class RelationTableTests(unittest.TestCase):
+    """关系表（`task_prs` / `task_comments`）两侧一致性检查的解析与检出能力。
+
+    #467（task_prs）与 #472（task_comments）同款：Python MCP 是**独立进程**、
+    不走 Rust 的 `open_db` ⇒ 表得自己建。漏建 ⇒ 读到它的路径报
+    `no such table` ⇒ 整个工具报错，而 App 自身完全正常、两侧单测都测不到
+    —— 与 #169/#262/#278 同源的盲区。
+    """
+
+    def test_table_columns_of_parses_both_relation_tables(self):
+        db_src = M.read(M.DB_RS)
+        py_src = M.read(M.SERVER_PY)
+        for table, expected in (
+            ("task_prs", ("account_id", "issue_key", "pr_number", "pr_url", "pr_state")),
+            (
+                "task_comments",
+                (
+                    "account_id",
+                    "issue_key",
+                    "comment_id",
+                    "comment_url",
+                    "author",
+                    "created_at",
+                ),
+            ),
+        ):
+            for src, side in ((db_src, "Rust db.rs"), (py_src, "Python server.py")):
+                cols = M.table_columns_of(src, table)
+                self.assertIsNotNone(cols, f"{side} 里应能找到 {table} 的建表语句")
+                for col in expected:
+                    self.assertIn(col, cols, f"{side} 的 {table} 缺列: {col}")
+
+    def test_both_sides_agree_on_relation_table_columns(self):
+        """两侧列名必须逐列一致 —— 拼错列名会「建表成功但查列报 no such column」。"""
+        db_src = M.read(M.DB_RS)
+        py_src = M.read(M.SERVER_PY)
+        for table in ("task_prs", "task_comments"):
+            rust = M.table_columns_of(db_src, table)
+            py = M.table_columns_of(py_src, table)
+            self.assertEqual(
+                rust,
+                py,
+                f"{table} 的列名两侧不一致（仅 Rust: {sorted(rust - py)}；"
+                f"仅 Python: {sorted(py - rust)}）",
+            )
+
+    def test_missing_table_is_detected(self):
+        """反向：某侧**缺表**必须被检出（而不是静默通过）。"""
+        self.assertIsNone(
+            M.table_columns_of("CREATE TABLE IF NOT EXISTS other (a TEXT)", "task_comments"),
+            "不存在的表必须返回 None（缺失本身就是要报告的问题）",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

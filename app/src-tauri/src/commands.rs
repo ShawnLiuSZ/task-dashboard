@@ -519,6 +519,43 @@ pub fn list_active_sessions(
     Ok(result)
 }
 
+/// #472：列出某 issue 的**全部**评论链接（**倒序：最新在前**）。
+///
+/// ⚠️ **按需命令，不挂在 `Task` 结构上**：一个 issue 的评论可达 100 条
+/// （GitHub comments API `per_page=100`），而看板一次渲染几百张卡 ⇒ 若随
+/// `list_tasks` 一起返回，IPC 载荷与前端内存都会被撑爆。故详情面板打开时
+/// 按需取**这一条** issue 的评论（与 `list_active_sessions` 同款「按需子集单独取」）。
+///
+/// **账号维度**：按 `(account_id, issue_key)` 精确匹配 —— issue_key 的值是
+/// `repo#number`（不含 owner），多账号下会重复 ⇒ 必须带账号才能定位到唯一那条
+/// （否则多账号下点开 A 账号的卡片会显示 B 账号的评论）。
+///
+/// **排序**：`created_at DESC, comment_id DESC`（见 `db::load_task_comments`）
+/// ⇒ 最新评论在最前。
+#[tauri::command]
+pub fn list_task_comments(
+    state: State<'_, AppState>,
+    issue_key: String,
+    account_id: i64,
+) -> Result<Vec<crate::common::CommentRef>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    list_task_comments_inner(&conn, &issue_key, account_id)
+}
+
+/// `list_task_comments` 的**纯函数版**（`&Connection` 入参）。
+///
+/// 抽出来的理由与 `active_sessions_sql()` 相同：Tauri 的 `State<'_, AppState>`
+/// 在单测里**无法构造**（`State::from(&T)` 未实现）⇒ 直接把命令体写死在
+/// `#[tauri::command]` 里就永远测不到。抽出来后单测直接调本函数，
+/// 与生产命令**共用同一份实现**（不是复制品）。
+fn list_task_comments_inner(
+    conn: &Connection,
+    issue_key: &str,
+    account_id: i64,
+) -> Result<Vec<crate::common::CommentRef>, String> {
+    crate::db::load_task_comments(conn, account_id, issue_key)
+}
+
 /// #422 账号维度解析：`Option<i64>` → 实际用于过滤的账号 id。
 ///
 /// **返回 `None` 表示「聚合全部、不过滤」**（不是「无账号」）。契约：
@@ -3084,5 +3121,64 @@ mod tests {
             t.pr_url,
             t.prs
         );
+    }
+
+    // ==========================================================================
+    // #472：`list_task_comments`（评论链接的一对多读取）
+    // ==========================================================================
+
+    fn cmtref(id: i64, url: &str, author: &str, created_at: i64) -> crate::common::CommentRef {
+        crate::common::CommentRef {
+            id,
+            url: url.to_string(),
+            author: author.to_string(),
+            created_at,
+        }
+    }
+
+    /// #472：`list_task_comments` 必须按 `(account_id, issue_key)` 精确取，
+    /// 且返回**倒序**（最新在前）。
+    ///
+    /// ⚠️ 必须带账号：issue_key 是 `repo#number`（不含 owner），多账号下会重复
+    /// ⇒ 只按 issueKey 取会拿到**别的账号**的评论。
+    #[test]
+    fn list_task_comments_scopes_by_account_and_returns_reverse_order() {
+        let conn = crate::db::open_db(std::path::Path::new(":memory:")).unwrap();
+        // 账号 1 与账号 2 有同号 issue（issue_key 不含 owner ⇒ 可重复）。
+        crate::db::write_task_comments(
+            &conn,
+            1,
+            "o/r#10",
+            &[cmtref(1, "u1", "alice", 100), cmtref(2, "u2", "bob", 200)],
+            1,
+        )
+        .unwrap();
+        crate::db::write_task_comments(&conn, 2, "o/r#10", &[cmtref(9, "u9", "zoe", 100)], 1)
+            .unwrap();
+
+        let state = crate::AppState {
+            db: std::sync::Mutex::new(conn),
+            syncing: std::sync::atomic::AtomicBool::new(false),
+            quarantine_notice: std::sync::Mutex::new(None),
+        };
+        let _ = &state; // AppState 本身在此无用；命令体只经 `list_task_comments_inner` 取数。
+
+        // 账号 1：自己的两条，且倒序（最新在前）。
+        let got = super::list_task_comments_inner(&state.db.lock().unwrap(), "o/r#10", 1).unwrap();
+        assert_eq!(got.len(), 2, "账号 1 应看到自己的两条评论");
+        assert_eq!(
+            got.iter().map(|c| c.url.as_str()).collect::<Vec<_>>(),
+            vec!["u2", "u1"],
+            "必须倒序返回：最新的在前"
+        );
+
+        // 账号 2：只看到自己那条（**不得串号**）。
+        let got = super::list_task_comments_inner(&state.db.lock().unwrap(), "o/r#10", 2).unwrap();
+        assert_eq!(got.len(), 1, "账号 2 不得看到账号 1 的评论");
+        assert_eq!(got[0].url, "u9");
+
+        // 别的 issue ⇒ 空列表（不是报错）。
+        let got = super::list_task_comments_inner(&state.db.lock().unwrap(), "o/r#999", 1).unwrap();
+        assert!(got.is_empty(), "不存在的 issue 应返回空列表");
     }
 }

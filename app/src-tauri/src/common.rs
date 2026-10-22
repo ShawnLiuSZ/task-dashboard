@@ -131,6 +131,26 @@ pub fn sort_prs_primary_first(prs: &mut Vec<PrRef>, main_number: i64, main_url: 
     }
 }
 
+/// #472：一条 issue **评论**的链接（评论的一对多载体）。
+///
+/// 与 [`PrRef`] 同款设计：只缓存展示必需的字段，不存评论正文
+/// （正文会变、会长，且展示需求只要「哪条评论 + 谁写的 + 什么时候」）。
+///
+/// 状态口径：评论没有「状态」；`created_at` 为 0 表示**时间未知**
+/// （GitHub 少数字段缺失，或 `created_at` 解析失败）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentRef {
+    /// GitHub 评论 id（评论的稳定标识；同一 issue 下唯一）。
+    pub id: i64,
+    /// 评论永久链接（`html_url`）—— 详情面板的跳转目标。
+    pub url: String,
+    /// 评论作者 login（不含 @）；空串 = 未知。
+    pub author: String,
+    /// 创建时间（Unix 秒）；0 = 未知。
+    pub created_at: i64,
+}
+
 /// #278：一条 issue 的父子关系（GraphQL `parent` / `subIssues` 的落库形态）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IssueLinks {

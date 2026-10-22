@@ -129,6 +129,8 @@
   "detail.handoffSaved": "Handoff notes saved ({n} chars)",
   "detail.openInBrowser": "Open in browser",
   "detail.latestComment": "Latest comment",
+  "detail.commentsTitle": "Comment links ({n})",
+  "detail.commentsLoading": "Loading comment links…",
   "detail.assignees": "Assignees: {list}",
   "detail.mentionedSuffix": "Someone mentioned me in comments",
   "detail.branch": "🌿 Branch: {branch}",

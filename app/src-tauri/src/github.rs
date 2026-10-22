@@ -225,6 +225,21 @@ impl RawTask {
     }
 }
 
+/// #472：一条 issue **评论**的精简信息（评论链接的一对多载体）。
+///
+/// 与 [`RawPr`] 同款定位：只取展示必需的字段，不取评论正文。
+#[derive(Debug, Clone)]
+pub struct RawComment {
+    /// GitHub 评论 id（评论的稳定标识）。
+    pub id: i64,
+    /// 评论永久链接（`html_url`）—— 详情面板的跳转目标。
+    pub url: String,
+    /// 评论作者 login（不含 @）；空串 = 未知。
+    pub author: String,
+    /// 创建时间（Unix 秒）；0 = 解析失败 / 字段缺失。
+    pub created_at: i64,
+}
+
 /// 一个 PR 的精简信息，用于把「issue 对应的 PR」关联回看板卡片。
 #[derive(Debug, Deserialize, Clone)]
 pub struct RawPr {
@@ -857,15 +872,24 @@ impl GitHubClient {
         out
     }
 
-    /// 拉取某 issue 的全部评论，返回最新一条评论的永久链接（html_url），供卡片一键跳转。
-    /// 无评论返回 None。best-effort：失败返回 Err。
+    /// 拉取某 issue 的**全部**评论（#472）。
+    ///
+    /// #472：改造前本方法**拉了全部评论却只返回最新一条**（`.next_back()` 取
+    /// `html_url`）⇒ 其余评论的链接全部丢弃，详情面板只能给出「最新评论」一个
+    /// 入口。现在返回**全部**评论，供独立关系表 `task_comments` 承载一对多关系。
+    ///
+    /// 返回 `Ok(None)` = 该 issue **没有评论**；`Err` = 请求失败
+    /// （调用方须**保留既有值**，不得清空 —— 一次网络抖动不该把评论链接全清掉）。
     /// `repo_owner` 用于 org 为空时构造完整仓库路径。
+    ///
+    /// ⚠️ GitHub comments API `per_page=100` ⇒ 超过 100 条评论的老 issue
+    /// 只能拿到最近 100 条（GitHub 端限制，非本仓引入）。
     pub fn fetch_comments(
         &self,
         repo: &str,
         number: i64,
         repo_owner: &str,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Option<Vec<RawComment>>, String> {
         let full_repo = if !self.org.is_empty() {
             format!("{}/{}", self.org, repo)
         } else if !repo_owner.is_empty() {
@@ -881,10 +905,33 @@ impl GitHubClient {
         let arr = v
             .as_array()
             .ok_or_else(|| "comments 返回非数组".to_string())?;
-        Ok(arr
-            .iter()
-            .filter_map(|c| c.get("html_url").and_then(|u| u.as_str()).map(String::from))
-            .next_back())
+        let mut out: Vec<RawComment> = Vec::with_capacity(arr.len());
+        for c in arr {
+            // `html_url` 缺失的条目直接跳过 —— 没有链接的评论对本功能无意义。
+            let Some(comment_url) = c.get("html_url").and_then(|u| u.as_str()) else {
+                continue;
+            };
+            out.push(RawComment {
+                id: c.get("id").and_then(|x| x.as_i64()).unwrap_or(0),
+                url: comment_url.to_string(),
+                author: c
+                    .get("user")
+                    .and_then(|u| u.get("login"))
+                    .and_then(|l| l.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                created_at: c
+                    .get("created_at")
+                    .and_then(|x| x.as_str())
+                    .map(crate::common::iso8601_to_secs)
+                    .unwrap_or(0),
+            });
+        }
+        if out.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(out))
+        }
     }
 
     /// 拉取 GitHub Project「OMS Kanban」中每个 issue 的 Status 字段，

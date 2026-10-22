@@ -199,6 +199,42 @@ CREATE TABLE IF NOT EXISTS task_prs (
 -- 按 issue 查全部关联 PR（看板渲染 / MCP 返回多 PR 列表）。
 CREATE INDEX IF NOT EXISTS idx_task_prs_issue ON task_prs(account_id, issue_key);
 
+-- #472：一个 issue 可有**多条评论**，每条评论都是一个可跳转的链接。
+--
+-- 此前 `tasks.latest_comment_url` 是**单值**列，只存最新一条评论的链接
+-- （`github.rs::fetch_comments` 拉了全部评论却只 `.next_back()` 取最后一条）
+-- ⇒ 其余评论的链接全部丢弃，详情面板只能给「最新评论」一个入口。
+--
+-- 同样刻意做成**独立表**而非给 `tasks` 加 JSON 列（理由同 `task_prs`）：
+--   ① `tasks` 表零改动 ⇒ 避开「新列必须写在 `migrate_tasks_v2_rebuild` 之后」
+--      的顺序硬约束，也不动 `mcp.rs` / `server.py` / `commands.rs` 三处位置绑定；
+--   ② `CREATE TABLE IF NOT EXISTS` 放在 SCHEMA 里 ⇒ **老库自动补齐，无需 bump
+--      `SCHEMA_VERSION`、无需写迁移**。
+--
+-- 唯一键含 `comment_url`：GitHub 评论 id 在理论上已唯一，但 `html_url` 更稳定
+-- （不依赖 id 字段是否被 API 返回）。`account_id` 必须在键里：issue_key
+-- （`repo#number`，不含 owner）在多账号下会重复（与 tasks 表现一致）。
+--
+-- ⚠️ `created_at` 存 Unix 秒（INTEGER）⇒ 读端直接 `ORDER BY created_at DESC`
+-- 做**倒序**（最新在前），无需在 SQL 里做日期字符串解析。
+CREATE TABLE IF NOT EXISTS task_comments (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id  INTEGER NOT NULL,
+  issue_key   TEXT NOT NULL,
+  -- GitHub 评论 id（稳定标识；API 未返回时为 0，仅用于同刻排序的次序兜底）。
+  comment_id  INTEGER NOT NULL DEFAULT 0,
+  comment_url TEXT NOT NULL,
+  -- 评论作者 login（不含 @）；空串 = 未知。
+  author      TEXT NOT NULL DEFAULT '',
+  -- 创建时间（Unix 秒）；0 = 未知。
+  created_at  INTEGER NOT NULL DEFAULT 0,
+  updated_at  INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(account_id, issue_key, comment_url)
+);
+-- 按 issue 查全部评论（详情面板按需取；倒序由 created_at DESC 保证）。
+CREATE INDEX IF NOT EXISTS idx_task_comments_issue
+  ON task_comments(account_id, issue_key, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS label_mappings (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   org         TEXT NOT NULL,
@@ -1269,6 +1305,10 @@ pub fn delete_account(conn: &Connection, id: i64) -> Result<(), String> {
     // 表现为「已删除的账号的 PR 关联仍显示在别人的卡片上」。
     tx.execute("DELETE FROM task_prs WHERE account_id = ?1", [id])
         .map_err(|e| format!("删除 task_prs 失败: {e}"))?;
+    // 1c. 删除 task_comments（#472：issue↔多评论关系表）。
+    // 同上：残留行会被聚合视图 / 详情面板读到。
+    tx.execute("DELETE FROM task_comments WHERE account_id = ?1", [id])
+        .map_err(|e| format!("删除 task_comments 失败: {e}"))?;
     // 2. 删除 projects
     tx.execute("DELETE FROM projects WHERE account_id = ?1", [id])
         .map_err(|e| format!("删除 projects 失败: {e}"))?;
@@ -2077,6 +2117,19 @@ pub struct TaskUpsert {
     pub prs: Vec<crate::common::PrRef>,
     /// #467：本轮 PR 列表是否拉取成功。`false` ⇒ `prs` 无意义，写入阶段保留既有值。
     pub pr_fetch_ok: bool,
+    /// #472：该 issue 的**全部**评论（写入独立的 `task_comments` 表）。
+    ///
+    /// 与 `latest_comment_url` 单值列并存：后者是「最新一条评论」的链接，
+    /// 保持旧契约不变（卡片跳转 + MCP 契约都用它）；本字段承载完整的一对多关系。
+    ///
+    /// **空列表有两种含义，必须区分**：
+    /// - 「拉取成功且确实没有评论」⇒ 写入阶段应清空该 issue 的既有 `task_comments` 行；
+    /// - 「评论列表拉取失败」⇒ 写入阶段应**跳过**（保留既有关联）。
+    ///
+    /// 区分靠 [`TaskUpsert::comments_fetch_ok`]，不靠列表是否为空 —— 后者无法区分二者。
+    pub comments: Vec<crate::common::CommentRef>,
+    /// #472：本轮评论列表是否拉取成功。`false` ⇒ `comments` 无意义，写入阶段保留既有值。
+    pub comments_fetch_ok: bool,
     pub branch: String,
     /// #278：父 issue（JSON 对象串 `{"number","title","url"}`），无父为空串。
     pub parent_issue: String,
@@ -2321,6 +2374,95 @@ pub fn load_all_task_prs(
     for r in rows {
         let (k, v) = r.map_err(|e| format!("读取 PR 关联行失败: {e}"))?;
         out.entry(k).or_default().push(v);
+    }
+    Ok(out)
+}
+
+// ============================================================================
+// #472：issue ↔ 多评论关系表（task_comments）
+// ============================================================================
+
+/// 写入某 issue 的**全部**评论（全量替换语义）。
+///
+/// ⚠️ **全量替换**是本 API 的核心契约：调用方在一次同步里拿到的是该 issue 的
+/// **完整**评论列表（GitHub comments API 一次返回全部），语义上「先删旧的、
+/// 再写新的」。若某条评论被删除（GitHub 上删除评论），本次传入的列表里就没有它
+/// ⇒ 该行被清掉 ⇒ 读端不再显示失效链接。
+///
+/// 写入策略用 `INSERT ... ON CONFLICT DO UPDATE`：同一评论在一次同步里可能被
+/// 命中多次（去重后仍可能撞同一唯一键）⇒ 冲突时更新而不是报错。
+///
+/// ⚠️ 调用方**必须**在「评论拉取失败」时**跳过本函数**（保留既有关联）——
+/// 与 PR 关联同款取舍：一次网络抖动不该把评论链接全清掉。
+pub fn write_task_comments(
+    conn: &Connection,
+    account_id: i64,
+    issue_key: &str,
+    comments: &[crate::common::CommentRef],
+    now: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM task_comments WHERE account_id = ?1 AND issue_key = ?2",
+        rusqlite::params![account_id, issue_key],
+    )
+    .map_err(|e| format!("清理任务评论关联失败: {e}"))?;
+    for c in comments {
+        conn.execute(
+            "INSERT INTO task_comments
+               (account_id, issue_key, comment_id, comment_url, author, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(account_id, issue_key, comment_url)
+             DO UPDATE SET comment_id = excluded.comment_id,
+                           author = excluded.author,
+                           created_at = excluded.created_at,
+                           updated_at = excluded.updated_at",
+            rusqlite::params![
+                account_id,
+                issue_key,
+                c.id,
+                c.url,
+                c.author,
+                c.created_at,
+                now
+            ],
+        )
+        .map_err(|e| format!("写入任务评论关联失败: {e}"))?;
+    }
+    Ok(())
+}
+
+/// 读取某 issue 的**全部**评论，**倒序**（最新在前）。
+///
+/// 排序口径：`created_at DESC, comment_id DESC`。
+/// - 主序 `created_at DESC` ⇒ **最新的评论排在最前**（GitHub API 按升序返回，
+///   这里正好反过来 = 用户要的「倒序」）；
+/// - 次序 `comment_id DESC` ⇒ `created_at` 相同（同秒内多条评论 / 时间未知）
+///   时仍有**确定**的次序，不依赖 SQLite 的行序（避免同刻评论顺序抖动）。
+pub fn load_task_comments(
+    conn: &Connection,
+    account_id: i64,
+    issue_key: &str,
+) -> Result<Vec<crate::common::CommentRef>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT comment_id, comment_url, author, created_at FROM task_comments
+             WHERE account_id = ?1 AND issue_key = ?2
+             ORDER BY created_at DESC, comment_id DESC",
+        )
+        .map_err(|e| format!("读取任务评论关联失败: {e}"))?;
+    let rows = stmt
+        .query_map(rusqlite::params![account_id, issue_key], |r| {
+            Ok(crate::common::CommentRef {
+                id: r.get(0)?,
+                url: r.get(1)?,
+                author: r.get(2)?,
+                created_at: r.get(3)?,
+            })
+        })
+        .map_err(|e| format!("遍历任务评论关联失败: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("读取任务评论关联行失败: {e}"))?);
     }
     Ok(out)
 }
@@ -3208,6 +3350,198 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 0, "删账号后不得残留 PR 关联行");
+    }
+
+    // ============================================================================
+    // #472：issue ↔ 多评论关系表（task_comments）
+    // ============================================================================
+
+    fn cmt(id: i64, url: &str, author: &str, created_at: i64) -> crate::common::CommentRef {
+        crate::common::CommentRef {
+            id,
+            url: url.to_string(),
+            author: author.to_string(),
+            created_at,
+        }
+    }
+
+    /// #472：一个 issue 的**多条**评论全部落库。
+    ///
+    /// 改造前评论只有 `tasks.latest_comment_url` **一个**单值列 ⇒ 只有最新一条
+    /// 的链接能留下来，其余全丢。
+    #[test]
+    fn task_comments_stores_all_comments_for_one_issue() {
+        let conn = open_db(std::path::Path::new(":memory:")).expect("open_db");
+        write_task_comments(
+            &conn,
+            1,
+            "o/r#10",
+            &[
+                cmt(1, "u1", "alice", 100),
+                cmt(2, "u2", "bob", 200),
+                cmt(3, "u3", "carol", 300),
+            ],
+            1000,
+        )
+        .unwrap();
+        let got = load_task_comments(&conn, 1, "o/r#10").unwrap();
+        assert_eq!(got.len(), 3, "三条评论必须全部落库，而不是只留最新一条");
+        let mut urls: Vec<&str> = got.iter().map(|c| c.url.as_str()).collect();
+        urls.sort();
+        assert_eq!(urls, vec!["u1", "u2", "u3"], "三条链接都必须在");
+    }
+
+    /// #472：读回时**倒序**（最新在前）—— 本功能的核心语义。
+    #[test]
+    fn task_comments_are_returned_in_reverse_order() {
+        let conn = open_db(std::path::Path::new(":memory:")).expect("open_db");
+        // 写入顺序是「由旧到新」（GitHub API 的返回顺序）。
+        write_task_comments(
+            &conn,
+            1,
+            "o/r#10",
+            &[
+                cmt(1, "u1", "alice", 100),
+                cmt(2, "u2", "bob", 200),
+                cmt(3, "u3", "carol", 300),
+            ],
+            1000,
+        )
+        .unwrap();
+        let got = load_task_comments(&conn, 1, "o/r#10").unwrap();
+        assert_eq!(
+            got.iter().map(|c| c.url.as_str()).collect::<Vec<_>>(),
+            vec!["u3", "u2", "u1"],
+            "必须倒序返回：最新的（created_at 最大的）在最前"
+        );
+        assert_eq!(got[0].author, "carol", "首项应是最新那条评论的作者");
+    }
+
+    /// #472：`created_at` 相同（同秒内多条评论）时**次序仍确定**，
+    /// 不依赖 SQLite 的行序（避免同刻评论顺序抖动）。
+    #[test]
+    fn task_comments_order_is_deterministic_for_same_timestamp() {
+        let conn = open_db(std::path::Path::new(":memory:")).expect("open_db");
+        write_task_comments(
+            &conn,
+            1,
+            "o/r#10",
+            &[
+                cmt(1, "u1", "alice", 100),
+                cmt(2, "u2", "bob", 100),
+                cmt(3, "u3", "carol", 100),
+            ],
+            1000,
+        )
+        .unwrap();
+        let got = load_task_comments(&conn, 1, "o/r#10").unwrap();
+        assert_eq!(
+            got.iter().map(|c| c.url.as_str()).collect::<Vec<_>>(),
+            vec!["u3", "u2", "u1"],
+            "同刻评论按 comment_id 倒序 ⇒ 次序确定"
+        );
+    }
+
+    /// #472：全量替换语义 —— 评论被删除后旧行必须消失。
+    #[test]
+    fn task_comments_replaces_previous_rows() {
+        let conn = open_db(std::path::Path::new(":memory:")).expect("open_db");
+        write_task_comments(&conn, 1, "o/r#10", &[cmt(1, "u1", "alice", 100)], 1000).unwrap();
+        // 第二轮：评论列表变了 ⇒ 旧的行被清掉、只留新的。
+        write_task_comments(&conn, 1, "o/r#10", &[cmt(2, "u2", "bob", 200)], 2000).unwrap();
+        let got = load_task_comments(&conn, 1, "o/r#10").unwrap();
+        assert_eq!(got.len(), 1, "全量替换：旧评论行必须被清掉");
+        assert_eq!(got[0].url, "u2");
+    }
+
+    /// #472：多账号下同一 `issue_key`（`repo#number` 不含 owner）**不得串号**。
+    #[test]
+    fn task_comments_isolated_by_account() {
+        let conn = open_db(std::path::Path::new(":memory:")).expect("open_db");
+        write_task_comments(&conn, 1, "o/r#10", &[cmt(1, "u1", "alice", 100)], 1000).unwrap();
+        write_task_comments(&conn, 2, "o/r#10", &[cmt(9, "u9", "zoe", 100)], 1000).unwrap();
+        let a = load_task_comments(&conn, 1, "o/r#10").unwrap();
+        let b = load_task_comments(&conn, 2, "o/r#10").unwrap();
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].url, "u1", "账号 1 只应看到自己的评论");
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].url, "u9", "账号 2 只应看到自己的评论");
+    }
+
+    /// #472：老库（没有 `task_comments` 表）首次打开应**自动补齐**该表 + 索引。
+    ///
+    /// 这是「不 bump `SCHEMA_VERSION`、不写迁移」方案成立的前提 ——
+    /// 若 `CREATE TABLE IF NOT EXISTS` 没被 `execute_batch(SCHEMA)` 执行到，
+    /// 老库上的读路径会直接 `no such table: task_comments`。
+    #[test]
+    fn legacy_db_gets_task_comments_table_automatically() {
+        let path = tmp_db_guarded("task-comments-legacy");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(SCHEMA).unwrap();
+            conn.execute_batch(
+                "DROP TABLE task_comments;
+                 DROP INDEX IF EXISTS idx_task_comments_issue;",
+            )
+            .unwrap();
+            let t: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_comments'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(t, 0, "前置条件：task_comments 表应已被删掉");
+        }
+        {
+            let conn = open_db(&path).expect("open_db 应成功");
+            let t: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_comments'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(t, 1, "老库首次打开必须自动建出 task_comments 表");
+            let i: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_task_comments_issue'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                i, 1,
+                "老库首次打开必须自动建出 idx_task_comments_issue 索引"
+            );
+            // 补齐后读路径可用。
+            write_task_comments(&conn, 1, "o/r#1", &[cmt(1, "u", "alice", 100)], 1).unwrap();
+            assert_eq!(load_task_comments(&conn, 1, "o/r#1").unwrap().len(), 1);
+        }
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #472：删账号必须级联清理 `task_comments`（否则残留行会被详情面板读到）。
+    #[test]
+    fn delete_account_cascades_task_comments() {
+        let conn = open_db(std::path::Path::new(":memory:")).expect("open_db");
+        conn.execute(
+            "INSERT INTO accounts (id, label, login, org, pat_token, is_default, created_at)
+             VALUES (7, 'l', 'l', 'org', 't', 1, 1)",
+            [],
+        )
+        .unwrap();
+        write_task_comments(&conn, 7, "o/r#10", &[cmt(1, "u", "alice", 100)], 1).unwrap();
+        assert_eq!(load_task_comments(&conn, 7, "o/r#10").unwrap().len(), 1);
+        delete_account(&conn, 7).expect("删除账号");
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM task_comments WHERE account_id = 7",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0, "删账号后不得残留评论关联行");
     }
 
     /// #427：`open_db` 必须在**新库**里建出 sessions 表 + 两个索引。

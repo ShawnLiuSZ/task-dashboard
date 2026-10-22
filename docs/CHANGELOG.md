@@ -29,6 +29,19 @@
   - **验证**：`cargo test` **227 + 27 passed**（新增 11 条）· `cargo fmt --check` / `clippy --all-targets -D warnings` · `mcp_server` **66 passed**（新增 6 条）· `scripts` **129 passed** · `vitest` **364 passed**（新增 1 条）· `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check`（418 key）/ `build` / 四个 `check-*.py` 全绿。
   - 详见 [`issue-467-multi-pr.md`](./issue-467-multi-pr.md)
 
+- **v0.7.7（未发布）— task 评论链接支持一对多，详情面板倒序列出全部评论（#472）**
+
+  - **评论链接不再只留一条**：此前 `tasks.latest_comment_url` 是**单值**列，只存最新一条评论的链接；而 `github.rs::fetch_comments` **明明拉了全部评论**（`per_page=100`）却只用 `.next_back()` 取最后一条 ⇒ 其余评论的链接**全部丢弃**，详情面板只有「最新评论」一个入口。现改为**一对多**：新增独立关系表 `task_comments` 承载 issue ↔ 多评论关系，详情面板把**全部**评论链接**逐条列出**。
+  - **倒序（最新在前）**：GitHub comments API 按 `created_at` **升序**返回 ⇒ 落库存 `created_at`（Unix 秒），读端 `ORDER BY created_at DESC, comment_id DESC` ⇒ 最新在前。次序用 `comment_id DESC` 兜底 ⇒ 同秒内多条评论（或时间未知）时次序仍**确定**，不依赖 SQLite 行序。**前端不再二次排序** —— 前端重排会掩盖后端排序写反的问题。
+  - **独立关系表，`tasks` 表零改动**（沿用 #467 定案）：避开「`tasks` 新列必须写在 `migrate_tasks_v2_rebuild` 之后」的顺序硬约束，也避开 `mcp.rs` / `server.py` / `commands.rs` 三处位置索引绑定（漏改一处 ⇒ `Row::get(N)` 越界 ⇒ 前端空看板，#285 的真实事故）。`CREATE TABLE IF NOT EXISTS` 进 `SCHEMA` ⇒ 老库自动补齐，**不 bump `SCHEMA_VERSION`、不写迁移**；删账号**级联清理**关联行。
+  - **读端按需取，不随看板列表返回**：评论可达 100 条/issue，而看板一次渲染几百张卡 ⇒ 若把评论列表挂进 `Task` 结构随 `list_tasks` 一起返回，IPC 载荷与前端内存都会被撑爆（300 卡 × 100 条 = 3 万个对象）。故新增按需命令 `list_task_comments(issue_key, account_id)`，详情面板打开时再取（与 `list_active_sessions` 同款「按需子集单独取」）。
+  - **「拉取失败保留既有值」**：评论回源失败时**保留既有关联行**（不清空），与 PR 关联同款取舍 —— 一次网络抖动不该把详情面板里的评论链接全清掉。靠 `TaskUpsert::comments_fetch_ok` 区分「拉取成功但确实没有评论」与「拉取失败」（两者都表现为空列表，无法靠列表本身区分）。
+  - **MCP 工具契约不变**（`list_my_tasks` / `get_task_status` 仍只暴露 `latest_comment_url` 单值）⇒ 批量返回体不被撑爆，两套 MCP 实现因此天然一致；`tasks.latest_comment_url` 保留 ⇒ 卡片「新评论」跳转与 MCP 契约零变化。
+  - **回归防线**：Python MCP 是**独立进程**、不走 Rust 的 `open_db` ⇒ 其 `ensure_schema` 必须**自建** `task_comments`，漏建 ⇒ 读到它的路径报 `no such table` ⇒ 整个工具报错，而 App 自身正常、两侧单测都测不到（与 #169/#262/#278 同源盲区）⇒ `scripts/check-mcp-columns.py` 新增第 8 条检查（两侧都建表 + 列名逐列一致）。
+  - **反向验证**：倒序写反 / 去掉全量替换的 `DELETE` / Python 侧删掉建表块 / 前端反序渲染 ⇒ 分别有 **3 / 1 / 3 / 1** 条断言立刻失败 ⇒ 断言真在守行为、不是恒真装饰。
+  - **验证**：`cargo test` **238 + 27 passed**（新增 11 条）· `mcp_server` **68 passed**（新增 2 条）· `scripts` **132 passed**（新增 3 条）· `vitest` **364 + 8 passed**（新增 8 条）· `cargo fmt --check` / `clippy --all-targets -D warnings` / `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check`（420 key）/ `build` / 四个 `check-*.py` 全绿。
+  - 详见 [`issue-472-task-comment-links.md`](./issue-472-task-comment-links.md)
+
 - **v0.7.6（2026-10-22）— 同一个 issue 支持关联多个 PR（#467）**
 
   - **同一 issue 的多个 PR 全部可见**：改造前同步层用 `pr_map.entry(rk).or_insert(...)` 构建 PR↔issue 映射 ⇒ 同一个 issue 被多个 PR 引用时**只有第一个入表，其余静默丢弃**（无日志、无报错）；数据层 `tasks.pr_number` / `pr_url` / `pr_state` 也是单值列。现新增独立关系表 `task_prs` 承载完整的一对多关系，卡片 PR 行与详情面板都会**逐个渲染全部关联 PR**。

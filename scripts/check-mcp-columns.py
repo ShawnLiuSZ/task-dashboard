@@ -321,6 +321,36 @@ def main() -> int:
                 f"仅 Python server.py: {sorted(only_py) or '无'}）"
             )
 
+    # (#472) `task_comments` 关系表：与 `task_prs` **同款**的两侧一致性检查。
+    #
+    # 同源于 #467 的教训：Python MCP 是独立进程、不走 Rust 的 `open_db`，
+    # 它的 `ensure_schema` 必须自建这张表；漏建 ⇒ 任何读到它的路径报
+    # `no such table: task_comments` ⇒ 整个工具报错，而 App 自身完全正常
+    # （Rust 侧由 SCHEMA 建表）、两侧单测都测不到。
+    #
+    # 附带校验列名一致：Rust 侧写 `comment_id` / `comment_url` / `author` /
+    # `created_at`，Python 侧若拼错成 `id` / `url` ⇒ 建表成功但查列时报
+    # `no such column`，同样是「表在、读不通」的隐蔽失败。
+    rust_cmt_cols = table_columns_of(db_src, "task_comments")
+    py_cmt_cols = table_columns_of(server_src, "task_comments")
+    if rust_cmt_cols is None:
+        problems.append("db.rs::SCHEMA 里找不到 task_comments 表定义（#472 的关系表）")
+    if py_cmt_cols is None:
+        problems.append(
+            "server.py::ensure_schema 里找不到 task_comments 的建表语句"
+            "（Python MCP 是独立进程、不走 Rust 的 open_db，必须自建这张表；"
+            "漏建 ⇒ 读到它的路径报 no such table: task_comments）"
+        )
+    if rust_cmt_cols is not None and py_cmt_cols is not None:
+        only_rust = rust_cmt_cols - py_cmt_cols
+        only_py = py_cmt_cols - rust_cmt_cols
+        if only_rust or only_py:
+            problems.append(
+                "task_comments 表的列名两侧不一致"
+                f"（仅 Rust db.rs: {sorted(only_rust) or '无'}；"
+                f"仅 Python server.py: {sorted(only_py) or '无'}）"
+            )
+
     # 兜底：旧列名写法（tasks.key 已于 #155 改名 issue_key）。
     # 跳过注释行——说明性注释里会故意写出 `WHERE key=?` 这个反例。
     legacy = [
