@@ -2,7 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **v0.7.6 (unreleased) — One issue can be linked to multiple PRs (#467)**
+- **v0.7.6 (2026-10-22) — One issue can be linked to multiple PRs (#467)**
 
   - **All PRs of one issue are now visible**: the sync layer used to build the PR↔issue map with `pr_map.entry(rk).or_insert(...)` ⇒ when the same issue was referenced by several PRs, **only the first one was stored and the rest were silently dropped** (no log, no error); the data layer's `tasks.pr_number` / `pr_url` / `pr_state` were single-value columns too. A new dedicated relation table `task_prs` now carries the full one-to-many relationship, and both the card's PR row and the detail panel render **every linked PR**.
   - **Approach: a dedicated relation table, with `tasks` left untouched** (deliberately avoiding the two traps this repo keeps hitting): ① a new `tasks` column must be added **after** `migrate_tasks_v2_rebuild` (a physical rebuild with a hard-coded column whitelist), or it gets dropped; ② the **positional index** bindings in `mcp.rs::row_to_value` / `server.py` / `commands.rs::task_mapper` must all be updated in lockstep — miss one and `Row::get(N)` goes out of range ⇒ the whole `list_tasks` errors out ⇒ the board renders empty (#285's real incident). Leaving `tasks` untouched means neither trap is entered.
@@ -16,7 +16,7 @@
   - **Reverse verification caught 2/2 mutations**: removing the `task_prs` creation from the Python side, and renaming the Python columns to `number/url/state` — each failed exactly one check.
   - See [`issue-467-multi-pr.md`](./issue-467-multi-pr.md)
 
-- **v0.7.6 (unreleased) — Notes no longer split across columns, board gets a fixed height with scrolling, plus a full-text viewer (#465)**
+- **v0.7.6 (2026-10-22) — Notes no longer split across columns, board gets a fixed height with scrolling, plus a full-text viewer (#465)**
 
   - **A single note is no longer cut into two columns**: the #462 masonry layout put the height limit and the scrolling on the **same element** as the multi-column container, and a multi-column flow's **column height equals the container height** ⇒ when a card is taller than the column the browser has no choice but to break it across columns (user screenshot: a 30+ line record split into left and right halves, reading like two different records). The **scrolling host and the column container are now separate**: a new `.notes-scroll` carries the height limit and the vertical scrollbar, while `.notes-list` (the multi-column container) sizes itself **to its content** ⇒ column heights follow the content, and `break-inside: avoid` **always applies**.
   - **The board has a fixed maximum height and a vertical scrollbar**: once `overflow-y: auto` moved to an ancestor, the multi-column flow's "spreads horizontally only, never scrolls vertically" behaviour disappeared with it (measured at a 1440px viewport: before the fix, 3338px of horizontal overflow, `scrollable=false`, content spread across 10 columns; after the fix, -8px horizontal overflow, vertical scrolling enabled, 3 measured columns).
