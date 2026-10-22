@@ -160,6 +160,12 @@ fn task_mapper(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
 /// 则用主 PR 三元组合成一条 —— `prs` 数组的语义因此统一为「该 issue 关联的
 /// **全部** PR（含主 PR）」，前端不必再区分「单值列」与「数组」。
 /// 存量库在首次同步前 `task_prs` 是空的，这一步保证 PR 徽章不消失。
+///
+/// **顺序语义**（#467 后续修复）：`prs[0]` **恒为主 PR** —— `task_prs` 的读取
+/// 顺序是 `pr_number ASC`，而主 PR 的口径是「首命中」⇒ 二者可能不同。
+/// 故在组装完成后统一把主 PR 提到首位（`common::sort_prs_primary_first`），
+/// 与 Rust MCP 侧（`mcp.rs::attach_prs`）、Python 侧（`server.py::_attach_prs`）
+/// **同一口径**。
 fn attach_task_prs(
     conn: &Connection,
     tasks: &mut [Task],
@@ -186,6 +192,8 @@ fn attach_task_prs(
                 }
             }
         };
+        // 主 PR 提到首位（回退分支里本来就是唯一一条 ⇒ 空操作）。
+        crate::common::sort_prs_primary_first(&mut t.prs, t.pr_number, &t.pr_url);
     }
     Ok(())
 }
@@ -2928,5 +2936,153 @@ mod tests {
         // 全部不存在：total == 0（common 层不报错，由 commands 层 require_affected 兜底）。
         let total = crate::common::clear_task_sessions(&conn, &["nope#1".to_string()]).unwrap();
         assert_eq!(total, 0);
+    }
+
+    // ==========================================================================
+    // #467 后续修复：GUI 读路径的 `attach_task_prs`（此前**完全无覆盖**）
+    // ==========================================================================
+
+    /// 造一条任务行（最小列集，其余走 schema 默认值）。
+    fn insert_task_row(
+        conn: &Connection,
+        issue_key: &str,
+        number: i64,
+        account_id: i64,
+        pr_number: i64,
+        pr_url: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
+                                ownership, status, synced_at, account_id, pr_number, pr_url, pr_state)
+             VALUES (?1,'o','r',?2,'t','u','open','assigned','todo',1,?3,?4,?5,'merged')",
+            rusqlite::params![issue_key, number, account_id, pr_number, pr_url],
+        )
+        .unwrap();
+    }
+
+    fn pr(number: i64, url: &str) -> crate::common::PrRef {
+        crate::common::PrRef {
+            number,
+            url: url.to_string(),
+            state: "merged".to_string(),
+        }
+    }
+
+    /// **核心修复**：GUI 读路径的 `prs[0]` 必须是主 PR。
+    ///
+    /// 缺陷形态：`task_prs` 的读取顺序是 `pr_number ASC`，而主 PR 的口径是
+    /// 「本轮同步中第一个命中的 PR」⇒ 二者可能不同 ⇒ `prs[0]` 未必是主 PR，
+    /// UI / agent 若取 `prs[0]` 就会取错。
+    ///
+    /// 本用例**直接跑生产读路径**（`rows_to_tasks` → `task_mapper` →
+    /// `attach_task_prs`），不是单独调 `attach_task_prs` ⇒ 调用点漏接线也测得到。
+    #[test]
+    fn attach_task_prs_promotes_primary_pr_to_head() {
+        let conn = crate::db::open_db(std::path::Path::new(":memory:")).unwrap();
+        // 主 PR = 101（刻意**不是**编号最小的那条）。
+        insert_task_row(&conn, "o/r#10", 10, 1, 101, "u101");
+        crate::db::write_task_prs(
+            &conn,
+            1,
+            "o/r#10",
+            &[pr(100, "u100"), pr(101, "u101")],
+            1000,
+        )
+        .unwrap();
+
+        let tasks = super::rows_to_tasks(&conn, None, Some(0)).unwrap();
+        assert_eq!(tasks.len(), 1, "应读出 1 条任务");
+        let t = &tasks[0];
+        assert_eq!(t.pr_number, 101, "主 PR 单值列口径不变");
+        assert_eq!(t.prs.len(), 2, "两个关联 PR 都必须在");
+        assert_eq!(
+            t.prs[0].number, 101,
+            "prs[0] 必须是主 PR（修复前此处是 100 ⇒ 断言失败）"
+        );
+        assert_eq!(t.prs[0].url, "u101", "主 PR 必须是 (number, url) 组合匹配");
+        assert_eq!(t.prs[1].number, 100, "其余元素的相对顺序保持 pr_number ASC");
+    }
+
+    /// **存量回退**：`task_prs` 无行时回退到主 PR（否则徽章消失）。
+    ///
+    /// 存量库在首次同步前 `task_prs` 是空的 ⇒ 必须由 `tasks.pr_*` 单值列兜底。
+    #[test]
+    fn attach_task_prs_falls_back_to_primary_for_legacy_rows() {
+        let conn = crate::db::open_db(std::path::Path::new(":memory:")).unwrap();
+        insert_task_row(&conn, "o/r#10", 10, 1, 42, "u42");
+        // 刻意不写 task_prs ⇒ 模拟存量行。
+
+        let tasks = super::rows_to_tasks(&conn, None, Some(0)).unwrap();
+        assert_eq!(tasks.len(), 1);
+        let t = &tasks[0];
+        assert_eq!(
+            t.prs.len(),
+            1,
+            "存量行必须回退成主 PR 一条（否则 PR 徽章消失）"
+        );
+        assert_eq!(t.prs[0].number, 42);
+        assert_eq!(t.prs[0].url, "u42");
+    }
+
+    /// **多账号不串号**：同一 `issue_key`（`repo#number`，不含 owner）在两个账号下
+    /// 各自有关联 PR ⇒ 不得交叉挂载。
+    #[test]
+    fn attach_task_prs_isolates_accounts() {
+        let conn = crate::db::open_db(std::path::Path::new(":memory:")).unwrap();
+        insert_task_row(&conn, "o/r#10", 10, 1, 101, "u101");
+        insert_task_row(&conn, "o/r#10", 10, 2, 201, "u201");
+        crate::db::write_task_prs(&conn, 1, "o/r#10", &[pr(101, "u101")], 1000).unwrap();
+        crate::db::write_task_prs(&conn, 2, "o/r#10", &[pr(201, "u201")], 1000).unwrap();
+
+        let tasks = super::rows_to_tasks(&conn, None, Some(0)).unwrap();
+        assert_eq!(tasks.len(), 2, "聚合视图应读出两个账号的各一条");
+        for t in &tasks {
+            let expected = if t.account_id == 1 { 101 } else { 201 };
+            assert_eq!(
+                t.prs.len(),
+                1,
+                "账号 {} 只应看到自己的 PR 关联",
+                t.account_id
+            );
+            assert_eq!(
+                t.prs[0].number, expected,
+                "账号 {} 的 PR 关联不得串号",
+                t.account_id
+            );
+        }
+    }
+
+    /// **不变量**：凡是 `task_prs` 里有行的 issue，其主 PR 必须在关联列表里。
+    ///
+    /// ⚠️ 这是 `sync.rs::test_headless_multi_pr`（`#[ignore]`，需真实 PAT +
+    /// 生产库快照）断言 ③ 的**本地等价版** —— 那条测试因依赖网络而 CI 跑不到，
+    /// 于是这条最关键的不变量在 CI 里**无人守**。本用例用构造数据覆盖同一件事：
+    /// 写入端（`write_task_prs`）传进来的列表必然含主 PR（同步层 `pr_refs`
+    /// 的首元素就是主 PR）⇒ 读回来时主 PR 必在其中。
+    #[test]
+    fn primary_pr_is_always_present_in_the_association_list() {
+        let conn = crate::db::open_db(std::path::Path::new(":memory:")).unwrap();
+        insert_task_row(&conn, "o/r#10", 10, 1, 101, "u101");
+        // 模拟同步层写入的 `pr_refs`：首元素即主 PR。
+        crate::db::write_task_prs(
+            &conn,
+            1,
+            "o/r#10",
+            &[pr(101, "u101"), pr(102, "u102"), pr(103, "u103")],
+            1000,
+        )
+        .unwrap();
+
+        let tasks = super::rows_to_tasks(&conn, None, Some(0)).unwrap();
+        let t = &tasks[0];
+        assert!(
+            t.prs
+                .iter()
+                .any(|p| p.number == t.pr_number && p.url == t.pr_url),
+            "主 PR（{} / {}）必须出现在关联列表 {:?} 中",
+            t.pr_number,
+            t.pr_url,
+            t.prs
+        );
     }
 }

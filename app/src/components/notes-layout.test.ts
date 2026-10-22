@@ -520,4 +520,27 @@ describe('记事本编辑文本框自适应高度（#322）', () => {
     expect(editorModal).toContain('ref={textareaRef}');
     expect(editorModal).toContain('className="note-textarea note-editor-textarea"');
   });
+
+  // 代码审查（2026-10-22）发现的低危项：#470 把 hook 抽到公共模块时，
+  // 文档注释被抄坏 —— 「用 `useLayoutEffect` 而非 `useLayoutEffect`」
+  // （两侧同一个词，等于没说）、「被动 `useLayoutEffect`」（应为 useEffect），
+  // 且有一处残留损坏字节（U+FFFD）。
+  //
+  // 这类注释错误会**误导后来者**：注释本意是提醒「`useLayoutEffect` 不含子串
+  // `useEffect`，静态断言要精确匹配」，写反了反而让人以为两者等价。
+  it('useAutoSize 的注释正确区分 useLayoutEffect 与 useEffect（防笔误回归）', () => {
+    const doc = autoSizeRaw.match(/\/\*\*[\s\S]*?\*\//);
+    expect(doc, 'utils/useAutoSize.ts 开头应有块注释').toBeTruthy();
+    // 必须写成「而非 `useEffect`」——这正是本注释要传达的对照。
+    expect(doc![0]).toContain('而非 `useEffect`');
+    // 不得两侧写成同一个词。
+    expect(doc![0], '注释不得把 useLayoutEffect 与 useEffect 写成同一个词').not.toContain(
+      '而非 `useLayoutEffect`',
+    );
+    // 「被动 useEffect」这句不得误写成「被动 useLayoutEffect」。
+    expect(doc![0]).toContain('被动 `useEffect`');
+    expect(doc![0]).not.toContain('被动 `useLayoutEffect`');
+    // 不得残留损坏字节（U+FFFD 替换字符）。
+    expect(doc![0], '注释不得含损坏字符 U+FFFD').not.toContain('\uFFFD');
+  });
 });

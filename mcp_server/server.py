@@ -348,6 +348,38 @@ def rows_to_dicts(rows):
     return [dict(r) for r in rows]
 
 
+def _sort_prs_primary_first(prs, main_number, main_url):
+    """#467 后续修复：把「主 PR」排到 `prs` 数组**首位**。
+
+    与 Rust 侧 `common.rs::sort_prs_primary_first` **同一口径**（AGENTS.md §8.6
+    要求两实现一致）。
+
+    **为什么需要**：`tasks.pr_number` / `pr_url`（主 PR）的取值口径是
+    「本轮同步中第一个命中的 PR」（见 Rust `sync.rs::build_pr_map` 的 `list[0]`），
+    而 `task_prs` 的读取顺序是 `pr_number ASC` ⇒ 两者顺序**可能不同**
+    ⇒ `prs[0]` 未必是主 PR。agent 若把 `prs[0]` 当主 PR 用就会取错。
+
+    **修法**：在**读取端**（组装 `prs` 数组时）把主 PR 提到首位 —— 不改表结构、
+    不改 SQL 顺序语义、零额外查询。
+
+    ⚠️ 匹配键是 **(number, url) 组合**而非单独的 number：跨仓库 PR 可能撞号
+    （`parse_issue_refs` 把 `owner/repo#N` 归一化为 `repo#N`，不带 owner），
+    `task_prs` 的唯一键也是 `(account_id, issue_key, pr_number, pr_url)`
+    ⇒ 同号不同 URL 的两条是合法共存的两条关联，只有组合键能唯一确定「主 PR」。
+
+    **找不到主 PR 时保持原顺序不变**（存量行 / `task_prs` 为空 ⇒ 走回退分支，
+    此时数组本来就只有主 PR 一条，排序是空操作）。
+    """
+    if not main_number or not main_url:
+        return
+    for i, p in enumerate(prs):
+        if p.get("number") == main_number and p.get("url") == main_url:
+            if i != 0:
+                # `pop` + `insert`（而非 `swap`）⇒ 其余元素的相对顺序保持不变。
+                prs.insert(0, prs.pop(i))
+            return
+
+
 def _attach_prs(rows):
     """#467：给每个任务行补上该 issue 关联的**全部** PR（`task_prs` 关系表）。
 
@@ -359,6 +391,9 @@ def _attach_prs(rows):
     多账号下会重复 ⇒ 只按 issue_key 匹配会把 A 账号的 PR 关联挂到 B 账号的同号 issue 上。
 
     一次性取回整表关联行后在内存里匹配 ⇒ 无 N+1 查询。
+
+    **顺序语义**（#467 后续修复）：`prs[0]` **恒为主 PR**（见
+    `_sort_prs_primary_first`）—— 与 Rust GUI 侧、Python 侧同一口径。
     """
     if not rows:
         return rows
@@ -377,7 +412,9 @@ def _attach_prs(rows):
         )
     for r in rows:
         key = (r.get("account_id"), r.get("issue_key"))
-        lst = grouped.get(key, [])
+        # ⚠️ 必须**复制**一份：`grouped` 里的 list 是共享对象，而下面要就地排序
+        # （`_sort_prs_primary_first`）⇒ 直接改会污染其它行。
+        lst = list(grouped.get(key, []))
         if not lst:
             # 回退到主 PR（存量行 / 首次同步前 task_prs 为空）⇒ prs 数组语义统一为
             # 「该 issue 关联的全部 PR（含主 PR）」，与 Rust 侧口径一致。
@@ -387,6 +424,8 @@ def _attach_prs(rows):
                 lst = [
                     {"number": num, "url": url, "state": r.get("pr_state") or ""}
                 ]
+        # 主 PR 提到首位（回退分支里本来就是唯一一条 ⇒ 空操作）。
+        _sort_prs_primary_first(lst, r.get("pr_number") or 0, r.get("pr_url") or "")
         r["prs"] = lst
     return rows
 
