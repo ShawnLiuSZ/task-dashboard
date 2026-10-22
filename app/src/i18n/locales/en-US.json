@@ -326,6 +326,7 @@
   "notes.markAs": "Mark as “{label}”",
   "notes.toggleTag": "Click to cycle label",
   "notes.editTitle": "Edit",
+  "notes.editModalTitle": "Edit Note",
   "notes.deleteTitle": "Delete",
   "notes.viewTitle": "View full content",
   "notes.viewModalTitle": "Note details",

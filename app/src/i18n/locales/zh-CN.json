@@ -326,6 +326,7 @@
   "notes.markAs": "标记为「{label}」",
   "notes.toggleTag": "点击切换标签",
   "notes.editTitle": "编辑",
+  "notes.editModalTitle": "编辑备忘录",
   "notes.deleteTitle": "删除",
   "notes.viewTitle": "查看完整内容",
   "notes.viewModalTitle": "备忘录详情",

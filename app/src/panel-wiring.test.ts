@@ -10,6 +10,8 @@ import boardRaw from './components/Board.tsx?raw';
 import confirmRaw from './components/ConfirmDialog.tsx?raw';
 import detailRaw from './components/DetailPanel.tsx?raw';
 import notesRaw from './components/NotesPanel.tsx?raw';
+// #470：编辑弹窗（Esc 走 window 级分层）。
+import editorModalRaw from './components/NoteEditorModal.tsx?raw';
 import sessionsRaw from './components/SessionsPanel.tsx?raw';
 import settingsRaw from './components/SettingsPanel.tsx?raw';
 import logsRaw from './components/SyncLogsPanel.tsx?raw';
@@ -78,9 +80,20 @@ describe('Esc 分层接线（#329）', () => {
     });
   }
 
-  it('NotesPanel 的 Esc 是「取消行内编辑」的局部语义，不参与分层', () => {
-    expect(notesRaw).toMatch(/note-textarea/);
+  it('NotesPanel 不再有行内编辑的局部 Esc 语义（#470：编辑已搬进弹窗）', () => {
+    // 改造前：NotesPanel 里的行内 textarea 用元素级 onKeyDown 处理 Esc（取消行内
+    // 编辑），刻意**不**参与 Esc 分层 —— 那是「取消编辑」而非「关闭面板」的语义。
+    // #470：编辑搬进 NoteEditorModal ⇒ 面板里不再有 textarea，也没有局部 Esc。
+    expect(notesRaw).not.toMatch(/note-textarea/);
     expect(notesRaw).not.toMatch(/isTop\(\)/);
+    // 面板本身仍不得注册 Esc 层（否则会压住子弹窗的 Esc）。
+    expect(notesRaw).not.toMatch(/useWindowEscLayer\(/);
+  });
+
+  it('编辑弹窗走 window 级 Esc 分层（#470）', () => {
+    // 弹窗是遮罩层拿不到焦点 ⇒ 元素级 onKeyDown 收不到事件，必须用
+    // useWindowEscLayer（#344 的分层机制）。
+    expect(editorModalRaw).toMatch(/useWindowEscLayer\(/);
   });
 });
 
