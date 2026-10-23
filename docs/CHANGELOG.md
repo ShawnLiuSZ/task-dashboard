@@ -29,6 +29,22 @@
   - **验证**：`cargo test` **227 + 27 passed**（新增 11 条）· `cargo fmt --check` / `clippy --all-targets -D warnings` · `mcp_server` **66 passed**（新增 6 条）· `scripts` **129 passed** · `vitest` **364 passed**（新增 1 条）· `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check`（418 key）/ `build` / 四个 `check-*.py` 全绿。
   - 详见 [`issue-467-multi-pr.md`](./issue-467-multi-pr.md)
 
+- **v0.7.7（2026-10-23）— 发布后修复：updater 清单补齐 macOS 条目，macOS 应用内更新恢复可用（#478）**
+
+  - **现象**：本版发布后，macOS 上「应用内更新」报 `None of the fallback platforms ["darwin-aarch64-app", "darwin-aarch64"] were found` —— 线上 `latest.json` 里**一个 macOS 条目都没有**（14 个 key 全是 Linux / Windows），而 macOS 的 updater 产物（`.app.tar.gz` + `.sig`）其实都在 Release 上。
+  - **根因**：`tauri-apps/tauri-action@v1` 在**每个矩阵 job 结束时各生成一次**清单（并发 ⇒ 删/传互相踩）⇒ **先完成平台的条目被后完成者用过期内容覆盖**；本版 macOS 的两个 job 最早完成 ⇒ 条目被抹掉。
+  - **处理**：已补齐 4 个 macOS 条目并替换线上清单（14 → **18** 个 key）⇒ **本版（v0.7.7）的 macOS 用户现在可以正常应用内更新**。发版流水线的根因修复与完整性门禁见 v0.7.8。
+  - 详见 [`issue-478-updater-manifest-macos.md`](./issue-478-updater-manifest-macos.md)
+
+- **v0.7.8（未发布）— 发版流水线：updater 清单不再丢平台条目 + 完整性门禁（#478）**
+
+  - **起因**：macOS 上「应用内更新」直接失败 —— `None of the fallback platforms ["darwin-aarch64-app", "darwin-aarch64"] were found in the response 'platforms' object`；Windows / Linux 正常。根因**不在客户端**：发布出去的 `latest.json` 里**一个 macOS 条目都没有**（v0.7.7 实测 14 个 key 全是 Linux / Windows），而 macOS 的 updater 产物（`.app.tar.gz` + `.sig`）其实都在 Release 上。
+  - **根因**：`tauri-apps/tauri-action@v1` 的 `uploadVersionJSON()` 在**每个矩阵 job 结束时各跑一次**（下载已有清单 → 合并自己平台的条目 → **删旧资产** → 上传新的；GitHub 的 release 资产不能同名覆盖 ⇒ 必须先删）⇒ 6 个 job **并发**时删/传互相踩，后完成者拿**过期**内容覆盖 ⇒ **先完成平台的条目整块丢失**。实测 v0.7.7 的 macOS 两个 job 最早完成（03:53 / 03:55）⇒ 条目被随后完成的 Linux / Windows job 抹掉。
+  - **根因修复**：`release.yml` 的矩阵加 `max-parallel: 1`（串行化）⇒ 每个 job 都能看到前一个 job 的清单 ⇒ 最终清单必然齐全（用**上游自己的**清单逻辑，不重复实现 ⇒ 不与 tauri-action 漂移）。代价：发版从约 9 分钟变成约 45~50 分钟。
+  - **兜底门禁**：新增 `scripts/check-updater-manifest.py`（零第三方依赖）+ workflow 的 `updater-check` job（`needs: build`）⇒ 矩阵跑完后复核**线上**清单，**缺平台条目就发版变红**，而不是静默发一个装不了更新的版本。断言：6 个平台的 primary key + 各 bundle 变体（共 18 个）齐全、每个条目的 `signature` / `url` 非空、清单 `version` 与 tag 对得上。
+  - **验证**：`scripts` **143 passed**（新增 11 条）· **反向验证**：把线上清单删掉 macOS 条目 ⇒ 校验器 exit 1 ✓ · `check-workflow-yaml`（6 文件）全绿。
+  - 详见 [`issue-478-updater-manifest-macos.md`](./issue-478-updater-manifest-macos.md)
+
 - **v0.7.7（2026-10-23）— 备忘录瀑布流：某列首卡上边距多 10px（#475）**
 
   - **现象**：备忘录面板（CSS multi-column 瀑布流）里，**某一列的首张卡片**比其它列的首卡**低 10px**。⚠️ **不是最后一列专属** —— 换一组数据偏移会出现在**中间列**，再换一组又「好了」⇒ 表现为「时有时无」，极难自查。

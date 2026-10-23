@@ -29,6 +29,24 @@ jobs:
   build:
     strategy:
       fail-fast: false
+      # #476 后续：**串行化**（`max-parallel: 1`）。
+      #
+      # 起因：tauri-action v1 在**每个矩阵 job 结束时各生成一次** updater 清单
+      # （`latest.json`），每次都是「下载已有清单 → 合并自己平台的条目 →
+      # **删掉旧资产** → 上传新的」（见 tauri-action `src/upload-version-json.ts`）。
+      # GitHub 的 release 资产**不能同名覆盖** ⇒ 必须先删 ⇒ **6 个 job 并发时互相踩**：
+      # 后完成的 job 往往拿着**过期**的内容去覆盖 ⇒ 先完成平台的条目整块丢失。
+      #
+      # 实测 v0.7.7：macOS 两个 job 最早完成（03:53 / 03:55 上传），条目被随后完成的
+      # Linux / Windows job 覆盖 ⇒ 线上清单只剩 14 个 Linux/Windows key，
+      # **macOS 的 4 个全丢** ⇒ macOS 客户端报「None of the fallback platforms
+      # ["darwin-aarch64-app", "darwin-aarch64"] were found」⇒ 完全无法应用内更新。
+      #
+      # 串行化后每个 job 都能看到前一个 job 的结果 ⇒ 最终清单必然齐全
+      # （用上游自己的清单逻辑，不重复实现 ⇒ 不会与 tauri-action 漂移）。
+      # 代价：发版从约 9 分钟变成约 45~50 分钟（构建本身不变，只是排队）。
+      # 兜底：矩阵跑完后还有 `updater-check` job 复核线上清单，缺条目就发版变红。
+      max-parallel: 1
       matrix:
         include:
           # macOS ARM (Apple Silicon)
@@ -136,3 +154,30 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+  # #476 后续：updater 清单完整性门禁。
+  #
+  # 清单缺当前平台的 key ⇒ 客户端「检查更新」直接失败（macOS 在 v0.7.7 实测踩过：
+  # 清单里一个 darwin 条目都没有）。这里在矩阵全部结束后复核**线上**清单：
+  # 缺平台条目就**让本次发版变红**，而不是静默发一个装不了更新的版本。
+  #
+  # 断言清单里每个平台（darwin / windows / linux × x86_64 / aarch64）的
+  # primary key 与各 bundle 变体都在 —— 与 `scripts/check-updater-manifest.py`
+  # 里的 `PLATFORM_BUNDLES` 一一对应。
+  updater-check:
+    name: Updater Manifest Check
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: 校验 updater 清单的平台完整性
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          python3 scripts/check-updater-manifest.py
+          --tag "${{ github.event.release.tag_name || github.ref_name }}"
