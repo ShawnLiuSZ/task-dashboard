@@ -290,10 +290,16 @@ struct PrEntry {
 /// 评论（0 永远输给正常时间戳）⇒ 与「最新」语义相反。
 /// 按 API 顺序取末位则**与时间戳解析无关**，且与改造前的 `.next_back()` 行为
 /// **逐位相同**（单值列零行为变化）。
+///
+/// ⚠️ **只保留最新的 N 条**（[`crate::common::COMMENTS_KEPT_MAX`] = 20）：
+/// API 升序 ⇒ 取**末 N 条**（更早的不落库）。这既满足「详情面板只列最近 20 条」，
+/// 也让关系表**不会**随评论历史无限增长（旧的评论链接被全量替换掉）。
 fn comments_to_refs(
     list: &[crate::github::RawComment],
 ) -> (Vec<crate::common::CommentRef>, String) {
-    let refs = list
+    // 只保留最新的 N 条（API 升序 ⇒ 末 N 条）。
+    let start = list.len().saturating_sub(crate::common::COMMENTS_KEPT_MAX);
+    let refs = list[start..]
         .iter()
         .map(|c| crate::common::CommentRef {
             id: c.id,
@@ -975,15 +981,19 @@ fn sync_account_inner(
         //
         // `latest_comment_url` 单值列**保持不变**（卡片跳转 + MCP 契约依赖它），
         // 取本轮列表里**最新**的那条（GitHub 按 created_at 升序返回）。
+        // 本次拉取需要的 HTTP 调用数：末页不足「最新 N 条」时要再取上一页
+        // ⇒ 最多 2 次（`per_page=100` > N=20 ⇒ 两页必然够）。
+        let want_calls =
+            crate::github::comments_pages(t.comments, crate::common::COMMENTS_KEPT_MAX).len();
         let (comments_count, latest_comment_url, comments, comments_fetch_ok): (
             i64,
             String,
             Vec<crate::common::CommentRef>,
             bool,
-        ) = if t.comments > existing_comments as u64 && comment_budget > 0 {
+        ) = if t.comments > existing_comments as u64 && comment_budget >= want_calls {
             match client.fetch_comments(&t.repo, t.number, &t.repo_owner, t.comments) {
                 Ok(Some(list)) if !list.is_empty() => {
-                    comment_budget -= 1;
+                    comment_budget -= want_calls;
                     std::thread::sleep(Duration::from_millis(80));
                     let (refs, newest) = comments_to_refs(&list);
                     (t.comments as i64, newest, refs, true)
@@ -992,7 +1002,7 @@ fn sync_account_inner(
                     // 没有评论（`Ok(None)`）或空列表 ⇒ 保留既有值，**不清空**关联。
                     // ⚠️ 触发条件是「评论数较上次增加」，此时拿到空列表属自相矛盾
                     // （GitHub 说有评论、API 却返回空）⇒ 保守起见按「没拉到」处理。
-                    comment_budget -= 1;
+                    comment_budget -= want_calls;
                     (
                         t.comments as i64,
                         existing_comment_url.to_string(),
@@ -2089,6 +2099,41 @@ mod tests {
         );
         assert_eq!(refs[1].author, "bob", "作者要一并带上");
         assert_eq!(refs[2].created_at, 300, "创建时间要一并带上（倒序的依据）");
+    }
+
+    /// #472：**只保留最新的 20 条**（用户明确要求）—— 早于第 20 条的不落库。
+    ///
+    /// 缺陷形态：不截断 ⇒ 关系表随评论历史无限增长、详情面板变成长列表。
+    /// API 升序 ⇒ 取**末 N 条**。
+    #[test]
+    fn comments_to_refs_keeps_only_the_latest_twenty() {
+        let keep = crate::common::COMMENTS_KEPT_MAX;
+        assert_eq!(keep, 20, "保留条数由产品要求固定为 20");
+        // 造 35 条（API 升序：u1 最旧 … u35 最新）。
+        let list: Vec<crate::github::RawComment> = (1..=35)
+            .map(|i| raw_comment(i, &format!("u{i}"), "alice", i))
+            .collect();
+        let (refs, newest) = super::comments_to_refs(&list);
+        assert_eq!(refs.len(), keep, "只保留最新的 20 条");
+        assert_eq!(
+            refs.first().unwrap().url,
+            "u16",
+            "保留的是**末** 20 条（u16…u35），不是最旧 20 条"
+        );
+        assert_eq!(refs.last().unwrap().url, "u35", "末条必须是最新那条");
+        assert_eq!(newest, "u35", "latest_comment_url 取最新那条");
+    }
+
+    /// #472：评论总数**少于**保留上限时 ⇒ 全部保留（不补齐、不截断）。
+    #[test]
+    fn comments_to_refs_keeps_all_when_fewer_than_limit() {
+        let list = vec![
+            raw_comment(1, "u1", "alice", 100),
+            raw_comment(2, "u2", "bob", 200),
+        ];
+        let (refs, newest) = super::comments_to_refs(&list);
+        assert_eq!(refs.len(), 2, "不足上限时全部保留");
+        assert_eq!(newest, "u2");
     }
 
     /// #472：`latest_comment_url` 单值列取 **API 顺序的末位**（= 最新）。

@@ -72,13 +72,25 @@ GitHub comments API 按 `created_at` **升序**返回 ⇒ 落库存 `created_at`
 
 **修法**：把评论总数（`t.comments`，issue 元数据 / GraphQL `totalCount`）传进
 `fetch_comments`，按 `page = ceil(count / per_page)` 取**最后一页**。
-URL 拼装抽成**纯函数** `comments_url(full_repo, number, total)` / `comments_page(total, per_page)`
-—— 原先的 URL 拼装在命令式代码里、HTTP 层硬编码 `api.github.com` 不可 mock ⇒
-**这个 bug 才没法被单测挡住**；抽成纯函数后 `page` 参数可被断言。
+URL 拼装抽成**纯函数** `comments_url(full_repo, number, page)` / `comments_page(total, per_page)`
+/ `comments_pages(total, keep)` —— 原先的 URL 拼装在命令式代码里、HTTP 层硬编码
+`api.github.com` 不可 mock ⇒ **这个 bug 才没法被单测挡住**；抽成纯函数后 `page`
+参数可被断言。
 
-⚠️ **代价**：评论数超过 `per_page` 时**只保留最新的那一页**（不是全部历史）。
-这是「1 次 API 调用」的取舍（`comment_budget = 12`/轮）—— 用户意图是看
-**最近**的讨论，不是考古。
+### 2.3c 只保留**最新的 20 条**（2026-10-23 用户要求）
+
+`common::COMMENTS_KEPT_MAX = 20` ⇒ 落库与展示都只保留**最新的 20 条**：
+
+- **落库**：`comments_to_refs` 取 API 升序的**末 20 条** ⇒ 早于第 20 条的评论
+  **不落库**（全量替换语义会把它们清掉 ⇒ 关系表**不会**随评论历史无限增长）；
+- **抓取**：`github::comments_pages(total, keep)` 从末页往前**凑够 20 条**：
+  - 末页 ≥ 20 条 ⇒ **1 次调用**（绝大多数情况）；
+  - 末页是「零头」页（`total = 105` ⇒ 末页只有 5 条）⇒ **再取上一页** ⇒
+    **2 次调用**。`per_page = 100 > 20` ⇒ **最多 2 页**必然够。
+- **预算**：`comment_budget` 按**实际 HTTP 调用数**扣减（不再是「每 issue 扣 1」）。
+
+⚠️ 代价：评论历史**只保留最近 20 条**（不是全量考古）—— 这是产品要求，
+也是「详情面板别变成长列表」的取舍。
 
 ### 2.4 「拉取失败保留既有值」
 
@@ -191,6 +203,8 @@ Python MCP 是**独立进程**、不走 Rust 的 `open_db` ⇒ 其 `ensure_schem
 | 14 | 时间戳解析失败**不得**让人选到更旧的评论 | `comments_to_refs_ignores_timestamp_parse_failures` |
 | 15 | 淘汰任务**级联清理**关系表 | `prune_done_tasks_cascades_relation_tables` |
 | 16 | 详情面板同步后**重取**评论 | `task-comments-list.test.tsx` 的「依赖必须含 latestCommentUrl」 |
+| 17 | **只保留最新的 20 条** | `comments_to_refs_keeps_only_the_latest_twenty` / `comments_to_refs_keeps_all_when_fewer_than_limit` |
+| 18 | 末页不足 20 条时**补取上一页**，且**最多 2 页** | `comments_pages_falls_back_to_previous_page_when_last_is_short` / `comments_pages_is_single_page_when_last_page_is_enough` / `comments_pages_never_needs_more_than_two_pages` |
 
 ### 反向验证（变异检查）
 
@@ -209,11 +223,12 @@ Python MCP 是**独立进程**、不走 Rust 的 `open_db` ⇒ 其 `ensure_schem
 
 | 边界 | 说明 |
 |---|---|
-| 超过 100 条评论 | GitHub 按 ID 升序返回、端点无 `sort`/`direction` ⇒ 本仓**按评论总数取最后一页**（§2.3b）⇒ 拿到的是**最新**的一批，但**只保留这一页**（150 条 ⇒ 保留最新 50 条），不是全部历史。这是「1 次 API 调用」的取舍 |
-| 评论拉取时机 | 仅在**评论数增长**时回源（`comment_budget = 12`/轮）⇒ 评论被删除但数量不变时，本地列表仍保留旧行（链接会 404） |
+| 评论历史**只保留最近 20 条** | `COMMENTS_KEPT_MAX = 20`（产品要求）⇒ 更早的评论链接**不落库**、详情面板也不显示 |
+| 超过 100 条评论 | GitHub 按 ID 升序返回、端点无 `sort`/`direction` ⇒ 本仓**按评论总数从末页往前取**（§2.3b）⇒ 拿到的是**最新**的一批；末页不足 20 条时**补取上一页**（§2.3c）⇒ 实际取到 1~2 次 HTTP 调用 |
+| 评论拉取时机 | 仅在**评论数增长**时回源（`comment_budget = 12`/轮，按**实际调用数**扣减）⇒ 评论被删除但数量不变时，本地列表仍保留旧行（链接会 404） |
 | 首次同步前 | `task_comments` 为空 ⇒ 详情面板不显示评论节，但「最新评论」按钮仍可用（走单值列） |
 | `created_at` 未知 | 全部为 0 时按 `comment_id DESC` 排序；`latest_comment_url` 取 API 顺序末位（**与时间戳解析无关**） |
-| 评论总数不准 | 页面数由 `t.comments` 算出；若元数据滞后，可能取到倒数第二页（GitHub 端限制，非本仓引入） |
+| 评论总数不准 | 页码由 `t.comments` 算出；若元数据滞后，可能少取一页（GitHub 端限制，非本仓引入） |
 
 ## 六、相关链接
 

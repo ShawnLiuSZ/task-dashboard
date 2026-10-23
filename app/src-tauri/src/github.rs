@@ -540,7 +540,7 @@ pub fn parse_links_from_graphql(v: &serde_json::Value) -> HashMap<i64, IssueLink
 /// 评论列表每页条数（GitHub 上限 100）。
 pub const COMMENTS_PER_PAGE: u64 = 100;
 
-/// 计算评论列表应该取**哪一页**。
+/// 计算评论列表的**最后一页**页码。
 ///
 /// #472：GitHub 的 issue comments 端点**按 ID 升序**返回
 /// （官方文档：*"Issue comments are ordered by ascending ID."*），
@@ -553,10 +553,6 @@ pub const COMMENTS_PER_PAGE: u64 = 100;
 /// GraphQL `totalCount`）：
 /// - `total <= per_page` ⇒ 第 1 页（= 全部评论 ⇒ 与不带 `page` 的旧行为一致）；
 /// - `total = 150, per_page = 100` ⇒ 第 2 页（= 最新的 50 条）。
-///
-/// ⚠️ 代价：评论数超过 `per_page` 时**只保留最新的那一页**（不是全部历史）。
-/// 这是「1 次 API 调用」的取舍（`comment_budget = 12`/轮）—— 用户的意图是看
-/// **最近**的讨论，不是考古。
 pub fn comments_page(total: u64, per_page: u64) -> u64 {
     if per_page == 0 {
         return 1;
@@ -566,13 +562,41 @@ pub fn comments_page(total: u64, per_page: u64) -> u64 {
     pages.max(1)
 }
 
-/// 构造评论列表的请求 URL。
+/// 计算**需要拉取哪些页**（**倒序**：从最后一页往前），使取到的评论**不少于**
+/// `keep` 条。
+///
+/// #472：只要「最新的 N 条」（N = [`crate::common::COMMENTS_KEPT_MAX`] = 20）。
+///
+/// - 末页条数 ≥ `keep` ⇒ **1 次调用**（绝大多数情况）；
+/// - 末页条数 < `keep`（末页是「零头」页，如 `total = 105` ⇒ 末页只有 5 条）
+///   ⇒ 再取**上一页**凑够 ⇒ **2 次调用**。
+///
+/// ⚠️ `per_page = 100 > keep = 20` ⇒ **最多 2 页**就够（两页至少 100 条 ≥ 20）。
+/// 取页数上限由 `per_page` 与 `keep` 的关系保证，不是硬编码的「2」。
+///
+/// `total` 是**估算**（来自 issue 元数据，可能滞后）⇒ 实际取到的条数可能与
+/// `total` 不符；此时按**实际取到的**内容决定是否够数。
+pub fn comments_pages(total: u64, keep: usize) -> Vec<u64> {
+    let per = COMMENTS_PER_PAGE;
+    let last = comments_page(total, per);
+    let mut pages = vec![last];
+    if total == 0 {
+        return pages;
+    }
+    // 末页的条数 = total - (last-1) * per（末页至少 1 条，total>0 时）。
+    let items_last = total.saturating_sub((last - 1) * per);
+    if (items_last as usize) < keep && last > 1 {
+        pages.push(last - 1);
+    }
+    pages
+}
+
+/// 构造评论列表的请求 URL（`page` 显式传入）。
 ///
 /// 抽成**纯函数**是为了让「取第几页」这件事可被单测覆盖 ——
 /// `fetch_comments` 内部的 HTTP 调用硬编码 `api.github.com`、**不可 mock**，
 /// URL 拼装若留在命令式代码里就永远测不到（#472 的分页缺陷正是因此逃过 CI）。
-pub fn comments_url(full_repo: &str, number: i64, total: u64) -> String {
-    let page = comments_page(total, COMMENTS_PER_PAGE);
+pub fn comments_url(full_repo: &str, number: i64, page: u64) -> String {
     format!(
         "https://api.github.com/repos/{}/issues/{}/comments?per_page={}&page={}",
         full_repo, number, COMMENTS_PER_PAGE, page
@@ -920,10 +944,10 @@ impl GitHubClient {
     /// `html_url`）⇒ 其余评论的链接全部丢弃，详情面板只能给出「最新评论」一个
     /// 入口。现在返回**全部**评论，供独立关系表 `task_comments` 承载一对多关系。
     ///
-    /// ⚠️ **取哪一页由 [`comments_page`] 决定**（`total` = 评论总数）：
+    /// ⚠️ **取哪几页由 [`comments_pages`] 决定**（`total` = 评论总数）：
     /// GitHub 按 ID 升序返回且端点无 `sort`/`direction` ⇒ 不带 `page` 只会拿到
-    /// **最旧**的一批（≤100 条）⇒ 评论数超过 100 的 issue **拿不到最新评论**。
-    /// 故必须传入总数、取**最后一页**。
+    /// **最旧**的一批 ⇒ 评论数超过 100 的 issue **拿不到最新评论**。
+    /// 故必须传入总数、从**最后一页**往前取，凑够「最新 N 条」为止。
     ///
     /// 返回 `Ok(None)` = 该 issue **没有评论**（或页码越界）；`Err` = 请求失败
     /// （调用方须**保留既有值**，不得清空 —— 一次网络抖动不该把评论链接全清掉）。
@@ -942,32 +966,43 @@ impl GitHubClient {
         } else {
             return Err("无法确定仓库 owner（org 为空且无 repo_owner）".to_string());
         };
-        let url = comments_url(&full_repo, number, total);
-        let v = self.get(&url)?;
-        let arr = v
-            .as_array()
-            .ok_or_else(|| "comments 返回非数组".to_string())?;
-        let mut out: Vec<RawComment> = Vec::with_capacity(arr.len());
-        for c in arr {
-            // `html_url` 缺失的条目直接跳过 —— 没有链接的评论对本功能无意义。
-            let Some(comment_url) = c.get("html_url").and_then(|u| u.as_str()) else {
-                continue;
-            };
-            out.push(RawComment {
-                id: c.get("id").and_then(|x| x.as_i64()).unwrap_or(0),
-                url: comment_url.to_string(),
-                author: c
-                    .get("user")
-                    .and_then(|u| u.get("login"))
-                    .and_then(|l| l.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                created_at: c
-                    .get("created_at")
-                    .and_then(|x| x.as_str())
-                    .map(crate::common::iso8601_to_secs)
-                    .unwrap_or(0),
-            });
+        let mut out: Vec<RawComment> = Vec::new();
+        // 页码是**倒序**的（末页在前）⇒ 每页的内容**前插**到列表头部，
+        // 最终列表保持 API 的**升序**（旧 → 新）。
+        for page in comments_pages(total, crate::common::COMMENTS_KEPT_MAX) {
+            let url = comments_url(&full_repo, number, page);
+            let v = self.get(&url)?;
+            let arr = v
+                .as_array()
+                .ok_or_else(|| "comments 返回非数组".to_string())?;
+            let mut page_items: Vec<RawComment> = Vec::with_capacity(arr.len());
+            for c in arr {
+                // `html_url` 缺失的条目直接跳过 —— 没有链接的评论对本功能无意义。
+                let Some(comment_url) = c.get("html_url").and_then(|u| u.as_str()) else {
+                    continue;
+                };
+                page_items.push(RawComment {
+                    id: c.get("id").and_then(|x| x.as_i64()).unwrap_or(0),
+                    url: comment_url.to_string(),
+                    author: c
+                        .get("user")
+                        .and_then(|u| u.get("login"))
+                        .and_then(|l| l.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    created_at: c
+                        .get("created_at")
+                        .and_then(|x| x.as_str())
+                        .map(crate::common::iso8601_to_secs)
+                        .unwrap_or(0),
+                });
+            }
+            // 前插 ⇒ 保持整体升序（后取的更早）。
+            page_items.extend(out);
+            out = page_items;
+            if out.len() >= crate::common::COMMENTS_KEPT_MAX {
+                break;
+            }
         }
         if out.is_empty() {
             Ok(None)
@@ -2223,20 +2258,65 @@ mod tests {
     /// #472：URL 必须**带 `page`** —— 不带就只取第 1 页（= 最旧的一批）。
     #[test]
     fn comments_url_always_carries_the_page_parameter() {
-        let url = super::comments_url("o/r", 42, 150);
-        assert!(
-            url.contains("page=2"),
-            "评论数 150 ⇒ URL 必须指向第 2 页，实际: {url}"
-        );
+        let url = super::comments_url("o/r", 42, 2);
+        assert!(url.contains("page=2"), "URL 必须指向指定页，实际: {url}");
         assert!(url.contains("per_page=100"), "每页条数必须显式带上: {url}");
         assert!(
             url.ends_with("issues/42/comments?per_page=100&page=2"),
             "实际: {url}"
         );
+    }
 
-        // ≤ 一页时是第 1 页（与旧版行为一致）。
-        let url = super::comments_url("o/r", 42, 10);
-        assert!(url.contains("page=1"), "实际: {url}");
+    /// #472：末页条数够用时 ⇒ **只取 1 页**（绝大多数情况）。
+    #[test]
+    fn comments_pages_is_single_page_when_last_page_is_enough() {
+        let keep = crate::common::COMMENTS_KEPT_MAX;
+        assert_eq!(
+            super::comments_pages(0, keep),
+            vec![1],
+            "0 条 ⇒ 第 1 页（防呆）"
+        );
+        assert_eq!(super::comments_pages(5, keep), vec![1]);
+        assert_eq!(
+            super::comments_pages(20, keep),
+            vec![1],
+            "正好 20 条 ⇒ 1 页"
+        );
+        assert_eq!(super::comments_pages(100, keep), vec![1], "正好一页 ⇒ 1 页");
+        // 末页 50 条 ≥ 20 ⇒ 1 页
+        assert_eq!(super::comments_pages(150, keep), vec![2]);
+        // 末页 100 条 ⇒ 1 页
+        assert_eq!(super::comments_pages(250, keep), vec![3]);
+    }
+
+    /// #472：末页是「零头」页（不足 `keep` 条）⇒ **再取上一页**凑够。
+    ///
+    /// 缺陷形态：只取末页 ⇒ `total = 105` 时末页只有 5 条 ⇒ 用户只看到 5 条
+    /// 评论，而不是应有的 20 条。
+    #[test]
+    fn comments_pages_falls_back_to_previous_page_when_last_is_short() {
+        let keep = crate::common::COMMENTS_KEPT_MAX;
+        assert_eq!(
+            super::comments_pages(105, keep),
+            vec![2, 1],
+            "末页只有 5 条 ⇒ 必须再取上一页（页码按倒序：末页在前）"
+        );
+        assert_eq!(super::comments_pages(101, keep), vec![2, 1]);
+        assert_eq!(super::comments_pages(119, keep), vec![2, 1]);
+        // 末页 20 条 ⇒ 刚好够 ⇒ 不必再取上一页
+        assert_eq!(super::comments_pages(120, keep), vec![2]);
+    }
+
+    /// #472：取页数**最多 2 页** —— `per_page=100` > `keep=20` ⇒ 两页必然够。
+    #[test]
+    fn comments_pages_never_needs_more_than_two_pages() {
+        let keep = crate::common::COMMENTS_KEPT_MAX;
+        for total in 0u64..=1000 {
+            assert!(
+                super::comments_pages(total, keep).len() <= 2,
+                "total={total} 不该需要超过 2 页"
+            );
+        }
     }
 
     /// #327：项目条目数必须取 `items.totalCount`，不能取 `number`（那是项目编号）。

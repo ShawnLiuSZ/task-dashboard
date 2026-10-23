@@ -151,6 +151,16 @@ pub struct CommentRef {
     pub created_at: i64,
 }
 
+/// #472：详情面板保留的评论条数上限（**最新的 N 条**）。
+///
+/// 用户明确要求「只保留最新的 20 条」⇒ 落库与展示都以本值为准：
+/// - 落库：`comments_to_refs` 只取 API 升序的**末 N 条**；
+/// - 抓取：`github::comments_pages` 从末页往前凑够 N 条（`per_page=100` ⇒ 最多 2 页）。
+///
+/// ⚠️ **不是「全部历史」** —— 一个 issue 可能有几百条评论，全量落库既撑大数据库
+/// 又让详情面板变成长列表；用户的意图是看**最近**的讨论。
+pub const COMMENTS_KEPT_MAX: usize = 20;
+
 /// #278：一条 issue 的父子关系（GraphQL `parent` / `subIssues` 的落库形态）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IssueLinks {
