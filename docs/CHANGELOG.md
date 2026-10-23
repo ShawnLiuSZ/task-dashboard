@@ -33,10 +33,10 @@
 
   - **现象**：本版发布后，macOS 上「应用内更新」报 `None of the fallback platforms ["darwin-aarch64-app", "darwin-aarch64"] were found` —— 线上 `latest.json` 里**一个 macOS 条目都没有**（14 个 key 全是 Linux / Windows），而 macOS 的 updater 产物（`.app.tar.gz` + `.sig`）其实都在 Release 上。
   - **根因**：`tauri-apps/tauri-action@v1` 在**每个矩阵 job 结束时各生成一次**清单（并发 ⇒ 删/传互相踩）⇒ **先完成平台的条目被后完成者用过期内容覆盖**；本版 macOS 的两个 job 最早完成 ⇒ 条目被抹掉。
-  - **处理**：已补齐 4 个 macOS 条目并替换线上清单（14 → **18** 个 key）⇒ **本版（v0.7.7）的 macOS 用户现在可以正常应用内更新**。发版流水线的根因修复与完整性门禁见 v0.7.8。
+  - **处理**：已补齐 4 个 macOS 条目并替换线上清单（14 → **18** 个 key）⇒ **本版（v0.7.7）的 macOS 用户现在可以正常应用内更新**。发版流水线的根因修复与完整性门禁见 **v0.7.8**。
   - 详见 [`issue-478-updater-manifest-macos.md`](./issue-478-updater-manifest-macos.md)
 
-- **v0.7.8（未发布）— 发版流水线：updater 清单不再丢平台条目 + 完整性门禁（#478）**
+- **v0.7.8（2026-10-23）— 发版流水线：updater 清单不再丢平台条目 + 完整性门禁（#478）**
 
   - **起因**：macOS 上「应用内更新」直接失败 —— `None of the fallback platforms ["darwin-aarch64-app", "darwin-aarch64"] were found in the response 'platforms' object`；Windows / Linux 正常。根因**不在客户端**：发布出去的 `latest.json` 里**一个 macOS 条目都没有**（v0.7.7 实测 14 个 key 全是 Linux / Windows），而 macOS 的 updater 产物（`.app.tar.gz` + `.sig`）其实都在 Release 上。
   - **根因**：`tauri-apps/tauri-action@v1` 的 `uploadVersionJSON()` 在**每个矩阵 job 结束时各跑一次**（下载已有清单 → 合并自己平台的条目 → **删旧资产** → 上传新的；GitHub 的 release 资产不能同名覆盖 ⇒ 必须先删）⇒ 6 个 job **并发**时删/传互相踩，后完成者拿**过期**内容覆盖 ⇒ **先完成平台的条目整块丢失**。实测 v0.7.7 的 macOS 两个 job 最早完成（03:53 / 03:55）⇒ 条目被随后完成的 Linux / Windows job 抹掉。
