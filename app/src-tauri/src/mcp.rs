@@ -203,6 +203,11 @@ fn tool_list(
 /// **回退语义**：`task_prs` 无该 issue 的行时，若 `pr_number > 0` 则用主 PR
 /// 组成一条 ⇒ `prs` 数组语义统一为「该 issue 关联的**全部** PR（含主 PR）」，
 /// 且与 GUI 侧（`commands.rs::attach_task_prs`）口径一致。
+///
+/// **顺序语义**（#467 后续修复）：`prs[0]` **恒为主 PR** —— `task_prs` 的读取
+/// 顺序是 `pr_number ASC`，而主 PR 的口径是「首命中」⇒ 二者可能不同。
+/// 故在序列化前统一把主 PR 提到首位（`common::sort_prs_primary_first`），
+/// 与 GUI 侧、Python 侧（`server.py::_attach_prs`）**同一口径**。
 fn attach_prs(conn: &Connection, rows: &mut [Value]) -> Result<(), String> {
     if rows.is_empty() {
         return Ok(());
@@ -235,10 +240,12 @@ fn attach_prs(conn: &Connection, rows: &mut [Value]) -> Result<(), String> {
             // 回退到主 PR（存量行 / 首次同步前 task_prs 为空）。
             list.push(crate::common::PrRef {
                 number: main.0,
-                url: main.1,
+                url: main.1.clone(),
                 state: main.2,
             });
         }
+        // 主 PR 提到首位（回退分支里本来就是唯一一条 ⇒ 空操作）。
+        crate::common::sort_prs_primary_first(&mut list, main.0, &main.1);
         let arr: Vec<Value> = list
             .into_iter()
             .map(|p| {
@@ -1233,6 +1240,87 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    /// #467 后续修复：`prs[0]` **必须是主 PR**。
+    ///
+    /// 缺陷形态：`task_prs` 的读取顺序是 `pr_number ASC`，而主 PR 的口径是
+    /// 「本轮同步中第一个命中的 PR」⇒ 二者可能不同 ⇒ `prs[0]` 未必是主 PR。
+    /// agent 若把 `prs[0]` 当主 PR 用就会取错（`pr_number` 列与 `prs[0]` 打架）。
+    ///
+    /// 本用例把主 PR 设为 101 —— **刻意不是编号最小的那条**（100 在前）。
+    /// 修复前 `prs[0]` 会是 100 ⇒ 断言失败。
+    #[test]
+    fn prs_head_is_the_primary_pr() {
+        let c = test_conn();
+        insert_sample(&c);
+        // 把主 PR 改成 101 / u101（`insert_sample` 默认是 42 / www.pr）。
+        c.execute(
+            "UPDATE tasks SET pr_number=101, pr_url='u101' WHERE issue_key='fad-backend#1247'",
+            [],
+        )
+        .unwrap();
+        insert_task_prs(
+            &c,
+            1,
+            "fad-backend#1247",
+            &[(100, "u100", "open"), (101, "u101", "merged")],
+        );
+
+        let out = tool_list(&c, None, None).unwrap();
+        let arr = out.as_array().unwrap();
+        let prs = arr[0]["prs"].as_array().unwrap();
+        assert_eq!(
+            prs[0]["number"].as_i64(),
+            Some(101),
+            "prs[0] 必须是主 PR（修复前此处是 100）"
+        );
+        assert_eq!(
+            prs[0]["url"].as_str(),
+            Some("u101"),
+            "主 PR 必须按 (number, url) 组合匹配"
+        );
+        assert_eq!(
+            prs[1]["number"].as_i64(),
+            Some(100),
+            "其余元素的相对顺序保持 pr_number ASC"
+        );
+        // 主 PR 单值列口径不变（旧契约）。
+        assert_eq!(arr[0]["pr_number"].as_i64(), Some(101));
+    }
+
+    /// #467 后续修复：**同号不同 URL** 不得误匹配。
+    ///
+    /// 跨仓库 PR 会撞号（`parse_issue_refs` 把 `owner/repo#N` 归一化为
+    /// `repo#N`，不带 owner）⇒ `task_prs` 的唯一键含 `pr_url`。
+    /// 只按 number 匹配会把**另一仓库**的同号 PR 提到首位。
+    #[test]
+    fn prs_head_does_not_pick_same_number_from_another_repo() {
+        let c = test_conn();
+        insert_sample(&c);
+        c.execute(
+            "UPDATE tasks SET pr_number=101, pr_url='u101' WHERE issue_key='fad-backend#1247'",
+            [],
+        )
+        .unwrap();
+        insert_task_prs(
+            &c,
+            1,
+            "fad-backend#1247",
+            &[
+                (101, "https://github.com/other/repo/pull/101", "open"),
+                (101, "u101", "merged"),
+            ],
+        );
+
+        let out = tool_list(&c, None, None).unwrap();
+        let arr = out.as_array().unwrap();
+        let prs = arr[0]["prs"].as_array().unwrap();
+        assert_eq!(
+            prs[0]["url"].as_str(),
+            Some("u101"),
+            "必须按 (number, url) 组合匹配 —— 只按 number 会取到另一仓库的同号 PR"
+        );
     }
 
     /// #467：`list_my_tasks` 必须返回该 issue 关联的**全部** PR。

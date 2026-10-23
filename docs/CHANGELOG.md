@@ -18,6 +18,17 @@
   - **验证**：`vitest` **362 passed**（原 347）· `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check`（418 key）/ `build` 全绿。
   - 详见 [`issue-470-note-edit-modal.md`](./issue-470-note-edit-modal.md)
 
+- **v0.7.7（未发布）— 代码审查后修复：多 PR 关联的「主 PR 置首」+ 读路径测试补齐（#467 后续）**
+
+  - **`prs[0]` 恒为主 PR**（#467 后续修复）：`task_prs` 的读取顺序是 `pr_number ASC`，而主 PR 的口径是「本轮同步中**第一个**命中的 PR」⇒ 两者顺序**可能不同** ⇒ `prs[0]` 未必是主 PR，于是 `tasks.pr_number` 与 `prs[0].number` 会**打架**（UI / agent 取 `prs[0]` 当主 PR 就会取错）。现统一在**读取端**把主 PR 提到首位：Rust 两侧（`commands.rs::attach_task_prs` / `mcp.rs::attach_prs`）共用 `common.rs::sort_prs_primary_first`，Python 侧（`server.py::_attach_prs`）对应 `_sort_prs_primary_first`，**三处同一口径**。**不改表结构、不改 SQL 顺序语义、零额外查询**。
+  - **匹配键是 `(number, url)` 组合**：跨仓库 PR 会撞号（`parse_issue_refs` 把 `owner/repo#N` 归一化为 `repo#N`，不带 owner）⇒ 同号不同 URL 的两条是**合法共存**的两条关联；只按 number 匹配会把**另一仓库**的同号 PR 提到首位。
+  - **读路径测试覆盖补齐**：审查发现三处读路径实现里**只有 MCP 侧有单测** —— `commands.rs::attach_task_prs`（GUI 看板 / 会话面板）与 `server.py::_attach_prs`（Python MCP）此前**零覆盖**。Python 侧尤其危险：它是**独立进程**、两侧单测互不覆盖 ⇒ 双实现口径漂移无人发现（与 #169/#262/#278 同源）。现补 `commands.rs` 4 条 + `mcp.rs` 2 条 + `server.py` 6 条用例。
+  - **把 `#[ignore]` 的端到端断言搬进 CI**：原端到端测试 `test_headless_multi_pr` 需真实 PAT + 生产库快照 ⇒ CI 跑不到，「主 PR 口径不漂」这条最关键的不变量原本**无人守**。现补本地等价版 `primary_pr_is_always_present_in_the_association_list`（构造数据、**不需要网络与 PAT** ⇒ CI 每次都跑）。
+  - **反向验证**：把 `sort_prs_primary_first` 退化为空操作（等价修复前行为）后，Rust 侧 **5 条**、Python 侧 **3 条**断言立刻失败 ⇒ 断言真在守行为、不是恒真装饰。
+  - **顺带修掉 `utils/useAutoSize.ts` 的注释笔误**：#470 抽公共模块时文档注释被抄坏（「用 `useLayoutEffect` 而非 `useLayoutEffect`」两侧同一个词、「被动 `useLayoutEffect`」应为 `useEffect`、一处残留损坏字节 U+FFFD）⇒ 已改正并加静态断言防回归。
+  - **验证**：`cargo test` **227 + 27 passed**（新增 11 条）· `cargo fmt --check` / `clippy --all-targets -D warnings` · `mcp_server` **66 passed**（新增 6 条）· `scripts` **129 passed** · `vitest` **364 passed**（新增 1 条）· `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check`（418 key）/ `build` / 四个 `check-*.py` 全绿。
+  - 详见 [`issue-467-multi-pr.md`](./issue-467-multi-pr.md)
+
 - **v0.7.6（2026-10-22）— 同一个 issue 支持关联多个 PR（#467）**
 
   - **同一 issue 的多个 PR 全部可见**：改造前同步层用 `pr_map.entry(rk).or_insert(...)` 构建 PR↔issue 映射 ⇒ 同一个 issue 被多个 PR 引用时**只有第一个入表，其余静默丢弃**（无日志、无报错）；数据层 `tasks.pr_number` / `pr_url` / `pr_state` 也是单值列。现新增独立关系表 `task_prs` 承载完整的一对多关系，卡片 PR 行与详情面板都会**逐个渲染全部关联 PR**。

@@ -68,6 +68,11 @@ class OnDemandTest(unittest.TestCase):
     def setUpClass(cls):
         c = sqlite3.connect(_DB)
         c.executescript(SCHEMA)
+        # #467：补建 `task_prs` 等表（Python MCP 走自己的 `ensure_schema`，
+        # 不走 Rust 的 `open_db`）⇒ setUp 里才能安全地 `DELETE FROM task_prs`。
+        # 放在 `executescript(SCHEMA)` **之后**：SCHEMA 里的建表语句没有
+        # IF NOT EXISTS，先建再 ensure_schema 会撞「table accounts already exists」。
+        S.ensure_schema(c)
         c.commit()
         c.close()
 
@@ -85,6 +90,9 @@ class OnDemandTest(unittest.TestCase):
         c.executescript(
             "DELETE FROM tasks; DELETE FROM accounts;"
             "DELETE FROM label_mappings; DELETE FROM account_columns;"
+            # #467：多 PR 关系表也要一起清 —— 否则残留行会被后续用例的
+            # `tool_list_my_tasks` 读到，表现为「凭空多出 PR 关联」。
+            "DELETE FROM task_prs;"
         )
         c.commit()
         c.close()
@@ -958,6 +966,165 @@ class FramingTests(unittest.TestCase):
             sys.stdin, sys.stdout, sys.argv = real_stdin, real_stdout, real_argv
         chunks = [c for c in out.getvalue().split(b"\n") if c.strip()]
         return [json.loads(c.decode()) for c in chunks]
+
+
+class AttachPrsTest(unittest.TestCase):
+    """#467 后续修复：`_attach_prs` 的「主 PR 置首」语义（与 Rust 侧同一口径）。
+
+    ⚠️ 本组用例补的是**此前完全无覆盖**的一段：Python MCP 侧的 `_attach_prs`
+    没有任何单测 ⇒ 双实现口径漂移（AGENTS.md §8.6 要求两实现一致）无人守
+    —— 与 #169/#262/#278 同源的盲区。
+
+    场景与断言与 Rust 侧 `commands.rs::attach_task_prs` / `mcp.rs::attach_prs`
+    的用例**一一对应**（同一组场景、同一组期望值）。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        # ⚠️ 本组用例**必须用独立的临时库**：`_attach_prs` 走 `conn()`，而
+        # `conn()` 会调 `ensure_schema`（建 accounts / task_prs 等表）⇒ 若共用
+        # `_DB`，本类先跑（unittest 按类名字母序）就会把 `accounts` 建出来，
+        # 随后 `OnDemandTest.setUpClass` 的 `executescript(SCHEMA)`（无
+        # IF NOT EXISTS）必然报「table accounts already exists」。
+        # ⇒ 改为每个用例一份独立库 + 临时改写 `S.DB_PATH`（`conn()` 运行时
+        # 才读模块全局 ⇒ 改写有效）。
+        pass
+
+    @staticmethod
+    def _reset_conn():
+        if S._conn is not None:
+            S._conn.close()
+        S._conn = None
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="tb-mcp-prs-")
+        self._db = os.path.join(self._tmpdir, "taskboard.db")
+        self._orig_db_path = S.DB_PATH
+        S.DB_PATH = self._db
+        self._reset_conn()
+        c = sqlite3.connect(self._db)
+        c.executescript(SCHEMA)
+        # 建出 `task_prs`（与生产同款：Python MCP 走自己的 `ensure_schema`，
+        # 不走 Rust 的 `open_db` —— 这正是 #467 的关键点）。
+        S.ensure_schema(c)
+        c.commit()
+        c.close()
+
+    def tearDown(self):
+        self._reset_conn()
+        S.DB_PATH = self._orig_db_path
+        import shutil
+
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def _insert_task(self, issue_key, number, account_id, pr_number, pr_url):
+        c = sqlite3.connect(self._db)
+        c.execute(
+            "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,"
+            " ownership, status, synced_at, account_id, pr_number, pr_url)"
+            " VALUES (?, 'o', 'r', ?, 't', 'u', 'open', 'assigned', 'todo', 1, ?, ?, ?)",
+            (issue_key, number, account_id, pr_number, pr_url),
+        )
+        c.commit()
+        c.close()
+
+    def _insert_task_prs(self, account_id, issue_key, rows):
+        c = sqlite3.connect(self._db)
+        for num, url, state in rows:
+            c.execute(
+                "INSERT INTO task_prs (account_id, issue_key, pr_number, pr_url, pr_state,"
+                " updated_at) VALUES (?, ?, ?, ?, ?, 0)",
+                (account_id, issue_key, num, url, state),
+            )
+        c.commit()
+        c.close()
+
+    @staticmethod
+    def _row(issue_key, account_id, pr_number, pr_url):
+        """模拟 `rows_to_dicts` 产出的行（`_attach_prs` 的输入形态）。"""
+        return {
+            "issue_key": issue_key,
+            "account_id": account_id,
+            "pr_number": pr_number,
+            "pr_url": pr_url,
+            "pr_state": "merged",
+        }
+
+    def test_primary_pr_is_promoted_to_head(self):
+        """主 PR 必须被提到 `prs[0]`（`task_prs` 按 pr_number ASC 读，主 PR 未必最小）。"""
+        self._insert_task("o/r#10", 10, 1, 101, "u101")
+        self._insert_task_prs(1, "o/r#10", [(100, "u100", "open"), (101, "u101", "merged")])
+
+        rows = S._attach_prs([self._row("o/r#10", 1, 101, "u101")])
+        prs = rows[0]["prs"]
+        self.assertEqual(len(prs), 2, "两个关联 PR 都必须在")
+        self.assertEqual(prs[0]["number"], 101, "prs[0] 必须是主 PR（修复前是 100）")
+        self.assertEqual(prs[0]["url"], "u101", "主 PR 必须按 (number, url) 组合匹配")
+        self.assertEqual(prs[1]["number"], 100, "其余元素相对顺序保持 pr_number ASC")
+
+    def test_falls_back_to_primary_when_task_prs_is_empty(self):
+        """存量行（`task_prs` 为空）必须回退到主 PR，否则 PR 徽章消失。"""
+        self._insert_task("o/r#10", 10, 1, 42, "u42")
+        rows = S._attach_prs([self._row("o/r#10", 1, 42, "u42")])
+        prs = rows[0]["prs"]
+        self.assertEqual(len(prs), 1, "存量行必须回退成主 PR 一条")
+        self.assertEqual(prs[0]["number"], 42)
+        self.assertEqual(prs[0]["url"], "u42")
+
+    def test_accounts_are_isolated(self):
+        """同一 `issue_key` 在两个账号下各有 PR 关联 ⇒ 不得串号。"""
+        self._insert_task("o/r#10", 10, 1, 101, "u101")
+        self._insert_task("o/r#10", 10, 2, 201, "u201")
+        self._insert_task_prs(1, "o/r#10", [(101, "u101", "merged")])
+        self._insert_task_prs(2, "o/r#10", [(201, "u201", "merged")])
+
+        rows = S._attach_prs(
+            [self._row("o/r#10", 1, 101, "u101"), self._row("o/r#10", 2, 201, "u201")]
+        )
+        self.assertEqual(len(rows[0]["prs"]), 1)
+        self.assertEqual(rows[0]["prs"][0]["number"], 101, "账号 1 不得看到账号 2 的 PR")
+        self.assertEqual(rows[1]["prs"][0]["number"], 201, "账号 2 不得看到账号 1 的 PR")
+
+    def test_same_number_different_url_is_not_matched(self):
+        """**同号不同 URL**（跨仓库撞号）不得误匹配。"""
+        self._insert_task("o/r#10", 10, 1, 101, "u101")
+        self._insert_task_prs(
+            1,
+            "o/r#10",
+            [
+                (101, "https://github.com/other/repo/pull/101", "open"),
+                (101, "u101", "merged"),
+            ],
+        )
+        rows = S._attach_prs([self._row("o/r#10", 1, 101, "u101")])
+        self.assertEqual(
+            rows[0]["prs"][0]["url"],
+            "u101",
+            "必须按 (number, url) 组合匹配 —— 只按 number 会取到另一仓库的同号 PR",
+        )
+
+    def test_sort_helper_is_noop_when_primary_unknown(self):
+        """主 PR 未知 ⇒ 顺序不变、不得凭空插入元素。"""
+        prs = [{"number": 100, "url": "u100"}, {"number": 102, "url": "u102"}]
+        S._sort_prs_primary_first(prs, 0, "u100")
+        S._sort_prs_primary_first(prs, 100, "")
+        self.assertEqual(
+            [p["number"] for p in prs], [100, 102], "主 PR 未知时必须是空操作"
+        )
+
+    def test_sort_helper_preserves_relative_order(self):
+        """主 PR 提到首位时，其余元素的相对顺序保持不变。"""
+        prs = [
+            {"number": 100, "url": "u100"},
+            {"number": 102, "url": "u102"},
+            {"number": 101, "url": "u101"},
+        ]
+        S._sort_prs_primary_first(prs, 101, "u101")
+        self.assertEqual(
+            [p["number"] for p in prs],
+            [101, 100, 102],
+            "主 PR 提到首位，其余元素相对顺序不变",
+        )
 
 
 if __name__ == "__main__":

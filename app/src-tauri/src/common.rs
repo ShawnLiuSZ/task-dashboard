@@ -96,6 +96,41 @@ pub struct PrRef {
     pub state: String,
 }
 
+/// #467 后续修复：把「主 PR」排到 `prs` 数组**首位**。
+///
+/// **为什么需要**：`tasks.pr_number` / `pr_url`（主 PR）的取值口径是
+/// 「本轮同步中**第一个**命中的 PR」（见 `sync.rs::build_pr_map` 的 `list[0]`），
+/// 而 `task_prs` 的读取顺序是 `pr_number ASC` ⇒ 两者顺序**可能不同**
+/// ⇒ `prs[0]` 未必是主 PR。UI / agent 若把 `prs[0]` 当主 PR 用就会取错。
+///
+/// **修法**：在**读取端**（组装 `prs` 数组时）把主 PR 提到首位 —— 不改表结构、
+/// 不改 SQL 顺序语义、零额外查询。Rust 两侧（`commands.rs::attach_task_prs` /
+/// `mcp.rs::attach_prs`）与 Python 侧（`server.py::_attach_prs`）共用同一口径。
+///
+/// ⚠️ 匹配键是 **(number, url) 组合**而非单独的 number：跨仓库 PR 可能撞号
+/// （`parse_issue_refs` 把 `owner/repo#N` 归一化为 `repo#N`，不带 owner），
+/// `task_prs` 的唯一键也是 `(account_id, issue_key, pr_number, pr_url)`
+/// ⇒ 同号不同 URL 的两条是**合法共存**的两条关联，只有组合键能唯一确定「主 PR」。
+///
+/// **找不到主 PR 时保持原顺序不变**（存量行 / `task_prs` 为空 ⇒ 走回退分支，
+/// 此时数组本来就只有主 PR 一条，排序是空操作）。
+pub fn sort_prs_primary_first(prs: &mut Vec<PrRef>, main_number: i64, main_url: &str) {
+    if main_number <= 0 || main_url.is_empty() {
+        return;
+    }
+    if let Some(pos) = prs
+        .iter()
+        .position(|p| p.number == main_number && p.url == main_url)
+    {
+        if pos != 0 {
+            // `remove` + `insert` 而非 `swap`/`rotate` ⇒ 其余元素的相对顺序保持不变
+            //（仍按 `pr_number ASC`），只有主 PR 被提到首位。
+            let primary = prs.remove(pos);
+            prs.insert(0, primary);
+        }
+    }
+}
+
 /// #278：一条 issue 的父子关系（GraphQL `parent` / `subIssues` 的落库形态）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IssueLinks {
@@ -1007,5 +1042,91 @@ mod tests {
         // 不能是前缀/子串匹配
         assert!(!is_closed_state("closed_by_bot"));
         assert!(!is_closed_state("unclosed"));
+    }
+
+    // ==========================================================================
+    // #467 后续修复：sort_prs_primary_first（prs[0] 恒为主 PR）
+    // ==========================================================================
+
+    fn pr(number: i64, url: &str) -> PrRef {
+        PrRef {
+            number,
+            url: url.to_string(),
+            state: String::new(),
+        }
+    }
+
+    /// 主 PR 在列表**中间**时必须被提到首位，且其余元素的相对顺序保持不变。
+    ///
+    /// 这正是本次修复的缺陷形态：`task_prs` 的读取顺序是 `pr_number ASC`，
+    /// 而主 PR 的口径是「首命中」⇒ 二者可能不同 ⇒ `prs[0]` 未必是主 PR。
+    #[test]
+    fn sort_prs_primary_first_promotes_primary_to_head() {
+        let mut prs = vec![
+            pr(100, "u100"),
+            pr(102, "u102"),
+            pr(101, "u101"), // ← 主 PR（编号不是最小）
+        ];
+        super::sort_prs_primary_first(&mut prs, 101, "u101");
+        assert_eq!(
+            prs.iter().map(|p| p.number).collect::<Vec<_>>(),
+            vec![101, 100, 102],
+            "主 PR 必须被提到首位，其余元素的相对顺序保持不变"
+        );
+    }
+
+    /// 主 PR 已在首位 ⇒ 不得改变任何顺序（空操作是幂等的）。
+    #[test]
+    fn sort_prs_primary_first_is_idempotent_when_already_first() {
+        let mut prs = vec![pr(101, "u101"), pr(100, "u100")];
+        super::sort_prs_primary_first(&mut prs, 101, "u101");
+        assert_eq!(
+            prs.iter().map(|p| p.number).collect::<Vec<_>>(),
+            vec![101, 100]
+        );
+    }
+
+    /// **同号不同 URL** 不得误匹配 —— 跨仓库 PR 会撞号
+    /// （`parse_issue_refs` 把 `owner/repo#N` 归一化为 `repo#N`，不带 owner），
+    /// `task_prs` 的唯一键正是 `(account_id, issue_key, pr_number, pr_url)`
+    /// ⇒ 同号不同 URL 的两条是**合法共存**的两条关联。
+    ///
+    /// 缺陷形态：只用 number 匹配 ⇒ 会把**另一条仓库**的同号 PR 提到首位。
+    #[test]
+    fn sort_prs_primary_first_does_not_match_same_number_different_url() {
+        let mut prs = vec![
+            pr(101, "https://github.com/o/other/pull/101"),
+            pr(101, "u101"),
+        ];
+        super::sort_prs_primary_first(&mut prs, 101, "u101");
+        assert_eq!(
+            prs[0].url, "u101",
+            "必须按 (number, url) 组合匹配 —— 只按 number 会误提到另一仓库的同号 PR"
+        );
+    }
+
+    /// 列表里**没有**主 PR（存量行 / `task_prs` 为空）⇒ 保持原顺序，不得凭空插入。
+    #[test]
+    fn sort_prs_primary_first_keeps_order_when_primary_absent() {
+        let mut prs = vec![pr(100, "u100"), pr(102, "u102")];
+        super::sort_prs_primary_first(&mut prs, 999, "u999");
+        assert_eq!(
+            prs.iter().map(|p| p.number).collect::<Vec<_>>(),
+            vec![100, 102],
+            "找不到主 PR 时不得改变顺序、也不得凭空插入元素"
+        );
+    }
+
+    /// 主 PR 未知（`pr_number = 0` / `pr_url` 为空）⇒ 直接返回，不做任何改动。
+    #[test]
+    fn sort_prs_primary_first_is_noop_for_unknown_primary() {
+        let mut prs = vec![pr(100, "u100"), pr(102, "u102")];
+        super::sort_prs_primary_first(&mut prs, 0, "u100");
+        super::sort_prs_primary_first(&mut prs, 100, "");
+        assert_eq!(
+            prs.iter().map(|p| p.number).collect::<Vec<_>>(),
+            vec![100, 102],
+            "主 PR 未知时必须是空操作"
+        );
     }
 }

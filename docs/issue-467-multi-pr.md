@@ -146,6 +146,26 @@ list.push(PrEntry { number, url, head_ref, state });
 
 **无 N+1**：一次性取回整批关联行后在内存里匹配。
 
+**顺序语义（2026-10-22 代码审查后修复）**：`prs[0]` **恒为主 PR**。
+
+- **缺陷形态**：`task_prs` 的读取顺序是 `pr_number ASC`（`ORDER BY pr_number ASC`），
+  而主 PR 的口径是「本轮同步中**第一个**命中的 PR」（`sync.rs::build_pr_map` 的
+  `list[0]`）⇒ 两者顺序**可能不同** ⇒ `prs[0]` 未必是主 PR。
+  于是 `tasks.pr_number`（主 PR）与 `prs[0].number` 会**打架** ——
+  UI / agent 若取 `prs[0]` 当主 PR 用就会取错。
+- **修法**：在**读取端**（组装 `prs` 数组时）把主 PR 提到首位 ——
+  **不改表结构、不改 SQL 顺序语义、零额外查询**。
+  Rust 两侧（`commands.rs::attach_task_prs` / `mcp.rs::attach_prs`）共用
+  `common.rs::sort_prs_primary_first`，Python 侧（`server.py::_attach_prs`）
+  对应 `_sort_prs_primary_first`，**三处同一口径**。
+- **匹配键是 `(number, url)` 组合**而非单独的 number：跨仓库 PR 会撞号
+  （`parse_issue_refs` 把 `owner/repo#N` 归一化为 `repo#N`，不带 owner），
+  `task_prs` 的唯一键也是 `(account_id, issue_key, pr_number, pr_url)`
+  ⇒ 同号不同 URL 的两条是**合法共存**的两条关联，只有组合键能唯一确定「主 PR」。
+  只按 number 匹配会把**另一仓库**的同号 PR 提到首位。
+- **找不到主 PR 时保持原顺序不变**（存量行 / `task_prs` 为空 ⇒ 走回退分支，
+  此时数组本来就只有主 PR 一条，排序是空操作）。
+
 ### 5.4 前端
 
 | 文件 | 改动 |
@@ -173,6 +193,9 @@ list.push(PrEntry { number, url, head_ref, state });
 | 8 | PR 拉取失败**保留**既有关联 | `TaskUpsert::pr_fetch_ok` 语义 + 代码路径审查 |
 | 9 | 前端渲染多个 PR 且链接不串 | `board.test.tsx` 5 条新用例 |
 | 10 | MCP 两侧返回一致 | `mcp.rs` 4 条新用例 + `check-mcp-columns.py` 第 7 条 |
+| 11 | `prs[0]` **恒为主 PR** | `sort_prs_primary_first_promotes_primary_to_head` / `attach_task_prs_promotes_primary_pr_to_head` / `prs_head_is_the_primary_pr` / `test_primary_pr_is_promoted_to_head` |
+| 12 | 同号不同 URL 不得误匹配主 PR | `sort_prs_primary_first_does_not_match_same_number_different_url` / `prs_head_does_not_pick_same_number_from_another_repo` / `test_same_number_different_url_is_not_matched` |
+| 13 | 主 PR 必在关联列表内（口径不漂） | `primary_pr_is_always_present_in_the_association_list`（本地版，CI 可跑） |
 
 ## 七、回归防线
 
@@ -213,13 +236,41 @@ Rust 侧收尾是 `);`、Python 侧是 `)`，字面量查找会在 Python 侧一
 （实现过程中第一版断言写成全表比较，端到端立刻报出 25 个「不匹配」，
 经查全是未覆盖的陈旧任务 ⇒ 收窄断言范围后通过。）
 
+⚠️ **端到端测试是 `#[ignore]` 的**（需真实 PAT + 生产库快照）⇒ **CI 跑不到**，
+断言 3（主 PR 口径不漂）这条最关键的不变量在 CI 里原本**无人守**。
+2026-10-22 代码审查后补了**本地等价版**：
+`commands.rs::primary_pr_is_always_present_in_the_association_list`
+用构造数据覆盖同一件事（写入端传进来的列表必然含主 PR ⇒ 读回来时必在其中），
+**不需要网络、不需要 PAT ⇒ CI 每次都跑**。
+
+### 7.3 读路径测试覆盖补齐（2026-10-22 代码审查后）
+
+审查发现 `attach_prs` 的三处实现里，**只有 MCP 侧（`mcp.rs`）有单测**：
+
+| 读路径 | 修复前覆盖 | 修复后 |
+|---|---|---|
+| `commands.rs::attach_task_prs`（GUI 看板 / 会话面板） | ❌ **零覆盖** | 4 条新用例 |
+| `mcp.rs::attach_prs`（Rust MCP） | ✅ 4 条 | +2 条（主 PR 置首 / 同号不同 URL） |
+| `server.py::_attach_prs`（Python MCP） | ❌ **零覆盖** | 6 条新用例（`AttachPrsTest`） |
+
+Python 侧零覆盖尤其危险：AGENTS.md §8.6 要求两实现一致，
+而 Python MCP 是**独立进程**、两侧单测互不覆盖 ⇒ 口径漂移无人发现
+（与 #169/#262/#278 同源的盲区）。
+
+⚠️ Python 侧用例**必须用独立的临时库**：`_attach_prs` 走 `conn()`，而 `conn()`
+会调 `ensure_schema`（建 `accounts` / `task_prs` 等表）⇒ 若共用 `mcp_server`
+单测的 `_DB`，本类先跑（unittest 按类名字母序）就会把 `accounts` 建出来，
+随后 `OnDemandTest.setUpClass` 的 `executescript(SCHEMA)`（**无** `IF NOT EXISTS`）
+必然报「table accounts already exists」⇒ 改为每个用例一份独立库 + 临时改写
+`S.DB_PATH`（`conn()` 运行时才读模块全局 ⇒ 改写有效）。
+
 ## 八、已知边界
 
 | 边界 | 说明 |
 |---|---|
 | 陈旧任务的多 PR 关联 | 本轮未覆盖 ⇒ `task_prs` 无行，读路径回退到主 PR。下次同步覆盖后自动补齐 |
 | 跨仓库 PR 撞号 | 唯一键含 `pr_url` 规避；显示的 PR 编号不含仓库名（沿用既有单值列口径） |
-| `prs` 数组排序 | 按 PR 编号升序（`load_task_prs` / `load_all_task_prs` 的 `ORDER BY pr_number`）；主 PR 未必是首元素 —— **主 PR 是「第一个命中者」**，与编号顺序无关 |
+| `prs` 数组排序 | **主 PR 恒在首位**（2026-10-22 审查后修复，见 §5.3「顺序语义」）；其余元素按 PR 编号升序。修复前是纯 `pr_number ASC` ⇒ 主 PR（口径为「第一个命中者」）未必是首元素 |
 | PR 拉取失败 | 保留既有 `tasks.pr_*` 与 `task_prs` 行，不清空 |
 
 ## 九、影响面清单
@@ -227,15 +278,17 @@ Rust 侧收尾是 `);`、Python 侧是 `)`，字面量查找会在 Python 侧一
 | 层 | 文件 | 改动 |
 |---|---|---|
 | 数据 | `app/src-tauri/src/db.rs` | `task_prs` 表 DDL + 3 个读写函数 + `delete_account` 级联 + 6 条单测 |
-| 公共类型 | `app/src-tauri/src/common.rs` | 新增 `PrRef` |
+| 公共类型 | `app/src-tauri/src/common.rs` | 新增 `PrRef`；**新增 `sort_prs_primary_first`（主 PR 置首）+ 5 条单测** |
 | 同步 | `app/src-tauri/src/sync.rs` | `build_pr_map`（多值聚合）+ `PrEntry` + `TaskUpsert` 填充 + 写入 `task_prs` + 4 条单测 + 端到端测试 |
 | 按需拉取 | `app/src-tauri/src/on_demand.rs` | `TaskUpsert` 新字段补齐（`pr_fetch_ok: false`） |
-| 读路径 | `app/src-tauri/src/commands.rs` | `Task.prs` 字段 + `attach_task_prs` + 两处读路径调用 |
-| MCP | `app/src-tauri/src/mcp.rs` | `attach_prs` + 两处读路径调用 + 4 条单测 |
-| MCP | `mcp_server/server.py` | `ensure_schema` 自建表 + `_attach_prs` + 三处读路径调用 |
+| 读路径 | `app/src-tauri/src/commands.rs` | `Task.prs` 字段 + `attach_task_prs` + 两处读路径调用；**+ 4 条新用例（含 GUI 路径零覆盖的补齐）** |
+| MCP | `app/src-tauri/src/mcp.rs` | `attach_prs` + 两处读路径调用 + 4 条单测；**+ 2 条新用例** |
+| MCP | `mcp_server/server.py` | `ensure_schema` 自建表 + `_attach_prs` + 三处读路径调用；**+ `_sort_prs_primary_first` + 列表复制（防共享对象被就地排序污染）** |
 | 前端 | `app/src/types.ts` | `PrRef` + `Task.prs` |
 | 前端 | `app/src/components/TaskCard.tsx` | 多 PR 渲染 |
 | 前端 | `app/src/components/DetailPanel.tsx` | 多 PR 按钮组 |
 | 前端 | `app/src/styles.css` | `.pr-item` / `.pr-btn-group` / `.pr-row` 换行 |
 | 校验 | `scripts/check-mcp-columns.py` | 第 7 条检查（`task_prs` 两侧一致） |
 | 测试 | `app/src/components/board.test.tsx` | 5 条多 PR 用例 + 3 处 fixture 补 `prs` |
+| 测试 | `mcp_server/test_server.py` | **新增 `AttachPrsTest` 6 条用例**（Python 侧读路径此前零覆盖） |
+| 测试 | `app/src/components/notes-layout.test.ts` | **+1 条用例**（锁住 `useAutoSize` 注释不被再次抄坏） |
