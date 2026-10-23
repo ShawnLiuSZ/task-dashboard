@@ -56,6 +56,30 @@ GitHub comments API 按 `created_at` **升序**返回 ⇒ 落库存 `created_at`
 **前端不再二次排序** —— 前端重排会掩盖后端排序写反的问题（前端测试断言的是
 「按传入顺序渲染」，倒序的正确性由后端测试守住）。
 
+### 2.3b 取哪一页：必须按评论总数取**最后一页**（2026-10-23 审查修复）
+
+⚠️ **GitHub 的 issue comments 端点按 ID 升序返回，且不支持 `sort`/`direction`**
+（官方文档：*"Issue comments are ordered by ascending ID."*）⇒ **不带 `page` 时
+取到的是第 1 页 = 最旧的一批**。
+
+| 评论总数 | 旧行为（只拼 `per_page=100`） | 修复后 |
+|---|---|---|
+| ≤ 100 | 第 1 页 = **全部** ✓ | 第 1 页 = **全部**（**零行为变化**） |
+| 150 | 第 1 页 = **最旧 100 条** ⇒ 最新的 50 条**根本没拿到** | 第 2 页 = **最新 50 条** ✓ |
+
+⇒ 修复前，评论数 > 100 的 issue：卡片「新评论」跳转、详情「最新评论」按钮都指向
+**第 100 旧**那条；本功能列出的也是**最旧**的一批。
+
+**修法**：把评论总数（`t.comments`，issue 元数据 / GraphQL `totalCount`）传进
+`fetch_comments`，按 `page = ceil(count / per_page)` 取**最后一页**。
+URL 拼装抽成**纯函数** `comments_url(full_repo, number, total)` / `comments_page(total, per_page)`
+—— 原先的 URL 拼装在命令式代码里、HTTP 层硬编码 `api.github.com` 不可 mock ⇒
+**这个 bug 才没法被单测挡住**；抽成纯函数后 `page` 参数可被断言。
+
+⚠️ **代价**：评论数超过 `per_page` 时**只保留最新的那一页**（不是全部历史）。
+这是「1 次 API 调用」的取舍（`comment_budget = 12`/轮）—— 用户意图是看
+**最近**的讨论，不是考古。
+
 ### 2.4 「拉取失败保留既有值」
 
 评论回源失败时**保留既有关联行**（不清空），与 PR 关联同款取舍 ——
@@ -63,6 +87,31 @@ GitHub comments API 按 `created_at` **升序**返回 ⇒ 落库存 `created_at`
 
 靠 `TaskUpsert::comments_fetch_ok` 区分「拉取成功但确实没有评论」与「拉取失败」——
 两者都表现为空列表，无法靠列表本身区分（与 `pr_fetch_ok` 同款）。
+
+### 2.5 `latest_comment_url` 取 API 顺序的**末位**（2026-10-23 审查修复）
+
+单值列「最新评论」的选取规则 = **API 返回顺序的末位**（GitHub 升序 ⇒ 末位即最新）。
+
+⚠️ **不要改用「`created_at` 最大者」**：本仓 `common::iso8601_to_secs` 解析失败返回 0
+⇒ 一旦**部分**评论的时间戳解析失败，「最大者」会选中一条**更旧**的评论
+（0 永远输给正常时间戳）⇒ 与「最新」语义**相反**。
+按 API 顺序取末位则**与时间戳解析无关**，且与改造前的 `.next_back()` **逐位相同**
+⇒ 单值列真正做到「零行为变化」。
+
+### 2.6 淘汰任务时**级联清理**关系表（2026-10-23 审查修复）
+
+`db::prune_done_tasks`（30 天 done 窗口淘汰）原先只 `DELETE FROM tasks`
+⇒ 被淘汰任务留下**孤儿行**（`task_comments` / `task_prs`）：
+
+- ① 孤儿行**无界增长**（每个被淘汰的任务留下它全部的评论 / PR 关联行）；
+- ② 同一 `issue_key` 之后被重新同步出来时，旧行会被**重新挂上** ——
+  而评论数没涨就不会触发拉取（`t.comments > existing_comments`）
+  ⇒ **陈旧的评论链接会一直显示**。
+
+**修法**：同一事务内**先删关系行**（`EXISTS` 子查询查 `tasks` 判定淘汰条件）、
+**后删 tasks 行**（顺序反了子查询就匹配不到）。
+实现从 `sync::run` 内联抽出到 `db::prune_done_tasks` —— 原先内联在需要真实网络的
+路径里 ⇒ **永远测不到**。
 
 ## 三、数据 / Schema 变更
 
@@ -102,16 +151,16 @@ Python MCP 是**独立进程**、不走 Rust 的 `open_db` ⇒ 其 `ensure_schem
 
 | 层 | 变更 |
 |---|---|
-| `github.rs` | `fetch_comments` 返回类型 `Option<String>` → `Option<Vec<RawComment>>`（**全部**评论）；新增 `RawComment` 结构 |
+| `github.rs` | `fetch_comments` 返回类型 `Option<String>` → `Option<Vec<RawComment>>`（**全部**评论）；新增 `RawComment` 结构；**新增 `total` 入参 + 纯函数 `comments_page` / `comments_url`（取最后一页，§2.3b）** |
 | `common.rs` | 新增 `CommentRef`（`id` / `url` / `author` / `created_at`，serde camelCase） |
-| `db.rs` | 新增 `task_comments` 表 + `write_task_comments`（全量替换）+ `load_task_comments`（倒序）；`delete_account` 级联清理；`TaskUpsert` 新增 `comments` / `comments_fetch_ok` |
-| `sync.rs` | 拉到的全部评论写入 `task_comments`（失败则跳过 ⇒ 保留既有）；新增纯函数 `comments_to_refs`（落库列表 + 最新一条） |
+| `db.rs` | 新增 `task_comments` 表 + `write_task_comments`（全量替换）+ `load_task_comments`（倒序）；`delete_account` 级联清理；`TaskUpsert` 新增 `comments` / `comments_fetch_ok`；**新增 `prune_done_tasks`（淘汰时级联清理关系表，§2.6）** |
+| `sync.rs` | 拉到的全部评论写入 `task_comments`（失败则跳过 ⇒ 保留既有）；新增纯函数 `comments_to_refs`（落库列表 + 最新一条，**取 API 末位**）；**调用点传评论总数** |
 | `on_demand.rs` | `TaskUpsert` 新字段补齐（`comments: []` / `comments_fetch_ok: false`） |
 | `commands.rs` | 新增命令 `list_task_comments(issue_key, account_id)` → `Vec<CommentRef>`（倒序） |
 | `lib.rs` | 注册 `list_task_comments` |
 | `server.py` | `ensure_schema` 建出 `task_comments` + 索引（schema 对齐） |
 | `check-mcp-columns.py` | 新增第 8 条检查（`task_comments` 两侧建表 + 列名一致） |
-| 前端 | 新增 `TaskComment` 类型 + `api.listTaskComments`；新增 `TaskCommentsList` 组件；`DetailPanel` 按需拉取并渲染 |
+| 前端 | 新增 `TaskComment` 类型 + `api.listTaskComments`；新增 `TaskCommentsList` 组件；`DetailPanel` 按需拉取并渲染；**effect 依赖加 `latestCommentUrl`（同步后重取）** |
 
 ### 刻意不做的事
 
@@ -119,7 +168,7 @@ Python MCP 是**独立进程**、不走 Rust 的 `open_db` ⇒ 其 `ensure_schem
   `latest_comment_url` 单值）⇒ 避免批量返回体被评论列表撑爆；两套 MCP 实现因此
   天然一致，无需在 Python 侧实现读路径。
 - **`tasks.latest_comment_url` 保留** ⇒ 卡片「新评论」跳转与 MCP 契约零变化；
-  它取本轮列表里 `created_at` 最大的一条。
+  它取本轮列表的**末位**（API 升序 ⇒ 末位即最新，见 §2.5）。
 - **不引入新依赖** ⇒ 无 chrono，时间换算复用既有 `common::iso8601_to_secs`。
 
 ## 五、测试 / 验收
@@ -137,7 +186,11 @@ Python MCP 是**独立进程**、不走 Rust 的 `open_db` ⇒ 其 `ensure_schem
 | 9 | `latest_comment_url` 取**最新**那条 | `comments_to_refs_picks_the_newest_as_latest` / `..._falls_back_to_last_when_timestamp_unknown` |
 | 10 | Python 侧建表 + 列齐全 | `test_ensure_schema_creates_task_comments_table` |
 | 11 | 检查脚本能检出两侧不一致 | `RelationTableTests`（3 条） |
-| 12 | 前端**倒序**渲染全部评论 | `task-comments-list.test.tsx`（8 条） |
+| 12 | 前端**倒序**渲染全部评论 | `task-comments-list.test.tsx`（渲染 8 条 + 接线 3 条） |
+| 13 | **取最后一页**（评论数 > 100 时拿到的是最新的） | `comments_page_is_the_last_page_when_total_exceeds_one_page` / `comments_url_always_carries_the_page_parameter` / `comments_page_is_one_when_total_fits_in_one_page` |
+| 14 | 时间戳解析失败**不得**让人选到更旧的评论 | `comments_to_refs_ignores_timestamp_parse_failures` |
+| 15 | 淘汰任务**级联清理**关系表 | `prune_done_tasks_cascades_relation_tables` |
+| 16 | 详情面板同步后**重取**评论 | `task-comments-list.test.tsx` 的「依赖必须含 latestCommentUrl」 |
 
 ### 反向验证（变异检查）
 
@@ -147,15 +200,20 @@ Python MCP 是**独立进程**、不走 Rust 的 `open_db` ⇒ 其 `ensure_schem
 | `write_task_comments` 去掉 `DELETE` | 全量替换断言失败 | ✅ **1 条** Rust 用例失败 |
 | Python 侧整块删掉 `task_comments` 建表 | 检查脚本报错 + 脚本自测失败 | ✅ 脚本 exit=1 + **3 条**脚本用例失败 |
 | 前端把列表反序渲染 | 前端倒序断言失败 | ✅ **1 条** vitest 用例失败 |
+| `comments_page` 恒返回 1（= 取最旧的一批） | 分页断言失败 | ✅ **2 条** Rust 用例失败 |
+| `comments_to_refs` 改回「`created_at` 最大者」 | 混合时间戳断言失败 | ✅ **1 条** Rust 用例失败 |
+| `prune_done_tasks` 不清关系表 | 级联断言失败 | ✅ **1 条** Rust 用例失败 |
+| 前端 effect 依赖去掉 `latestCommentUrl` | 接线断言失败 | ✅ **1 条** vitest 用例失败 |
 
 ### 已知边界
 
 | 边界 | 说明 |
 |---|---|
-| 超过 100 条评论 | GitHub comments API `per_page=100` ⇒ 只能拿到最近 100 条（GitHub 端限制，非本仓引入） |
-| 评论拉取时机 | 仅在**评论数增长**时回源（`comment_budget = 12`/轮）⇒ 评论被删除但数量不变时，本地列表仍保留旧行 |
+| 超过 100 条评论 | GitHub 按 ID 升序返回、端点无 `sort`/`direction` ⇒ 本仓**按评论总数取最后一页**（§2.3b）⇒ 拿到的是**最新**的一批，但**只保留这一页**（150 条 ⇒ 保留最新 50 条），不是全部历史。这是「1 次 API 调用」的取舍 |
+| 评论拉取时机 | 仅在**评论数增长**时回源（`comment_budget = 12`/轮）⇒ 评论被删除但数量不变时，本地列表仍保留旧行（链接会 404） |
 | 首次同步前 | `task_comments` 为空 ⇒ 详情面板不显示评论节，但「最新评论」按钮仍可用（走单值列） |
-| `created_at` 未知 | 全部为 0 时按 `comment_id DESC` 排序；`latest_comment_url` 取 API 顺序末位 |
+| `created_at` 未知 | 全部为 0 时按 `comment_id DESC` 排序；`latest_comment_url` 取 API 顺序末位（**与时间戳解析无关**） |
+| 评论总数不准 | 页面数由 `t.comments` 算出；若元数据滞后，可能取到倒数第二页（GitHub 端限制，非本仓引入） |
 
 ## 六、相关链接
 

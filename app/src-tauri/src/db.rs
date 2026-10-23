@@ -2585,6 +2585,53 @@ pub fn list_sync_logs(conn: &Connection, limit: i64) -> Result<Vec<SyncLog>, Str
     Ok(out)
 }
 
+/// #472：淘汰「已完成且超过保留窗口」的任务，**并级联清理其关系表**。
+///
+/// 保留窗口 = 30 天（`done_at` 口径，与单账号视图的清理策略一致）。
+///
+/// ⚠️ **必须一并清理关系表**（`task_comments` / `task_prs`）：
+/// 否则被淘汰的任务留下**孤儿行** ——
+///   ① 孤儿行**无界增长**（每个被淘汰的任务留下它全部的评论 / PR 关联行）；
+///   ② 同一 `issue_key` 之后被重新同步出来时，旧行会被**重新挂上** ——
+///      而评论数没涨就不会触发拉取（`t.comments > existing_comments`）
+///      ⇒ **陈旧的评论链接会一直显示**。
+///
+/// ⚠️ 顺序：**先删关系行**（其 `EXISTS` 子查询要查 `tasks` 判定淘汰条件）、
+/// **后删 tasks 行**；反过来子查询就匹配不到了。
+/// ⚠️ 三条语句放在**同一个事务**里 ⇒ 不会出现「只删了一半」的中间态。
+///
+/// 抽到 `db` 层是为了让它**可被单测覆盖**（原实现内联在 `sync::run` 里，
+/// 那条路径需要真实网络 ⇒ 永远测不到）。
+pub fn prune_done_tasks(conn: &Connection, now: i64) -> Result<usize, String> {
+    let thirty_days_secs = 30 * 24 * 60 * 60;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("开启任务淘汰事务失败: {e}"))?;
+    for table in ["task_comments", "task_prs"] {
+        tx.execute(
+            &format!(
+                "DELETE FROM {table} WHERE EXISTS ( \
+                   SELECT 1 FROM tasks t \
+                   WHERE t.account_id = {table}.account_id \
+                     AND t.issue_key = {table}.issue_key \
+                     AND t.status = 'done' AND t.done_at > 0 \
+                     AND ?1 - t.done_at > ?2)"
+            ),
+            [now, thirty_days_secs],
+        )
+        .map_err(|e| format!("清理过期任务的 {table} 关联失败: {e}"))?;
+    }
+    let n = tx
+        .execute(
+            "DELETE FROM tasks WHERE status = 'done' AND done_at > 0 AND ?1 - done_at > ?2",
+            [now, thirty_days_secs],
+        )
+        .map_err(|e| format!("清理过期已完成任务失败: {e}"))?;
+    tx.commit()
+        .map_err(|e| format!("提交任务淘汰事务失败: {e}"))?;
+    Ok(n)
+}
+
 /// 清理超过 30 天的同步日志（保留策略）。
 pub fn prune_sync_logs(conn: &Connection, now: i64) -> Result<usize, String> {
     let thirty_days_secs = 30 * 24 * 60 * 60;
@@ -3542,6 +3589,63 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 0, "删账号后不得残留评论关联行");
+    }
+
+    /// #472：淘汰过期已完成任务时**必须一并清理关系表**（`task_comments` / `task_prs`）。
+    ///
+    /// 缺陷形态：原先淘汰只 `DELETE FROM tasks` ⇒ 留下**孤儿行** ——
+    /// ① 无界增长；② 同一 `issue_key` 之后被重新同步出来时旧行被**重新挂上**，
+    /// 而评论数没涨就不会触发拉取 ⇒ **陈旧的评论链接长期显示**。
+    #[test]
+    fn prune_done_tasks_cascades_relation_tables() {
+        let conn = open_db(std::path::Path::new(":memory:")).expect("open_db");
+        let now = 2_000_000_000i64;
+        let thirty_days = 30 * 24 * 60 * 60i64;
+        // 过期任务（done_at 距今超过 30 天）+ 未过期任务（done_at = 0，不满足条件）。
+        conn.execute(
+            "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
+                                ownership, status, done_at, synced_at, account_id)
+             VALUES ('o/r#1','o','r',1,'t','u','closed','assigned','done', ?1, 1, 1)",
+            [now - thirty_days - 1],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
+                                ownership, status, done_at, synced_at, account_id)
+             VALUES ('o/r#2','o','r',2,'t','u','open','assigned','todo', 0, 1, 1)",
+            [],
+        )
+        .unwrap();
+        write_task_comments(&conn, 1, "o/r#1", &[cmt(1, "u1", "alice", 100)], 1).unwrap();
+        write_task_comments(&conn, 1, "o/r#2", &[cmt(2, "u2", "bob", 100)], 1).unwrap();
+        write_task_prs(&conn, 1, "o/r#1", &[pr(101, "u101", "open")], 1).unwrap();
+        write_task_prs(&conn, 1, "o/r#2", &[pr(102, "u102", "open")], 1).unwrap();
+
+        let pruned = prune_done_tasks(&conn, now).expect("淘汰应成功");
+        assert_eq!(pruned, 1, "只应淘汰那 1 个过期已完成任务");
+
+        // 过期任务的关联行必须**一并清掉**（否则成孤儿行）。
+        assert_eq!(
+            load_task_comments(&conn, 1, "o/r#1").unwrap().len(),
+            0,
+            "被淘汰任务的评论关联行必须被清理（不得留孤儿行）"
+        );
+        assert_eq!(
+            load_task_prs(&conn, 1, "o/r#1").unwrap().len(),
+            0,
+            "被淘汰任务的 PR 关联行必须被清理（不得留孤儿行）"
+        );
+        // 未过期任务的关联行必须**保留**。
+        assert_eq!(
+            load_task_comments(&conn, 1, "o/r#2").unwrap().len(),
+            1,
+            "未过期任务的关联行不得被误删"
+        );
+        assert_eq!(
+            load_task_prs(&conn, 1, "o/r#2").unwrap().len(),
+            1,
+            "未过期任务的 PR 关联行不得被误删"
+        );
     }
 
     /// #427：`open_db` 必须在**新库**里建出 sessions 表 + 两个索引。

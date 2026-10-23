@@ -38,8 +38,13 @@
   - **「拉取失败保留既有值」**：评论回源失败时**保留既有关联行**（不清空），与 PR 关联同款取舍 —— 一次网络抖动不该把详情面板里的评论链接全清掉。靠 `TaskUpsert::comments_fetch_ok` 区分「拉取成功但确实没有评论」与「拉取失败」（两者都表现为空列表，无法靠列表本身区分）。
   - **MCP 工具契约不变**（`list_my_tasks` / `get_task_status` 仍只暴露 `latest_comment_url` 单值）⇒ 批量返回体不被撑爆，两套 MCP 实现因此天然一致；`tasks.latest_comment_url` 保留 ⇒ 卡片「新评论」跳转与 MCP 契约零变化。
   - **回归防线**：Python MCP 是**独立进程**、不走 Rust 的 `open_db` ⇒ 其 `ensure_schema` 必须**自建** `task_comments`，漏建 ⇒ 读到它的路径报 `no such table` ⇒ 整个工具报错，而 App 自身正常、两侧单测都测不到（与 #169/#262/#278 同源盲区）⇒ `scripts/check-mcp-columns.py` 新增第 8 条检查（两侧都建表 + 列名逐列一致）。
-  - **反向验证**：倒序写反 / 去掉全量替换的 `DELETE` / Python 侧删掉建表块 / 前端反序渲染 ⇒ 分别有 **3 / 1 / 3 / 1** 条断言立刻失败 ⇒ 断言真在守行为、不是恒真装饰。
-  - **验证**：`cargo test` **238 + 27 passed**（新增 11 条）· `mcp_server` **68 passed**（新增 2 条）· `scripts` **132 passed**（新增 3 条）· `vitest` **364 + 8 passed**（新增 8 条）· `cargo fmt --check` / `clippy --all-targets -D warnings` / `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check`（420 key）/ `build` / 四个 `check-*.py` 全绿。
+  - **代码审查后修复（2026-10-23）**：
+    - ⚠️ **评论分页取错页（中危）**：GitHub 的 issue comments 端点**按 ID 升序**返回（官方文档 *"Issue comments are ordered by ascending ID"*）且**不提供** `sort`/`direction` ⇒ 只拼 `?per_page=100` 而**不带 `page`** 拿到的是**第 1 页 = 最旧的一批**。⇒ 评论数 > 100 的 issue：卡片「新评论」跳转、详情「最新评论」按钮都指向**第 100 旧**那条，本功能列出的也是**最旧**的一批（**最新的根本没拿到**）。现把评论总数（issue 元数据 `comments`）传进 `fetch_comments`，按 `page = ceil(count / per_page)` 取**最后一页**；≤ 100 条时仍是第 1 页 ⇒ **零行为变化**。URL 拼装抽成**纯函数** `comments_page` / `comments_url` —— 原先 HTTP 层硬编码 `api.github.com` 不可 mock ⇒ 这个 bug 才没法被单测挡住。
+    - ⚠️ **淘汰任务留下孤儿关联行**：30 天 done 窗口淘汰原先只 `DELETE FROM tasks` ⇒ `task_comments` / `task_prs` 行残留（**无界增长**；且同一 `issue_key` 重新同步时旧行会被**重新挂上**，而评论数没涨就不触发拉取 ⇒ **陈旧链接长期显示**）。现抽成 `db::prune_done_tasks`（原先内联在需要真实网络的 `sync::run` 里 ⇒ 永远测不到），同一事务内**先删关系行、后删 tasks 行**。
+    - ⚠️ **`latest_comment_url` 选取规则**改回 **API 顺序的末位**：原先用「`created_at` 最大者」，而本仓 `iso8601_to_secs` 解析失败返回 0 ⇒ **部分**评论时间戳解析失败时会选中一条**更旧**的评论（0 输给正常时间戳）⇒ 与「最新」相反。改按末位后**与时间戳解析无关**，且与改造前 `.next_back()` 逐位相同 ⇒ 单值列真正「零行为变化」。
+    - ⚠️ **详情面板同步后不刷新评论**：effect 依赖只有 `[issueKey, accountId]` ⇒ 同步后 App 重查但这两项不变 ⇒ effect 不重跑 ⇒ 评论列表停在打开那一刻（面板其它字段会刷新 ⇒ 只有评论这块陈旧）。依赖加 `latestCommentUrl`（恰在有新评论被拉到时才变 ⇒ 精确触发重取，且无变化时不产生多余 IPC）。
+  - **反向验证**：倒序写反 / 去掉全量替换的 `DELETE` / Python 侧删掉建表块 / 前端反序渲染 / 分页恒取第 1 页 / 选取规则改回 `max_by_key` / 淘汰不清关系表 / 依赖去掉 `latestCommentUrl` ⇒ 分别有 **3 / 1 / 3 / 1 / 2 / 1 / 1 / 1** 条断言立刻失败 ⇒ 断言真在守行为、不是恒真装饰。
+  - **验证**：`cargo test` **243 + 27 passed**（新增 16 条）· `mcp_server` **68 passed**（新增 2 条）· `scripts` **132 passed**（新增 3 条）· `vitest` **375 passed**（新增 11 条）· `cargo fmt --check` / `clippy --all-targets -D warnings` / `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check`（420 key）/ `build` / 四个 `check-*.py` 全绿。
   - 详见 [`issue-472-task-comment-links.md`](./issue-472-task-comment-links.md)
 
 - **v0.7.6（2026-10-22）— 同一个 issue 支持关联多个 PR（#467）**

@@ -537,6 +537,48 @@ pub fn parse_links_from_graphql(v: &serde_json::Value) -> HashMap<i64, IssueLink
     out
 }
 
+/// 评论列表每页条数（GitHub 上限 100）。
+pub const COMMENTS_PER_PAGE: u64 = 100;
+
+/// 计算评论列表应该取**哪一页**。
+///
+/// #472：GitHub 的 issue comments 端点**按 ID 升序**返回
+/// （官方文档：*"Issue comments are ordered by ascending ID."*），
+/// 且该端点**不提供** `sort` / `direction` 参数（仓库级端点才有）
+/// ⇒ **不带 `page` 时取到的是第 1 页 = 最旧的一批**。
+///
+/// 想拿到「最近的」评论，只能自己按评论总数算页码、取**最后一页**。
+///
+/// `total` = 该 issue 的评论总数（来自 issue 元数据 `comments` /
+/// GraphQL `totalCount`）：
+/// - `total <= per_page` ⇒ 第 1 页（= 全部评论 ⇒ 与不带 `page` 的旧行为一致）；
+/// - `total = 150, per_page = 100` ⇒ 第 2 页（= 最新的 50 条）。
+///
+/// ⚠️ 代价：评论数超过 `per_page` 时**只保留最新的那一页**（不是全部历史）。
+/// 这是「1 次 API 调用」的取舍（`comment_budget = 12`/轮）—— 用户的意图是看
+/// **最近**的讨论，不是考古。
+pub fn comments_page(total: u64, per_page: u64) -> u64 {
+    if per_page == 0 {
+        return 1;
+    }
+    // 向上取整；不用 `div_ceil`（避免依赖较新的 std 版本）。
+    let pages = total / per_page + u64::from(total % per_page != 0);
+    pages.max(1)
+}
+
+/// 构造评论列表的请求 URL。
+///
+/// 抽成**纯函数**是为了让「取第几页」这件事可被单测覆盖 ——
+/// `fetch_comments` 内部的 HTTP 调用硬编码 `api.github.com`、**不可 mock**，
+/// URL 拼装若留在命令式代码里就永远测不到（#472 的分页缺陷正是因此逃过 CI）。
+pub fn comments_url(full_repo: &str, number: i64, total: u64) -> String {
+    let page = comments_page(total, COMMENTS_PER_PAGE);
+    format!(
+        "https://api.github.com/repos/{}/issues/{}/comments?per_page={}&page={}",
+        full_repo, number, COMMENTS_PER_PAGE, page
+    )
+}
+
 impl GitHubClient {
     /// 构造客户端。`login` / `org` 为空时仍允许（外部调用方可能用不到）。
     ///
@@ -872,23 +914,26 @@ impl GitHubClient {
         out
     }
 
-    /// 拉取某 issue 的**全部**评论（#472）。
+    /// 拉取某 issue 的评论（#472）。
     ///
     /// #472：改造前本方法**拉了全部评论却只返回最新一条**（`.next_back()` 取
     /// `html_url`）⇒ 其余评论的链接全部丢弃，详情面板只能给出「最新评论」一个
     /// 入口。现在返回**全部**评论，供独立关系表 `task_comments` 承载一对多关系。
     ///
-    /// 返回 `Ok(None)` = 该 issue **没有评论**；`Err` = 请求失败
+    /// ⚠️ **取哪一页由 [`comments_page`] 决定**（`total` = 评论总数）：
+    /// GitHub 按 ID 升序返回且端点无 `sort`/`direction` ⇒ 不带 `page` 只会拿到
+    /// **最旧**的一批（≤100 条）⇒ 评论数超过 100 的 issue **拿不到最新评论**。
+    /// 故必须传入总数、取**最后一页**。
+    ///
+    /// 返回 `Ok(None)` = 该 issue **没有评论**（或页码越界）；`Err` = 请求失败
     /// （调用方须**保留既有值**，不得清空 —— 一次网络抖动不该把评论链接全清掉）。
     /// `repo_owner` 用于 org 为空时构造完整仓库路径。
-    ///
-    /// ⚠️ GitHub comments API `per_page=100` ⇒ 超过 100 条评论的老 issue
-    /// 只能拿到最近 100 条（GitHub 端限制，非本仓引入）。
     pub fn fetch_comments(
         &self,
         repo: &str,
         number: i64,
         repo_owner: &str,
+        total: u64,
     ) -> Result<Option<Vec<RawComment>>, String> {
         let full_repo = if !self.org.is_empty() {
             format!("{}/{}", self.org, repo)
@@ -897,10 +942,7 @@ impl GitHubClient {
         } else {
             return Err("无法确定仓库 owner（org 为空且无 repo_owner）".to_string());
         };
-        let url = format!(
-            "https://api.github.com/repos/{}/issues/{}/comments?per_page=100",
-            full_repo, number
-        );
+        let url = comments_url(&full_repo, number, total);
         let v = self.get(&url)?;
         let arr = v
             .as_array()
@@ -2145,6 +2187,57 @@ fn urlencode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ===== #472：评论分页（取最后一页才是「最近的」）=====
+
+    /// #472：评论数不超过一页时 ⇒ 第 1 页（= 全部评论，行为与旧版一致）。
+    #[test]
+    fn comments_page_is_one_when_total_fits_in_one_page() {
+        assert_eq!(super::comments_page(0, 100), 1, "0 条 ⇒ 第 1 页（防呆）");
+        assert_eq!(super::comments_page(1, 100), 1);
+        assert_eq!(super::comments_page(99, 100), 1);
+        assert_eq!(super::comments_page(100, 100), 1, "正好一页 ⇒ 仍是第 1 页");
+    }
+
+    /// #472：评论数超过一页时 ⇒ 取**最后一页**。
+    ///
+    /// 缺陷形态（本次修复的起因）：URL 只拼 `per_page=100` 而**不带 `page`**
+    /// ⇒ 取第 1 页；GitHub 按 **ascending ID** 返回 ⇒ 第 1 页是**最旧**的一批
+    /// ⇒ 评论数 > 100 的 issue **拿不到最新评论**（卡片「新评论」跳转也会跳错）。
+    #[test]
+    fn comments_page_is_the_last_page_when_total_exceeds_one_page() {
+        assert_eq!(
+            super::comments_page(101, 100),
+            2,
+            "101 条 ⇒ 第 2 页（最新那条）"
+        );
+        assert_eq!(super::comments_page(150, 100), 2);
+        assert_eq!(
+            super::comments_page(200, 100),
+            2,
+            "200 条 ⇒ 第 2 页（正好满页）"
+        );
+        assert_eq!(super::comments_page(201, 100), 3);
+    }
+
+    /// #472：URL 必须**带 `page`** —— 不带就只取第 1 页（= 最旧的一批）。
+    #[test]
+    fn comments_url_always_carries_the_page_parameter() {
+        let url = super::comments_url("o/r", 42, 150);
+        assert!(
+            url.contains("page=2"),
+            "评论数 150 ⇒ URL 必须指向第 2 页，实际: {url}"
+        );
+        assert!(url.contains("per_page=100"), "每页条数必须显式带上: {url}");
+        assert!(
+            url.ends_with("issues/42/comments?per_page=100&page=2"),
+            "实际: {url}"
+        );
+
+        // ≤ 一页时是第 1 页（与旧版行为一致）。
+        let url = super::comments_url("o/r", 42, 10);
+        assert!(url.contains("page=1"), "实际: {url}");
+    }
 
     /// #327：项目条目数必须取 `items.totalCount`，不能取 `number`（那是项目编号）。
     ///

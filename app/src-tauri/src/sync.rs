@@ -279,10 +279,17 @@ struct PrEntry {
 /// 抽成独立**纯函数**是为了让它可被单测覆盖 —— 同步主路径需要真实网络，
 /// 单测里跑不通（与 `build_pr_map` 同样的取舍）。
 ///
-/// **最新一条**的判据：`created_at` 最大者。
-/// ⚠️ 全部 `created_at` 都是 0（字段缺失 / 解析失败）时，`max_by_key` 取**末位**
-/// —— GitHub comments API 按 `created_at` **升序**返回 ⇒ 末位即最新 ⇒
-/// 与「按 API 顺序取最后一条」的老行为一致。
+/// **最新一条 = API 顺序的末位**。
+///
+/// ⚠️ 依据是 GitHub 的**文档保证**而非推测：issue comments 端点
+/// *"Issue comments are ordered by ascending ID."*（ID 随创建时间单调递增）
+/// ⇒ 末位即最新。
+///
+/// ⚠️ **不要改用「`created_at` 最大者」**：本仓的 `iso8601_to_secs` 在解析失败时
+/// 返回 0 ⇒ 一旦**部分**评论的时间戳解析失败，「最大者」可能选中一条**更旧**的
+/// 评论（0 永远输给正常时间戳）⇒ 与「最新」语义相反。
+/// 按 API 顺序取末位则**与时间戳解析无关**，且与改造前的 `.next_back()` 行为
+/// **逐位相同**（单值列零行为变化）。
 fn comments_to_refs(
     list: &[crate::github::RawComment],
 ) -> (Vec<crate::common::CommentRef>, String) {
@@ -295,11 +302,8 @@ fn comments_to_refs(
             created_at: c.created_at,
         })
         .collect();
-    let newest = list
-        .iter()
-        .max_by_key(|c| c.created_at)
-        .map(|c| c.url.clone())
-        .unwrap_or_default();
+    // API 升序 ⇒ 末位即最新（空列表 ⇒ 空串，与改造前 `next_back()` 一致）。
+    let newest = list.last().map(|c| c.url.clone()).unwrap_or_default();
     (refs, newest)
 }
 
@@ -977,7 +981,7 @@ fn sync_account_inner(
             Vec<crate::common::CommentRef>,
             bool,
         ) = if t.comments > existing_comments as u64 && comment_budget > 0 {
-            match client.fetch_comments(&t.repo, t.number, &t.repo_owner) {
+            match client.fetch_comments(&t.repo, t.number, &t.repo_owner, t.comments) {
                 Ok(Some(list)) if !list.is_empty() => {
                     comment_budget -= 1;
                     std::thread::sleep(Duration::from_millis(80));
@@ -1393,12 +1397,12 @@ pub fn run(conn: &Connection, trigger_type: &str) -> Result<SyncResult, String> 
     }
 
     // 已完成任务保留 1 个月（按 done_at 窗口淘汰），与单账号视图保持同样的清理策略。
-    let pruned = conn
-        .execute(
-            "DELETE FROM tasks WHERE status = 'done' AND done_at > 0 AND ?1 - done_at > 2592000",
-            [now],
-        )
-        .map_err(|e| format!("清理过期已完成任务失败: {}", e))?;
+    //
+    // #472 审查修复：淘汰时**一并清理关系表**（`task_comments` / `task_prs`），
+    // 否则留下**孤儿行**（无界增长 + 同 issue_key 重新同步时陈旧链接被重新挂上）。
+    // 实现见 `db::prune_done_tasks`（抽到 db 层才能被单测覆盖 —— 原先内联在
+    // 这条需要真实网络的路径里，永远测不到）。
+    let pruned = crate::db::prune_done_tasks(conn, now)?;
 
     crate::db::set_setting(conn, "last_sync_at", &now.to_string())?;
 
@@ -2087,18 +2091,43 @@ mod tests {
         assert_eq!(refs[2].created_at, 300, "创建时间要一并带上（倒序的依据）");
     }
 
-    /// #472：`latest_comment_url` 单值列取**最新**那条（`created_at` 最大者）。
+    /// #472：`latest_comment_url` 单值列取 **API 顺序的末位**（= 最新）。
+    ///
+    /// 依据是 GitHub 的**文档保证**：issue comments *"ordered by ascending ID"*
+    /// ⇒ 末位即最新。
     #[test]
     fn comments_to_refs_picks_the_newest_as_latest() {
-        // 故意让 API 顺序与时间顺序不一致（真实 API 按时间升序，但这里验证的是
-        // 「按 created_at 取最大」而非「按位置取最后」）。
+        // API 升序返回（真实形态）。
         let list = vec![
-            raw_comment(3, "u3", "carol", 300),
             raw_comment(1, "u1", "alice", 100),
             raw_comment(2, "u2", "bob", 200),
+            raw_comment(3, "u3", "carol", 300),
         ];
         let (_refs, newest) = super::comments_to_refs(&list);
-        assert_eq!(newest, "u3", "最新一条必须按 created_at 最大取，而非按位置");
+        assert_eq!(newest, "u3", "最新一条必须取 API 顺序的末位");
+    }
+
+    /// #472：**时间戳解析失败不得影响「最新一条」的选取**。
+    ///
+    /// 缺陷形态（本次修复的起因）：原先用「`created_at` 最大者」挑最新 ——
+    /// 而本仓 `iso8601_to_secs` 解析失败返回 0 ⇒ 一旦**部分**评论时间戳解析失败，
+    /// 「最大者」会选中一条**更旧**的评论（0 永远输给正常时间戳）⇒ 与「最新」相反。
+    ///
+    /// 本用例把 API 顺序与时间戳顺序**故意拆开**：末位那条的时间戳是 0（解析失败），
+    /// 但它按 ID 升序仍是**最新**的 ⇒ 正确实现必须选它。
+    #[test]
+    fn comments_to_refs_ignores_timestamp_parse_failures() {
+        let list = vec![
+            raw_comment(1, "u1", "alice", 100),
+            raw_comment(2, "u2", "bob", 200),
+            // 末位 = 按 ID 最新，但时间戳解析失败（= 0）
+            raw_comment(3, "u3", "carol", 0),
+        ];
+        let (_refs, newest) = super::comments_to_refs(&list);
+        assert_eq!(
+            newest, "u3",
+            "时间戳解析失败不得让人选到更旧的那条（应按 API 升序取末位）"
+        );
     }
 
     /// #472：全部 `created_at` 未知（= 0）时，取**末位** ——

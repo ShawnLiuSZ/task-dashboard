@@ -52,6 +52,13 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
   //
   // ⚠️ 组件在切换任务时被 `key={taskIdentity(selectedTask)}` **重新挂载**，
   // 但同一 issueKey 在聚合视图下可能属于不同账号 ⇒ 依赖里带上 accountId。
+  //
+  // ⚠️ **依赖里必须带 `task.latestCommentUrl`**（#472 审查修复）：
+  // 同步后 App 会重查任务列表 ⇒ `selectedTask` 变成新对象，但 `issueKey` /
+  // `accountId` **不变** ⇒ 若依赖只有这两项，effect 不会重跑 ⇒ 评论列表停在
+  // 打开那一刻（面板其它字段会刷新 ⇒ 只有评论这块陈旧，观感割裂）。
+  // `latestCommentUrl` 恰好在「有新评论被成功拉到」时才变 ⇒ 精确触发重取，
+  // 且没变化时**不产生多余的 IPC**。
   useEffect(() => {
     let cancelled = false;
     setCommentsLoading(true);
@@ -72,7 +79,7 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
       // 卸载 / 换任务后到达的响应不得再 setState。
       cancelled = true;
     };
-  }, [task.issueKey, task.accountId]);
+  }, [task.issueKey, task.accountId, task.latestCommentUrl]);
 
   // #196：当前 GitHub 状态键（与 Board.groupByProjectStatus 同规则）：
   // closed→done，有原文取原文，空→unclassified。详情状态区永远以此为准，

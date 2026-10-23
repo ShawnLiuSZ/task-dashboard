@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import TaskCommentsList from './TaskCommentsList';
 import { I18nProvider } from '../i18n';
 import type { TaskComment } from '../types';
+// 源码文本（`?raw`）—— 只读字符串，**不执行模块** ⇒ node 环境无 DOM 也能用。
+import detailPanelRaw from './DetailPanel.tsx?raw';
 
 /**
  * 「评论链接列表」的渲染回归（#472）。
@@ -114,5 +116,44 @@ describe('TaskCommentsList（#472）', () => {
   it('时间未知时显示占位符而不是 1970 年', () => {
     const html = render([{ id: 1, url: 'u1', author: 'alice', createdAt: 0 }]);
     expect(html).not.toContain('1970');
+  });
+});
+
+/**
+ * DetailPanel 的**评论拉取接线**（#472 审查修复后的回归防线）。
+ *
+ * ⚠️ 为什么用源码静态断言：拉取逻辑在 `useEffect` 里，而本仓前端测试跑在
+ * node 环境（**无 DOM / 无 jsdom**）⇒ `useEffect` 不会执行 ⇒ 渲染断言
+ * 覆盖不到「依赖数组对不对」。静态断言是本仓既有的做法
+ * （见 `notes-layout.test.ts` 对 `utils/useAutoSize.ts` 的同类断言）。
+ */
+describe('DetailPanel 的评论拉取接线（#472）', () => {
+  /** 取出评论拉取 effect 的依赖数组内容。 */
+  function depsOfCommentEffect(): string {
+    const at = detailPanelRaw.indexOf('listTaskComments');
+    expect(at, 'DetailPanel 应调用 listTaskComments').toBeGreaterThan(-1);
+    const m = detailPanelRaw.slice(at).match(/\}, \[([^\]]*)\]\);/);
+    expect(m, '应能定位到评论拉取 effect 的依赖数组').not.toBeNull();
+    return m![1];
+  }
+
+  it('依赖必须含 latestCommentUrl（否则同步后评论列表不刷新）', () => {
+    // 缺陷形态：依赖只有 [issueKey, accountId] ⇒ 同步后 App 重查任务列表，
+    // 但这两个值不变 ⇒ effect 不重跑 ⇒ 评论列表停在打开那一刻
+    // （面板其它字段会刷新 ⇒ 只有评论这块陈旧）。
+    const deps = depsOfCommentEffect();
+    expect(deps).toContain('latestCommentUrl');
+  });
+
+  it('依赖必须含 issueKey 与 accountId（换任务 / 换账号要重取）', () => {
+    const deps = depsOfCommentEffect();
+    expect(deps).toContain('issueKey');
+    // ⚠️ 必须带账号：issueKey 是 `repo#number`（不含 owner），多账号下会重复
+    // ⇒ 只按 issueKey 取会拿到别的账号的评论。
+    expect(deps).toContain('accountId');
+  });
+
+  it('拉取必须带 accountId（多账号不串号）', () => {
+    expect(detailPanelRaw).toContain('listTaskComments(task.issueKey, task.accountId)');
   });
 });
