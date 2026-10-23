@@ -2,7 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **v0.7.7 (unreleased) — Note editing now happens in a Modal instead of on the card itself (#470)**
+- **v0.7.7 (2026-10-23) — Note editing now happens in a Modal instead of on the card itself (#470)**
 
   - **Editing no longer happens in place on the original card**: previously "view" opened a Modal while **"edit" stayed on the card** — clicking the pencil turned the card itself into a textarea. The screen therefore mixed two card shapes whose heights differed by an order of magnitude: the read-only shape is folded with `-webkit-line-clamp: 9` (capped at ~9 lines), while the editing textarea is not folded at all and grows via `useAutoSize` up to **260px** (~16 lines). A new `NoteEditorModal` now opens when the pencil is clicked ⇒ cards **always have the single folded read-only shape**.
   - **Why it had to move into a Modal (not just for looks)**: the #462/#465 layout is a CSS multi-column masonry flow whose `.notes-list` sizes itself to its content ⇒ **a column's height equals the height of its tallest card**. That is a benefit while reading (less raggedness at the bottom), but a single 260px editing card stretches **that whole column** to 260px, leaving a large gap under every other card in it ⇒ the height difference between the three columns is amplified and the eye jumps between "one very tall card" and "a short column" while scrolling.
@@ -14,7 +14,7 @@
   - **Verification**: `vitest` **362 passed** (was 347) · `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check` (418 keys) / `build` all green.
   - See [`issue-470-note-edit-modal.md`](./issue-470-note-edit-modal.md)
 
-- **v0.7.7 (unreleased) — Post-review fixes: "primary PR first" ordering for multi-PR links and read-path test coverage (#467 follow-up)**
+- **v0.7.7 (2026-10-23) — Post-review fixes: "primary PR first" ordering for multi-PR links and read-path test coverage (#467 follow-up)**
 
   - **`prs[0]` is now always the primary PR** (#467 follow-up): `task_prs` is read back with `ORDER BY pr_number ASC`, while the primary PR is defined as "the **first** PR hit during that sync" ⇒ the two orders **can differ** ⇒ `prs[0]` was not necessarily the primary PR, so `tasks.pr_number` and `prs[0].number` could **contradict** each other (any UI or agent treating `prs[0]` as the primary PR would pick the wrong one). The primary PR is now promoted to the front **on the read side**: both Rust paths (`commands.rs::attach_task_prs` / `mcp.rs::attach_prs`) share `common.rs::sort_prs_primary_first`, and the Python side (`server.py::_attach_prs`) has the matching `_sort_prs_primary_first` ⇒ **one single definition across all three**. **No table change, no change to the SQL ordering semantics, zero extra queries.**
   - **The match key is the `(number, url)` pair**: cross-repo PR numbers can collide (`parse_issue_refs` normalises `owner/repo#N` to `repo#N`, dropping the owner) ⇒ two associations with the same number but different URLs legitimately coexist; matching on the number alone would promote **another repo's** same-numbered PR to the front.
@@ -25,7 +25,7 @@
   - **Verification**: `cargo test` **227 + 27 passed** (11 new) · `cargo fmt --check` / `clippy --all-targets -D warnings` · `mcp_server` **66 passed** (6 new) · `scripts` **129 passed** · `vitest` **364 passed** (1 new) · `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check` (418 keys) / `build` / all four `check-*.py` green.
   - See [`issue-467-multi-pr.md`](./issue-467-multi-pr.md)
 
-- **v0.7.7 (unreleased) — Notes masonry: the first card of one column had 10px too much top margin (#475)**
+- **v0.7.7 (2026-10-23) — Notes masonry: the first card of one column had 10px too much top margin (#475)**
 
   - **Symptom**: in the notes panel (CSS multi-column masonry), the **first card of one column** sat **10px lower** than the first cards of the other columns. ⚠️ **Not specific to the last column** — with a different set of notes the offset shows up in the **middle** column, and with yet another set it disappears ⇒ it looks intermittent and is very hard to spot.
   - **Root cause**: `column-fill: balance` picks the **smallest column height H** that fits all the content ⇒ **the column that determines H is always exactly full** ⇒ that column's last card's `margin-bottom: 10px` no longer fits inside the column box ⇒ WebKit paints it at the **top of the next column** ⇒ the next column's first card is pushed down by 10px. Measured: switching to `margin-top`, or wrapping the cards (`flow-root` / `padding-bottom`), does **not** help — as long as the gap is "overflow space after the last box of a column", it gets carried into the next column.
@@ -34,7 +34,7 @@
   - **Verification**: `vitest` **376 passed** (+1) · `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check` (420 keys) / `build` all green.
   - See [`issue-475-notes-column-top-alignment.md`](./issue-475-notes-column-top-alignment.md)
 
-- **v0.7.7 (unreleased) — Task comment links are now one-to-many; the detail panel lists them all in reverse order (#472)**
+- **v0.7.7 (2026-10-23) — Task comment links are now one-to-many; the detail panel lists them all in reverse order (#472)**
 
   - **Comment links are no longer limited to one**: the `tasks.latest_comment_url` column was **single-valued** and only held the newest comment's link, while `github.rs::fetch_comments` **did fetch every comment** (`per_page=100`) but only kept the last one via `.next_back()` ⇒ **all the other comment links were silently dropped**, leaving the detail panel with a single "Latest comment" entry point. It is now **one-to-many**: a dedicated relation table `task_comments` carries the issue ↔ comments relationship, and the detail panel lists **every** comment link.
   - **Reverse order (newest first)**: the GitHub comments API returns comments in **ascending** `created_at` order ⇒ the timestamp is persisted (Unix seconds) and the read side uses `ORDER BY created_at DESC, comment_id DESC` ⇒ newest first. `comment_id DESC` breaks ties, so comments created in the same second (or with an unknown timestamp) still have a **deterministic** order instead of relying on SQLite's row order. The **frontend no longer re-sorts** — re-sorting there would mask a wrong ordering in the backend.
