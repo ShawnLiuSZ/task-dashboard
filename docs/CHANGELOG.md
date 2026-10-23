@@ -29,6 +29,15 @@
   - **验证**：`cargo test` **227 + 27 passed**（新增 11 条）· `cargo fmt --check` / `clippy --all-targets -D warnings` · `mcp_server` **66 passed**（新增 6 条）· `scripts` **129 passed** · `vitest` **364 passed**（新增 1 条）· `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check`（418 key）/ `build` / 四个 `check-*.py` 全绿。
   - 详见 [`issue-467-multi-pr.md`](./issue-467-multi-pr.md)
 
+- **v0.7.7（未发布）— 备忘录瀑布流：某列首卡上边距多 10px（#475）**
+
+  - **现象**：备忘录面板（CSS multi-column 瀑布流）里，**某一列的首张卡片**比其它列的首卡**低 10px**。⚠️ **不是最后一列专属** —— 换一组数据偏移会出现在**中间列**，再换一组又「好了」⇒ 表现为「时有时无」，极难自查。
+  - **根因**：`column-fill: balance` 的平衡算法取**能放下全部内容的最小列高 H** ⇒ **决定 H 的那一列必然「刚好填满」** ⇒ 该列**末卡的 `margin-bottom: 10px` 放不进列框** ⇒ WebKit 把它**画到下一列的顶部** ⇒ 下一列首卡被下推 10px。实测：改用 `margin-top`、外层 wrapper（`flow-root` / `padding-bottom`）**都无效** —— 只要间距是「列内最后一个盒子之后的溢出空间」，就会被带到下一列顶部。
+  - **修法**：把纵向间距从「卡片的外部 `margin-bottom`」改成「**卡片自身 box 内的透明下边框**」（`border-bottom-width: 10px` + `border-bottom-color: transparent` + `background-clip: padding-box` + `inset` 阴影补回彩色底边）⇒ 间距在 box 之内、列高已算进去 ⇒ **没有溢出到列外的空间** ⇒ 各列首卡对齐（Playwright + WebKit 实测 7 组数据全部对齐）。
+  - **视觉零差异**：WebKit 逐像素比对 —— 卡片底色范围、彩色四边、**10px 间距**、**正文位置**全部一致，仅整体上移 1px。⚠️ `.note-card:hover` / `.note-card.confirming` 都会覆盖 `box-shadow` ⇒ 两处均已补回 inset 底边并显式保持底边透明（否则 10px 间距会被填成实色、卡片贴到一起）。
+  - **验证**：`vitest` **376 passed**（+1）· `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check`（420 key）/ `build` 全绿。
+  - 详见 [`issue-475-notes-column-top-alignment.md`](./issue-475-notes-column-top-alignment.md)
+
 - **v0.7.7（未发布）— task 评论链接支持一对多，详情面板倒序列出全部评论（#472）**
 
   - **评论链接不再只留一条**：此前 `tasks.latest_comment_url` 是**单值**列，只存最新一条评论的链接；而 `github.rs::fetch_comments` **明明拉了全部评论**（`per_page=100`）却只用 `.next_back()` 取最后一条 ⇒ 其余评论的链接**全部丢弃**，详情面板只有「最新评论」一个入口。现改为**一对多**：新增独立关系表 `task_comments` 承载 issue ↔ 多评论关系，详情面板把**全部**评论链接**逐条列出**。

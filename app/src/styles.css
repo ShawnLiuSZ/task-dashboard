@@ -2617,8 +2617,18 @@ button.unassigned-tag:disabled {
  *
  * #462：改瀑布流后卡片是多列流的**子项**，需额外几处：
  * · `break-inside: avoid` —— 卡片不被切成两半（多列流默认会跨列断开）。
- * · `margin-bottom: 10px` —— 多列流里 `column-gap` 只管**列**间距，
- *   卡片之间的**纵向**间距得靠 margin（原先由 grid 的 `gap: 10px` 承担）。
+ * · **纵向间距 10px** —— 多列流里 `column-gap` 只管**列**间距，卡片之间的
+ *   **纵向**间距得自己提供（原先由 grid 的 `gap: 10px` 承担）。
+ *   ⚠️ #475：这段间距**不能**用卡片的 `margin-bottom`！
+ *   `column-fill: balance` 的平衡算法取「能放下全部内容的**最小**列高」⇒
+ *   **决定列高的那一列必然刚好填满** ⇒ 该列末卡的 `margin-bottom` 放不进列框
+ *   ⇒ WebKit 把它**画到下一列的顶部** ⇒ 下一列首卡被下推 10px
+ *   （实测：不是最后一列专属，偏移也会出现在中间列；换组数据又「好了」——
+ *    只在列高恰好被填满时触发）。
+ *   ⇒ 故把间距改成**卡片自身 box 内的透明下边框**（见下方 `border-bottom-width`
+ *   + `background-clip: padding-box` + inset 阴影补回彩色底边）：
+ *   间距在 box 之内 ⇒ 列高已把它算进去 ⇒ **没有溢出到列外的空间** ⇒ 各列对齐。
+ *   视觉零差异：逐像素比对，底色范围 / 彩色四边 / 10px 间距 / 正文位置全一致。
  * · ⚠️ **不能用 `width: 100%`** —— 多列流里 `width: 100%` 解析为相对**整个
  *   容器**而非列宽，实测单列时卡片直接撑到 2688px（容器 900px）⇒ 横向溢出。
  *   用 `width: auto`（块级子项在多列流里自动占满列宽）。
@@ -2638,7 +2648,17 @@ button.unassigned-tag:disabled {
   break-inside: avoid;
   page-break-inside: avoid;
   width: auto;
-  margin: 0 0 10px;
+  /* #475：纵向间距做进**卡片自己的 box**（透明下边框），不用外部 margin。
+   * 理由见上方长注释：`margin-bottom` 在「列高恰好填满」时会被 WebKit
+   * 带到下一列顶部 ⇒ 各列首卡错位 10px。 */
+  margin: 0;
+  /* 1px 彩色底边 + 10px 透明间距（合计 10px 的 border-bottom）。 */
+  border-bottom-width: 10px;
+  border-bottom-color: transparent;
+  /* 背景只铺到 padding box ⇒ 透明下边框那 10px 露出容器底色 = 视觉间距。 */
+  background-clip: padding-box;
+  /* 彩色底边被透明边框顶掉了 ⇒ 用 inset 阴影在 padding box 底边补回 1px。 */
+  box-shadow: inset 0 -1px 0 var(--note-accent, var(--border));
   transition:
     box-shadow 0.15s,
     border-color 0.15s;
@@ -2648,7 +2668,13 @@ button.unassigned-tag:disabled {
 
 .note-card:hover {
   border-color: var(--border-strong);
-  box-shadow: 0 2px 8px var(--shadow);
+  /* #475：底边是「透明下边框」⇒ 必须显式保持透明，否则 hover 时会变成
+   * 10px 宽的实色条（把 10px 间距填满、卡片贴到一起）。
+   * 彩色底边由 inset 阴影补回，hover 时跟随边框色（与改造前一致）。 */
+  border-bottom-color: transparent;
+  box-shadow:
+    0 2px 8px var(--shadow),
+    inset 0 -1px 0 var(--border-strong);
 }
 
 /* #456：卡片改为 column 布局 + gap 8px（与 .session-card 同参）后，
@@ -2962,7 +2988,11 @@ button.unassigned-tag:disabled {
  * 「折叠只读」与「删除确认」两态，`.note-card.editing` 不再需要。 */
 .note-card.confirming {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(10, 108, 255, 0.08);
+  /* #475：同 hover —— 底边保持透明，彩色底边由 inset 阴影补回（用 accent 色）。 */
+  border-bottom-color: transparent;
+  box-shadow:
+    0 0 0 3px rgba(10, 108, 255, 0.08),
+    inset 0 -1px 0 var(--accent);
 }
 
 .note-hint {
