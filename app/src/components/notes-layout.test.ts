@@ -27,7 +27,9 @@ import composerModalRaw from './NoteComposerModal.tsx?raw';
  * 判定口径（最终）：面板撑满主区且不挂行内宽度；列表区是受约束的纵向滚动区；
  * 卡片与 `.session-card` 同构且可收缩；旧的分列结构零残留；
  * 瀑布流参数（`column-fill: balance`、无 `column-width`、`break-inside: avoid`、
- * 卡片 `margin-bottom` 间距、`@media` 列数断点）逐条锁定。
+ * 卡片纵向间距做进 box 内部（#475：不用 `margin-bottom`，否则「列高恰好填满」
+ * 时末卡的 margin 会被 WebKit 带到下一列顶部 ⇒ 各列首卡错位 10px）、
+ * `@media` 列数断点）逐条锁定。
  *
  * ⚠️ 本仓库约定：改被静态断言覆盖的源码必须**同步改这里**（#444 / #450 / #452 / #456 / #460 均踩过）。
  *
@@ -116,13 +118,45 @@ describe('记事本列表（网格布局，#456；原 #259 四列）', () => {
     );
   });
 
-  it('卡片是多列流的子项：break-inside avoid + margin-bottom 间距', () => {
+  it('卡片是多列流的子项：break-inside avoid + 间距做进 box（不用外边距）', () => {
     // · `break-inside: avoid` —— 多列流默认会把元素跨列断开，卡片会被切成两半。
-    // · `margin-bottom` —— 多列流里 `column-gap` 只管**列**间距，卡片之间的
-    //   **纵向**间距得靠 margin（原先由 grid 的 `gap: 10px` 承担）。
+    // · 纵向间距 10px —— 多列流里 `column-gap` 只管**列**间距，卡片之间的
+    //   **纵向**间距得自己提供（原先由 grid 的 `gap: 10px` 承担）。
+    //
+    // ⚠️ #475：这段间距**不能**用卡片的 `margin-bottom`！
+    // `column-fill: balance` 的平衡算法取「能放下全部内容的**最小**列高」⇒
+    // **决定列高的那一列必然刚好填满** ⇒ 该列末卡的 `margin-bottom` 放不进列框
+    // ⇒ WebKit 把它**画到下一列的顶部** ⇒ 下一列首卡被下推 10px
+    // （实测：不是最后一列专属，偏移也会出现在**中间列**；换组数据又「好了」
+    //   —— 只在列高恰好被填满时触发）。
+    // ⇒ 间距改由**卡片自身 box 内的透明下边框**承担：box 之内 ⇒ 列高已算进去
+    //   ⇒ 没有溢出到列外的空间 ⇒ 各列首卡对齐。
     const card = decls('.note-card');
     expect(card, '卡片可能被切成两半').toMatch(/break-inside\s*:\s*avoid/);
-    expect(card, '卡片纵向间距缺失').toMatch(/margin\s*:\s*0 0 10px/);
+    // 外边距必须归零（间距不再由 margin 承担）。
+    expect(card, '卡片外边距必须为 0（纵向间距改由 box 内部承担）').toMatch(/margin\s*:\s*0\s*;/);
+    // 间距 = 10px 透明下边框；背景只铺 padding box ⇒ 那 10px 露出容器底色。
+    expect(card, '纵向间距应由 10px 透明下边框承担').toMatch(/border-bottom-width\s*:\s*10px/);
+    expect(card, '透明下边框必须配合 background-clip: padding-box').toMatch(
+      /background-clip\s*:\s*padding-box/,
+    );
+    // 彩色底边被透明边框顶掉 ⇒ 用 inset 阴影在 padding box 底边补回。
+    expect(card, '彩色底边须由 inset 阴影补回').toMatch(/box-shadow\s*:\s*inset\s+0\s+-1px\s+0/);
+  });
+
+  it('hover / 删除确认态：底边保持透明且补回 inset 底边', () => {
+    // 这两个态都会覆盖 `box-shadow`（hover 投影 / 确认态光圈）⇒ 若不补回
+    // inset 底边，彩色底边就没了；若不保持底边透明，10px 间距会被填成实色
+    // （卡片贴到一起）。
+    const hover = decls('.note-card:hover');
+    expect(hover, 'hover 态必须保持底边透明').toMatch(/border-bottom-color\s*:\s*transparent/);
+    expect(hover, 'hover 态必须补回 inset 底边').toMatch(/inset\s+0\s+-1px\s+0/);
+
+    const confirming = decls('.note-card.confirming');
+    expect(confirming, '删除确认态必须保持底边透明').toMatch(
+      /border-bottom-color\s*:\s*transparent/,
+    );
+    expect(confirming, '删除确认态必须补回 inset 底边').toMatch(/inset\s+0\s+-1px\s+0/);
   });
 
   it('卡片不得用 width: 100% —— 多列流里它相对整个容器而非列宽', () => {
