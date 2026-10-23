@@ -25,6 +25,22 @@
   - **Verification**: `cargo test` **227 + 27 passed** (11 new) · `cargo fmt --check` / `clippy --all-targets -D warnings` · `mcp_server` **66 passed** (6 new) · `scripts` **129 passed** · `vitest` **364 passed** (1 new) · `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check` (418 keys) / `build` / all four `check-*.py` green.
   - See [`issue-467-multi-pr.md`](./issue-467-multi-pr.md)
 
+- **v0.7.7 (2026-10-23) — Post-release fix: the updater manifest now carries the macOS entries, so in-app updates work again on macOS (#478)**
+
+  - **Symptom**: after this release, "in-app update" failed on macOS with `None of the fallback platforms ["darwin-aarch64-app", "darwin-aarch64"] were found` — the published `latest.json` contained **no macOS entry at all** (all 14 keys were Linux / Windows), even though the macOS updater artifacts (`.app.tar.gz` + `.sig`) were on the release.
+  - **Root cause**: `tauri-apps/tauri-action@v1` generates the manifest **once at the end of every matrix job** (concurrently ⇒ the delete/upload steps clobber each other) ⇒ **the platforms that finished earlier lost their entries**; this time the two macOS jobs finished first and were wiped.
+  - **Resolution**: the 4 missing macOS entries were added and the published manifest replaced (14 → **18** keys) ⇒ **macOS users of this release (v0.7.7) can now update in-app**. The root-cause fix and the completeness gate for the release pipeline ship in v0.7.8.
+  - See [`issue-478-updater-manifest-macos.md`](./issue-478-updater-manifest-macos.md)
+
+- **v0.7.8 (unreleased) — Release pipeline: the updater manifest no longer loses platform entries, plus a completeness gate (#478)**
+
+  - **Origin**: "in-app update" failed on macOS — `None of the fallback platforms ["darwin-aarch64-app", "darwin-aarch64"] were found in the response 'platforms' object`; Windows and Linux were fine. The root cause is **not** on the client: the published `latest.json` contained **no macOS entry at all** (measured on v0.7.7: all 14 keys were Linux / Windows), even though the macOS updater artifacts (`.app.tar.gz` + `.sig`) were on the release.
+  - **Root cause**: `tauri-apps/tauri-action@v1`'s `uploadVersionJSON()` runs **once at the end of every matrix job** (download the existing manifest → merge in this job's platform entries → **delete the old asset** → upload a new one; GitHub release assets cannot be overwritten under the same name, so the delete is mandatory) ⇒ with 6 jobs running **concurrently** the delete/upload steps clobber each other, and the job that finishes later overwrites the content with a **stale** copy ⇒ **every platform that finished earlier loses its entries entirely**. On v0.7.7 the two macOS jobs finished first (03:53 / 03:55) and their entries were wiped by the Linux / Windows jobs that followed.
+  - **Root-cause fix**: the matrix in `release.yml` now runs with `max-parallel: 1` ⇒ each job sees the previous job's manifest ⇒ the final manifest is always complete (using **upstream's own** manifest logic rather than re-implementing it ⇒ no drift from tauri-action). Trade-off: a release now takes ~45–50 minutes instead of ~9.
+  - **Safety net (gate)**: new `scripts/check-updater-manifest.py` (zero third-party dependencies) plus an `updater-check` job in the workflow (`needs: build`) ⇒ after the matrix finishes, the **published** manifest is re-verified and a **missing platform entry turns the release red** instead of silently shipping a version nobody can update to. It asserts: the primary key of all 6 platforms plus every bundle variant (18 in total) are present, every entry has a non-empty `signature` / `url`, and the manifest `version` matches the tag.
+  - **Verification**: `scripts` **143 passed** (11 new) · **mutation-checked**: deleting the macOS entries from the published manifest makes the checker exit 1 ✓ · `check-workflow-yaml` (6 files) green.
+  - See [`issue-478-updater-manifest-macos.md`](./issue-478-updater-manifest-macos.md)
+
 - **v0.7.7 (2026-10-23) — Notes masonry: the first card of one column had 10px too much top margin (#475)**
 
   - **Symptom**: in the notes panel (CSS multi-column masonry), the **first card of one column** sat **10px lower** than the first cards of the other columns. ⚠️ **Not specific to the last column** — with a different set of notes the offset shows up in the **middle** column, and with yet another set it disappears ⇒ it looks intermittent and is very hard to spot.
