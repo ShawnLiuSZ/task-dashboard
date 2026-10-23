@@ -6,7 +6,7 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **v0.7.7（未发布）— 备忘录编辑改为在 Modal 弹窗中完成（#470）**
+- **v0.7.7（2026-10-23）— 备忘录编辑改为在 Modal 弹窗中完成（#470）**
 
   - **编辑不再在原卡片上就地修改**：改造前「查看」进弹窗、**「编辑」留在卡片上** —— 点铅笔 ⇒ 原卡片变成 textarea 行内编辑。于是同一屏里混着两种高度差一个数量级的卡片：只读态被 `-webkit-line-clamp: 9` 折叠（约 9 行封顶），编辑态的 textarea 不受折叠约束、经 `useAutoSize` 可长到 **260px**（约 16 行）。现新增 `NoteEditorModal`，铅笔按钮改为**打开编辑弹窗** ⇒ 卡片**永远只有「折叠只读」这一种形态**。
   - **为什么必须搬进弹窗（不只是为了好看）**：#462/#465 已定案的布局是 CSS multi-column 瀑布流，`.notes-list` 高度自适应内容 ⇒ **列高 = 该列最高卡片的高度**。纯阅读时这是优点（底部参差小），但一张 260px 的编辑中卡片会把**整列**撑到 260px、其余卡片在该列底部留大片空白 ⇒ 三列高度差被放大，滚动时视线在「一张特别高的卡」与「一列短卡」之间来回跳。
@@ -18,7 +18,7 @@
   - **验证**：`vitest` **362 passed**（原 347）· `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check`（418 key）/ `build` 全绿。
   - 详见 [`issue-470-note-edit-modal.md`](./issue-470-note-edit-modal.md)
 
-- **v0.7.7（未发布）— 代码审查后修复：多 PR 关联的「主 PR 置首」+ 读路径测试补齐（#467 后续）**
+- **v0.7.7（2026-10-23）— 代码审查后修复：多 PR 关联的「主 PR 置首」+ 读路径测试补齐（#467 后续）**
 
   - **`prs[0]` 恒为主 PR**（#467 后续修复）：`task_prs` 的读取顺序是 `pr_number ASC`，而主 PR 的口径是「本轮同步中**第一个**命中的 PR」⇒ 两者顺序**可能不同** ⇒ `prs[0]` 未必是主 PR，于是 `tasks.pr_number` 与 `prs[0].number` 会**打架**（UI / agent 取 `prs[0]` 当主 PR 就会取错）。现统一在**读取端**把主 PR 提到首位：Rust 两侧（`commands.rs::attach_task_prs` / `mcp.rs::attach_prs`）共用 `common.rs::sort_prs_primary_first`，Python 侧（`server.py::_attach_prs`）对应 `_sort_prs_primary_first`，**三处同一口径**。**不改表结构、不改 SQL 顺序语义、零额外查询**。
   - **匹配键是 `(number, url)` 组合**：跨仓库 PR 会撞号（`parse_issue_refs` 把 `owner/repo#N` 归一化为 `repo#N`，不带 owner）⇒ 同号不同 URL 的两条是**合法共存**的两条关联；只按 number 匹配会把**另一仓库**的同号 PR 提到首位。
@@ -29,7 +29,7 @@
   - **验证**：`cargo test` **227 + 27 passed**（新增 11 条）· `cargo fmt --check` / `clippy --all-targets -D warnings` · `mcp_server` **66 passed**（新增 6 条）· `scripts` **129 passed** · `vitest` **364 passed**（新增 1 条）· `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check`（418 key）/ `build` / 四个 `check-*.py` 全绿。
   - 详见 [`issue-467-multi-pr.md`](./issue-467-multi-pr.md)
 
-- **v0.7.7（未发布）— 备忘录瀑布流：某列首卡上边距多 10px（#475）**
+- **v0.7.7（2026-10-23）— 备忘录瀑布流：某列首卡上边距多 10px（#475）**
 
   - **现象**：备忘录面板（CSS multi-column 瀑布流）里，**某一列的首张卡片**比其它列的首卡**低 10px**。⚠️ **不是最后一列专属** —— 换一组数据偏移会出现在**中间列**，再换一组又「好了」⇒ 表现为「时有时无」，极难自查。
   - **根因**：`column-fill: balance` 的平衡算法取**能放下全部内容的最小列高 H** ⇒ **决定 H 的那一列必然「刚好填满」** ⇒ 该列**末卡的 `margin-bottom: 10px` 放不进列框** ⇒ WebKit 把它**画到下一列的顶部** ⇒ 下一列首卡被下推 10px。实测：改用 `margin-top`、外层 wrapper（`flow-root` / `padding-bottom`）**都无效** —— 只要间距是「列内最后一个盒子之后的溢出空间」，就会被带到下一列顶部。
@@ -38,7 +38,7 @@
   - **验证**：`vitest` **376 passed**（+1）· `tsc` / `eslint --max-warnings 0` / `prettier` / `i18n:check`（420 key）/ `build` 全绿。
   - 详见 [`issue-475-notes-column-top-alignment.md`](./issue-475-notes-column-top-alignment.md)
 
-- **v0.7.7（未发布）— task 评论链接支持一对多，详情面板倒序列出全部评论（#472）**
+- **v0.7.7（2026-10-23）— task 评论链接支持一对多，详情面板倒序列出全部评论（#472）**
 
   - **评论链接不再只留一条**：此前 `tasks.latest_comment_url` 是**单值**列，只存最新一条评论的链接；而 `github.rs::fetch_comments` **明明拉了全部评论**（`per_page=100`）却只用 `.next_back()` 取最后一条 ⇒ 其余评论的链接**全部丢弃**，详情面板只有「最新评论」一个入口。现改为**一对多**：新增独立关系表 `task_comments` 承载 issue ↔ 多评论关系，详情面板把**全部**评论链接**逐条列出**。
   - **倒序（最新在前）**：GitHub comments API 按 `created_at` **升序**返回 ⇒ 落库存 `created_at`（Unix 秒），读端 `ORDER BY created_at DESC, comment_id DESC` ⇒ 最新在前。次序用 `comment_id DESC` 兜底 ⇒ 同秒内多条评论（或时间未知）时次序仍**确定**，不依赖 SQLite 行序。**前端不再二次排序** —— 前端重排会掩盖后端排序写反的问题。
