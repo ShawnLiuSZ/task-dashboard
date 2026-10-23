@@ -609,6 +609,66 @@ class EnsureSchemaTest(unittest.TestCase):
         ensured = {name for name, _ in S.ENSURE_COLUMNS}
         self.assertEqual([x for x in self._select_cols() if x not in ensured], [])
 
+    def test_ensure_schema_creates_task_comments_table(self):
+        """#472：`ensure_schema` 必须建出 `task_comments`（issue ↔ 多评论关系表）。
+
+        Python MCP 是**独立进程**、不走 Rust 的 `open_db` ⇒ 表得自己建。
+        漏建 ⇒ 任何读到它的路径报 `no such table: task_comments`，
+        而 App 自身完全正常（Rust 侧由 SCHEMA 建表）、两侧单测都测不到。
+
+        列名与 Rust `db.rs::SCHEMA` 逐列一致（由 `scripts/check-mcp-columns.py`
+        校验）；此处钉住「表存在 + 列齐全 + 幂等」。
+        """
+        c = self._tmp_conn()
+        self._seed_tasks(c)
+        S.ensure_schema(c)
+        cols = S.table_columns(c, "task_comments")
+        self.assertTrue(cols, "ensure_schema 后必须存在 task_comments 表")
+        for col in (
+            "account_id",
+            "issue_key",
+            "comment_id",
+            "comment_url",
+            "author",
+            "created_at",
+            "updated_at",
+        ):
+            self.assertIn(col, cols, f"task_comments 缺列: {col}")
+        # 唯一键含 account_id + issue_key + comment_url（多账号不串号）。
+        idx = c.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='task_comments'"
+        ).fetchone()[0]
+        self.assertIn("UNIQUE(account_id, issue_key, comment_url)", idx)
+        # 幂等：再跑一次不报错。
+        S.ensure_schema(c)
+        self.assertEqual(S.table_columns(c, "task_comments"), cols)
+        c.close()
+
+    def test_ensure_schema_creates_task_prs_table(self):
+        """#467：`ensure_schema` 必须建出 `task_prs`（回归防线，与上条同款）。"""
+        c = self._tmp_conn()
+        self._seed_tasks(c)
+        S.ensure_schema(c)
+        cols = S.table_columns(c, "task_prs")
+        self.assertTrue(cols, "ensure_schema 后必须存在 task_prs 表")
+        for col in ("account_id", "issue_key", "pr_number", "pr_url", "pr_state"):
+            self.assertIn(col, cols, f"task_prs 缺列: {col}")
+        c.close()
+
+    @staticmethod
+    def _seed_tasks(c):
+        """建一张最小 `tasks` 表 —— `ensure_schema` 要求它已存在。
+
+        缺列由 `ensure_schema` 自己的 `ENSURE_COLUMNS` 补齐（这正是
+        `test_completes_every_select_col` 覆盖的路径）。
+        """
+        c.execute(
+            "CREATE TABLE tasks ("
+            "issue_key TEXT PRIMARY KEY, owner TEXT, repo TEXT, number INTEGER,"
+            "title TEXT, url TEXT, issue_state TEXT, ownership TEXT, status TEXT,"
+            "account_id INTEGER)"
+        )
+
     def test_legacy_layout_is_rejected_with_actionable_message(self):
         c = self._tmp_conn()
         c.execute("CREATE TABLE tasks (key TEXT PRIMARY KEY, gh_state TEXT, issue_key TEXT)")

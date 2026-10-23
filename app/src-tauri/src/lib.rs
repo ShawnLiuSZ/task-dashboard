@@ -488,6 +488,8 @@ pub fn run() {
             commands::set_work_branch,
             // #287：列出活跃会话（session_id 非空的任务）。
             commands::list_active_sessions,
+            // #472：按需列出某 issue 的全部评论链接（倒序：最新在前）。
+            commands::list_task_comments,
             // #214：认领任务（首个 GitHub 写回操作，用户确认后显式调用）。
             commands::claim_issue,
             // #215：详情 Project 状态写回（用户确认后显式调用）。

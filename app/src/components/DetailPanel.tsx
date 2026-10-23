@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, openExternal } from '../api';
 import { AGENTS, agentLabel } from '../agents';
-import { type ProjectStatus, type Task } from '../types';
+import { type ProjectStatus, type Task, type TaskComment } from '../types';
 import { fmtTime, useI18n } from '../i18n';
 import ConfirmDialog from './ConfirmDialog';
+import TaskCommentsList from './TaskCommentsList';
 import { registerEscLayer, type EscLayer } from '../utils/escLayer';
 
 interface Props {
@@ -22,6 +23,10 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
   const [err, setErr] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [handoff, setHandoff] = useState(task.handoff ?? '');
+  // #472：评论链接（倒序：最新在前）。**按需拉取** —— 评论可达 100 条/issue，
+  // 看板一次渲染几百张卡 ⇒ 不能随 `list_tasks` 一起返回（IPC 载荷会被撑爆）。
+  const [comments, setComments] = useState<TaskComment[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
   // #215：待确认的目标 Project 状态（确认框 → set_project_status 写回）。
   const [pendingStatus, setPendingStatus] = useState<string | null>(null);
   // 「已复制」提示的复位定时器：组件的卸载（切换任务、关闭面板）时需清理，
@@ -39,6 +44,42 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
       if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
     };
   }, []);
+
+  // #472：按需拉取该 issue 的**全部**评论链接（后端已按倒序返回：最新在前）。
+  //
+  // ⚠️ 必须带 `task.accountId`：issue_key 是 `repo#number`（不含 owner），
+  // 多账号下会重复 ⇒ 只按 issueKey 取会拿到**别的账号**的评论。
+  //
+  // ⚠️ 组件在切换任务时被 `key={taskIdentity(selectedTask)}` **重新挂载**，
+  // 但同一 issueKey 在聚合视图下可能属于不同账号 ⇒ 依赖里带上 accountId。
+  //
+  // ⚠️ **依赖里必须带 `task.latestCommentUrl`**（#472 审查修复）：
+  // 同步后 App 会重查任务列表 ⇒ `selectedTask` 变成新对象，但 `issueKey` /
+  // `accountId` **不变** ⇒ 若依赖只有这两项，effect 不会重跑 ⇒ 评论列表停在
+  // 打开那一刻（面板其它字段会刷新 ⇒ 只有评论这块陈旧，观感割裂）。
+  // `latestCommentUrl` 恰好在「有新评论被成功拉到」时才变 ⇒ 精确触发重取，
+  // 且没变化时**不产生多余的 IPC**。
+  useEffect(() => {
+    let cancelled = false;
+    setCommentsLoading(true);
+    api
+      .listTaskComments(task.issueKey, task.accountId)
+      .then((list) => {
+        if (!cancelled) setComments(list);
+      })
+      .catch((e) => {
+        // 读失败不打断详情面板（其余信息照常展示）⇒ 只清空列表。
+        console.error('[taskboard] 读取评论链接失败:', e);
+        if (!cancelled) setComments([]);
+      })
+      .finally(() => {
+        if (!cancelled) setCommentsLoading(false);
+      });
+    return () => {
+      // 卸载 / 换任务后到达的响应不得再 setState。
+      cancelled = true;
+    };
+  }, [task.issueKey, task.accountId, task.latestCommentUrl]);
 
   // #196：当前 GitHub 状态键（与 Board.groupByProjectStatus 同规则）：
   // closed→done，有原文取原文，空→unclassified。详情状态区永远以此为准，
@@ -316,6 +357,13 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
         )}
         <div className="muted small top-gap">{t('detail.localOnly')}</div>
       </section>
+
+      {/* #472：评论链接（**倒序：最新在前**）—— 按需拉取，不随看板列表返回。
+          渲染拆到 `TaskCommentsList`（独立组件）⇒ 倒序语义有明确的断言落点
+          （前端测试跑在 node 环境，`useEffect` 不会执行 ⇒ 放在本文件内部测不到）。
+          ⚠️ 列表为空时**整节不渲染**（不显示空标题）—— 评论表在首次同步前是空的，
+          此时上面的「最新评论」按钮仍可用（它走 `tasks.latest_comment_url` 单值列）。 */}
+      <TaskCommentsList comments={comments} loading={commentsLoading} />
 
       {/* #278：关联 issue（父 / 子）—— 同步自 GitHub `parent` / `subIssues`（只读）。
           仅在确实有关联时渲染整节，避免每个详情都多一个空块；

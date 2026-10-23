@@ -129,6 +129,8 @@
   "detail.handoffSaved": "已记录交接详情（共 {n} 字）",
   "detail.openInBrowser": "在浏览器打开",
   "detail.latestComment": "最新评论",
+  "detail.commentsTitle": "评论链接（{n}）",
+  "detail.commentsLoading": "正在加载评论链接…",
   "detail.assignees": "分配人：{list}",
   "detail.mentionedSuffix": "评论区有人 @我",
   "detail.branch": "🌿 分支：{branch}",

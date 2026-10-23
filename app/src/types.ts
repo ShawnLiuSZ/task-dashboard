@@ -54,6 +54,24 @@ export interface PrRef {
   state: string;
 }
 
+/**
+ * #472：一条 issue **评论**的链接（同一 issue 可有多条评论）。
+ *
+ * ⚠️ **不挂在 `Task` 上**：评论可达 100 条/issue，看板一次渲染几百张卡 ⇒
+ * 随 `list_tasks` 一起返回会撑爆 IPC 载荷与前端内存。故由
+ * `api.listTaskComments(issueKey, accountId)` **按需**取回。
+ */
+export interface TaskComment {
+  /** GitHub 评论 id（稳定标识）。 */
+  id: number;
+  /** 评论永久链接 —— 跳转目标。 */
+  url: string;
+  /** 评论作者 login（不含 @）；空串 = 未知。 */
+  author: string;
+  /** 创建时间（Unix 秒）；0 = 未知。 */
+  createdAt: number;
+}
+
 export interface Task {
   issueKey: string;
   owner: string;

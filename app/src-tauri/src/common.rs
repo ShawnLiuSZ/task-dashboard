@@ -131,6 +131,36 @@ pub fn sort_prs_primary_first(prs: &mut Vec<PrRef>, main_number: i64, main_url: 
     }
 }
 
+/// #472：一条 issue **评论**的链接（评论的一对多载体）。
+///
+/// 与 [`PrRef`] 同款设计：只缓存展示必需的字段，不存评论正文
+/// （正文会变、会长，且展示需求只要「哪条评论 + 谁写的 + 什么时候」）。
+///
+/// 状态口径：评论没有「状态」；`created_at` 为 0 表示**时间未知**
+/// （GitHub 少数字段缺失，或 `created_at` 解析失败）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentRef {
+    /// GitHub 评论 id（评论的稳定标识；同一 issue 下唯一）。
+    pub id: i64,
+    /// 评论永久链接（`html_url`）—— 详情面板的跳转目标。
+    pub url: String,
+    /// 评论作者 login（不含 @）；空串 = 未知。
+    pub author: String,
+    /// 创建时间（Unix 秒）；0 = 未知。
+    pub created_at: i64,
+}
+
+/// #472：详情面板保留的评论条数上限（**最新的 N 条**）。
+///
+/// 用户明确要求「只保留最新的 20 条」⇒ 落库与展示都以本值为准：
+/// - 落库：`comments_to_refs` 只取 API 升序的**末 N 条**；
+/// - 抓取：`github::comments_pages` 从末页往前凑够 N 条（`per_page=100` ⇒ 最多 2 页）。
+///
+/// ⚠️ **不是「全部历史」** —— 一个 issue 可能有几百条评论，全量落库既撑大数据库
+/// 又让详情面板变成长列表；用户的意图是看**最近**的讨论。
+pub const COMMENTS_KEPT_MAX: usize = 20;
+
 /// #278：一条 issue 的父子关系（GraphQL `parent` / `subIssues` 的落库形态）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IssueLinks {

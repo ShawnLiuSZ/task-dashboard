@@ -883,6 +883,11 @@ fn base_task_upsert(parent_issue: String, sub_issues: String, exists: bool) -> d
         // （写入阶段据此跳过 task_prs，保留既有关联）。
         prs: Vec::new(),
         pr_fetch_ok: false,
+        // #472：多评论关联（写入独立的 task_comments 表）。
+        // 本 fixture 不涉及评论关联 ⇒ 空列表 + `comments_fetch_ok=false`
+        // （写入阶段据此跳过 task_comments，保留既有关联）。
+        comments: Vec::new(),
+        comments_fetch_ok: false,
         branch: String::new(),
         parent_issue,
         sub_issues,
