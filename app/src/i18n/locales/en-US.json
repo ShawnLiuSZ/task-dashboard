@@ -3,7 +3,7 @@
   "topbar.singleAccount": "Single account",
   "topbar.allAccounts": "All accounts",
   "app.title": "TaskBoard",
-  "topbar.totalCount": "{n} tasks",
+  "topbar.openCount": "{n} open",
   "topbar.addNote": "New note",
   "topbar.lastSync": "Last sync {time}",
   "btn.syncing": "Syncing…",
