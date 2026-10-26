@@ -1485,9 +1485,17 @@ fn install_one(
     };
     for (rel, content, exec) in files_of(agent_id) {
         let p = root.join(rel);
+        // #481：全局 opencode 插件与项目级插件同源（同一 include_str! 模板），
+        // 若共用 id 会触发 opencode "duplicate plugin id" 告警。全局副本改用独立
+        // id（`taskboard-global`），项目级保持 `taskboard`。
+        let effective = if project.is_none() && rel == "plugins/taskboard.js" {
+            content.replacen("id: \"taskboard\"", "id: \"taskboard-global\"", 1)
+        } else {
+            content.to_string()
+        };
         // #190 用户定制保护：已存在且与模板不一致 → 先备份（仅首份），覆盖记入 notice。
         if let Ok(old) = std::fs::read_to_string(&p) {
-            if old != content {
+            if old != effective {
                 if let Some(b) = backup_once(&p)? {
                     res.notices.push(format!(
                         "{} 与内置模板不一致，已按新模板覆盖，用户定制备份于 {b}",
@@ -1496,7 +1504,7 @@ fn install_one(
                 }
             }
         }
-        if write_file(&p, &content, exec)? {
+        if write_file(&p, &effective, exec)? {
             res.files_written.push(display_path(home, project, &p));
         }
     }
@@ -2191,6 +2199,38 @@ mod tests {
             .exists());
         assert!(!u.backups.is_empty(), "settings 改动应留备份");
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn opencode_global_plugin_id_distinct_from_project() {
+        // #481：全局与项目级 opencode 插件同源（同一 include_str! 模板），必须用
+        // 不同 id，否则 opencode 报 "duplicate plugin id" 告警。全局副本 →
+        // taskboard-global，项目副本 → taskboard。
+        let home = fake_home("oc-id-global");
+        std::fs::create_dir_all(home.join(".config").join("opencode")).unwrap();
+        let repo = tmp("oc-id-repo");
+        install_global(&home, &["opencode"]);
+        install_project(&repo, &["opencode"]);
+        let global_js = std::fs::read_to_string(
+            home.join(".config/opencode/plugins/taskboard.js"),
+        )
+        .unwrap();
+        let project_js =
+            std::fs::read_to_string(repo.join(".opencode/plugins/taskboard.js")).unwrap();
+        assert!(
+            global_js.contains("id: \"taskboard-global\""),
+            "全局插件 id 必须为 taskboard-global"
+        );
+        assert!(
+            !global_js.contains("id: \"taskboard\","),
+            "全局插件不得保留原始 taskboard id"
+        );
+        assert!(
+            project_js.contains("id: \"taskboard\""),
+            "项目插件 id 必须为 taskboard"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     #[test]

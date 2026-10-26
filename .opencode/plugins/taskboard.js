@@ -1,11 +1,18 @@
-// TaskBoard 看板插件（issue #177）—— opencode 原生 hook，仅用运行自带能力
-// （Bun/Node 内建，不引任何 npm 包）。
+// TaskBoard 看板插件（issue #177 / #481）—— opencode v2 原生插件 API。
+// 仅用运行自带能力（Bun/Node 内建，不引任何 npm 包）。
+//
+// ⚠️ v2 插件契约（#481）：opencode v2 移除了 V1 的 `return { event, "tool.execute.before",
+// "shell.env" }` 形态，加载器直接拒绝（无兼容别名）。本文件用 V2 形态：
+//   export default Plugin.define({ id, setup(ctx) })，
+//   在 setup 中通过 ctx.tool.hook / ctx.shell.hook / ctx.event.subscribe 注册。
+// 单一可变 event 对象取代 V1 的 (input, output)：工具参数在 event.input，shell 环境变量在
+// event.env，事件流通过 ctx.event.subscribe 异步迭代（event.type / event.properties 同 V1）。
 //
 // 职责（只补“调用方才知道”的参数，不写 DB —— 自动执行除外）：
 // 1. `session.created`：记住本次会话 id（多路径兼容提取，payload 形状不同版本有差异）。
 // 2. `tool.execute.before`：taskboard 的 record_session 缺 session_id/agent/branch 时自动填
 //    （session_id 用真实会话 id 覆盖模型编造值；branch 用 git 取，取不到不写）。
-// 3. `shell.env`：向 shell 执行注入 TASKBOARD_SESSION_ID。
+// 3. `shell.create.before`：向 shell 执行注入 TASKBOARD_SESSION_ID。
 // 4. 自动执行（clawd-on-desk agents 式事件驱动：事件 hook → 直接调本地后端，
 //    只是我们不经过 HTTP，用 `taskboard mcp` 子命令一-shot 直写同一 SQLite）：
 //    当前用户消息中出现**唯一未触发** issue 引用（repo#num / owner/repo#num / GitHub issue URL）
@@ -19,6 +26,9 @@
 // —— 自动执行是唯一的例外，且走的仍是同一 MCP 后端（`taskboard mcp` 子进程）。
 // MCP 工具在 opencode 里以 `<server>_<tool>` 注册（如 taskboard_record_session），
 // 为兼容用户改 server 名，这里按后缀匹配。
+
+import { Plugin } from "@opencode/plugin";
+import { spawnSync as nodeSpawnSync } from "node:child_process";
 
 let sessionId = "";
 let repoDir = "";
@@ -63,14 +73,29 @@ function isRecordSessionTool(name) {
   return typeof name === "string" && /(^|_)record_session$/.test(name);
 }
 
-async function currentBranch($) {
+/// 同步执行命令，返回 { code, out, err }。优先 Bun（CLI/TUI/Desktop 均为 Bun 运行时），
+/// 退回 node:child_process（静态 import）。env 默认继承宿主（避免误写默认库）。
+function runSync(args, opts = {}) {
   try {
-    if (typeof $ !== "function") return "";
-    const out = await $`git -C ${repoDir || "."} branch --show-current`.text();
-    return (out || "").trim();
-  } catch {
-    return "";
+    if (typeof Bun !== "undefined" && Bun && typeof Bun.spawnSync === "function") {
+      const r = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe", ...opts });
+      const out = r.stdout ? Buffer.from(r.stdout).toString("utf8") : "";
+      const err = r.stderr ? Buffer.from(r.stderr).toString("utf8") : "";
+      return { code: r.exitCode ?? (r.success ? 0 : 1), out, err };
+    }
+  } catch { /* fallthrough */ }
+  try {
+    const r = nodeSpawnSync(args[0], args.slice(1), { encoding: "utf8", ...opts });
+    return { code: r.status ?? 0, out: r.stdout || "", err: r.stderr || "" };
+  } catch (e) {
+    return { code: 1, out: "", err: String(e) };
   }
+}
+
+function currentBranch() {
+  if (!repoDir) return "";
+  const r = runSync(["git", "-C", repoDir, "branch", "--show-current"]);
+  return r.code === 0 ? r.out.trim() : "";
 }
 
 // ---------------- 自动执行 ----------------
@@ -131,25 +156,16 @@ function userTextOf(event) {
 }
 
 /// 定位 taskboard 二进制：TASKBOARD_BIN → 默认安装位 → PATH。找不到返回 ""。
-async function resolveBin($) {
+function resolveBin() {
   const manual = ((typeof process !== "undefined" && process.env && process.env.TASKBOARD_BIN) || "").trim();
   const cands = [manual, "/Applications/TaskBoard.app/Contents/MacOS/taskboard"];
   for (const c of cands) {
     if (!c) continue;
-    try {
-      await $`test -x ${c}`;
-      return c;
-    } catch {
-      // 继续下一个候选
-    }
+    if (runSync(["test", "-x", c]).code === 0) return c;
   }
-  try {
-    if (typeof $ !== "function") return "";
-    const w = (await $`command -v taskboard`.text() || "").trim().split("\n")[0].trim();
-    return w || "";
-  } catch {
-    return "";
-  }
+  const w = runSync(["command", "-v", "taskboard"]);
+  const line = w.out.trim().split("\n")[0].trim();
+  return line || "";
 }
 
 /// 同步 spawn `taskboard mcp` 并把 NDJSON 经 stdin 喂入，返回 stdout 文本。
@@ -224,27 +240,16 @@ async function mcpCall(bin, calls) {
   });
 }
 
-async function applog(client, level, message) {
-  try {
-    if (client && client.app && typeof client.app.log === "function") {
-      await client.app.log({ body: { service: "taskboard", level, message } });
-    }
-  } catch {
-    // 日志失败不影响主流程
-  }
-}
-
 /// 自动开始：唯一引用 + 看板存在 + todo → 置处理中 + 记 session。
 /// #191：成功后才记去重（失败可重试）；两路调用结果都检查；done/processed 不回退。
-async function autoStart(ctx, issueKey) {
-  const { $, client } = ctx;
+async function autoStart(issueKey) {
   const sid = sessionId;
   if (!sid) return;
   const dedup = `${sid}|${issueKey}`;
   if (autoFired.has(dedup)) return;
-  const bin = await resolveBin($);
+  const bin = resolveBin();
   if (!bin) {
-    await applog(client, "debug", `[taskboard] 自动执行跳过：找不到 taskboard 二进制（${issueKey}），请手动 /task-start`);
+    console.log(`[taskboard] 自动执行跳过：找不到 taskboard 二进制（${issueKey}），请手动 /task-start`);
     return;
   }
   try {
@@ -255,88 +260,90 @@ async function autoStart(ctx, issueKey) {
       autoFired.add(dedup); // 已在处理中且有 session：视为已接管，不再重复写
       return;
     }
-    const branch = await currentBranch($);
+    const branch = currentBranch();
     const workDir = repoDir || ".";
     const [upd, rec] = await mcpCall(bin, [
       { name: "update_task_status", args: { issue: issueKey, status: "doing" } },
       { name: "record_session", args: { issue: issueKey, session_id: sid, agent: "opencode", branch, work_dir: workDir } },
     ]);
     if (upd.error || rec.error) {
-      await applog(client, "warn", `[taskboard] 自动执行失败 ${issueKey}：${upd.error || rec.error}（可重试）`);
+      console.warn(`[taskboard] 自动执行失败 ${issueKey}：${upd.error || rec.error}（可重试）`);
       return;
     }
     autoFired.add(dedup); // 成功后才标记
-    await applog(client, "info", `[taskboard] 已自动开始 ${issueKey}（处理中，分支 ${branch || "未知"}）`);
+    console.log(`[taskboard] 已自动开始 ${issueKey}（处理中，分支 ${branch || "未知"}）`);
   } catch (e) {
-    await applog(client, "warn", `[taskboard] 自动执行异常 ${issueKey}：${(e && e.message) || e}（可重试）`);
+    console.warn(`[taskboard] 自动执行异常 ${issueKey}：${(e && e.message) || e}（可重试）`);
   }
 }
 
-export const TaskboardPlugin = async ({ directory, $, client }) => {
-  if (typeof directory === "string" && directory) repoDir = directory;
-  const ctx = { $, client };
-
-  return {
-    // 会话创建即记住 id，供后续补参 + shell env + 自动执行使用。
-    event: async ({ event }) => {
-      if (!event || typeof event !== "object") return;
-      if (event.type === "session.created") {
-        const id = pickSessionId(event);
-        if (id) sessionId = id;
-        return;
-      }
-      // message 系事件：跟进 session id + 当前消息扫 issue 引用
-      // #204：按当前消息判定（历史引用不再抑制新任务，单窗口多任务可依次自动执行）；
-      // 当前无引用时用上条尾部 40 字 + 当前文本再扫一次（分片切断 token 兜底）。
-      if (event.type === "message.updated" || event.type === "message.part.updated") {
-        const sid = pickSessionId(event);
-        if (sid) sessionId = sid;
-        if (!sessionId) return;
-        const text = userTextOf(event);
-        if (!text) return;
-        const prev = partBuf.get(sessionId) || "";
-        partBuf.set(sessionId, (prev + "\n" + text).slice(-4000));
-        const unfired = (keys) => keys.filter((k) => !autoFired.has(`${sessionId}|${k}`));
-        // 当前消息恰好一个未触发引用 → 自动执行；多条无法消歧（回退手动）
-        const cur = unfired(extractIssueRefs(text));
-        if (cur.length === 1) {
-          await autoStart(ctx, cur[0]);
-          return;
-        }
-        if (cur.length > 1) return;
-        // 当前 0 引用：分片可能切断 token，尾部重叠再扫一次
-        const tail = unfired(extractIssueRefs((prev.slice(-40) + "\n" + text).slice(-4000)));
-        if (tail.length === 1) {
-          await autoStart(ctx, tail[0]);
-        }
-        return;
-      }
-    },
+export default Plugin.define({
+  id: "taskboard",
+  async setup(ctx) {
+    if (ctx && ctx.location && typeof ctx.location.directory === "string" && ctx.location.directory) {
+      repoDir = ctx.location.directory;
+    }
 
     // record_session 调用前补参：session_id 用真实会话 id（覆盖编造值）；
     // agent 缺省 opencode；branch 缺省且 git 可取时填入；work_dir 缺省用项目目录。
-    "tool.execute.before": async (input, output) => {
-      if (!isRecordSessionTool(input && input.tool)) return;
-      const args = (output && output.args) || {};
+    await ctx.tool.hook("execute.before", (event) => {
+      if (!isRecordSessionTool(event.tool)) return;
+      const args = (event.input && typeof event.input === "object") ? event.input : (event.input = {});
       if (sessionId) args.session_id = sessionId;
-      if (!args.session_id && typeof args.sessionId === "string" && args.sessionId.trim()) {
-        args.session_id = args.sessionId.trim();
-      }
+      else if (typeof args.sessionId === "string" && args.sessionId.trim()) args.session_id = args.sessionId.trim();
       if (!args.agent || !String(args.agent).trim()) args.agent = "opencode";
-      if ((!args.branch || !String(args.branch).trim()) && $) {
-        const br = await currentBranch($);
+      if ((!args.branch || !String(args.branch).trim())) {
+        const br = currentBranch();
         if (br) args.branch = br;
       }
-      if (!args.work_dir || !String(args.work_dir).trim()) {
-        args.work_dir = repoDir || ".";
-      }
-    },
+      if (!args.work_dir || !String(args.work_dir).trim()) args.work_dir = repoDir || ".";
+    });
 
     // shell 执行可见本次会话 id（命令/脚本里可用 $TASKBOARD_SESSION_ID）。
-    "shell.env": async (_input, output) => {
-      if (sessionId && output && output.env) {
-        output.env.TASKBOARD_SESSION_ID = sessionId;
+    await ctx.shell.hook("create.before", (event) => {
+      if (sessionId && event.env) event.env.TASKBOARD_SESSION_ID = sessionId;
+    });
+
+    // 事件流：会话创建即记 id，供后续补参 + shell env + 自动执行使用；
+    // message.* 事件跟进 session id + 当前消息扫 issue 引用。
+    // #204：按当前消息判定（历史引用不再抑制新任务，单窗口多任务可依次自动执行）；
+    // 当前无引用时用上条尾部 40 字 + 当前文本再扫一次（分片切断 token 兜底）。
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+          if (event.type === "session.created") {
+            const id = pickSessionId(event);
+            if (id) sessionId = id;
+            continue;
+          }
+          if (event.type === "message.updated" || event.type === "message.part.updated") {
+            const sid = pickSessionId(event);
+            if (sid) sessionId = sid;
+            if (!sessionId) continue;
+            const text = userTextOf(event);
+            if (!text) continue;
+            const prev = partBuf.get(sessionId) || "";
+            partBuf.set(sessionId, (prev + "\n" + text).slice(-4000));
+            const unfired = (keys) => keys.filter((k) => !autoFired.has(`${sessionId}|${k}`));
+            // 当前消息恰好一个未触发引用 → 自动执行；多条无法消歧（回退手动）
+            const cur = unfired(extractIssueRefs(text));
+            if (cur.length === 1) {
+              await autoStart(cur[0]);
+              continue;
+            }
+            if (cur.length > 1) continue;
+            // 当前 0 引用：分片可能切断 token，尾部重叠再扫一次
+            const tail = unfired(extractIssueRefs((prev.slice(-40) + "\n" + text).slice(-4000)));
+            if (tail.length === 1) await autoStart(tail[0]);
+          }
+        }
+      } catch {
+        // 订阅结束（abort / 卸载）时正常退出
       }
-    },
-  };
-};
+    })();
+
+    // 卸载时退订事件流，释放缓冲。
+    return () => controller.abort();
+  },
+});
