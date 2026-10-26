@@ -22,6 +22,9 @@ const TASK_START_MD: &str = include_str!("../../../.claude/commands/task-start.m
 const TASK_DONE_MD: &str = include_str!("../../../.claude/commands/task-done.md");
 const TASK_HANDOFF_MD: &str = include_str!("../../../.claude/commands/task-handoff.md");
 const OPENCODE_PLUGIN_JS: &str = include_str!("../../../.opencode/plugins/taskboard.js");
+/// opencode v1（1.x）插件模板：V2 移除了 V1 函数形态插件 API，两代互不兼容，
+/// 安装器按 `opencode --version` 探测的主版本二选一（见 #481）。
+const OPENCODE_PLUGIN_V1_JS: &str = include_str!("../templates/opencode-taskboard-v1.js");
 const OC_TASK_START_MD: &str = include_str!("../../../.opencode/commands/task-start.md");
 const OC_TASK_DONE_MD: &str = include_str!("../../../.opencode/commands/task-done.md");
 const OC_TASK_HANDOFF_MD: &str = include_str!("../../../.opencode/commands/task-handoff.md");
@@ -160,14 +163,89 @@ fn claude_files() -> [(&'static str, &'static str, bool); 5] {
 }
 
 /// opencode 模板清单（相对于 `.opencode` 配置根：项目 `<repo>/.opencode`；
-/// 全局 `~/.config/opencode`）。
-fn opencode_files() -> [(&'static str, &'static str, bool); 4] {
-    [
-        ("plugins/taskboard.js", OPENCODE_PLUGIN_JS, false),
-        ("commands/task-start.md", OC_TASK_START_MD, false),
-        ("commands/task-done.md", OC_TASK_DONE_MD, false),
-        ("commands/task-handoff.md", OC_TASK_HANDOFF_MD, false),
+/// 全局 `~/.config/opencode`）。插件 JS 按本机 opencode 主版本注入
+/// （`plugin_js`：V1 / V2 模板二选一，见 `pick_opencode_plugin_for_install`）。
+fn opencode_files(plugin_js: &str) -> Vec<(&'static str, String, bool)> {
+    vec![
+        ("plugins/taskboard.js", plugin_js.to_string(), false),
+        (
+            "commands/task-start.md",
+            OC_TASK_START_MD.to_string(),
+            false,
+        ),
+        ("commands/task-done.md", OC_TASK_DONE_MD.to_string(), false),
+        (
+            "commands/task-handoff.md",
+            OC_TASK_HANDOFF_MD.to_string(),
+            false,
+        ),
     ]
+}
+
+// ---- opencode v1 / v2 插件模板选择（#481）----
+
+/// 从 `opencode --version` 输出解析主版本号。兼容 "opencode v2.0.32" /
+/// "2.0.32" / "v1.8.0" 等前后缀；解析不出返回 None。
+fn parse_opencode_major(output: &str) -> Option<u32> {
+    output
+        .trim()
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .ok()
+}
+
+/// 按主版本选插件模板：1.x → V1 函数形态；2+ / 未知 → V2 `Plugin.define`
+/// 形态（当前主流，缺省安全）。两代 API 互不兼容（v2 加载器直接拒绝 V1
+/// 形态，v1 也不认 `Plugin.define`），只能二选一。
+fn pick_opencode_plugin(major: Option<u32>) -> &'static str {
+    match major {
+        Some(m) if m < 2 => OPENCODE_PLUGIN_V1_JS,
+        _ => OPENCODE_PLUGIN_JS,
+    }
+}
+
+/// 运行 opencode 二进制的 `--version` 并解析主版本；执行失败 / 非零退出 /
+/// 解析不出 → None。
+fn detect_opencode_major(bin: &Path) -> Option<u32> {
+    let out = std::process::Command::new(bin)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_opencode_major(&String::from_utf8_lossy(&out.stdout))
+}
+
+// 测试注入点：强制**本线程**的 opencode 插件模板选择（绕过本机二进制探测），
+// 保证并行测试确定性。libtest 每个测试独立线程，thread-local 天然隔离。
+// 注意用普通注释：`thread_local!` 是宏调用，`///` 会触发 unused_doc_comments。
+#[cfg(test)]
+thread_local! {
+    static OC_PLUGIN_TEST_OVERRIDE: std::cell::RefCell<Option<&'static str>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// 安装时选 opencode 插件模板：测试注入点（仅测试构建）> 环境变量
+/// `TASKBOARD_OPENCODE_MAJOR`（手动兜底，与 `TASKBOARD_DB` 同风格）>
+/// 探测本机 opencode 二进制；三者皆不可得按 V2。
+fn pick_opencode_plugin_for_install(home: &Path) -> &'static str {
+    #[cfg(test)]
+    if let Some(t) = OC_PLUGIN_TEST_OVERRIDE.with(|c| *c.borrow()) {
+        return t;
+    }
+    if let Ok(v) = std::env::var("TASKBOARD_OPENCODE_MAJOR") {
+        if let Some(m) = parse_opencode_major(&v) {
+            return pick_opencode_plugin(Some(m));
+        }
+    }
+    match find_binary(home, &["opencode"]) {
+        Some(bin) => pick_opencode_plugin(detect_opencode_major(&bin)),
+        None => pick_opencode_plugin(None),
+    }
 }
 
 // ================= agent 注册表（Clawd 式 per-agent 安装器） =================
@@ -791,10 +869,13 @@ fn script_variant(content: &str) -> String {
         )
 }
 
-fn files_of(agent: &str) -> Vec<(&'static str, String, bool)> {
-    let raw: Vec<(&'static str, &'static str, bool)> = match agent {
-        "opencode" => opencode_files().into_iter().collect(),
-        _ => claude_files().into_iter().collect(),
+fn files_of(agent: &str, oc_plugin: &str) -> Vec<(&'static str, String, bool)> {
+    let raw: Vec<(&'static str, String, bool)> = match agent {
+        "opencode" => opencode_files(oc_plugin),
+        _ => claude_files()
+            .into_iter()
+            .map(|(rel, content, exec)| (rel, content.to_string(), exec))
+            .collect(),
     };
     let generic = !matches!(spec_of(agent).map(|s| s.claude_copy), Some(true));
     raw.into_iter()
@@ -804,9 +885,9 @@ fn files_of(agent: &str) -> Vec<(&'static str, String, bool)> {
         })
         .map(|(rel, content, exec)| {
             let body = if generic && rel.ends_with(".sh") {
-                script_variant(content)
+                script_variant(&content)
             } else {
-                content.to_string()
+                content
             };
             (rel, body, exec)
         })
@@ -1483,11 +1564,25 @@ fn install_one(
         }
         return Ok(());
     };
-    for (rel, content, exec) in files_of(agent_id) {
+    // #481：opencode v1 / v2 插件 API 互不兼容，按本机 opencode 主版本选模板。
+    let oc_plugin = if agent_id == "opencode" {
+        pick_opencode_plugin_for_install(home)
+    } else {
+        OPENCODE_PLUGIN_JS
+    };
+    for (rel, content, exec) in files_of(agent_id, oc_plugin) {
         let p = root.join(rel);
+        // #481：全局 opencode 插件与项目级插件同源（同一 include_str! 模板），
+        // 若共用 id 会触发 opencode "duplicate plugin id" 告警。全局副本改用独立
+        // id（`taskboard-global`），项目级保持 `taskboard`。
+        let effective = if project.is_none() && rel == "plugins/taskboard.js" {
+            content.replacen("id: \"taskboard\"", "id: \"taskboard-global\"", 1)
+        } else {
+            content.to_string()
+        };
         // #190 用户定制保护：已存在且与模板不一致 → 先备份（仅首份），覆盖记入 notice。
         if let Ok(old) = std::fs::read_to_string(&p) {
-            if old != content {
+            if old != effective {
                 if let Some(b) = backup_once(&p)? {
                     res.notices.push(format!(
                         "{} 与内置模板不一致，已按新模板覆盖，用户定制备份于 {b}",
@@ -1496,7 +1591,7 @@ fn install_one(
                 }
             }
         }
-        if write_file(&p, &content, exec)? {
+        if write_file(&p, &effective, exec)? {
             res.files_written.push(display_path(home, project, &p));
         }
     }
@@ -1689,7 +1784,7 @@ fn uninstall_one(
             .push(format!("{agent_id}：未检测到全局配置，已跳过"));
         return Ok(());
     };
-    for (rel, content, _) in files_of(agent_id) {
+    for (rel, content, _) in files_of(agent_id, OPENCODE_PLUGIN_JS) {
         let p = root.join(rel);
         match std::fs::read_to_string(&p) {
             Ok(old) if old == content => {
@@ -2086,6 +2181,11 @@ mod tests {
         res
     }
 
+    /// 强制本测试线程的 opencode 插件模板（None = 恢复自动探测）。
+    fn force_oc_plugin(t: Option<&'static str>) {
+        OC_PLUGIN_TEST_OVERRIDE.with(|c| *c.borrow_mut() = t);
+    }
+
     #[test]
     fn project_install_both_agents_idempotent() {
         let repo = tmp("proj-both");
@@ -2191,6 +2291,116 @@ mod tests {
             .exists());
         assert!(!u.backups.is_empty(), "settings 改动应留备份");
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn opencode_global_plugin_id_distinct_from_project() {
+        // #481：全局与项目级 opencode 插件同源（同一 include_str! 模板），必须用
+        // 不同 id，否则 opencode 报 "duplicate plugin id" 告警。全局副本 →
+        // taskboard-global，项目副本 → taskboard。
+        // 强制按 v2 模板：测试不依赖本机 PATH 上 opencode 的真实版本。
+        force_oc_plugin(Some(pick_opencode_plugin(Some(2))));
+        let home = fake_home("oc-id-global");
+        std::fs::create_dir_all(home.join(".config").join("opencode")).unwrap();
+        let repo = tmp("oc-id-repo");
+        install_global(&home, &["opencode"]);
+        install_project(&repo, &["opencode"]);
+        let global_js =
+            std::fs::read_to_string(home.join(".config/opencode/plugins/taskboard.js")).unwrap();
+        let project_js =
+            std::fs::read_to_string(repo.join(".opencode/plugins/taskboard.js")).unwrap();
+        force_oc_plugin(None);
+        assert!(
+            global_js.contains("id: \"taskboard-global\""),
+            "全局插件 id 必须为 taskboard-global"
+        );
+        assert!(
+            !global_js.contains("id: \"taskboard\","),
+            "全局插件不得保留原始 taskboard id"
+        );
+        assert!(
+            project_js.contains("id: \"taskboard\""),
+            "项目插件 id 必须为 taskboard"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn parse_opencode_major_variants() {
+        assert_eq!(parse_opencode_major("opencode v2.0.32"), Some(2));
+        assert_eq!(parse_opencode_major("opencode v1.0.118"), Some(1));
+        assert_eq!(parse_opencode_major("2.0.32"), Some(2));
+        assert_eq!(parse_opencode_major("v1.8.0"), Some(1));
+        assert_eq!(parse_opencode_major("opencode"), None);
+        assert_eq!(parse_opencode_major(""), None);
+    }
+
+    #[test]
+    fn pick_opencode_plugin_by_major() {
+        // 判别标记：V2 独有 `Plugin.define`；V1 独有 `export const TaskboardPlugin`。
+        let v1 = pick_opencode_plugin(Some(1));
+        assert!(
+            v1.contains("export const TaskboardPlugin"),
+            "1.x 应选 V1 模板"
+        );
+        assert!(!v1.contains("Plugin.define"));
+        assert!(pick_opencode_plugin(Some(2)).contains("Plugin.define"));
+        assert!(pick_opencode_plugin(Some(3)).contains("Plugin.define"));
+        assert!(
+            pick_opencode_plugin(None).contains("Plugin.define"),
+            "探测失败缺省 V2"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn detect_opencode_major_runs_version_flag() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = fake_home("ocver");
+        let bindir = home.join("bin");
+        std::fs::create_dir_all(&bindir).unwrap();
+        let bin = bindir.join("fake-opencode");
+        std::fs::write(&bin, "#!/bin/sh\necho \"opencode v1.0.118\"\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(detect_opencode_major(&bin), Some(1));
+        // 非零退出 → None（缺省逻辑交给上层按 V2 处理）
+        let bad = bindir.join("bad-opencode");
+        std::fs::write(&bad, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(detect_opencode_major(&bad), None);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn opencode_v1_host_gets_v1_template() {
+        // #481：v1（1.x）宿主必须写 V1 函数形态模板；V2 `Plugin.define` 形态在
+        // v1 上不被识别（ID 显示 `-`）。线程内强制注入，测试不依赖本机 opencode。
+        force_oc_plugin(Some(pick_opencode_plugin(Some(1))));
+        let home = fake_home("oc-v1-global");
+        std::fs::create_dir_all(home.join(".config").join("opencode")).unwrap();
+        let repo = tmp("oc-v1-repo");
+        install_global(&home, &["opencode"]);
+        install_project(&repo, &["opencode"]);
+        let global_js =
+            std::fs::read_to_string(home.join(".config/opencode/plugins/taskboard.js")).unwrap();
+        let project_js =
+            std::fs::read_to_string(repo.join(".opencode/plugins/taskboard.js")).unwrap();
+        force_oc_plugin(None);
+        assert!(
+            global_js.contains("export const TaskboardPlugin"),
+            "v1 宿主全局插件应为 V1 形态"
+        );
+        assert!(
+            !global_js.contains("Plugin.define"),
+            "v1 宿主不得写入 V2 模板"
+        );
+        assert!(
+            project_js.contains("export const TaskboardPlugin"),
+            "v1 宿主项目插件应为 V1 形态"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     #[test]

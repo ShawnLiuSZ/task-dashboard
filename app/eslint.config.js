@@ -61,6 +61,14 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ['dist/', 'node_modules/', 'src-tauri/target/', 'scripts/'],
+    // src-tauri/templates/：被 Rust `include_str!` 内嵌的 agent 运行时脚本
+    // （opencode 插件模板），不是前端源码，按后端资源处理。
+    ignores: [
+      'dist/',
+      'node_modules/',
+      'src-tauri/target/',
+      'src-tauri/templates/',
+      'scripts/',
+    ],
   },
 );
