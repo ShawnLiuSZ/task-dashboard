@@ -6,6 +6,16 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.9（2026-10-26）— opencode 集成适配 v2 插件 API，并按主版本兼容 v1（#481）**
+
+  - **现象**：本机 opencode 升级到 v2（v2.0.32）后，`.opencode/plugins/taskboard.js` 在 `opencode plugin list` 里的 ID 变成 `-`（加载器未识别）⇒ `record_session` 的 `session_id` / `agent` / `branch` 自动补参、`TASKBOARD_SESSION_ID` 注入、唯一 issue 引用的自动接管**全部静默失效**。
+  - **根因**：opencode v2 **直接移除**了 V1 插件 API（`export const X = async (ctx) => ({ event, "tool.execute.before", ... })`），无兼容别名。现重写为 V2 形态 `Plugin.define({ id, setup(ctx) })`，在 `setup` 内命令式注册 `ctx.tool.hook("execute.before")`（补参数）/ `ctx.shell.hook("create.before")`（注环境变量）/ `ctx.event.subscribe`（会话与消息事件），并去掉对 Bun `$` 的依赖（改同步 `runSync`）。参数位置随之变化：工具参数在 `event.input`（原 `output.args`）、环境变量在 `event.env`。
+  - **v1 同时兼容**：两代 API **互不兼容**（v1 也不认 `Plugin.define`）⇒ 不存在通吃的单一插件文件。安装器改为按 `opencode --version` 探测的主版本选模板：1.x 写 V1 函数形态（新增 `app/src-tauri/templates/opencode-taskboard-v1.js`，自迁移前源文件逐字节恢复），2+ / 探测失败写 V2 形态（缺省安全）；环境变量 `TASKBOARD_OPENCODE_MAJOR` 可手动兜底。
+  - **重复插件 id 告警**：全局副本与项目级副本同源同 id ⇒ opencode 报 `duplicate plugin id`。全局副本改写为 `taskboard-global`，项目级保持 `taskboard`（双份触发本就幂等：`record_session` / `touch_session` 是 `(issue_key, session_id)` upsert，`update_task_status` 幂等）。
+  - **MCP 注册零改动**：v2 仍接受扁平 `mcp` 键（deprecated 但可用），`opencode mcp list` 正常显示 `taskboard connected`；DB schema / i18n 无变更。
+  - **验证**：`hooks` 44 项单测 ×3 轮（新增版本解析 / 模板选择 / `--version` 探测 / v1 宿主模板 / id 区分共 5 条）· `cargo test` **253 + 27 passed** · `clippy --all-targets -D warnings` / `fmt` / 四个 `check-*.py` 全绿 · 实机 `opencode reload` 后 `plugin list` 显示 `taskboard`（项目）与 `taskboard-global`（全局），告警消失。
+  - 详见 [`issue-481-opencode-v2-plugin.md`](./issue-481-opencode-v2-plugin.md)
+
 - **v0.7.7（2026-10-23）— 备忘录编辑改为在 Modal 弹窗中完成（#470）**
 
   - **编辑不再在原卡片上就地修改**：改造前「查看」进弹窗、**「编辑」留在卡片上** —— 点铅笔 ⇒ 原卡片变成 textarea 行内编辑。于是同一屏里混着两种高度差一个数量级的卡片：只读态被 `-webkit-line-clamp: 9` 折叠（约 9 行封顶），编辑态的 textarea 不受折叠约束、经 `useAutoSize` 可长到 **260px**（约 16 行）。现新增 `NoteEditorModal`，铅笔按钮改为**打开编辑弹窗** ⇒ 卡片**永远只有「折叠只读」这一种形态**。
