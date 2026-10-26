@@ -150,6 +150,18 @@ function Board({
       const keys = projectStatuses.map((ps) => ps.name);
       if ((grouped.get('done') ?? []).length > 0) keys.push('done');
       if ((grouped.get('unclassified') ?? []).length > 0) keys.push('unclassified');
+      // 注意：known 必须在合成列 push **之后**构建，否则 done/unclassified 会被当成
+      // 「表外状态」再兜底一次 ⇒ 重复列（单测「已关闭任务仍归 done 列」守住）。
+      const known = new Set(keys);
+      // #485：表外状态值必须有列可落。任务按 `projectStatus` **原文**分组，而列键只来自
+      // `project_statuses` 表 ⇒ 选项改名（如 Planned → Planing）或跨项目状态会把任务送进
+      // 永不渲染的分组，看板静默少任务（实测 567 条只渲染 558，差 9 条 `Planned`）。
+      // 这里把「有任务、但表里没有」的 key 追加成兜底列（按名排序保证渲染稳定）；
+      // 无任务的表外值不建列，避免空列噪音。
+      const extra = Array.from(grouped.keys())
+        .filter((k) => !known.has(k) && (grouped.get(k) ?? []).length > 0)
+        .sort((a, b) => a.localeCompare(b));
+      keys.push(...extra);
       return keys;
     }
     // 无 project_statuses 时回退：只展示有任务的列
@@ -160,8 +172,14 @@ function Board({
   const statusIndexMap = useMemo(() => {
     const m = new Map<string, number>();
     projectStatuses?.forEach((ps, i) => m.set(ps.name, i));
+    // #485：兜底列也要有稳定配色（接在已配置列之后），否则所有表外列共用同一个颜色索引。
+    let next = projectStatuses?.length ?? 0;
+    for (const k of projectKeys) {
+      if (k === 'done' || k === 'unclassified' || m.has(k)) continue;
+      m.set(k, next++);
+    }
     return m;
-  }, [projectStatuses]);
+  }, [projectStatuses, projectKeys]);
 
   // 自定义列视图：单遍分组（列 key -> 任务）+ 未匹配列，替代原来的每列 filter 全量扫。
   const customGroups = useMemo(

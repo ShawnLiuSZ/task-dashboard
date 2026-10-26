@@ -6,6 +6,15 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.10（未发布）— 看板「按项目」视图不再丢表外状态的任务（#485）**
+
+  - **现象**：列头数字之和小于任务总数，且差的那几条既不在任何列、也不在「未标注」列 —— **静默丢数据**。实测激活账号 567 条只渲染 558，差 9 条 `project_status='Planned'` 且未关闭。
+  - **根因**：任务按 `projectStatus` **原文**分组，而「按项目」视图的列键只来自 `project_statuses` 表（单账号视图还只取状态数最多的那个项目）⇒ 选项改名（`Planned` → `Planing`）或跨项目状态会让任务落进永不渲染的分组。
+  - **修法**：`Board.tsx::projectKeys` 追加「有任务、但表里没有」的状态值作为兜底列（按名排序、仅非空），并为其分配独立配色索引。表内列「即使无任务也展示」的既有契约不变。
+  - **取舍**：不改 `App.tsx` 的「主项目」选取（合并全部项目会带来大量永远为空的列 + 跨项目 order_index 不可比），兜底列已保证「有任务必有列」。
+  - **验证**：`vitest` **380 passed**（新增 4 条，含「列头之和 == 任务总数」不变量）；两处变异（去掉兜底 / 去掉排序）分别使 2 条 / 1 条断言失败 ⇒ 断言有效。
+  - 详见 [`issue-485-board-lost-status.md`](./issue-485-board-lost-status.md)
+
 - **v0.7.9（2026-10-26）— opencode 集成适配 v2 插件 API，并按主版本兼容 v1（#481）**
 
   - **现象**：本机 opencode 升级到 v2（v2.0.32）后，`.opencode/plugins/taskboard.js` 在 `opencode plugin list` 里的 ID 变成 `-`（加载器未识别）⇒ `record_session` 的 `session_id` / `agent` / `branch` 自动补参、`TASKBOARD_SESSION_ID` 注入、唯一 issue 引用的自动接管**全部静默失效**。
