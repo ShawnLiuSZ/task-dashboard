@@ -220,8 +220,9 @@ fn detect_opencode_major(bin: &Path) -> Option<u32> {
     parse_opencode_major(&String::from_utf8_lossy(&out.stdout))
 }
 
-/// 测试注入点：强制**本线程**的 opencode 插件模板选择（绕过本机二进制探测），
-/// 保证并行测试确定性。libtest 每个测试独立线程，thread-local 天然隔离。
+// 测试注入点：强制**本线程**的 opencode 插件模板选择（绕过本机二进制探测），
+// 保证并行测试确定性。libtest 每个测试独立线程，thread-local 天然隔离。
+// 注意用普通注释：`thread_local!` 是宏调用，`///` 会触发 unused_doc_comments。
 #[cfg(test)]
 thread_local! {
     static OC_PLUGIN_TEST_OVERRIDE: std::cell::RefCell<Option<&'static str>> =
