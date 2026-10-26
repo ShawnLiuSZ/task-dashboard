@@ -56,7 +56,8 @@ v2 的契约（`@opencode/plugin` 的 `Plugin.define`）：默认导出必须是
 
 - **源文件只用 `id: "taskboard"`**（项目级插件保留此 id）。
 - **安装器对全局副本改写 id**：`install_one` 在 `project.is_none()` 且 `rel == "plugins/taskboard.js"` 时，把 `id: "taskboard"` → `id: "taskboard-global"`（见下文「后续修复：重复 id 告警」）。这是为了避免全局与项目级两份**同源**插件 id 撞车触发 opencode 的 `duplicate plugin id` 告警。
-- 合并 / 卸载 / 去重逻辑不变；重跑「安装」即把 V2 版本 + 正确 id 同步到用户目录。
+- **v1 / v2 模板自适应**：安装器按本机 `opencode --version` 探测的主版本选模板（1.x → V1 函数形态 `app/src-tauri/templates/opencode-taskboard-v1.js`；2+ / 探测失败 → 本文件的 V2 形态）。详见下文「v1 兼容」。
+- 合并 / 卸载 / 去重逻辑不变；重跑「安装」即把对应版本模板 + 正确 id 同步到用户目录。
 
 ## 接口 / 行为变更
 
@@ -89,14 +90,32 @@ opencode plugin list
 1. `opencode plugin list`（项目目录）：taskboard 显示 ID `taskboard`（V2 形态被接受，`setup` 完整跑完，三个 hook 全部注册成功——任一 `ctx.*.hook` 名称/签名错误都会在加载期抛错、拿不到 ID）。
 2. 同步全局副本后 `opencode reload` + `opencode plugin list`（~）：全局显示 `taskboard-global`（id 与项目级 `taskboard` 区分，不再重复）。
 3. 隔离探针确认 V2 钩子字段契约：`event.tool` / `event.input` / `event.env` / `event.type` / `event.properties` 与官方迁移文档及 kooky 参考插件一致。
+4. v1 路径由单测覆盖（`opencode_v1_host_gets_v1_template` 等 4 项）；V1 模板内容与 V2 迁移前线上运行正常的 `.opencode/plugins/taskboard.js` 逐字节一致（`git show` 校验）。未在本机实际装 opencode 1.x 端到端复测——如需冒烟，在 1.x 环境重跑「安装」后 `opencode plugin list` 应能识别 taskboard。
 
 **建议的手动冒烟（可选）**：在已装 TaskBoard、且有看板的仓库里开 opencode v2 会话，发一条含唯一 issue 引用（如 `task-dashboard#481`）的用户消息，应自动出现 `taskboard` 的 `update_task_status(doing)` + `record_session` 调用；直接调 `record_session` 时其 `session_id` 应被真实会话 id 覆盖、`branch` 自动填当前 git 分支。
 
 **回归防护**：
 
 - `scripts/check-doc-links.py`：新增 KB 文档后链接完整性通过。
-- `hooks.rs` 安装器无需改动（`include_str!` 路径不变），既有 opencode MCP 合并单测不受影响。
-- `hooks.rs::tests::opencode_global_plugin_id_distinct_from_project`：断言全局插件 id 为 `taskboard-global`、项目插件 id 为 `taskboard`，防止同源两份插件再次撞 id 触发重复告警。
+- `hooks.rs::tests::opencode_global_plugin_id_distinct_from_project`：断言全局插件 id 为 `taskboard-global`、项目插件 id 为 `taskboard`，防止同源两份插件再次撞 id 触发重复告警（线程内强制 v2 模板，不依赖本机 opencode）。
+- `hooks.rs::tests::parse_opencode_major_variants` / `pick_opencode_plugin_by_major` / `detect_opencode_major_runs_version_flag`：版本解析、模板选择、`--version` 探测三段单测。
+- `hooks.rs::tests::opencode_v1_host_gets_v1_template`：1.x 宿主必须写入 V1 函数形态、不得混入 `Plugin.define`。
+
+## v1 兼容：按主版本选择插件模板
+
+V2 加载器直接拒绝 V1 函数形态，反过来 v1（1.x）也不认 `Plugin.define`——**不存在两代通吃的单一插件文件**，必须按宿主版本写入对应形态。职责落在安装器（它本来就是插件文件的唯一写入方）：
+
+| 探测结果（`opencode --version` 主版本） | 写入的模板 | 形态 |
+|---|---|---|
+| 1.x | `app/src-tauri/templates/opencode-taskboard-v1.js`（自 V2 迁移前的 `.opencode/plugins/taskboard.js` 逐字节恢复，`git show` 校验） | `export const TaskboardPlugin = async (ctx) => ({ event, "tool.execute.before", "shell.env" })` |
+| 2+ / 二进制不存在 / 解析失败 | `.opencode/plugins/taskboard.js`（V2 形态） | `Plugin.define({ id, setup(ctx) })` |
+
+要点：
+
+- **纯函数三件套**（可单测）：`parse_opencode_major`（容忍 `opencode v2.0.32` / 裸版本号等前后缀）、`pick_opencode_plugin(major)`、`detect_opencode_major(bin)`（跑 `--version`）。
+- **选择顺序**：测试线程注入（thread-local）> 环境变量 `TASKBOARD_OPENCODE_MAJOR`（手动兜底，同 `TASKBOARD_DB` 风格）> 二进制探测 > 缺省 V2。⚠️ 不能用进程级 env 做测试注入——并行测试互踩（首轮实测两个测试竞态失败），故测试走 thread-local、env 只留给手动兜底。
+- **卸载不受影响**：两代模板写入的相对路径同为 `plugins/taskboard.js`，卸载按路径摘除。
+- **升级路径**：v1 → v2 升级后重跑「安装」即换成 V2 模板；降级同理。
 
 ## 后续修复：重复 id 告警
 
