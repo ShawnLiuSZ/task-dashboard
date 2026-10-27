@@ -2,7 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **v0.7.10 (unreleased) — Top bar count now shows my open issues, excluding closed / completed (#484)**
+- **v0.7.10 (2026-10-27) — Top bar count now shows my open issues, excluding closed / completed (#484)**
 
   - **Semantics changed**: the top bar number moved from "all tasks in the current view" to "open issue count" — excluding `issueState=closed` (authoritatively closed on GitHub) and `status=done` (marked done on the board while the issue may still be open). On the active account here it goes from 567 to **181**.
   - **Explicit label**: `共 {n} 条` → `未完成 {n} 条` (en `{n} tasks` → `{n} open`). The board's "done" column still lists closed tasks, so this number never equals the sum of the columns; the old wording made it easy to misread as a total.
@@ -10,7 +10,7 @@
   - Repo filter and keyword search still apply (same `visible` source as the board); no backend / MCP / DB changes.
   - See [`issue-484-topbar-open-count.md`](./issue-484-topbar-open-count.md)
 
-- **v0.7.10 (unreleased) — Project board no longer drops tasks whose project status is missing from the table (#485)**
+- **v0.7.10 (2026-10-27) — Project board no longer drops tasks whose project status is missing from the table (#485)**
 
   - **Symptom**: the column counts added up to less than the task total, and the missing rows appeared in no column at all — not even "unlabeled" — i.e. **silent data loss**. Measured on the active account: 567 tasks but only 558 rendered; the 9 missing were `project_status='Planned'` and still open.
   - **Root cause**: tasks are grouped by the **raw** `projectStatus`, while the project view's column keys came only from the `project_statuses` table (and the single-account view further narrowed that to the project with the most statuses) ⇒ a renamed option (`Planned` → `Planing`) or a cross-project status sent tasks into a group that is never rendered.
