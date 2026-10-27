@@ -10,6 +10,14 @@
   - Repo filter and keyword search still apply (same `visible` source as the board); no backend / MCP / DB changes.
   - See [`issue-484-topbar-open-count.md`](./issue-484-topbar-open-count.md)
 
+- **v0.7.10 (unreleased) — Project board no longer drops tasks whose project status is missing from the table (#485)**
+
+  - **Symptom**: the column counts added up to less than the task total, and the missing rows appeared in no column at all — not even "unlabeled" — i.e. **silent data loss**. Measured on the active account: 567 tasks but only 558 rendered; the 9 missing were `project_status='Planned'` and still open.
+  - **Root cause**: tasks are grouped by the **raw** `projectStatus`, while the project view's column keys came only from the `project_statuses` table (and the single-account view further narrowed that to the project with the most statuses) ⇒ a renamed option (`Planned` → `Planing`) or a cross-project status sent tasks into a group that is never rendered.
+  - **Fix**: `Board.tsx::projectKeys` now appends every status value that **has tasks but no table column** as a fallback column (sorted by name, non-empty only), with its own colour index. The existing contract "configured columns are shown even when empty" is unchanged.
+  - **Trade-off**: `App.tsx`'s "main project" selection is untouched — merging all projects would add many permanently empty columns and cross-project `order_index` values are not comparable; the fallback column already guarantees "every task has a column".
+  - **Verification**: `vitest` **380 passed** (4 new tests, including the "sum of column counts == task total" invariant); two mutations (removing the fallback / removing the sort) fail 2 and 1 assertions respectively ⇒ the assertions are effective.
+  - See [`issue-485-board-lost-status.md`](./issue-485-board-lost-status.md)
 - **v0.7.9 (2026-10-26) — opencode integration migrated to the v2 plugin API, with v1 supported by major version (#481)**
 
   - **Symptom**: after opencode was upgraded to v2 (v2.0.32) on this machine, `.opencode/plugins/taskboard.js` showed the ID `-` in `opencode plugin list` (the loader did not recognise it) ⇒ the automatic `record_session` arguments (`session_id` / `agent` / `branch`), the `TASKBOARD_SESSION_ID` injection and the "single untriggered issue reference" auto-start **all failed silently**.

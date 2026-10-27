@@ -585,3 +585,74 @@ describe('TaskCard 创建人行与顶部账号行（#237）', () => {
     expect(html).toContain('card-top');
   });
 });
+
+/**
+ * #485：任务按 `projectStatus` **原文**分组，而 project 视图的列键原本只来自
+ * `project_statuses` 表 ⇒ 选项改名（Planned → Planing）或跨项目状态会把任务送进
+ * 永不渲染的分组：列头之和 < 任务总数，且既不进任何列也不进「未标注」。
+ * 实测本机 567 条只渲染 558（差 9 条 `Planned`）。
+ */
+describe('Board 表外状态值兜底成列（#485）', () => {
+  const colOrder = (html: string): string[] =>
+    [...html.matchAll(/class="[^"]*column-title[^"]*"[^>]*>([^<]+)</g)].map((m) => m[1].trim());
+
+  /** 所有列头 count 之和 —— 「不丢任务」的不变量：必须等于任务总数。 */
+  const countSum = (html: string): number =>
+    [...html.matchAll(/class="count">(\d+)</g)].reduce((s, m) => s + Number(m[1]), 0);
+
+  const render = (tasks: Task[], statuses: ProjectStatus[]) =>
+    renderToStaticMarkup(
+      <I18nProvider>
+        <Board tasks={tasks} selected={null} onSelect={noop} projectStatuses={statuses} />
+      </I18nProvider>,
+    );
+
+  const statuses: ProjectStatus[] = [
+    { id: 1, accountId: 1, projectGithubId: 'PVT_x', name: 'Alpha', orderIndex: 0 },
+  ];
+
+  it('project_status 不在表里的任务必须成列（修复前静默消失）', () => {
+    const tasks = [
+      mkTask({ issueKey: 'o/r#1', projectStatus: 'Alpha', title: 'IN-TABLE' }),
+      mkTask({ issueKey: 'o/r#2', projectStatus: 'Planned', title: 'OUT-OF-TABLE' }),
+    ];
+    const html = render(tasks, statuses);
+    const order = colOrder(html);
+    expect(order, `实际列序 ${JSON.stringify(order)}`).toContain('Planned');
+    // 反向契约：任务卡片真的渲染出来了（而不是只多了一个空列）
+    expect(html).toContain('OUT-OF-TABLE');
+    // 不变量：列头数字之和 == 任务总数（修复前为 1 < 2）
+    expect(countSum(html), `列头之和应等于任务数，实际列序 ${JSON.stringify(order)}`).toBe(2);
+    // 表外兜底列排在已配置列之后
+    expect(order.indexOf('Alpha')).toBeLessThan(order.indexOf('Planned'));
+  });
+
+  it('表外状态无任务时不建空列（避免列噪音）', () => {
+    const tasks = [mkTask({ issueKey: 'o/r#1', projectStatus: 'Alpha' })];
+    expect(colOrder(render(tasks, statuses))).not.toContain('Planned');
+  });
+
+  it('多个表外状态按名称排序，且不随任务传入顺序变化（渲染稳定）', () => {
+    const a = [
+      mkTask({ issueKey: 'o/r#1', projectStatus: 'Zeta' }),
+      mkTask({ issueKey: 'o/r#2', projectStatus: 'Eta' }),
+    ];
+    const extraOrder = (ts: Task[]) =>
+      colOrder(render(ts, statuses)).filter((c) => ['Eta', 'Zeta'].includes(c));
+    expect(extraOrder(a)).toEqual(['Eta', 'Zeta']);
+    expect(extraOrder([...a].reverse())).toEqual(['Eta', 'Zeta']);
+  });
+
+  it('已关闭任务仍归 done 列，不因兜底逻辑重复成列', () => {
+    // 关闭任务按 issueState 先归 done；其 projectStatus 即便表外，也不该再单独成列
+    const tasks = [
+      mkTask({ issueKey: 'o/r#1', projectStatus: 'Alpha' }),
+      mkTask({ issueKey: 'o/r#2', issueState: 'closed', projectStatus: 'Planned' }),
+    ];
+    const html = render(tasks, statuses);
+    const order = colOrder(html);
+    expect(order).toContain('已完成');
+    expect(order).not.toContain('Planned');
+    expect(countSum(html)).toBe(2);
+  });
+});
