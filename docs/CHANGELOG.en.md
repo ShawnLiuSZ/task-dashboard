@@ -2,6 +2,14 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.7.10 (unreleased) — Top bar count now shows my open issues, excluding closed / completed (#484)**
+
+  - **Semantics changed**: the top bar number moved from "all tasks in the current view" to "open issue count" — excluding `issueState=closed` (authoritatively closed on GitHub) and `status=done` (marked done on the board while the issue may still be open). On the active account here it goes from 567 to **181**.
+  - **Explicit label**: `共 {n} 条` → `未完成 {n} 条` (en `{n} tasks` → `{n} open`). The board's "done" column still lists closed tasks, so this number never equals the sum of the columns; the old wording made it easy to misread as a total.
+  - **Extracted into a pure function**: `app/src/utils/openCount.ts::countOpenIssues` — the App layer has no component-test setup, so filtering inlined in JSX can only be guarded end-to-end; 6 unit tests added (closed / done each excluded, both matching counted once, mixed list).
+  - Repo filter and keyword search still apply (same `visible` source as the board); no backend / MCP / DB changes.
+  - See [`issue-484-topbar-open-count.md`](./issue-484-topbar-open-count.md)
+
 - **v0.7.9 (2026-10-26) — opencode integration migrated to the v2 plugin API, with v1 supported by major version (#481)**
 
   - **Symptom**: after opencode was upgraded to v2 (v2.0.32) on this machine, `.opencode/plugins/taskboard.js` showed the ID `-` in `opencode plugin list` (the loader did not recognise it) ⇒ the automatic `record_session` arguments (`session_id` / `agent` / `branch`), the `TASKBOARD_SESSION_ID` injection and the "single untriggered issue reference" auto-start **all failed silently**.

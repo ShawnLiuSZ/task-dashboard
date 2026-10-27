@@ -11,6 +11,7 @@ import { taskListSignature } from './utils/taskSig';
 import { coalescedLoad, createLoadCoalescer } from './utils/coalescedLoad';
 import { countHiddenChanged, snapshotTasks } from './utils/syncHint';
 import { taskIdentity } from './utils/taskIdentity';
+import { countOpenIssues } from './utils/openCount';
 import { useEscLayer } from './utils/useEscLayer';
 import { fmtTime, I18nProvider, useI18n } from './i18n';
 import Board from './components/Board';
@@ -417,6 +418,11 @@ function BoardApp() {
     });
   }, [tasks, repo, deferredQuery]);
 
+  // #484：顶栏数字 =「我的未完成 issue 数」（排除 closed / done）。
+  // 与 visible 同源 ⇒ 仓库筛选与关键词搜索仍然生效；看板「已完成」列仍展示已关闭任务，
+  // 因此该数字本就**不该**等于各列之和，文案已显式写明「未完成」。
+  const openCount = useMemo(() => countOpenIssues(visible), [visible]);
+
   const doSync = async () => {
     setSyncing(true);
     setError(null);
@@ -542,7 +548,7 @@ function BoardApp() {
         <div className="topbar-left">
           {/* #259：品牌 + 当前视图条数；账号切换移到左侧 Sidebar。 */}
           <span className="app-title">{t('app.title')}</span>
-          <span className="muted">{t('topbar.totalCount', { n: visible.length })}</span>
+          <span className="muted">{t('topbar.openCount', { n: openCount })}</span>
           {/* #447：新建备忘录入口移到顶栏，点击弹出 Modal。 */}
           <button
             type="button"

@@ -6,6 +6,14 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.10（未发布）— 顶栏计数改为「我的未完成 issue 数」，排除已关闭 / 已完成（#484）**
+
+  - **口径变更**：顶栏数字从「当前视图全部任务」改为「未完成 issue 数」—— 排除 `issueState=closed`（GitHub 权威关闭）与 `status=done`（看板手动标记已完成，issue 可能尚未关闭）。本机激活账号实测 567 → **181**。
+  - **文案显式化**：`共 {n} 条` → `未完成 {n} 条`（en `{n} tasks` → `{n} open`）。看板「已完成」列仍展示已关闭任务，因此该数字本就不等于各列之和，旧文案容易被误读成总数。
+  - **口径抽成纯函数**：`app/src/utils/openCount.ts::countOpenIssues` —— App 层没有组件测试基建，内联在 JSX 里的过滤只能靠端到端测试守；新增 6 条单测（closed / done 各自排除、双命中只扣一次、混合列表）。
+  - 仓库筛选与关键词搜索仍生效（与看板同源 `visible`）；后端 / MCP / DB 零改动。
+  - 详见 [`issue-484-topbar-open-count.md`](./issue-484-topbar-open-count.md)
+
 - **v0.7.9（2026-10-26）— opencode 集成适配 v2 插件 API，并按主版本兼容 v1（#481）**
 
   - **现象**：本机 opencode 升级到 v2（v2.0.32）后，`.opencode/plugins/taskboard.js` 在 `opencode plugin list` 里的 ID 变成 `-`（加载器未识别）⇒ `record_session` 的 `session_id` / `agent` / `branch` 自动补参、`TASKBOARD_SESSION_ID` 注入、唯一 issue 引用的自动接管**全部静默失效**。
