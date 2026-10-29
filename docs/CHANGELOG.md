@@ -6,6 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.11（未发布）— 详情面板：body / 评论等实时信息移到「交接任务」下；知识库文档索引迁到 CONTRIBUTING.md（#504）**
+
+  - **需求 ①（详情面板重排）**：用户要求「将 body 信息，评论等信息放在『交接任务』下边」。三块**实时拉取**的内容（#490 / #498 的产出）原先**分散在面板上下**（描述在最上、评论在中、PR 提交历史在最末）⇒ 改后聚成一段连续的「远端实况」，紧跟「交接任务」之后。**只动 JSX 顺序，不改任何渲染条件**。
+  - **断言落点**：三块皆**条件渲染**（正文非空 / 有评论 / 有 PR），而前端测试跑在 node 环境（无 DOM）⇒ `useEffect` 不执行 ⇒ SSR 产物里根本没有它们 ⇒ **渲染断言够不着** ⇒ 改用**源码顺序断言**（精确 JSX 片段作锚点，两两比较 `indexOf`）。⚠️ 锚点必须用精确片段而非裸词 —— 裸词会命中注释里的同一字符串，断言就成了「恒真」。
+  - **需求 ②（文档索引迁移）**：知识库文档链接与说明从 `README.md` 整体迁到 `CONTRIBUTING.md` 的新章节「## 文档索引」（含原有的「### 历史知识库文档」子节与说明文字，原样保留）。`README.md` **358 → 181 行**、`README.en.md` 190 → 178 行、两者只留入口指针；`CONTRIBUTING.md` 120 → 324 行。
+  - **⚠️ 连带改动**：`docs/*.md` 必须被「索引文件」引用否则报**孤岛文档**（#330）⇒ 原白名单 `INDEX_FILES`（README / README.en / 两个 CHANGELOG）必须补上 **`CONTRIBUTING.md`**，否则迁出的全部 `docs/*.md` 立刻变成孤岛而误报；脚本的两处提示文案同步更新。
+  - **口径同步**：`AGENTS.md` 的「新增文档后必须建立反向链接」补上 `CONTRIBUTING.md` 并写明「#504 起知识库文档索引在 CONTRIBUTING.md」；`CONTRIBUTING.md` 的「获取帮助」补一条指向本文档索引。
+  - **验证**：`check-doc-links.py` ✓（251 个 markdown，无断链 / 无孤岛）· scripts 单测 143 ✓ · `check-versions.py` ✓ · tsc / lint / prettier / build / i18n ✓ · vitest 469 → **475**。**反向验证**：把「描述」挪回「执行状态」之前 ⇒ 2 条顺序断言失败。
+  - **影响面**：前端 `DetailPanel.tsx`（仅 JSX 顺序）+ 1 个测试文件；文档 4 篇；工具 `check-doc-links.py`。**零后端 / 零 DB schema / 零 i18n 改动**。
+  - 详见 [`issue-504-detail-panel-order-and-doc-index.md`](./issue-504-detail-panel-order-and-doc-index.md)
+
 - **v0.7.11（未发布）— 任务详情：issue 正文在 CRLF 行尾下死循环，导致详情面板整块消失（#502）**
 
   - **现象**：用户反馈「实时拉取信息，为什么没有拉取 issue 的 body、评论记录等信息展示在详情中」。排查结论：**拉到了，但渲染时炸了** —— `renderMarkdown` 在真实正文上**死循环**，渲染期抛 `RangeError` ⇒ React 卸载整棵树 ⇒ **详情面板（连同 body / 评论 / PR 提交历史）整块消失**。

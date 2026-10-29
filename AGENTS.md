@@ -209,7 +209,7 @@ CI：`/.github/workflows/i18n-check.yml` 在 PR 时自动校验 i18n 一致性�
 - 文件名遵循 `kebab-case.md`；**禁止中文文件名**。
 - 内部链接用相对路径 `./xxx.md` 或 `../docs/xxx.md`。
 - 不在 KB 文档中嵌入大段代码；只贴最小可复现片段并指向源文件。
-- 新增文档后**必须**在 README.md / CHANGELOG.md / 涉及的 PRD 章节建立反向链接（避免孤岛文档）。
+- 新增文档后**必须**在 README.md / CONTRIBUTING.md / CHANGELOG.md / 涉及的 PRD 章节建立反向链接（避免孤岛文档）。#504 起，**知识库文档索引在 `CONTRIBUTING.md` 的「文档索引」**（README 只留入口指针）。
 - 旧文档若被新文档取代，在文档顶部标注「⚠️ 已被 `<new-doc>` 取代」并保留 1 个版本周期后删除。
 
 ### 5.6 评估「测试是否真的在守什么」

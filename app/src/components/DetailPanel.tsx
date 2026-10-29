@@ -269,26 +269,6 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
         </span>
       </div>
 
-      {/* #498：issue **正文**（描述）——用户要的「具体的详细信息」。
-          实时数据未到达时没有正文可显示 ⇒ 整节不渲染。
-          正文是 markdown 源文本 ⇒ 经 `utils/markdown.ts` 渲染成**安全** HTML
-          （先 HTML 转义、只允许白名单标签、链接协议只放行 http/https）。 */}
-      {liveBody.trim() && (
-        <section className="detail-block">
-          <div className="block-title">{t('detail.bodyTitle')}</div>
-          <div
-            className={`detail-body markdown${bodyLong && !bodyExpanded ? ' collapsed' : ''}`}
-            // ⚠️ 安全：`renderMarkdown` 的返回值已转义并限白名单标签（见 utils/markdown.ts）。
-            dangerouslySetInnerHTML={{ __html: bodyHtml }}
-          />
-          {bodyLong && (
-            <button className="btn ghost small" onClick={() => setBodyExpanded((v) => !v)}>
-              {bodyExpanded ? t('detail.bodyCollapse') : t('detail.bodyExpand')}
-            </button>
-          )}
-        </section>
-      )}
-
       <section className="detail-block">
         <div className="block-title">{t('detail.statusTitle')}</div>
         {/* #215：GitHub 状态行可点（确认框 → 写回远端 Status）。
@@ -401,6 +381,59 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
         )}
       </section>
 
+      {/* #504：以下三块是**实时拉取**的内容（#490 / #498 的产出），统一聚在
+          「交接任务」之后，形成一段连续的「远端实况」；原先它们分散在面板
+          上下（描述在最上、评论在中、PR 提交历史在最末），读起来要来回跳。
+          顺序：描述（正文）→ 评论链接 → 关联 PR 提交历史。 */}
+
+      {/* #498：issue **正文**（描述）——用户要的「具体的详细信息」。
+          实时数据未到达时没有正文可显示 ⇒ 整节不渲染。
+          正文是 markdown 源文本 ⇒ 经 `utils/markdown.ts` 渲染成**安全** HTML
+          （先 HTML 转义、只允许白名单标签、链接协议只放行 http/https）。 */}
+      {liveBody.trim() && (
+        <section className="detail-block">
+          <div className="block-title">{t('detail.bodyTitle')}</div>
+          <div
+            className={`detail-body markdown${bodyLong && !bodyExpanded ? ' collapsed' : ''}`}
+            // ⚠️ 安全：`renderMarkdown` 的返回值已转义并限白名单标签（见 utils/markdown.ts）。
+            dangerouslySetInnerHTML={{ __html: bodyHtml }}
+          />
+          {bodyLong && (
+            <button className="btn ghost small" onClick={() => setBodyExpanded((v) => !v)}>
+              {bodyExpanded ? t('detail.bodyCollapse') : t('detail.bodyExpand')}
+            </button>
+          )}
+        </section>
+      )}
+
+      {/* #472：评论链接（**倒序：最新在前**）—— 按需拉取，不随看板列表返回。
+          渲染拆到 `TaskCommentsList`（独立组件）⇒ 倒序语义有明确的断言落点
+          （前端测试跑在 node 环境，`useEffect` 不会执行 ⇒ 放在本文件内部测不到）。
+          ⚠️ 列表为空时**整节不渲染**（不显示空标题）—— 评论表在首次同步前是空的，
+          此时上面的「最新评论」按钮仍可用（它走 `tasks.latest_comment_url` 单值列）。 */}
+      {/* #490：评论区优先展示实时拉取的评论（覆盖本地库）；未加载时回退 DB 评论。
+          加载态叠加 live 拉取中，避免评论区在实时数据到达前闪烁为空。 */}
+      <TaskCommentsList comments={shownComments} loading={commentsLoading || liveLoading} />
+
+      {/* #490：关联 PR 的提交历史（实时拉取，不落库）。仅在确实有关联 PR 时渲染。 */}
+      {livePrCommits.length > 0 && (
+        <section className="detail-block">
+          <div className="block-title">
+            {t('detail.prCommitsTitle', { n: livePrCommits.length })}
+          </div>
+          <ul className="link-list">
+            {livePrCommits.map((c) => (
+              <li key={c.sha} className="link-line">
+                <span className="link-ref mono">{c.sha}</span>
+                <span className="link-title">{c.message.split('\n')[0]}</span>
+                {c.author && <span className="muted small">@{c.author}</span>}
+                {c.date > 0 && <span className="muted small">{fmtTime(c.date, lang)}</span>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section className="detail-block">
         <div className="block-title">GitHub</div>
         <div className="row">
@@ -472,15 +505,6 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
         <div className="muted small top-gap">{t('detail.localOnly')}</div>
       </section>
 
-      {/* #472：评论链接（**倒序：最新在前**）—— 按需拉取，不随看板列表返回。
-          渲染拆到 `TaskCommentsList`（独立组件）⇒ 倒序语义有明确的断言落点
-          （前端测试跑在 node 环境，`useEffect` 不会执行 ⇒ 放在本文件内部测不到）。
-          ⚠️ 列表为空时**整节不渲染**（不显示空标题）—— 评论表在首次同步前是空的，
-          此时上面的「最新评论」按钮仍可用（它走 `tasks.latest_comment_url` 单值列）。 */}
-      {/* #490：评论区优先展示实时拉取的评论（覆盖本地库）；未加载时回退 DB 评论。
-          加载态叠加 live 拉取中，避免评论区在实时数据到达前闪烁为空。 */}
-      <TaskCommentsList comments={shownComments} loading={commentsLoading || liveLoading} />
-
       {/* #278：关联 issue（父 / 子）—— 同步自 GitHub `parent` / `subIssues`（只读）。
           仅在确实有关联时渲染整节，避免每个详情都多一个空块；
           每项复用 openExternal + copyToClipboard，与上方 GitHub 行同一套交互。 */}
@@ -540,24 +564,6 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
       {/* #490：实时拉取失败只做轻量提示，不阻断详情面板（保留本地库展示）。 */}
       {liveError && (
         <div className="muted small top-gap">{t('detail.liveError', { msg: liveError })}</div>
-      )}
-      {/* #490：关联 PR 的提交历史（实时拉取，不落库）。仅在确实有关联 PR 时渲染。 */}
-      {livePrCommits.length > 0 && (
-        <section className="detail-block">
-          <div className="block-title">
-            {t('detail.prCommitsTitle', { n: livePrCommits.length })}
-          </div>
-          <ul className="link-list">
-            {livePrCommits.map((c) => (
-              <li key={c.sha} className="link-line">
-                <span className="link-ref mono">{c.sha}</span>
-                <span className="link-title">{c.message.split('\n')[0]}</span>
-                {c.author && <span className="muted small">@{c.author}</span>}
-                {c.date > 0 && <span className="muted small">{fmtTime(c.date, lang)}</span>}
-              </li>
-            ))}
-          </ul>
-        </section>
       )}
       {err && <div className="banner error">{err}</div>}
     </aside>

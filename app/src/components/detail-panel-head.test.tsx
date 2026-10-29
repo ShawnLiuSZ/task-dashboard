@@ -1,6 +1,8 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import DetailPanel from './DetailPanel';
+// 源码文本（`?raw`）—— 只读字符串，**不执行模块** ⇒ node 环境无 DOM 也能用。
+import detailPanelRaw from './DetailPanel.tsx?raw';
 import { I18nProvider } from '../i18n';
 import type { Task } from '../types';
 
@@ -97,5 +99,62 @@ describe('任务详情头部结构（#500）', () => {
     expect(render()).toContain(
       '<h2 class="detail-title">[Epic] 牛奶罐按司机结算：欠抵扣款 / 多还奖励、司机端可查</h2>',
     );
+  });
+});
+
+/**
+ * 详情面板**区块顺序**（#504）。
+ *
+ * 用户的诉求：「将 body 信息，评论等信息放在『交接任务』下边」。
+ *
+ * ⇒ 三块**实时拉取**的内容（#490 / #498 的产出）必须聚在「交接任务」之后，
+ *    形成一段连续的「远端实况」；原先它们分散在面板上下（描述在最上、评论在中、
+ *    PR 提交历史在最末），读的时候要来回跳。
+ *
+ * ⚠️ 这三块都是**条件渲染**（正文非空 / 有评论 / 有 PR 才渲染），
+ *    node 环境的 SSR 不会执行 `useEffect` ⇒ `live` 恒为 null ⇒ **渲染断言够不着**
+ *    ⇒ 只能用源码顺序断言（与仓库既有范式一致）。
+ *    锚点一律用**精确 JSX 片段**，避免命中注释里的同名字符串。
+ */
+describe('详情面板区块顺序（#504）', () => {
+  /** 源码里某段 JSX 片段的首次出现位置。 */
+  function at(fragment: string): number {
+    const i = detailPanelRaw.indexOf(fragment);
+    expect(i, `源码里应能找到 ${fragment}`).toBeGreaterThan(-1);
+    return i;
+  }
+
+  it('「交接任务」在「描述」之前', () => {
+    expect(at("{t('detail.handoffTitle')}")).toBeLessThan(at("{t('detail.bodyTitle')}"));
+  });
+
+  it('「描述」在评论区块之前', () => {
+    expect(at("{t('detail.bodyTitle')}")).toBeLessThan(
+      at('<TaskCommentsList comments={shownComments}'),
+    );
+  });
+
+  it('评论区块在「PR 提交历史」之前', () => {
+    expect(at('<TaskCommentsList comments={shownComments}')).toBeLessThan(
+      at("{t('detail.prCommitsTitle'"),
+    );
+  });
+
+  it('三块实时内容都排在 GitHub 区块之前（聚成一段「远端实况」）', () => {
+    const iGitHub = at('<div className="block-title">GitHub</div>');
+    expect(at("{t('detail.bodyTitle')}")).toBeLessThan(iGitHub);
+    expect(at('<TaskCommentsList comments={shownComments}')).toBeLessThan(iGitHub);
+    expect(at("{t('detail.prCommitsTitle'")).toBeLessThan(iGitHub);
+  });
+
+  it('三块实时内容都不在「执行状态 / 会话」之前（它们是本地操作区，应在前）', () => {
+    const iStatus = at("{t('detail.statusTitle')}");
+    const iSession = at("{t('detail.sessionTitle')}");
+    expect(iStatus).toBeLessThan(at("{t('detail.bodyTitle')}"));
+    expect(iSession).toBeLessThan(at("{t('detail.bodyTitle')}"));
+  });
+
+  it('描述区块仍然只在正文非空时渲染（顺序调整不得改变条件）', () => {
+    expect(detailPanelRaw).toContain('liveBody.trim() &&');
   });
 });
