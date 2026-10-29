@@ -929,7 +929,10 @@ mod tests {
         assert_eq!(got[0].sha, "abc123de");
         assert_eq!(got[0].message, "fix: handle 404");
         assert_eq!(got[0].author, "Shawn");
-        assert_eq!(got[0].date, crate::common::iso8601_to_secs("2026-01-02T03:04:05Z"));
+        assert_eq!(
+            got[0].date,
+            crate::common::iso8601_to_secs("2026-01-02T03:04:05Z")
+        );
         // 第三条：commit.author.name 缺失 ⇒ 回退顶层 author.login。
         assert_eq!(got[1].sha, "fed987");
         assert_eq!(got[1].author, "bot");
