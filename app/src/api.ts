@@ -20,7 +20,6 @@ import type {
   Settings,
   SyncLog,
   SyncResult,
-  LiveTaskDetail,
   Task,
   TaskComment,
   UpdateProgress,
@@ -150,8 +149,14 @@ export const api = {
     invoke<TaskComment[]>('list_task_comments', { issueKey, accountId }),
   // #490：打开详情时实时拉取 GitHub 详情 + 评论 + 关联 PR 提交历史（只读、零落库）。
   // 失败时抛错，由调用方保留本地库展示。
+  //
+  // ⚠️ #496：返回类型刻意是 `unknown` 而不是 `LiveTaskDetail` ——
+  //   `invoke<T>` 只是类型断言，**不校验**运行时形状。后端结构体一旦漏写
+  //   `#[serde(rename_all = "camelCase")]`（键变 snake_case），断言照样"成立"，
+  //   但 `live.prCommits` 实际是 `undefined` ⇒ 渲染期 `.length` 抛错 ⇒ 整页白屏。
+  //   声明成 `unknown` 后，调用方**必须**先过 `utils/liveDetail.ts` 的规范化。
   fetchTaskDetailLive: (issueKey: string, accountId: number, prNumber?: number) =>
-    invoke<LiveTaskDetail>('fetch_task_detail_live', {
+    invoke<unknown>('fetch_task_detail_live', {
       issueKey,
       accountId,
       prNumber: prNumber ?? 0,

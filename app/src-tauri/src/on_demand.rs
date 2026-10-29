@@ -445,7 +445,14 @@ fn outcome_from_affected(affected: usize) -> EnsureOutcome {
 ///
 /// 字段命名与 `CommentRef` 一致（`#[serde(rename_all = "camelCase")]`）⇒ 前端可直接当
 /// `TaskComment` 用；`pr_commits` 额外承载「历史提交记录」。
+///
+/// ⚠️ #496：**这个 `rename_all` 不能删**。漏写时后端序列化出的是 `pr_commits`，
+/// 而前端 `types.ts` 的 `LiveTaskDetail` 期望 `prCommits` ⇒ `live.prCommits` 为
+/// `undefined` ⇒ 详情面板渲染 `live.prCommits.length` 时抛 TypeError ⇒
+/// React 卸载整棵树 ⇒ **窗口全屏空白**。
+/// 回归防线见同文件 `live_task_detail_serializes_camel_case_keys`。
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LiveTaskDetail {
     /// issue 实时详情（标题 / 状态 / 指派 / 标签 / 计数 / 时间）。
     pub issue: LiveIssue,
@@ -496,25 +503,29 @@ pub struct LivePrCommit {
     pub date: i64,
 }
 
-/// 实时拉取入口（纯编排，需联网；不可单测）。返回结构见 [`LiveTaskDetail`]。
+/// 实时拉取入口（**纯联网**，需联网；不可单测）。返回结构见 [`LiveTaskDetail`]。
 ///
-/// 账号按 `account_id` 取 PAT 与 login/org；`issue_key` 形如 `repo#number`
-/// （不含 owner），owner 由账号的 org/login 推断（与 `default_owner_of` 同口径）。
-/// 拉取失败（无 PAT / 账号 / 404 / 限流）一律返回 `Err` 并带原因，由前端优雅降级
-/// （保留本地库展示，不崩溃）。
+/// `issue_key` 形如 `repo#number`（不含 owner），owner 由账号的 org/login 推断
+/// （与 `default_owner_of` 同口径）。拉取失败（无 PAT / 账号 / 404 / 限流）一律返回 `Err`
+/// 并带原因，由前端优雅降级（保留本地库展示，不崩溃）。
+///
+/// ⚠️ #496：本函数**完全不碰 SQLite**（凭证由调用方传入）——
+/// 这是刻意的：命令层需要在**不持有 DB 锁**的前提下联网。锁内只取 PAT 这种
+/// 亚毫秒级本地读，锁一释放就去联网；否则一次慢响应会把共享锁占住几秒～几十秒，
+/// 连带阻塞所有读命令（设置 / 账号 / 同步日志面板），主线程也会被拖成 beachball（#329）。
 pub fn fetch_task_detail_live(
-    conn: &Connection,
+    login: &str,
+    org: &str,
+    pat: &str,
     issue_key: &str,
-    account_id: i64,
     pr_number: i64,
 ) -> Result<LiveTaskDetail, String> {
     let r = parse_issue_ref_parts(issue_key)?;
     let repo = r.repo.clone();
     let number = r.number;
 
-    // 账号：按 account_id 取 PAT 与 login/org。issue_key 只含 repo#number，
+    // 账号：PAT / login / org 由调用方给出。issue_key 只含 repo#number，
     // owner 由账号推断（与 `default_owner_of` 同口径）。
-    let (login, org, pat) = crate::db::get_account_pat(conn, account_id)?;
     if pat.trim().is_empty() {
         return Err(format!("账号 @{login} 未配置 PAT"));
     }
@@ -523,7 +534,11 @@ pub fn fetch_task_detail_live(
     } else {
         login.trim().to_string()
     };
-    let client = match crate::github::GitHubClient::new(pat, login.clone(), api_owner.clone()) {
+    let client = match crate::github::GitHubClient::new(
+        pat.to_string(),
+        login.to_string(),
+        api_owner.clone(),
+    ) {
         Ok(c) => c,
         Err(e) => return Err(format!("构造 GitHub 客户端失败: {e}")),
     };
@@ -944,5 +959,78 @@ mod tests {
     fn parse_pr_commits_tolerates_non_array() {
         assert!(super::parse_pr_commits(&serde_json::json!({})).is_empty());
         assert!(super::parse_pr_commits(&serde_json::json!([])).is_empty());
+    }
+
+    /// #496：回归防线 —— `LiveTaskDetail` 的序列化键**必须**是驼峰。
+    ///
+    /// 漏写 `#[serde(rename_all = "camelCase")]` 时后端给出 `pr_commits`，
+    /// 前端 `types.ts` 期望 `prCommits` ⇒ `live.prCommits` 为 `undefined` ⇒
+    /// 详情面板渲染 `live.prCommits.length` 时抛 TypeError ⇒
+    /// React 卸载整棵树 ⇒ **窗口全屏空白**（#496 的实际现象）。
+    ///
+    /// 断言写在**后端**：只有后端能保证「发出去的键名」与前端期望一致。
+    #[test]
+    fn live_task_detail_serializes_camel_case_keys() {
+        let detail = super::LiveTaskDetail {
+            issue: super::LiveIssue {
+                number: 7,
+                title: "t".into(),
+                url: "u".into(),
+                state: "open".into(),
+                assignees: vec!["a".into()],
+                labels: vec!["l".into()],
+                author: "au".into(),
+                comments_count: 0,
+                created_at: 0,
+                updated_at: 0,
+            },
+            comments: vec![super::LiveComment {
+                id: 1,
+                url: "c".into(),
+                author: "x".into(),
+                created_at: 0,
+            }],
+            pr_commits: vec![super::LivePrCommit {
+                sha: "abc12345".into(),
+                message: "m".into(),
+                author: "au".into(),
+                date: 0,
+            }],
+        };
+        let v = serde_json::to_value(&detail).expect("LiveTaskDetail 应可序列化");
+        let obj = v.as_object().expect("应序列化为对象");
+        // 顶层三个键：驼峰。
+        assert!(
+            obj.contains_key("prCommits"),
+            "顶层键必须是 prCommits，实际是 {:?}",
+            obj.keys().collect::<Vec<_>>()
+        );
+        assert!(obj.contains_key("issue"), "顶层键 issue 缺失");
+        assert!(obj.contains_key("comments"), "顶层键 comments 缺失");
+        assert!(
+            !obj.contains_key("pr_commits"),
+            "顶层键 pr_commits 不应出现（前端读的是 prCommits）"
+        );
+        // 嵌套结构同样驼峰：`issue.commentsCount`、`comments[0].createdAt`。
+        let issue = obj
+            .get("issue")
+            .and_then(|i| i.as_object())
+            .expect("issue 应为对象");
+        assert!(
+            issue.contains_key("commentsCount"),
+            "issue.commentsCount 应为驼峰，实际 {:?}",
+            issue.keys().collect::<Vec<_>>()
+        );
+        let c0 = obj
+            .get("comments")
+            .and_then(|c| c.as_array())
+            .and_then(|a| a.first())
+            .and_then(|c| c.as_object())
+            .expect("comments[0] 应为对象");
+        assert!(
+            c0.contains_key("createdAt"),
+            "comments[0].createdAt 应为驼峰，实际 {:?}",
+            c0.keys().collect::<Vec<_>>()
+        );
     }
 }
