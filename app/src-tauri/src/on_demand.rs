@@ -461,6 +461,12 @@ pub struct LiveTaskDetail {
     pub comments: Vec<LiveComment>,
     /// 关联 PR 的提交历史（仅当调用方传入 `pr_number > 0` 时拉取，否则空）。
     pub pr_commits: Vec<LivePrCommit>,
+    /// #506：**Activity 时间线**（评论 + 事件交织，按时间升序）。
+    ///
+    /// 对齐 orca 的 issue 详情 Activity 区块：一次 Timeline API 请求同时拿到
+    /// 评论（带正文）与时间线事件（指派 / 标签 / 状态变更 / 交叉引用 / 项目列移动）。
+    /// 拉取失败时为**空数组**（不阻断详情面板其余内容）。
+    pub timeline: Vec<LiveTimelineItem>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -504,6 +510,32 @@ pub struct LivePrCommit {
     pub author: String,
     /// 提交时间（Unix 秒）。
     pub date: i64,
+}
+
+/// #506：Activity 时间线的一个条目（评论 or 事件）。
+///
+/// 形状与前端 `types.ts::LiveTimelineItem` 一致（`#[serde(rename_all = "camelCase")]`）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveTimelineItem {
+    /// `"comment"`（评论正文）/ `"event"`（时间线事件）。
+    pub kind: String,
+    /// GitHub 事件名（`commented` / `assigned` / `labeled` / `closed` …）。
+    pub event: String,
+    /// 操作者 login（不含 @）；空串 = 未知。
+    pub actor: String,
+    /// 发生时间（Unix 秒）。
+    pub created_at: i64,
+    /// 评论正文（仅 `kind = "comment"`）。
+    pub body: String,
+    /// 评论永久链接（仅 `kind = "comment"`）。
+    pub url: String,
+    /// 标签事件的标签名。
+    pub label: String,
+    /// 指派事件的被指派人 login。
+    pub assignee: String,
+    /// 交叉引用 / 子 issue 事件指向的目标（如 `fad-backend#1629`）。
+    pub ref_issue: String,
 }
 
 /// 实时拉取入口（**纯联网**，需联网；不可单测）。返回结构见 [`LiveTaskDetail`]。
@@ -579,10 +611,31 @@ pub fn fetch_task_detail_live(
         Vec::new()
     };
 
+    // #506：Activity 时间线（评论 + 事件交织）。
+    // ⚠️ best-effort：失败降级为**空数组**，不阻断详情面板其余内容
+    // （时间线是「加分项」，而 issue 正文 / 评论 / PR 提交历史是主体）。
+    let timeline = client
+        .fetch_issue_timeline(&repo, number, &api_owner)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| LiveTimelineItem {
+            kind: t.kind.to_string(),
+            event: t.event,
+            actor: t.actor,
+            created_at: t.created_at,
+            body: t.body,
+            url: t.url,
+            label: t.label,
+            assignee: t.assignee,
+            ref_issue: t.ref_issue,
+        })
+        .collect();
+
     Ok(LiveTaskDetail {
         issue,
         comments,
         pr_commits,
+        timeline,
     })
 }
 
@@ -1012,6 +1065,18 @@ mod tests {
                 author: "au".into(),
                 date: 0,
             }],
+            // #506：Activity 时间线（评论 + 事件交织）。
+            timeline: vec![super::LiveTimelineItem {
+                kind: "comment".into(),
+                event: "commented".into(),
+                actor: "au".into(),
+                created_at: 0,
+                body: "b".into(),
+                url: "u".into(),
+                label: String::new(),
+                assignee: String::new(),
+                ref_issue: String::new(),
+            }],
         };
         let v = serde_json::to_value(&detail).expect("LiveTaskDetail 应可序列化");
         let obj = v.as_object().expect("应序列化为对象");
@@ -1058,6 +1123,98 @@ mod tests {
             "issue.body 缺失 ⇒ 详情面板拿不到 issue 正文（#498 的现象之一）"
         );
         assert_eq!(issue.get("body").and_then(|b| b.as_str()), Some("正文"));
+        // #506：Activity 时间线必须在返回体里，且**内部键名也是驼峰**
+        // （`createdAt` / `refIssue` 是多词字段 ⇒ 与 #496 同型风险点）。
+        assert!(
+            obj.contains_key("timeline"),
+            "顶层键 timeline 缺失 ⇒ 详情面板拿不到 Activity 时间线（#506）"
+        );
+        let t0 = obj
+            .get("timeline")
+            .and_then(|t| t.as_array())
+            .and_then(|a| a.first())
+            .and_then(|t| t.as_object())
+            .expect("timeline[0] 应为对象");
+        assert!(
+            t0.contains_key("createdAt"),
+            "timeline[0].createdAt 应为驼峰，实际 {:?}",
+            t0.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            t0.contains_key("refIssue"),
+            "timeline[0].refIssue 应为驼峰，实际 {:?}",
+            t0.keys().collect::<Vec<_>>()
+        );
+    }
+
+    /// #506：**真实样本**回归 —— 用 GitHub Timeline API 的**真实响应**解析。
+    ///
+    /// ⚠️ 样本来源：`GET /repos/FoodsUp-Inc/fad-backend/issues/1630/timeline`
+    /// （2026-10-29 实抓，6 条：项目列加入 / 项目列移动 ×2 / 子 issue / 交叉引用 / 1 条评论）。
+    /// 只裁掉了**与解析无关**的字段（`avatar_url` / `node_id` / `followers_url` 等），
+    /// **保留全部被解析的字段与它们的真实形状** ⇒ 解析函数面对的是真实数据。
+    ///
+    /// ⚠️ 这正是 #502 的教训所在：上一轮的 markdown 单测**全部自己造数据**，
+    /// 于是「行尾是 CRLF」这种真实形状差异整整放过一轮 ⇒ 这里必须用真实样本。
+    #[test]
+    fn parse_issue_timeline_handles_real_github_response() {
+        let raw = r#"[{"event":"added_to_project_v2","created_at":"2026-10-22T21:30:33Z","actor":{"login":"jackywoofsup"}},{"event":"project_v2_item_status_changed","created_at":"2026-10-22T21:30:35Z","actor":{"login":"github-project-automation[bot]"}},{"event":"project_v2_item_status_changed","created_at":"2026-10-22T21:30:39Z","actor":{"login":"jackywoofsup"}},{"event":"sub_issue_added","created_at":"2026-10-22T21:31:02Z","actor":{"login":"jackywoofsup"}},{"event":"cross-referenced","created_at":"2026-10-26T17:27:56Z","actor":{"login":"jackywoofsup"},"source":{"type":"issue","issue":{"number":1629,"title":"[返仓] 筐类商品：返仓任务下发标记；返仓保存时修正签的绑定并推 Kafka","repository_url":"https://api.github.com/repos/FoodsUp-Inc/fad-backend"}}},{"event":"commented","created_at":"2026-10-28T21:18:37Z","body":"10-28 定：先暂停，等司机贴签（贴司机签）的操作规范定下来后再推进 P1 / P2。\n","html_url":"https://github.com/FoodsUp-Inc/fad-backend/issues/1630#issuecomment-6480931933","actor":{"login":"jackywoofsup"},"user":{"login":"jackywoofsup"}}]"#;
+        let v: serde_json::Value = serde_json::from_str(raw).expect("样本应是合法 JSON");
+        let items = crate::github::parse_issue_timeline(&v);
+        assert_eq!(items.len(), 6, "真实响应有 6 条，实际 {}", items.len());
+
+        // 事件项：只看 `event` 字段（REST timeline 没有 `type`）。
+        assert_eq!(items[0].kind, "event");
+        assert_eq!(items[0].event, "added_to_project_v2");
+        assert_eq!(items[0].actor, "jackywoofsup");
+        assert_eq!(items[0].created_at, 1792704633, "2026-10-22T21:30:33Z");
+
+        // 项目列移动：actor 是 bot。
+        assert_eq!(items[1].event, "project_v2_item_status_changed");
+        assert_eq!(items[1].actor, "github-project-automation[bot]");
+
+        // 交叉引用：目标 issue 编号 + 仓库（拼成 `repo#number`）。
+        let xref = items
+            .iter()
+            .find(|i| i.event == "cross-referenced")
+            .expect("应有 cross-referenced 事件");
+        assert_eq!(xref.ref_issue, "fad-backend#1629");
+        assert_eq!(xref.actor, "jackywoofsup");
+
+        // 评论项：正文 + 永久链接 + 作者（作者在 `user` 而不是 `actor`）。
+        let c = items
+            .iter()
+            .find(|i| i.kind == "comment")
+            .expect("应有 commented 项");
+        assert_eq!(c.event, "commented");
+        assert_eq!(c.actor, "jackywoofsup");
+        assert!(c.body.contains("10-28 定：先暂停"), "评论正文应原样保留");
+        assert!(
+            c.url.ends_with("#issuecomment-6480931933"),
+            "评论永久链接应保留，实际 {}",
+            c.url
+        );
+        assert!(c.created_at > 0);
+    }
+
+    /// #506：**边界形状** —— 脏数据不能让整条时间线失败。
+    #[test]
+    fn parse_issue_timeline_skips_dirty_items_without_failing() {
+        // 非数组 ⇒ 空。
+        assert!(crate::github::parse_issue_timeline(&serde_json::json!({})).is_empty());
+        assert!(crate::github::parse_issue_timeline(&serde_json::json!(null)).is_empty());
+        // 缺 `event` 的项被跳过；其余照常。
+        let v = serde_json::json!([
+            { "actor": { "login": "x" } },
+            { "event": "closed", "created_at": "2026-01-01T00:00:00Z" },
+            { "event": "labeled", "label": { "name": "bug" } },
+        ]);
+        let items = crate::github::parse_issue_timeline(&v);
+        assert_eq!(items.len(), 2, "缺 event 的项应被跳过");
+        assert_eq!(items[0].event, "closed");
+        // 缺 actor ⇒ 空串（不 panic）。
+        assert_eq!(items[0].actor, "");
+        assert_eq!(items[1].label, "bug");
     }
 
     /// #498：**正文必须从 REST 响应一路透传到 `LiveIssue`**。

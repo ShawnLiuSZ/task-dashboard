@@ -18,6 +18,7 @@
  *    转义后只会显示为字面文本，不会变成节点。
  * 3. **链接协议白名单**：只放行 `http://` / `https://`；其余（`javascript:`、
  *    `data:`、`vbscript:`…）降级为**纯文本**，不生成 `<a>`。
+ *    （#506：图片 `![alt](url)` 走**同一套**协议白名单，只生成 `src` / `alt` 两个属性。）
  *
  * ## 支持的语法
  *
@@ -78,6 +79,19 @@ function renderInline(escaped: string): string {
   let s = escaped.replace(/`([^`\n]+)`/g, (_m, code: string) => {
     codeSpans.push(code);
     return `${CODE_SLOT_OPEN}CODE${codeSpans.length - 1}${CODE_SLOT_CLOSE}`;
+  });
+
+  // #506：图片 `![alt](url)` —— **必须先于链接处理**（否则 `!` 会被当成文字前缀，
+  // 留下一个裸 `!`）。
+  //
+  // ⚠️ 安全：`src` 走与链接**同一套**协议白名单（只放行 http/https）；
+  // `alt` 已被 escapeHtml 处理过（`"` → `&quot;`）⇒ 放进属性值安全。
+  // ⚠️ 隐私：放行意味着**会向外部域名发起请求**（与 GitHub 网页版渲染 issue 图片
+  // 的行为一致，orca 也加载 issue 里的图片）；协议不在白名单 ⇒ 只留 alt 文本。
+  s = s.replace(/!\[([^\]\n]*)\]\(([^)\s]+)\)/g, (_m, alt: string, url: string) => {
+    const src = safeUrl(url);
+    if (!src) return alt;
+    return `<img src="${src}" alt="${alt}" loading="lazy" />`;
   });
 
   // 链接：[文字](url) —— 文字里不能含 `]`（避免贪婪匹配吞掉后续文本）。

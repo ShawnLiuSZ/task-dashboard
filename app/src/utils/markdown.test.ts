@@ -264,3 +264,43 @@ describe('renderMarkdown — CRLF 行尾不得死循环（#502）', () => {
     expect(html).toContain('<h2>标题 1999</h2>');
   });
 });
+
+/**
+ * 图片（#506）—— 对齐 orca：描述 / 评论里的图片要能看见。
+ *
+ * ⚠️ 安全边界与链接**同一套**：协议只放行 http/https；`alt` 已在转义阶段处理过。
+ */
+describe('renderMarkdown — 图片（#506）', () => {
+  it('http/https 的图片生成 <img>（含 alt）', () => {
+    const html = renderMarkdown('![截图](https://user-images.githubusercontent.com/abc.png)');
+    expect(html).toContain('<img src="https://user-images.githubusercontent.com/abc.png"');
+    expect(html).toContain('alt="截图"');
+  });
+
+  it('javascript: 协议不生成 <img>（只留 alt 文本）', () => {
+    const html = renderMarkdown('![x](javascript:alert(1))');
+    expect(html).not.toMatch(/<img/i);
+    expect(html).toContain('x');
+  });
+
+  it('data: 协议不生成 <img>', () => {
+    const html = renderMarkdown('![x](data:text/html;base64,PHNjcmlwdD4=)');
+    expect(html).not.toMatch(/<img/i);
+  });
+
+  it('图片语法不会留下裸叹号（必须先于链接处理）', () => {
+    const html = renderMarkdown('![alt](https://e.com/a.png)');
+    expect(html).not.toContain('![');
+  });
+
+  it('alt 里的引号被转义（属性不会被闭合）', () => {
+    const html = renderMarkdown('![a" onerror="alert(1)](https://e.com/a.png)');
+    expect(html).not.toMatch(/onerror="alert/);
+    expect(html).toContain('&quot;');
+  });
+
+  it('普通链接仍正常生成 <a>（图片改动没影响链接）', () => {
+    const html = renderMarkdown('[文字](https://example.com)');
+    expect(html).toContain('<a href="https://example.com"');
+  });
+});
