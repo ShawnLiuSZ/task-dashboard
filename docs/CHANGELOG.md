@@ -6,6 +6,14 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.11（未发布）— 公开仓库自动关闭非协作者的 fork PR（#492）**
+
+  - **背景**：仓库保持公开，但 GitHub **没有**「公开仓库禁止 fork PR」的原生开关（Issues / Wiki 可关，Pull Requests 不可关）⇒ 任何人都能 fork 后开 PR，产生通知噪音。
+  - **方案**：新增 `.github/workflows/close-fork-prs.yml`，监听 `pull_request_target`（opened / reopened），按 `author_association` 判定——非 `OWNER` / `MEMBER` / `COLLABORATOR` 的 PR 自动关闭并留言引导走 issue。`gh pr close --comment` 一步完成，零第三方 action。
+  - **安全性**：`pull_request_target` 持有仓库 token，但本 workflow **绝不 checkout PR 代码、不执行其内容**，关闭动作与 PR 内容无关，无供应链风险；协作者 PR 不受任何影响。
+  - **验证**：`check-workflow-yaml.py` + `test_workflow_yaml.py`（正向回归扫描全部 workflow）通过。
+  - 详见 [`issue-492-close-fork-prs.md`](./issue-492-close-fork-prs.md)
+
 - **v0.7.11（未发布）— 打开任务详情时实时拉取 GitHub 详情与评论（不落库）（#490）**
 
   - **需求**：查看任务详情（打开 `DetailPanel`）时，从 GitHub **实时拉取**该任务的详细信息与评论，**不写入本地数据库**；覆盖评论区（评论链接列表），并展示实时指派 / 标签、以及关联 PR 的提交历史。
