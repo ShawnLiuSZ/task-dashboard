@@ -6,6 +6,7 @@ import { fmtTime, useI18n } from '../i18n';
 import ConfirmDialog from './ConfirmDialog';
 import TaskCommentsList from './TaskCommentsList';
 import { registerEscLayer, type EscLayer } from '../utils/escLayer';
+import { normalizeLiveDetail } from '../utils/liveDetail';
 
 interface Props {
   task: Task;
@@ -28,6 +29,9 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
   const [comments, setComments] = useState<TaskComment[]>([]);
   const [commentsLoading, setCommentsLoading] = useState(false);
   // #490：实时拉取结果（只读 GitHub、零落库）。打开详情即拉一次，覆盖本地库展示。
+  // ⚠️ #496：存的是**规范化后**的形状（`utils/liveDetail.ts`）⇒ 渲染期不必再假定
+  // `live.prCommits` / `live.issue` 一定存在；后端字段名漂移最坏是「少显示一段」，
+  // 而不是抛 TypeError 把整棵 React 树打崩（那会让窗口全屏空白）。
   const [live, setLive] = useState<LiveTaskDetail | null>(null);
   const [liveLoading, setLiveLoading] = useState(false);
   const [liveError, setLiveError] = useState<string | null>(null);
@@ -109,8 +113,14 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
       .fetchTaskDetailLive(task.issueKey, task.accountId, livePrNumber)
       .then((d) => {
         if (!cancelled) {
-          setLive(d);
-          setLiveAt(Date.now());
+          // #496：先规范化再 setState —— 保证进入渲染的形状一定安全。
+          const normalized = normalizeLiveDetail(d);
+          if (normalized) {
+            setLive(normalized);
+            setLiveAt(Date.now());
+          } else {
+            setLiveError('实时数据格式不可用，已回退到本地库数据');
+          }
         }
       })
       .catch((e) => {
@@ -145,9 +155,16 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
         ? [{ number: task.prNumber, url: task.prUrl, state: task.prState || '' }]
         : [];
   // #490：实时数据优先覆盖本地库展示（live 未加载时回退 DB 数据）。
-  const shownComments = live ? live.comments : comments;
-  const liveAssignees = live?.issue.assignees ?? [];
-  const liveLabels = live?.issue.labels ?? [];
+  // ⚠️ #496：一律用「**数组非空判据**」而不是「字段存在」——
+  //   后端结构体一旦漏写 `rename_all`（键变 snake_case）或换字段名，
+  //   `live.prCommits` 会是 `undefined` ⇒ 裸取它的 `.length`
+  //   会抛 TypeError ⇒ React 卸载整棵树 ⇒ 窗口全屏空白（#496 的实际故障）。
+  const liveIssue = live?.issue;
+  const liveComments = Array.isArray(live?.comments) ? live.comments : [];
+  const liveAssignees = Array.isArray(liveIssue?.assignees) ? liveIssue.assignees : [];
+  const liveLabels = Array.isArray(liveIssue?.labels) ? liveIssue.labels : [];
+  const livePrCommits = Array.isArray(live?.prCommits) ? live.prCommits : [];
+  const shownComments = live ? liveComments : comments;
   // 选项 = projectStatuses 名称；当前值不在其中时前置，保证永远可见且默认选中。
   const projectStatusOptions = useMemo(() => {
     const names = (projectStatuses ?? []).map((ps) => ps.name);
@@ -492,13 +509,13 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
         <div className="muted small top-gap">{t('detail.liveError', { msg: liveError })}</div>
       )}
       {/* #490：关联 PR 的提交历史（实时拉取，不落库）。仅在确实有关联 PR 时渲染。 */}
-      {live && live.prCommits.length > 0 && (
+      {livePrCommits.length > 0 && (
         <section className="detail-block">
           <div className="block-title">
-            {t('detail.prCommitsTitle', { n: live.prCommits.length })}
+            {t('detail.prCommitsTitle', { n: livePrCommits.length })}
           </div>
           <ul className="link-list">
-            {live.prCommits.map((c) => (
+            {livePrCommits.map((c) => (
               <li key={c.sha} className="link-line">
                 <span className="link-ref mono">{c.sha}</span>
                 <span className="link-title">{c.message.split('\n')[0]}</span>

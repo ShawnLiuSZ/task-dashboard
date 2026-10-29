@@ -561,15 +561,34 @@ fn list_task_comments_inner(
 ///
 /// 前端在详情面板打开时调用一次，用返回数据覆盖本地库展示（评论区 / 指派 / 标签 /
 /// PR 提交历史）。拉取失败返回 `Err`，前端保留本地库展示并提示，不崩溃。
+///
+/// ⚠️ #496：原实现是**同步**命令，且在持有 `state.db` Mutex 的情况下串行做 3 次
+/// 网络 I/O（issue + comments + PR commits）⇒ 主线程被堵住即 beachball；
+/// 若此刻别的线程正持有 DB 锁（同步 / 导入 / 扫描），主线程会**无限期**卡在 Mutex 上。
+/// 现按 #329 定下的范式改为 `async fn` + `spawn_blocking`：
+/// 主线程仅派发即返回，重活在工作线程执行。
+///
+/// ⚠️ **网络 I/O 期间不持有 DB 锁**：锁内只做「取 PAT」这一亚毫秒级本地读，
+/// 锁一释放就去联网（凭证已带出来）。否则一次慢响应会把共享锁占住几秒～几十秒，
+/// 连带阻塞所有读命令（设置 / 账号 / 同步日志面板）。
 #[tauri::command]
-pub fn fetch_task_detail_live(
-    state: State<'_, AppState>,
+pub async fn fetch_task_detail_live(
+    app: AppHandle,
     issue_key: String,
     account_id: i64,
     pr_number: i64,
 ) -> Result<crate::on_demand::LiveTaskDetail, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    crate::on_demand::fetch_task_detail_live(&conn, &issue_key, account_id, pr_number)
+    // 锁内只取凭证：读完立刻放锁。
+    let (login, org, pat) = {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        crate::db::get_account_pat(&conn, account_id)?
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::on_demand::fetch_task_detail_live(&login, &org, &pat, &issue_key, pr_number)
+    })
+    .await
+    .map_err(|e| format!("实时拉取线程异常: {e}"))?
 }
 
 /// #422 账号维度解析：`Option<i64>` → 实际用于过滤的账号 id。

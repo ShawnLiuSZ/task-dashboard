@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.11（未发布）— 任务详情点击后整页全屏空白（#496）**
+
+  - **现象**：点击任务卡片「查看详情」后**整个窗口变成一片空白**（整棵 React 树被卸载，webview 里什么都不剩），而不是「弹窗没弹出」或「遮罩太暗」。
+  - **根因**：#490 新增的实时拉取结构体 `LiveTaskDetail` **漏写 `#[serde(rename_all = "camelCase")]`**（其兄弟结构 `LiveIssue` / `LiveComment` / `LivePrCommit` 都有，唯独最外层漏了）⇒ 后端发回 `pr_commits`，前端 `types.ts` 期望 `prCommits` ⇒ `live.prCommits` 为 `undefined` ⇒ `DetailPanel` 渲染 `live.prCommits.length` 抛 `TypeError` ⇒ React 卸载整棵树 ⇒ 全屏空白。`issue` / `comments` 是单个单词、camelCase 与否同名 ⇒ **只有 `pr_commits` 暴露问题**，且崩在「实时数据到达后」，本地库阶段一切正常。
+  - **为什么影响面这么大**：`api.ts` 的 `invoke<LiveTaskDetail>` 只是**类型断言**（运行时不校验形状）、`types.ts` 的声明完全正确、后端也无任何「发出去的键名」断言 —— 三处都只**声明**契约、**没有一处验证**契约，漂移一路畅通到渲染期。
+  - **修复**：`LiveTaskDetail` 补 `rename_all`；新增后端单测**直接断言序列化后的键名**（顶层 `prCommits`、嵌套 `issue.commentsCount` / `comments[0].createdAt`），并在注释里写明该属性不能删。
+  - **前端防御层**：新增 `app/src/utils/liveDetail.ts::normalizeLiveDetail`（纯函数）把 IPC 返回值规范化成「形状一定安全」的对象 —— 蛇形键载荷不抛错、缺字段逐项降级为空值、非数组降级为空数组、条目缺 `url` / `sha` 则丢弃；`api.ts` 返回类型改为 **`unknown`**（`invoke<T>` 是断言不是校验，声明成 `unknown` 后类型层面就强制走规范化）；渲染期派生值一律用「**数组非空判据**」（`Array.isArray`）而非「字段存在」。契约再漂移 ⇒ 少显示一段内容，**绝不整页崩掉**。
+  - **顺带修（同一命令的阻塞问题）**：`commands.rs::fetch_task_detail_live` 原是**同步**命令且在持有 `state.db` Mutex 的情况下串行做 3 次网络 I/O —— 主线程被堵即 beachball（违反 #329 范式），且若别的线程正持 DB 锁则主线程**无限期**卡在 Mutex 上。现改为 `async fn` + `spawn_blocking`，且**网络期间不持 DB 锁**（锁内只取 PAT 即释放）；`on_demand::fetch_task_detail_live` 签名改为 `(login, org, pat, issue_key, pr_number)`（完全不碰 SQLite），原先持 `conn` 的版本已删除，不留「持锁联网」的陷阱。
+  - **测试**：后端新增 1 条键名断言；前端新增 `utils/liveDetail.test.ts` 14 例 + `task-comments-list.test.tsx` 防御 4 例。**反向验证两处 mutation 全被捕获** —— 删掉后端 `rename_all` ⇒ 用例失败并报出实际键名 `["comments", "issue", "pr_commits"]`；前端改回裸访问 `live.prCommits.length` ⇒ 2 条断言失败。
+  - **影响面**：零 DB schema 改动（无需 `check-mcp-columns.py`）· 零 i18n 改动（复用既有 `detail.liveError`）。
+  - 详见 [`issue-496-live-detail-blank.md`](./issue-496-live-detail-blank.md)
+
 - **v0.7.11（未发布）— 任务详情由右侧抽屉改为居中 Modal 查看（#494）**
 
   - **形态变更**：详情面板从「右侧 50% 抽屉」（`top:46px; right:0; width:50%`，盖住看板右半屏）改为**居中弹窗**（`top/left:50%` + `translate(-50%,-50%)`、720px 宽、圆角 + 阴影），弹窗外看板卡片仍可见。

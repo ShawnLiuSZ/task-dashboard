@@ -174,14 +174,60 @@ describe('DetailPanel 的实时拉取接线（#490）', () => {
   });
 
   it('实时评论覆盖本地库评论（shownComments 优先用 live.comments）', () => {
-    expect(detailPanelRaw).toContain('live ? live.comments : comments');
+    expect(detailPanelRaw).toContain('live ? liveComments : comments');
   });
 
   it('关联 PR 提交历史仅在确实有时渲染', () => {
-    expect(detailPanelRaw).toContain('live.prCommits.length > 0');
+    expect(detailPanelRaw).toContain('livePrCommits.length > 0');
   });
 
   it('实时拉取失败只做轻量提示，不阻断详情面板', () => {
     expect(detailPanelRaw).toContain('detail.liveError');
+  });
+});
+
+/**
+ * DetailPanel 的**实时数据防御**（#496 回归防线）。
+ *
+ * #496 的实际故障：后端 `LiveTaskDetail` 漏写 `#[serde(rename_all = "camelCase")]`
+ * ⇒ 发回来的键是 `pr_commits`，前端读到 `undefined`
+ * ⇒ 渲染 `live.prCommits.length` 抛 TypeError
+ * ⇒ React 卸载整棵树 ⇒ **窗口全屏空白**。
+ *
+ * 本块锁死三条防线：
+ * ① 渲染期**不得**再裸访问 `live.prCommits.length` / `live.issue.assignees`；
+ * ② 派生值一律用「**数组非空判据**」（`Array.isArray`）而不是「字段存在」；
+ * ③ 入口处必须先规范化（`normalizeLiveDetail`）再 setState。
+ */
+describe('DetailPanel 的实时数据防御（#496）', () => {
+  it('不得裸访问 live.prCommits.length（后端键名漂移即整页崩）', () => {
+    expect(
+      detailPanelRaw,
+      '渲染期裸访问 live.prCommits.length ⇒ undefined.length 抛错 ⇒ 全屏空白',
+    ).not.toContain('live.prCommits.length');
+    expect(detailPanelRaw).not.toMatch(/live\s*\.\s*prCommits\s*\.\s*length/);
+  });
+
+  it('不得裸访问 live.issue 的子字段', () => {
+    expect(detailPanelRaw).not.toMatch(/live\s*\?\s*\.\s*issue\s*\.\s*assignees/);
+    expect(detailPanelRaw).not.toMatch(/live\s*\?\s*\.\s*issue\s*\.\s*labels/);
+  });
+
+  it('派生值必须走 Array.isArray 判据（数组非空，而非字段存在）', () => {
+    expect(detailPanelRaw).toContain(
+      'const livePrCommits = Array.isArray(live?.prCommits) ? live.prCommits : [];',
+    );
+    expect(detailPanelRaw).toContain(
+      'const liveAssignees = Array.isArray(liveIssue?.assignees) ? liveIssue.assignees : [];',
+    );
+    expect(detailPanelRaw).toContain(
+      'const liveComments = Array.isArray(live?.comments) ? live.comments : [];',
+    );
+  });
+
+  it('入口必须先规范化再 setState（契约漂移降级为少显示，不崩）', () => {
+    expect(detailPanelRaw).toContain('normalizeLiveDetail');
+    expect(detailPanelRaw).toContain('const normalized = normalizeLiveDetail(d);');
+    expect(detailPanelRaw).toContain('setLive(normalized);');
   });
 });
