@@ -1211,32 +1211,57 @@ button.unassigned-tag:disabled {
   margin-left: auto;
 }
 
+/* #494：任务详情由「右侧 50% 抽屉」改为**居中 Modal**。
+ *
+ * - 居中：`top/left: 50%` + `translate(-50%, -50%)`。包含块是视口（`body` 无
+ *   `position`，`.app` 也是 static）⇒ 居中基准即窗口中心，不受 `.app` 的
+ *   横向滚动（`overflow-x: auto`）影响。
+ * - 尺寸自适应：`max-width: calc(100% - 48px)` 保证窄窗口不溢出；
+ *   `max-height: calc(100% - 96px)` + `overflow-y: auto` ⇒ 内容过长时弹窗内部滚动。
+ */
 .detail {
   position: absolute;
-  top: 46px;
-  right: 0;
-  bottom: 0;
-  width: 50%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 720px;
+  max-width: calc(100% - 48px);
+  max-height: calc(100% - 96px);
   background: var(--surface);
-  border-left: 0.5px solid var(--border);
-  padding: 14px 16px;
+  border: 0.5px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px var(--shadow-strong);
+  padding: 16px 18px;
   overflow-y: auto;
   z-index: 11;
 }
 
-/* 点击空白处关闭详情：遮罩覆盖看板区域，点击即关闭；详情面板 z-index 更高、点击不穿透。 */
-.detail-backdrop {
-  position: absolute;
-  inset: 0;
-  background: var(--shadow-strong);
-  z-index: 10;
-}
-
+/* #494：详情头部 sticky —— 内容很长（会话 / 交接 / GitHub / 评论 / PR 提交历史），
+ * 关闭按钮不能随内容滚走。`margin` 抵消 `.detail` 的 padding 让头部满宽，
+ * `padding` 再把视觉间距补回来；不透明背景保证滚过的内容不会透出。
+ * ⚠️ 头部自身有 `margin-bottom` 时其下方的 `.detail-title` 会贴上来，
+ *   故这里只保留上/左右的负 margin，间距交给 `.detail-title` 自己的 `margin: 8px 0`。 */
 .detail-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: -16px -18px 0;
+  padding: 16px 18px 8px;
+  background: var(--surface);
+  border-bottom: 0.5px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+/* 点击空白处关闭详情：遮罩覆盖整个窗口（弹窗化后含顶栏），点击即关闭；
+ * 弹窗 z-index 更高、点击不穿透。遮罩色用 `--overlay`，与仓库既有 `.modal-mask` 一致。 */
+.detail-backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--overlay);
+  z-index: 10;
 }
 
 .detail-head .repo {

@@ -142,6 +142,49 @@ describe('会话卡片彩色边框 #304', () => {
 });
 
 /**
+ * 任务详情弹窗化（#494）回归测试。
+ *
+ * 背景：详情原为「右侧 50% 抽屉」（`.detail` 绝对定位贴右边缘），改为**居中 Modal**。
+ * 几何纯由 CSS 决定，vitest 无布局引擎，故沿用 `?raw` 静态断言锁定关键属性。
+ *
+ * 实测（Chrome 无头 + 注入读数，见 docs/issue-494-detail-modal.md）：
+ * 1280×657 视口下卡片 720×561、`centered dx=0 dy=0`、`scrollHeight 925 > clientHeight 559`；
+ * 560×657 视口下卡片宽 512（= 视口 - 48px 边距）、左右各 24px、`横向溢出元素 0`。
+ */
+describe('任务详情居中弹窗 #494', () => {
+  it('卡片以 50% + translate 居中，不得回退成贴右的抽屉', () => {
+    const d = decls('.detail');
+    expect(d).toMatch(/left\s*:\s*50%/);
+    expect(d).toMatch(/transform\s*:\s*translate\(\s*-50%\s*,\s*-50%\s*\)/);
+    // 抽屉特征：`right: 0` 贴右边缘 + `width: 50%` 占半屏。
+    expect(d).not.toMatch(/right\s*:\s*0\b/);
+    // ⚠️ 用负向前查排除 `max-width:`（否则会被误判成命中）。
+    expect(d).not.toMatch(/(?<!max-)width\s*:\s*50%/);
+  });
+
+  it('窄窗口不溢出：max-width 留边距 + 内容内部滚动', () => {
+    const d = decls('.detail');
+    expect(d).toMatch(/max-width\s*:\s*calc\(\s*100%\s*-\s*48px\s*\)/);
+    expect(d).toMatch(/max-height\s*:\s*calc\(\s*100%\s*-\s*96px\s*\)/);
+    expect(d).toMatch(/overflow-y\s*:\s*auto/);
+  });
+
+  it('头部 sticky：内容很长时关闭按钮不随内容滚走', () => {
+    const h = decls('.detail-head');
+    expect(h).toMatch(/position\s*:\s*sticky/);
+    expect(h).toMatch(/top\s*:\s*0\b/);
+    // 不透明背景 ⇒ 滚过的内容不会从头部下方透出。
+    expect(h).toMatch(/background\s*:\s*var\(--surface\)/);
+  });
+
+  it('遮罩覆盖整个窗口且用 --overlay（与仓库既有 .modal-mask 一致）', () => {
+    const b = decls('.detail-backdrop');
+    expect(b).toMatch(/inset\s*:\s*0/);
+    expect(b).toMatch(/background\s*:\s*var\(--overlay\)/);
+  });
+});
+
+/**
  * 会话卡片标题换行完整显示回归测试。
  *
  * 背景：任务会话卡片标题原用 `white-space: nowrap` + `text-overflow: ellipsis`

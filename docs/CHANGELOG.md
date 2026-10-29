@@ -6,6 +6,16 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.11（未发布）— 任务详情由右侧抽屉改为居中 Modal 查看（#494）**
+
+  - **形态变更**：详情面板从「右侧 50% 抽屉」（`top:46px; right:0; width:50%`，盖住看板右半屏）改为**居中弹窗**（`top/left:50%` + `translate(-50%,-50%)`、720px 宽、圆角 + 阴影），弹窗外看板卡片仍可见。
+  - **交互契约不变**：Esc 关闭 / 点击遮罩关闭 / 关闭按钮全部照旧（Esc 分层 `utils/escLayer.ts` 未动），**零 TSX / 后端 / DB 改动**——只改 `styles.css` 三条规则。
+  - **窄窗不溢出**：`max-width: calc(100% - 48px)`（左右各留 24px）+ `max-height: calc(100% - 96px)` + 内部滚动；遮罩色改用 `--overlay`，与仓库既有 `.modal-mask` 对齐。
+  - **头部 sticky**：详情内容很长（会话 / 交接 / GitHub / 评论 / PR 提交历史），关闭按钮不随内容滚走（负 margin 抵消 padding 让头部满宽 + 不透明背景防透出）。
+  - **渲染验证**：Chrome 无头隔离复现页注入读数实测 —— 1280×657 视口下卡片 720×561、居中偏差 dx=0 dy=0、`scrollHeight 925 > clientHeight 559`；560×657 下卡片宽 512（left=24/right=536）、横向溢出元素 0；滚动 200px 后头部仍钉在卡片顶部。
+  - **测试**：`styles.test.ts` 新增 4 条静态断言（居中且不得回退抽屉 / 尺寸与内部滚动 / 头部 sticky / 遮罩），其中「不得有 `width: 50%`」用负向前查排除 `max-width` 误判。
+  - 详见 [`issue-494-detail-modal.md`](./issue-494-detail-modal.md)
+
 - **v0.7.11（未发布）— 公开仓库自动关闭非协作者的 fork PR（#492）**
 
   - **背景**：仓库保持公开，但 GitHub **没有**「公开仓库禁止 fork PR」的原生开关（Issues / Wiki 可关，Pull Requests 不可关）⇒ 任何人都能 fork 后开 PR，产生通知噪音。
