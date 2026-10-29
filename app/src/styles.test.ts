@@ -216,7 +216,9 @@ describe('详情头部不得遮挡标题 #498', () => {
 
   it('.detail-head 的顶部留白由自身 padding 提供', () => {
     const h = decls('.detail-head');
-    expect(h).toMatch(/padding\s*:\s*16px\s+18px\s+8px/);
+    // ⚠️ #500：底部 padding 由 8px 调为 10px —— 头部现在多了一行标题，
+    //    底部留白要留给「标题 → 分隔线」这一段。
+    expect(h).toMatch(/padding\s*:\s*16px\s+18px\s+10px/);
   });
 
   it('.detail-head 仍是 sticky + 不透明背景', () => {
@@ -224,6 +226,51 @@ describe('详情头部不得遮挡标题 #498', () => {
     expect(h).toMatch(/position\s*:\s*sticky/);
     expect(h).toMatch(/top\s*:\s*0\b/);
     expect(h).toMatch(/background\s*:\s*var\(--surface\)/);
+  });
+});
+
+/**
+ * 详情头部**两行固定**（#500）。
+ *
+ * 用户的原话：「向下滚动时，issue id 行和 modal 顶部有一段透明边距，
+ * 建议 issue id 行和标题行，都不参与滚动」。
+ *
+ * 拆成两条可验证的诉求：
+ * ① **透明边距**：滚动时 sticky 钉住的位置必须与正常流位置一致
+ *    ⇒ 头部**不得有上下负 margin**（sticky 会抵消它，被抵消后头部比正常流
+ *    低一截 ⇒ 顶部冒出一段空白）。同时 `top` 必须是 `0`（贴弹窗内边缘）。
+ * ② **两行都不参与滚动**：头部容器是**纵向块**（issue id 行 + 标题行同属一个
+ *    sticky 容器），左右分列下沉到 `.detail-head-row`。
+ *
+ * Chrome 无头实测（真实 CSS + 真实 DOM，滚动前 / 滚动 120px）：
+ *   head.top 相对 modal 顶部 = 1.00px（= modal 自身 1px 边框）
+ *   row.top  = 17.00px ／ title.top = 52.00px
+ *   滚动 120px 后三个值**完全不变** ⇒ 两行都固定、顶部无空隙、内容不透出。
+ */
+describe('详情头部两行固定 #500', () => {
+  it('.detail-head 是纵向块：横向排布下沉到 .detail-head-row', () => {
+    // 头部若仍是横向 flex ⇒ 标题会被排到第一行右侧（不再「单独一行」）。
+    expect(decls('.detail-head')).not.toMatch(/display\s*:\s*flex/);
+    const row = decls('.detail-head-row');
+    expect(row).toMatch(/display\s*:\s*flex/);
+    expect(row).toMatch(/justify-content\s*:\s*space-between/);
+  });
+
+  it('.detail-head 仍是 sticky + top:0 + 不透明背景（钉在弹窗内边缘）', () => {
+    const h = decls('.detail-head');
+    expect(h).toMatch(/position\s*:\s*sticky/);
+    expect(h).toMatch(/top\s*:\s*0\b/);
+    expect(h).toMatch(/background\s*:\s*var\(--surface\)/);
+  });
+
+  it('.detail-head 不得有负 margin（sticky 抵消它 ⇒ 顶部冒出空隙）', () => {
+    // ⚠️ #498 的断言只挡「负的上 margin」（`margin: -16px -18px 0`），
+    //    这里补齐「任何方向的负 margin」都算病根。
+    expect(decls('.detail-head')).not.toMatch(/margin\s*:\s*-/);
+  });
+
+  it('.detail-title 下 margin 归零（否则与头部 padding 叠加出多余空白）', () => {
+    expect(decls('.detail-title')).toMatch(/margin\s*:\s*8px\s+0\s+0/);
   });
 });
 
