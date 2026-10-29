@@ -114,7 +114,27 @@ function isHr(line: string): boolean {
  */
 export function renderMarkdown(src: string): string {
   if (!src || !src.trim()) return '';
-  const lines = escapeHtml(src).split('\n');
+  // ⚠️ #502：**先归一化行尾**（CRLF / 裸 CR → LF），再进块级解析。
+  //
+  // 原因：JavaScript 的 `.` **不匹配 `\r`**（`.` 排除 `\n` `\r` `\u2028` `\u2029`），
+  // 而 GitHub issue 正文**普遍是 CRLF 行尾**（Windows 编辑器粘贴的常见形态）。
+  // 于是下面这几条**带 `$` 锚点**的块级正则在 CRLF 行上**整行失配**：
+  //
+  //   /^(#{1,6})\s+(.*)$/        标题     ← (.*) 停在 \r 前，$ 要求到行尾
+  //   /^\s*[-*+]\s+(.*)$/       无序列表
+  //   /^\s*\d+[.)]\s+(.*)$/     有序列表
+  //   /^\s*(```|~~~)(.*)$/      代码围栏
+  //
+  // ⇒ 该行进不了任何块级分支，却会被**段落分支的终止条件**（`!/^(#{1,6})\s+/` 等，
+  //   这些**没有** `$` 锚点）判成「块级行」⇒ 段落分支的 `while` **一次都不执行**
+  // ⇒ `buf` 为空且 **`i` 不前进** ⇒ 外层 `while` 原地打转 ⇒ `out` 无限增长
+  // ⇒ `RangeError: Invalid array length`（或内存暴涨被 OOM kill）
+  // ⇒ **渲染期抛错 ⇒ React 卸载整棵树 ⇒ 详情面板整块消失（最坏整窗空白）**。
+  //
+  // 真实触发样本：`FoodsUp-Inc/fad-backend#1630` 的正文（首行 `## 现状\r\n`）。
+  // ⚠️ 修复前那 27 条 markdown 单测**全部用 `\n`** ⇒ 覆盖不到这条路径
+  //    （典型的「测试数据形状与真实数据不一致」）。
+  const lines = escapeHtml(src.replace(/\r\n?/g, '\n')).split('\n');
   const out: string[] = [];
 
   let i = 0;
@@ -201,6 +221,15 @@ export function renderMarkdown(src: string): string {
     ) {
       buf.push(lines[i]);
       i += 1;
+    }
+    // ⚠️ #502：**段落分支必须保证 `i` 前进**。
+    // 上面的终止条件与各块级分支的判定是「两套独立写法的同一份语义」，
+    // 只要有一处不一致（历史上就是 CRLF 导致标题行两套判定打架），
+    // `while` 会一次都不执行 ⇒ `buf` 为空且 `i` 不动 ⇒ 外层循环原地打转。
+    // 这里显式兜底：**任何分支都必须消费至少一行**。
+    if (buf.length === 0) {
+      i += 1;
+      continue;
     }
     out.push(`<p>${renderInline(buf.join('\n'))}</p>`);
   }

@@ -164,3 +164,103 @@ describe('shouldCollapseBody（#498）', () => {
     expect(shouldCollapseBody('x'.repeat(BODY_COLLAPSE_THRESHOLD))).toBe(false);
   });
 });
+
+/**
+ * CRLF 行尾下的死循环回归（#502）。
+ *
+ * ## 故障
+ *
+ * GitHub issue 正文**普遍是 CRLF 行尾**（Windows 编辑器粘贴的常见形态），
+ * 而 **JavaScript 的 `.` 不匹配 `\r`**（`.` 排除 `\n` `\r` `\u2028` `\u2029`）。
+ *
+ * ⇒ 块级正则里**带 `$` 锚点**的那些（标题 / 无序列表 / 有序列表 / 代码围栏）
+ *   在 CRLF 行上**整行失配**；
+ * ⇒ 该行却会被**段落分支的终止条件**（`!/^(#{1,6})\s+/` 等，**没有** `$` 锚点）
+ *   判成「块级行」⇒ 段落分支的 `while` 一次都不执行
+ * ⇒ `buf` 为空且 **`i` 不前进** ⇒ 外层 `while` 原地打转
+ * ⇒ `out` 无限增长 ⇒ `RangeError: Invalid array length`（或被 OOM kill）
+ * ⇒ **渲染期抛错 ⇒ React 卸载整棵树 ⇒ 详情面板整块消失**（最坏整窗空白）。
+ *
+ * 实测：真实 issue `FoodsUp-Inc/fad-backend#1630` 的正文（首行 `## 现状\r\n`）
+ * 在修复前跑 **111 秒**后抛 `RangeError`。
+ *
+ * ⚠️ 这批用例的价值在于**输入形状**：修复前的 27 条用例**全部用 `\n`**，
+ *    所以「测试数据与真实数据形状不一致」把这个 bug 整整放过了一轮。
+ */
+describe('renderMarkdown — CRLF 行尾不得死循环（#502）', () => {
+  it('CRLF + 标题：能渲染出 <h2>，且立即返回', () => {
+    const html = renderMarkdown('## 现状\r\n\r\n正文一行\r\n');
+    expect(html).toContain('<h2>现状</h2>');
+    expect(html).toContain('<p>正文一行</p>');
+    // ⚠️ 若再次死循环，本用例会因 vitest 超时（默认 5s）而失败 ⇒ 本身就是防线。
+  });
+
+  it('CRLF + 列表：能渲染出 <ul>/<li>', () => {
+    const html = renderMarkdown('- 一条\r\n- 两条\r\n');
+    expect(html).toContain('<ul><li>一条</li><li>两条</li></ul>');
+  });
+
+  it('CRLF + 有序列表：能渲染出 <ol>/<li>', () => {
+    const html = renderMarkdown('1. 第一\r\n2. 第二\r\n');
+    expect(html).toContain('<ol><li>第一</li><li>第二</li></ol>');
+  });
+
+  it('CRLF + 代码围栏：能渲染出 <pre><code>', () => {
+    const html = renderMarkdown('```ts\r\nconst a = 1;\r\n```\r\n');
+    expect(html).toContain('<pre><code>const a = 1;</code></pre>');
+  });
+
+  it('CRLF + 水平线：能渲染出 <hr />', () => {
+    const html = renderMarkdown('---\r\n正文\r\n');
+    expect(html).toContain('<hr />');
+  });
+
+  it('裸 CR（老 Mac 行尾）同样归一化', () => {
+    const html = renderMarkdown('## 标题\r正文\r');
+    expect(html).toContain('<h2>标题</h2>');
+    expect(html).not.toContain('\r');
+  });
+
+  it('CRLF 与 LF 的渲染结果完全一致', () => {
+    const lf = '## 现状\n\n正文\n\n## 方案\n\n- 一条\n- 两条\n';
+    const crlf = lf.replace(/\n/g, '\r\n');
+    expect(renderMarkdown(crlf)).toBe(renderMarkdown(lf));
+  });
+
+  it('真实 issue 正文（CRLF + 标题 + 列表 + 中文）可完整渲染', () => {
+    // 形状取自 FoodsUp-Inc/fad-backend#1630 的真实正文（首行即 CRLF 标题）。
+    const body = [
+      '## 现状',
+      '',
+      '牛奶供应商 CGR 称上线约 10 个月我们欠筐 3 万多个，按 $3 / 个约 $9–10 万。',
+      '',
+      '## 方案',
+      '',
+      '10-22 仓库会议定：',
+      '',
+      '- 责任在司机：两周结一次，少还扣 $3 / 个',
+      '- 多还奖 $0.5 / 个',
+      '',
+      '## 待定',
+      '',
+      '司机端可查：待确认。',
+    ].join('\r\n');
+    const html = renderMarkdown(body);
+    expect(html).toContain('<h2>现状</h2>');
+    expect(html).toContain('<h2>方案</h2>');
+    expect(html).toContain('<h2>待定</h2>');
+    expect(html).toContain('<ul><li>责任在司机：两周结一次，少还扣 $3 / 个</li>');
+    expect(html).not.toContain('\r');
+  });
+
+  it('大量 CRLF 行不会拖垮渲染（终止性 + 规模）', () => {
+    const body = Array.from({ length: 2000 }, (_, i) => `## 标题 ${i}\r\n\r\n正文 ${i}\r\n`).join(
+      '',
+    );
+    const t0 = Date.now();
+    const html = renderMarkdown(body);
+    expect(Date.now() - t0, 'CRLF 渲染必须是毫秒级，不允许出现秒级空转').toBeLessThan(2000);
+    expect(html).toContain('<h2>标题 0</h2>');
+    expect(html).toContain('<h2>标题 1999</h2>');
+  });
+});
