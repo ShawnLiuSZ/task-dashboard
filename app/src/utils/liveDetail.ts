@@ -50,6 +50,7 @@ export function normalizeLiveIssue(v: unknown): LiveIssue | null {
     labels: asStringArray(o.labels),
     author: asString(o.author),
     commentsCount: asNumber(o.commentsCount),
+    body: asString(o.body),
     createdAt: asNumber(o.createdAt),
     updatedAt: asNumber(o.updatedAt),
   };
@@ -114,6 +115,7 @@ export function normalizeLiveDetail(v: unknown): LiveTaskDetail | null {
     labels: [],
     author: '',
     commentsCount: 0,
+    body: '',
     createdAt: 0,
     updatedAt: 0,
   };

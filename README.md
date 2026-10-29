@@ -180,6 +180,8 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/issue-496-live-detail-blank.md`](./docs/issue-496-live-detail-blank.md) — **任务详情点击后整页全屏空白**：#490 的实时拉取结构体 `LiveTaskDetail` 漏写 `#[serde(rename_all = "camelCase")]` ⇒ 后端发回 `pr_commits`、前端读 `prCommits` 得到 `undefined` ⇒ 渲染期取 `.length` 抛 TypeError ⇒ React 卸载整棵树。修复补上属性 + 后端**直接断言序列化键名**的单测；前端新增 `utils/liveDetail.ts` 规范化层（`api.ts` 返回类型改 `unknown`，因为 `invoke<T>` 只是断言不校验形状），契约漂移降级为「少显示一段」而非整页崩；顺带把该命令从「同步 + 持 DB 锁联网」改为 `async` + `spawn_blocking`（#329 范式）
 
+- [`docs/issue-498-detail-body-and-sticky-head.md`](./docs/issue-498-detail-body-and-sticky-head.md) — **任务详情：sticky 头部遮挡标题 + 未展示 issue 正文**：`position: sticky` 会**抵消负 margin**（头部下移 16px ⇒ 盖住标题，实测重叠 8px），修法是 `.detail` 的 `padding-top` 归零 + 头部只左右负 margin；同时补上从未被拉取的 issue **正文**（`RawTask` 没有 `body` 字段）——新增零依赖的 `utils/markdown.ts` 轻量渲染（先转义 + 标签白名单 + 链接协议白名单），正文过长折叠
+
 - [`docs/issue-492-close-fork-prs.md`](./docs/issue-492-close-fork-prs.md) — **公开仓库自动关闭非协作者的 fork PR**：`pull_request_target` 按 `author_association` 判定，非 `OWNER`/`MEMBER`/`COLLABORATOR` 的 PR 自动关闭并引导走 issue（GitHub 无「禁止 fork PR」原生开关，此为等效防线）
 
 - [`docs/issue-494-detail-modal.md`](./docs/issue-494-detail-modal.md) — **任务详情由右侧抽屉改为居中 Modal 查看**：720px 居中弹窗 + 遮罩变暗 + 头部 sticky（内容长时关闭按钮不滚走），交互契约（Esc / 点遮罩 / 关闭按钮）完全不变，零 TSX 与后端改动

@@ -476,6 +476,9 @@ pub struct LiveIssue {
     /// issue 创建人 login（不含 @）。
     pub author: String,
     pub comments_count: u64,
+    /// #498：issue **正文**（GitHub `body`，markdown 源文本）。
+    /// 空串 = 无正文或取不到。前端渲染为「描述」区块。
+    pub body: String,
     /// 创建时间（Unix 秒）。
     pub created_at: i64,
     /// 更新时间（Unix 秒）。
@@ -544,7 +547,8 @@ pub fn fetch_task_detail_live(
     };
 
     // 单 issue REST（不做 best-effort 降级）：区分「远端没有」(Ok(None)) 与「请求失败」(Err)。
-    let raw = match client.fetch_issue(&api_owner, &repo, number)? {
+    // #498：用带 body 的变体 —— 同一次请求里多拿一段正文，不额外往返。
+    let (raw, body) = match client.fetch_issue_with_body(&api_owner, &repo, number)? {
         Some(t) => t,
         None => {
             return Err(format!(
@@ -552,18 +556,7 @@ pub fn fetch_task_detail_live(
             ))
         }
     };
-    let issue = LiveIssue {
-        number: raw.number,
-        title: raw.title.clone(),
-        url: raw.url.clone(),
-        state: crate::common::normalize_issue_state(&raw.state),
-        assignees: raw.assignees.clone(),
-        labels: raw.labels.clone(),
-        author: raw.author.clone(),
-        comments_count: raw.comments,
-        created_at: crate::common::iso8601_to_secs(&raw.created_at),
-        updated_at: crate::common::iso8601_to_secs(&raw.updated_at),
-    };
+    let issue = build_live_issue(&raw, body);
 
     // 评论：最新 N 条（与同步一致）。失败不阻断详情（保留本地库评论）。
     let comments = match client.fetch_comments(&repo, number, &api_owner, raw.comments) {
@@ -591,6 +584,28 @@ pub fn fetch_task_detail_live(
         comments,
         pr_commits,
     })
+}
+
+/// 把 REST issue 响应转成 [`LiveIssue`]（**纯函数**，便于单测）。
+///
+/// #498：正文（`body`）在这里透传。抽成纯函数的原因与 #496 的教训相同：
+/// 断言必须落在**真实数据流**上——若断言只对手工构造的 `LiveIssue` 做，
+/// 就会漏掉「转换这一步把 body 弄丢了」这种缺陷（反向验证实测过：
+/// 把 `body` 换成空串，单测仍然全绿）。
+pub fn build_live_issue(raw: &crate::github::RawTask, body: String) -> LiveIssue {
+    LiveIssue {
+        number: raw.number,
+        title: raw.title.clone(),
+        url: raw.url.clone(),
+        state: crate::common::normalize_issue_state(&raw.state),
+        assignees: raw.assignees.clone(),
+        labels: raw.labels.clone(),
+        author: raw.author.clone(),
+        comments_count: raw.comments,
+        body,
+        created_at: crate::common::iso8601_to_secs(&raw.created_at),
+        updated_at: crate::common::iso8601_to_secs(&raw.updated_at),
+    }
 }
 
 /// PR 提交历史 API（`/pulls/{n}/commits`）。返回全量提交（通常不超百条，足够详情展示）。
@@ -981,6 +996,7 @@ mod tests {
                 labels: vec!["l".into()],
                 author: "au".into(),
                 comments_count: 0,
+                body: "正文".into(),
                 created_at: 0,
                 updated_at: 0,
             },
@@ -1032,5 +1048,50 @@ mod tests {
             "comments[0].createdAt 应为驼峰，实际 {:?}",
             c0.keys().collect::<Vec<_>>()
         );
+        // #498：issue 正文必须在返回体里（详情面板的「描述」区块依赖它）。
+        let issue = obj
+            .get("issue")
+            .and_then(|i| i.as_object())
+            .expect("issue 应为对象");
+        assert!(
+            issue.contains_key("body"),
+            "issue.body 缺失 ⇒ 详情面板拿不到 issue 正文（#498 的现象之一）"
+        );
+        assert_eq!(issue.get("body").and_then(|b| b.as_str()), Some("正文"));
+    }
+
+    /// #498：**正文必须从 REST 响应一路透传到 `LiveIssue`**。
+    ///
+    /// ⚠️ 这条断言刻意落在 `build_live_issue`（**真实转换路径**）上，而不是手工构造的
+    /// `LiveIssue` 字面量上 —— 后者对「转换时把 body 丢了」完全无感。
+    /// 反向验证实测：把转换里的 `body` 换成空串，只断言字面量的那条用例**仍然全绿**。
+    #[test]
+    fn live_issue_carries_body_from_rest_response() {
+        let raw = crate::github::RawTask {
+            number: 1630,
+            title: "标题".into(),
+            url: "https://github.com/o/r/issues/1630".into(),
+            state: "OPEN".into(),
+            updated_at: "2026-10-29T05:18:38Z".into(),
+            repo: "r".into(),
+            repo_owner: "o".into(),
+            assignees: vec!["alice".into()],
+            labels: vec!["bug".into()],
+            author: "bob".into(),
+            comments: 2,
+            is_pr: false,
+            created_at: "2026-10-01T00:00:00Z".into(),
+        };
+        let body = "## 背景\n\n牛奶查找手机追踪".to_string();
+        let issue = super::build_live_issue(&raw, body.clone());
+        assert_eq!(
+            issue.body, body,
+            "正文必须原样透传（详情面板的「描述」区块依赖它）"
+        );
+        // 顺带确认其它字段没被这次重构弄坏。
+        assert_eq!(issue.number, 1630);
+        assert_eq!(issue.comments_count, 2);
+        assert_eq!(issue.assignees, vec!["alice".to_string()]);
+        assert_eq!(issue.state, "open", "state 必须归一化为小写");
     }
 }

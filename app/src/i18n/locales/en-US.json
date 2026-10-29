@@ -423,5 +423,9 @@
   "agent.guide.handoff.action": "record_handoff(issue, \"<done/not done/blockers/how to resume>\")",
   "agent.guide.done.when": "Task complete",
   "agent.guide.done.action": "update_task_status(issue, \"done\") + clear_session(issue)",
-  "board.unmappedHint": "Unmapped"
+  "board.unmappedHint": "Unmapped",
+  "detail.bodyTitle": "Description",
+  "detail.bodyExpand": "Show full description",
+  "detail.bodyCollapse": "Collapse",
+  "detail.bodyEmpty": "(no description)"
 }

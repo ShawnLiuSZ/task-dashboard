@@ -18,6 +18,19 @@
   - **影响面**：零 DB schema 改动（无需 `check-mcp-columns.py`）· 零 i18n 改动（复用既有 `detail.liveError`）。
   - 详见 [`issue-496-live-detail-blank.md`](./issue-496-live-detail-blank.md)
 
+- **v0.7.11（未发布）— 任务详情：sticky 头部遮挡标题 + 未展示 issue 正文（#498）**
+
+  - **现象 ①（标题行挡住标题）**：`.detail-head` 用 `margin: -16px -18px 0`（负 margin 抵消 `.detail` 的 `padding-top` 做满宽吸顶），但 **`position: sticky` 会抵消负 margin**——钉到滚动容器 padding box 顶部时按 border box 对齐 ⇒ 头部整体下移 16px ⇒ 盖住紧随其后的 `.detail-title`。Chrome 无头实测（真实 CSS + 真实 DOM）：`head 底部 354.9` vs `title 顶部 346.9` ⇒ **重叠 8px，标题文字被盖 6px**。
+  - **现象 ②（没有具体的详细信息）**：`RawTask` **没有 `body` 字段** ⇒ GitHub REST 响应的 `body` 从未被读取 ⇒ 详情面板从来只显示标题，没有正文描述。这与 #490 当时约定的「展示范围覆盖 body」不符（那一轮只做了评论区 / 指派 / 标签 / PR 提交历史，**body 漏做**）。
+  - **后端取 body**：`github.rs` 新增 `fetch_issue_with_body`（与 `fetch_issue` **同一次**请求，不额外往返）+ 纯函数 `issue_body_from_json`（`body` 缺失 / `null` / 类型异常一律降级为空串，绝不报错）。⚠️ **body 刻意不进 `RawTask`**：Search API 的 issue 项同样带 body，塞进去会让每次同步多下载几百 KB 正文，而同步路径根本不需要它。
+  - **前端渲染正文**：新增 `app/src/utils/markdown.ts` —— 自写**轻量** markdown → 安全 HTML，**零依赖**（仓库前端零运行时依赖，引 `marked` 要付几百 KB + 一条新供应链面）。支持代码块 / 标题 / 列表 / 引用 / 水平线 / 段落与行内粗体斜体删除线行内代码链接。**安全模型**：先 HTML 转义、只允许白名单标签、链接协议只放行 http/https（`javascript:` / `data:` / 相对链接一律降级为纯文本）。正文超 600 字默认折叠（限高 132px + 底部渐隐）+「展开全文 / 收起」。
+  - **修 sticky 遮挡**：`.detail` 的 `padding-top` 归零、`.detail-head` 改 `margin: 0 -18px`（只左右撑满宽，**不再上下位移**）⇒ 顶部留白交给头部自己的 padding（视觉不变）⇒ sticky 钉住位置与正常流位置一致。
+  - **渲染验证**（Chrome 无头 + 注入读数）：`OVERLAP(head vs title)` **8.00px → 0.00px**；`head.top` 相对 `detail.top` 从 +17.0px 变 **+1.0px**（贴顶）；滚动 200px 后仍钉在顶部且重叠 0；正文折叠态 132.0px / 展开 638.9px；弹窗内横向溢出元素 0。
+  - **一次「反向验证没抓到」的教训**：body 断言最初写的是「手工构造 `LiveTaskDetail` 字面量 ⇒ 序列化含 body」，**把转换里的 body 换成空串，单测仍全绿**（那条断言压根没经过真实数据流）⇒ 断言必须落在**真实转换路径**上。故把转换抽成纯函数 `build_live_issue`，断言改为「给定 `RawTask` + body ⇒ `LiveIssue.body` 原样透传」。与本仓此前 #376 `taskSig`、#355 同型：**「断言看起来合理」≠「断言有判别力」**。
+  - **测试**：后端 4 条（body 提取 3 + 透传 1）；前端新增 `markdown.test.ts` 27 例（XSS 6 + 结构 + 行内 + 边界）+ `liveDetail.test.ts` 追加 3 例 + 组件静态断言 5 例 + 样式静态断言 7 例。**反向验证 3 处 mutation 全被捕获**（CSS 负 margin 回归 / 后端 body 丢失 / 前端正文不渲染）。
+  - **影响面**：i18n 新增 4 词条（中英各 429 key）；**零 DB schema 改动**（无需 `check-mcp-columns.py`）。
+  - 详见 [`issue-498-detail-body-and-sticky-head.md`](./issue-498-detail-body-and-sticky-head.md)
+
 - **v0.7.11（未发布）— 任务详情由右侧抽屉改为居中 Modal 查看（#494）**
 
   - **形态变更**：详情面板从「右侧 50% 抽屉」（`top:46px; right:0; width:50%`，盖住看板右半屏）改为**居中弹窗**（`top/left:50%` + `translate(-50%,-50%)`、720px 宽、圆角 + 阴影），弹窗外看板卡片仍可见。

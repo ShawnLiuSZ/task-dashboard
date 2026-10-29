@@ -423,5 +423,9 @@
   "agent.guide.handoff.action": "record_handoff(issue, \"<已做/未做/卡点/如何恢复>\")",
   "agent.guide.done.when": "任务完成",
   "agent.guide.done.action": "update_task_status(issue, \"已完成\") + clear_session(issue)",
-  "board.unmappedHint": "未映射"
+  "board.unmappedHint": "未映射",
+  "detail.bodyTitle": "描述",
+  "detail.bodyExpand": "展开全文",
+  "detail.bodyCollapse": "收起",
+  "detail.bodyEmpty": "（无正文）"
 }
