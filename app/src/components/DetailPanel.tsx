@@ -7,6 +7,7 @@ import ConfirmDialog from './ConfirmDialog';
 import TaskCommentsList from './TaskCommentsList';
 import { registerEscLayer, type EscLayer } from '../utils/escLayer';
 import { normalizeLiveDetail } from '../utils/liveDetail';
+import { renderMarkdown, shouldCollapseBody } from '../utils/markdown';
 
 interface Props {
   task: Task;
@@ -165,6 +166,14 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
   const liveLabels = Array.isArray(liveIssue?.labels) ? liveIssue.labels : [];
   const livePrCommits = Array.isArray(live?.prCommits) ? live.prCommits : [];
   const shownComments = live ? liveComments : comments;
+
+  // #498：issue **正文**（body）——「具体的详细信息」就是它。
+  // 后端实时拉取（#490）此前**只带标题**，正文从未被读取过。
+  // markdown → 安全 HTML（零依赖，`utils/markdown.ts` 内部先转义再限白名单标签）。
+  const liveBody = liveIssue?.body ?? '';
+  const bodyHtml = useMemo(() => renderMarkdown(liveBody), [liveBody]);
+  const bodyLong = shouldCollapseBody(liveBody);
+  const [bodyExpanded, setBodyExpanded] = useState(false);
   // 选项 = projectStatuses 名称；当前值不在其中时前置，保证永远可见且默认选中。
   const projectStatusOptions = useMemo(() => {
     const names = (projectStatuses ?? []).map((ps) => ps.name);
@@ -255,6 +264,26 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
           {t('detail.updatedAt', { time: fmtTime(task.updatedAt, lang) })}
         </span>
       </div>
+
+      {/* #498：issue **正文**（描述）——用户要的「具体的详细信息」。
+          实时数据未到达时没有正文可显示 ⇒ 整节不渲染。
+          正文是 markdown 源文本 ⇒ 经 `utils/markdown.ts` 渲染成**安全** HTML
+          （先 HTML 转义、只允许白名单标签、链接协议只放行 http/https）。 */}
+      {liveBody.trim() && (
+        <section className="detail-block">
+          <div className="block-title">{t('detail.bodyTitle')}</div>
+          <div
+            className={`detail-body markdown${bodyLong && !bodyExpanded ? ' collapsed' : ''}`}
+            // ⚠️ 安全：`renderMarkdown` 的返回值已转义并限白名单标签（见 utils/markdown.ts）。
+            dangerouslySetInnerHTML={{ __html: bodyHtml }}
+          />
+          {bodyLong && (
+            <button className="btn ghost small" onClick={() => setBodyExpanded((v) => !v)}>
+              {bodyExpanded ? t('detail.bodyCollapse') : t('detail.bodyExpand')}
+            </button>
+          )}
+        </section>
+      )}
 
       <section className="detail-block">
         <div className="block-title">{t('detail.statusTitle')}</div>

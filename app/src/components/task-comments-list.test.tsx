@@ -231,3 +231,34 @@ describe('DetailPanel 的实时数据防御（#496）', () => {
     expect(detailPanelRaw).toContain('setLive(normalized);');
   });
 });
+
+/**
+ * DetailPanel 的 **issue 正文（body）展示**（#498）。
+ *
+ * #498 的现象之一：详情面板只有 issue **标题**，没有**正文描述**——
+ * 因为后端 `RawTask` / `LiveIssue` 当时都没有 `body` 字段，正文从未被拉取。
+ */
+describe('DetailPanel 的 issue 正文展示（#498）', () => {
+  it('必须渲染正文区块（标题下方的「描述」）', () => {
+    expect(detailPanelRaw).toContain('detail.bodyTitle');
+  });
+
+  it('正文来源必须是实时拉取结果的 issue.body', () => {
+    expect(detailPanelRaw).toContain('liveIssue?.body');
+  });
+
+  it('正文为空时整节不渲染（不显示空的「描述」标题）', () => {
+    expect(detailPanelRaw).toContain('liveBody.trim() &&');
+  });
+
+  it('正文必须经 markdown 渲染，且折叠态可展开', () => {
+    expect(detailPanelRaw).toContain('renderMarkdown');
+    expect(detailPanelRaw).toContain('shouldCollapseBody');
+    expect(detailPanelRaw).toContain('detail.bodyExpand');
+    expect(detailPanelRaw).toContain('detail.bodyCollapse');
+  });
+
+  it('正文用 dangerouslySetInnerHTML 注入（渲染结果已由 renderMarkdown 保证安全）', () => {
+    expect(detailPanelRaw).toContain('dangerouslySetInnerHTML={{ __html: bodyHtml }}');
+  });
+});

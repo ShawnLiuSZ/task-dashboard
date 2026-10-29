@@ -106,6 +106,17 @@ describe('normalizeLiveDetail（#496）', () => {
     expect(d!.issue.commentsCount).toBe(0);
   });
 
+  it('#498：body 正常保留', () => {
+    const d = normalizeLiveDetail({ issue: { body: '## 描述\n\n正文' } });
+    expect(d!.issue.body).toBe('## 描述\n\n正文');
+  });
+
+  it('#498：body 缺失或类型不对 ⇒ 降级为空串（不抛错）', () => {
+    expect(normalizeLiveDetail({ issue: {} })!.issue.body).toBe('');
+    expect(normalizeLiveDetail({ issue: { body: 123 } })!.issue.body).toBe('');
+    expect(normalizeLiveDetail({ issue: { body: null } })!.issue.body).toBe('');
+  });
+
   it('comments 非数组 ⇒ 空数组（不抛错）', () => {
     const d = normalizeLiveDetail({ comments: { a: 1 } });
     expect(d!.comments).toEqual([]);

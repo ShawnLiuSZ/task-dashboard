@@ -185,6 +185,73 @@ describe('任务详情居中弹窗 #494', () => {
 });
 
 /**
+ * 详情头部**不得遮挡标题**（#498）。
+ *
+ * #498 的实测（Chrome 无头，真实 CSS + 真实 DOM）：
+ * `head 底部 354.9` vs `title 顶部 346.9` ⇒ 重叠 8px，标题文字被盖 6px。
+ *
+ * 根因：**`position: sticky` 会抵消负 margin**——sticky 把元素钉到滚动容器
+ * padding box 顶部时按 border box 对齐，负 margin 的上移效果被抵消，
+ * 头部整体下移 16px ⇒ 盖住紧随其后的 `.detail-title`。
+ *
+ * 正解：`.detail` 的 `padding-top` 归零 + 头部**只用左右负 margin**撑满宽，
+ * 顶部留白交给头部自己的 padding ⇒ 不再有上下位移 ⇒ sticky 与正常流位置一致。
+ */
+describe('详情头部不得遮挡标题 #498', () => {
+  it('.detail 的 padding-top 归零（顶部留白交给头部自己）', () => {
+    const d = decls('.detail');
+    // 期望 `padding: 0 18px 16px`（三段式，上下分别写）。
+    expect(d).toMatch(/padding\s*:\s*0\s+18px\s+16px/);
+    // 旧的 `padding: 16px 18px` 会让负 margin 与 sticky 打架。
+    expect(d).not.toMatch(/padding\s*:\s*16px\s+18px\s*;/);
+  });
+
+  it('.detail-head 不得有上下负 margin（sticky 会抵消它 ⇒ 盖住标题）', () => {
+    const h = decls('.detail-head');
+    // 只允许左右负 margin：形如 `margin: 0 -18px`。
+    expect(h).toMatch(/margin\s*:\s*0\s+-\d+px/);
+    // ⚠️ 负的上/下 margin 才是病根（`-16px -18px 0` 这类）。
+    expect(h).not.toMatch(/margin\s*:\s*-[\d.]+px\s/);
+  });
+
+  it('.detail-head 的顶部留白由自身 padding 提供', () => {
+    const h = decls('.detail-head');
+    expect(h).toMatch(/padding\s*:\s*16px\s+18px\s+8px/);
+  });
+
+  it('.detail-head 仍是 sticky + 不透明背景', () => {
+    const h = decls('.detail-head');
+    expect(h).toMatch(/position\s*:\s*sticky/);
+    expect(h).toMatch(/top\s*:\s*0\b/);
+    expect(h).toMatch(/background\s*:\s*var\(--surface\)/);
+  });
+});
+
+/**
+ * issue 正文（描述）区块（#498）。
+ */
+describe('issue 正文区块 #498', () => {
+  it('.detail-body 有正文排版基础样式', () => {
+    const d = decls('.detail-body');
+    expect(d).toMatch(/line-height\s*:\s*1\.\d+/);
+    // 长 URL 不得横向撑破弹窗。
+    expect(d).toMatch(/overflow-wrap\s*:\s*anywhere/);
+  });
+
+  it('折叠态限高 + 裁溢出 + 底部渐隐遮罩', () => {
+    const d = decls('.detail-body.collapsed');
+    expect(d).toMatch(/max-height\s*:\s*\d+px/);
+    expect(d).toMatch(/overflow\s*:\s*hidden/);
+    // 渐隐遮罩提示「下面还有内容」。
+    expect(decls('.detail-body.collapsed::after')).toMatch(/linear-gradient/);
+  });
+
+  it('.markdown 代码块用等宽字体变量（禁硬编码 font-family）', () => {
+    expect(decls('.markdown code')).toMatch(/font-family\s*:\s*var\(--font-mono\)/);
+  });
+});
+
+/**
  * 会话卡片标题换行完整显示回归测试。
  *
  * 背景：任务会话卡片标题原用 `white-space: nowrap` + `text-overflow: ellipsis`

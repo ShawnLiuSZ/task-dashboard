@@ -100,6 +100,8 @@ export interface LiveIssue {
   /** issue 创建人 login（不含 @）。 */
   author: string;
   commentsCount: number;
+  /** #498：issue 正文（markdown 源文本）；空串 = 无正文。 */
+  body: string;
   createdAt: number;
   updatedAt: number;
 }

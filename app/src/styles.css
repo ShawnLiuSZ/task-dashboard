@@ -1231,21 +1231,32 @@ button.unassigned-tag:disabled {
   border: 0.5px solid var(--border);
   border-radius: 12px;
   box-shadow: 0 12px 40px var(--shadow-strong);
-  padding: 16px 18px;
+  /* ⚠️ #498：`padding-top` 归零 —— 顶部留白改由 `.detail-head` 自己的 padding 提供。
+     原因见下方 `.detail-head` 的注释：sticky 会抵消负 margin，上下位移只能靠 padding。 */
+  padding: 0 18px 16px;
   overflow-y: auto;
   z-index: 11;
 }
 
-/* #494：详情头部 sticky —— 内容很长（会话 / 交接 / GitHub / 评论 / PR 提交历史），
- * 关闭按钮不能随内容滚走。`margin` 抵消 `.detail` 的 padding 让头部满宽，
- * `padding` 再把视觉间距补回来；不透明背景保证滚过的内容不会透出。
- * ⚠️ 头部自身有 `margin-bottom` 时其下方的 `.detail-title` 会贴上来，
- *   故这里只保留上/左右的负 margin，间距交给 `.detail-title` 自己的 `margin: 8px 0`。 */
+/* #494 / #498：详情头部 sticky —— 内容很长（描述 / 会话 / 交接 / GitHub / 评论 / PR 提交历史），
+ * 关闭按钮不能随内容滚走。
+ *
+ * ⚠️ #498：**sticky 与负 margin 不可兼得**。
+ * 原写法 `margin: -16px -18px 0`（负 margin 抵消 `.detail` 的 `padding-top` 让头部满宽）
+ * 与 `position: sticky` 自相矛盾：sticky 把元素钉到「滚动容器 padding box 顶部」时
+ * **按 border box 对齐**，负 margin 的上移效果被抵消 ⇒ 头部整体下移 16px
+ * ⇒ 盖住紧随其后的 `.detail-title`。
+ * Chrome 无头实测：head 底部 354.9 vs title 顶部 346.9 ⇒ 重叠 8px，标题文字被盖 6px。
+ *
+ * 现在改成：**`.detail` 的 `padding-top` 归零 + 头部只用左右负 margin 撑满宽**
+ * ⇒ 没有任何上下位移 ⇒ sticky 钉住位置与正常流位置一致 ⇒ 标题不再被盖。
+ * 头部内容的顶部留白改由头部自己的 `padding-top: 16px` 提供（视觉与之前一致）。 */
 .detail-head {
   position: sticky;
   top: 0;
   z-index: 1;
-  margin: -16px -18px 0;
+  /* 只左右撑满宽（抵消 `.detail` 的左右 padding）；**不要上下负 margin**（见上方说明）。 */
+  margin: 0 -18px;
   padding: 16px 18px 8px;
   background: var(--surface);
   border-bottom: 0.5px solid var(--border);
@@ -1273,6 +1284,110 @@ button.unassigned-tag:disabled {
   font-weight: 500;
   margin: 8px 0;
   line-height: 1.5;
+}
+
+/* #498：issue 正文（描述）区块 —— 用户要的「具体的详细信息」。
+ * 正文是 markdown 源文本，渲染后的排版规则全部收敛在 `.markdown` 下。 */
+.detail-body {
+  font-size: var(--font-size-base);
+  line-height: 1.65;
+  color: var(--text);
+  /* issue 正文里常有长 URL / 长标识符 ⇒ 允许在任意处断行，避免横向撑破弹窗。 */
+  overflow-wrap: anywhere;
+}
+
+/* 折叠态：限高 + 裁掉溢出 + 底部渐隐遮罩提示「下面还有」。 */
+.detail-body.collapsed {
+  position: relative;
+  max-height: 132px;
+  overflow: hidden;
+}
+
+.detail-body.collapsed::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 36px;
+  background: linear-gradient(to bottom, transparent, var(--surface));
+  pointer-events: none;
+}
+
+/* markdown 渲染结果的排版（#498）。只覆盖本仓自己生成的标签白名单。 */
+.markdown p {
+  margin: 0 0 8px;
+}
+
+.markdown p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  margin: 12px 0 6px;
+  line-height: 1.4;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+
+.markdown li {
+  margin: 2px 0;
+}
+
+.markdown code {
+  font-family: var(--font-mono);
+  font-size: calc(var(--font-size-base) * 0.92);
+  background: var(--code-bg);
+  color: var(--code-text);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.markdown pre {
+  background: var(--code-bg);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0 0 8px;
+  overflow-x: auto;
+}
+
+.markdown pre code {
+  background: none;
+  color: var(--code-text);
+  padding: 0;
+  font-size: calc(var(--font-size-base) * 0.92);
+}
+
+.markdown blockquote {
+  margin: 0 0 8px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  color: var(--text-2);
+}
+
+.markdown a {
+  color: var(--accent);
+}
+
+.markdown hr {
+  border: none;
+  border-top: 0.5px solid var(--border);
+  margin: 10px 0;
+}
+
+.markdown del {
+  color: var(--text-3);
 }
 
 /* #490：详情面板「实时」徽标（打开即实时拉取 GitHub 数据，不落库）。 */

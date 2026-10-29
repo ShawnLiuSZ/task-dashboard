@@ -79,6 +79,17 @@ pub struct RawTask {
     pub created_at: String,
 }
 
+/// #498：从 issue 响应里取**正文**（GitHub `body`，markdown 源文本）。
+///
+/// 纯函数（便于单测）。`body` 可能缺失、为 `null`（空 issue）或类型异常
+/// ⇒ 一律降级为**空串**（详情面板据此不渲染「描述」区块），绝不报错。
+pub fn issue_body_from_json(v: &serde_json::Value) -> String {
+    v.get("body")
+        .and_then(|b| b.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
 /// 从 `[{login: "..."}]` 形态的数组字段提取 login 列表。
 ///
 /// Search API 与单 issue REST 响应的 `assignees` 同形，两处共用本函数。
@@ -1035,6 +1046,29 @@ impl GitHubClient {
         let url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{number}");
         match self.get_opt(&url)? {
             Some(v) => RawTask::from_issue_rest(&v, owner, repo).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// #498：按需拉取单 issue 详情，**额外产出正文（body）**。
+    ///
+    /// 与 [`Self::fetch_issue`] 走**同一次**请求（不额外往返），区别只是多返回一段正文。
+    ///
+    /// ⚠️ **body 刻意不进 `RawTask`**：GitHub 的 Search API 返回的 issue 项**同样带 body**，
+    /// 塞进 `RawTask` 会让每次同步多下载几百 KB 正文（5 个 Search × 100 条/页），
+    /// 而同步路径（写 `tasks` 表）根本不需要正文。正文只在「打开详情」这一次请求里取。
+    pub fn fetch_issue_with_body(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: i64,
+    ) -> Result<Option<(RawTask, String)>, String> {
+        let url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{number}");
+        match self.get_opt(&url)? {
+            Some(v) => {
+                let task = RawTask::from_issue_rest(&v, owner, repo)?;
+                Ok(Some((task, issue_body_from_json(&v))))
+            }
             None => Ok(None),
         }
     }
@@ -2224,6 +2258,46 @@ fn urlencode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ===== #498：issue 正文（body）提取 =====
+
+    /// #498：正常正文原样取回（markdown 源文本，含换行）。
+    #[test]
+    fn issue_body_is_extracted_verbatim() {
+        let v = serde_json::json!({ "body": "## 标题\n\n正文 **粗体**" });
+        assert_eq!(super::issue_body_from_json(&v), "## 标题\n\n正文 **粗体**");
+    }
+
+    /// #498：`body` 缺失 / 为 `null` / 类型异常 ⇒ 一律降级为空串，**不报错**。
+    ///
+    /// GitHub 对「无正文」的 issue 返回 `"body": null`；
+    /// 手工构造 / 异常响应下还可能是数字或对象。
+    /// 这三种都必须降级（详情面板据此不渲染「描述」区块），不能让整次拉取失败。
+    #[test]
+    fn issue_body_degrades_to_empty_string() {
+        assert_eq!(super::issue_body_from_json(&serde_json::json!({})), "");
+        assert_eq!(
+            super::issue_body_from_json(&serde_json::json!({ "body": null })),
+            ""
+        );
+        assert_eq!(
+            super::issue_body_from_json(&serde_json::json!({ "body": 123 })),
+            ""
+        );
+        assert_eq!(
+            super::issue_body_from_json(&serde_json::json!({ "body": { "a": 1 } })),
+            ""
+        );
+    }
+
+    /// #498：空正文与「无 body 字段」必须等价（前端只需判断「有没有正文」）。
+    #[test]
+    fn issue_body_empty_equals_missing() {
+        let missing = super::issue_body_from_json(&serde_json::json!({ "title": "t" }));
+        let empty = super::issue_body_from_json(&serde_json::json!({ "body": "" }));
+        assert_eq!(missing, empty);
+        assert!(missing.is_empty());
+    }
 
     // ===== #472：评论分页（取最后一页才是「最近的」）=====
 
