@@ -490,6 +490,8 @@ pub fn run() {
             commands::list_active_sessions,
             // #472：按需列出某 issue 的全部评论链接（倒序：最新在前）。
             commands::list_task_comments,
+            // #490：打开详情时实时拉取 GitHub 详情 + 评论 + PR 提交历史（只读、零落库）。
+            commands::fetch_task_detail_live,
             // #214：认领任务（首个 GitHub 写回操作，用户确认后显式调用）。
             commands::claim_issue,
             // #215：详情 Project 状态写回（用户确认后显式调用）。

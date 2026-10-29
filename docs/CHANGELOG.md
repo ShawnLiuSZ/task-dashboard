@@ -6,6 +6,15 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.11（未发布）— 打开任务详情时实时拉取 GitHub 详情与评论（不落库）（#490）**
+
+  - **需求**：查看任务详情（打开 `DetailPanel`）时，从 GitHub **实时拉取**该任务的详细信息与评论，**不写入本地数据库**；覆盖评论区（评论链接列表），并展示实时指派 / 标签、以及关联 PR 的提交历史。
+  - **与 `on_demand::ensure_task_available` 的区别**：后者也会拉单 issue，但会把结果**写入 `tasks` 表**（给 MCP 写路径兜底）；本功能新增一条**纯只读、零落库**的实时通道——数据只在单次请求里回传前端，绝不触碰 SQLite，因此不污染同步的「手动态不被覆盖」语义、也不引入双源冲突。
+  - **后端**：`on_demand.rs` 新增 `fetch_task_detail_live(conn, issue_key, account_id, pr_number)`，按 `account_id` 取 PAT、由 org/login 推断 owner，调 `fetch_issue` + `fetch_comments` +（仅当 `pr_number>0`）PR commits 端点；全程零写库。PR commits 解析抽成纯函数 `parse_pr_commits`（可单测）。`GitHubClient::get` 提升为 `pub(crate)` 以供复用。
+  - **前端**：`DetailPanel` 打开即 `useEffect` 调 `api.fetchTaskDetailLive`，用实时评论**覆盖**本地库评论、用实时指派 / 标签覆盖对应展示，关联 PR 时渲染提交历史区块，并显示「实时」徽标 + 拉取时间；拉取失败只做轻量提示、保留本地库展示、不崩溃。**仅打开时自动拉取，无手动刷新按钮**（按需求选择）。
+  - **测试**：`cargo test --lib on_demand` 18 passed（新增 `parse_pr_commits` 2 例）· `clippy --all-targets -D warnings` 全绿 · `task-comments-list.test.tsx` 16 passed（新增实时接线静态断言 5 例）· `tsc --noEmit` / `i18n:check`（中英 425 key）全绿。未改 `tasks` 表 schema ⇒ 无需跑 `check-mcp-columns.py`。
+  - 详见 [`issue-490-live-task-detail.md`](./issue-490-live-task-detail.md)
+
 - **v0.7.10（2026-10-27）— 顶栏计数改为「我的未完成 issue 数」，排除已关闭 / 已完成（#484）**
 
   - **口径变更**：顶栏数字从「当前视图全部任务」改为「未完成 issue 数」—— 排除 `issueState=closed`（GitHub 权威关闭）与 `status=done`（看板手动标记已完成，issue 可能尚未关闭）。本机激活账号实测 567 → **181**。

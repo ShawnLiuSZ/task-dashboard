@@ -20,6 +20,7 @@ import type {
   Settings,
   SyncLog,
   SyncResult,
+  LiveTaskDetail,
   Task,
   TaskComment,
   UpdateProgress,
@@ -147,6 +148,14 @@ export const api = {
   // ⚠️ 必须带 accountId —— issueKey 是 `repo#number`（不含 owner），多账号下会重复。
   listTaskComments: (issueKey: string, accountId: number) =>
     invoke<TaskComment[]>('list_task_comments', { issueKey, accountId }),
+  // #490：打开详情时实时拉取 GitHub 详情 + 评论 + 关联 PR 提交历史（只读、零落库）。
+  // 失败时抛错，由调用方保留本地库展示。
+  fetchTaskDetailLive: (issueKey: string, accountId: number, prNumber?: number) =>
+    invoke<LiveTaskDetail>('fetch_task_detail_live', {
+      issueKey,
+      accountId,
+      prNumber: prNumber ?? 0,
+    }),
   addNote: (content: string, label?: string) =>
     invoke<Note>('add_note', { content, label: label ?? null }),
   updateNote: (id: number, content: string) => invoke<Note>('update_note', { id, content }),

@@ -10,6 +10,7 @@
 //! - 落库用 [`TaskWriteMode::InsertIfAbsent`]，绝不覆盖同步写入的字段（见该枚举说明）
 
 use rusqlite::Connection;
+use serde::Serialize;
 
 use crate::db::{Account, TaskUpsert, TaskWriteMode};
 
@@ -435,6 +436,214 @@ fn outcome_from_affected(affected: usize) -> EnsureOutcome {
     }
 }
 
+/// #490：实时拉取单个任务的**详情 + 评论 + 关联 PR 提交历史**，**只读 GitHub、零落库**。
+///
+/// 与 [`ensure_task_available`] 的关键区别：后者会把单 issue 写入 `tasks` 表（给 MCP
+/// 写路径兜底）；本结构 + [`fetch_task_detail_live`] **绝不触碰 SQLite**，只把 GitHub 的
+/// 实时数据原样回传前端，供详情面板在「打开时」覆盖展示（评论区 / 指派 / 标签 /
+/// 关联 PR 提交历史）。
+///
+/// 字段命名与 `CommentRef` 一致（`#[serde(rename_all = "camelCase")]`）⇒ 前端可直接当
+/// `TaskComment` 用；`pr_commits` 额外承载「历史提交记录」。
+#[derive(Debug, Clone, Serialize)]
+pub struct LiveTaskDetail {
+    /// issue 实时详情（标题 / 状态 / 指派 / 标签 / 计数 / 时间）。
+    pub issue: LiveIssue,
+    /// 评论链接列表（最新在前，与 `fetch_comments` 同口径：最多 `COMMENTS_KEPT_MAX` 条）。
+    /// 形状与 `TaskComment` 一致，前端可直接喂给 `TaskCommentsList`。
+    pub comments: Vec<LiveComment>,
+    /// 关联 PR 的提交历史（仅当调用方传入 `pr_number > 0` 时拉取，否则空）。
+    pub pr_commits: Vec<LivePrCommit>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveIssue {
+    pub number: i64,
+    pub title: String,
+    pub url: String,
+    /// open / closed（已归一化为小写，与 `common::normalize_issue_state` 同口径）。
+    pub state: String,
+    pub assignees: Vec<String>,
+    pub labels: Vec<String>,
+    /// issue 创建人 login（不含 @）。
+    pub author: String,
+    pub comments_count: u64,
+    /// 创建时间（Unix 秒）。
+    pub created_at: i64,
+    /// 更新时间（Unix 秒）。
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveComment {
+    pub id: i64,
+    pub url: String,
+    pub author: String,
+    /// 创建时间（Unix 秒）。
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LivePrCommit {
+    /// commit sha 前 8 位（展示用）。
+    pub sha: String,
+    pub message: String,
+    pub author: String,
+    /// 提交时间（Unix 秒）。
+    pub date: i64,
+}
+
+/// 实时拉取入口（纯编排，需联网；不可单测）。返回结构见 [`LiveTaskDetail`]。
+///
+/// 账号按 `account_id` 取 PAT 与 login/org；`issue_key` 形如 `repo#number`
+/// （不含 owner），owner 由账号的 org/login 推断（与 `default_owner_of` 同口径）。
+/// 拉取失败（无 PAT / 账号 / 404 / 限流）一律返回 `Err` 并带原因，由前端优雅降级
+/// （保留本地库展示，不崩溃）。
+pub fn fetch_task_detail_live(
+    conn: &Connection,
+    issue_key: &str,
+    account_id: i64,
+    pr_number: i64,
+) -> Result<LiveTaskDetail, String> {
+    let r = parse_issue_ref_parts(issue_key)?;
+    let repo = r.repo.clone();
+    let number = r.number;
+
+    // 账号：按 account_id 取 PAT 与 login/org。issue_key 只含 repo#number，
+    // owner 由账号推断（与 `default_owner_of` 同口径）。
+    let (login, org, pat) = crate::db::get_account_pat(conn, account_id)?;
+    if pat.trim().is_empty() {
+        return Err(format!("账号 @{login} 未配置 PAT"));
+    }
+    let api_owner = if !org.trim().is_empty() {
+        org.trim().to_string()
+    } else {
+        login.trim().to_string()
+    };
+    let client = match crate::github::GitHubClient::new(pat, login.clone(), api_owner.clone()) {
+        Ok(c) => c,
+        Err(e) => return Err(format!("构造 GitHub 客户端失败: {e}")),
+    };
+
+    // 单 issue REST（不做 best-effort 降级）：区分「远端没有」(Ok(None)) 与「请求失败」(Err)。
+    let raw = match client.fetch_issue(&api_owner, &repo, number)? {
+        Some(t) => t,
+        None => {
+            return Err(format!(
+                "已按 `{api_owner}/{repo}#{number}` 查询，远端没有该 issue（或该编号是 PR）"
+            ))
+        }
+    };
+    let issue = LiveIssue {
+        number: raw.number,
+        title: raw.title.clone(),
+        url: raw.url.clone(),
+        state: crate::common::normalize_issue_state(&raw.state),
+        assignees: raw.assignees.clone(),
+        labels: raw.labels.clone(),
+        author: raw.author.clone(),
+        comments_count: raw.comments,
+        created_at: crate::common::iso8601_to_secs(&raw.created_at),
+        updated_at: crate::common::iso8601_to_secs(&raw.updated_at),
+    };
+
+    // 评论：最新 N 条（与同步一致）。失败不阻断详情（保留本地库评论）。
+    let comments = match client.fetch_comments(&repo, number, &api_owner, raw.comments) {
+        Ok(Some(v)) => v
+            .into_iter()
+            .map(|c| LiveComment {
+                id: c.id,
+                url: c.url,
+                author: c.author,
+                created_at: c.created_at,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    // PR 提交历史：仅当调用方给出关联 PR 编号时拉取（不阻塞主详情）。
+    let pr_commits = if pr_number > 0 {
+        fetch_pr_commits(&client, &api_owner, &repo, pr_number).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    Ok(LiveTaskDetail {
+        issue,
+        comments,
+        pr_commits,
+    })
+}
+
+/// PR 提交历史 API（`/pulls/{n}/commits`）。返回全量提交（通常不超百条，足够详情展示）。
+fn pr_commits_url(owner: &str, repo: &str, pr_number: i64) -> String {
+    format!("https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/commits")
+}
+
+/// 拉取并解析 PR 提交历史（失败返回 `Err`，由调用方降级为空列表）。
+fn fetch_pr_commits(
+    client: &crate::github::GitHubClient,
+    owner: &str,
+    repo: &str,
+    pr_number: i64,
+) -> Result<Vec<LivePrCommit>, String> {
+    let url = pr_commits_url(owner, repo, pr_number);
+    let v = client.get(&url)?;
+    Ok(parse_pr_commits(&v))
+}
+
+/// 纯函数：把 PR commits API 的 JSON 解析为 [`LivePrCommit`] 列表（便于单测）。
+///
+/// 容错与 `fetch_comments` 同思路：缺 sha 的条目跳过；作者优先 `commit.author.name`，
+/// 否则回退顶层 `author.login`；时间解析失败记 0。
+pub fn parse_pr_commits(v: &serde_json::Value) -> Vec<LivePrCommit> {
+    let arr = match v.as_array() {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for c in arr {
+        let sha = match c.get("sha").and_then(|x| x.as_str()) {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => continue,
+        };
+        let commit = c.get("commit");
+        let message = commit
+            .and_then(|m| m.get("message"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let author = commit
+            .and_then(|m| m.get("author"))
+            .and_then(|a| a.get("name"))
+            .and_then(|x| x.as_str())
+            .map(String::from)
+            .or_else(|| {
+                c.get("author")
+                    .and_then(|a| a.get("login"))
+                    .and_then(|x| x.as_str())
+                    .map(String::from)
+            })
+            .unwrap_or_default();
+        let date = commit
+            .and_then(|m| m.get("author"))
+            .and_then(|a| a.get("date"))
+            .and_then(|x| x.as_str())
+            .map(crate::common::iso8601_to_secs)
+            .unwrap_or(0);
+        out.push(LivePrCommit {
+            sha: sha.chars().take(8).collect(),
+            message,
+            author,
+            date,
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -690,5 +899,50 @@ mod tests {
         // ≥1 行 = 真插入 ⇒ 报 Pulled。
         assert_eq!(super::outcome_from_affected(1), EnsureOutcome::Pulled);
         assert!(super::outcome_from_affected(1).pulled());
+    }
+
+    /// #490：PR commits JSON → `LivePrCommit` 列表解析（纯函数，可直接单测）。
+    #[test]
+    fn parse_pr_commits_maps_shape() {
+        let json = serde_json::json!([
+            {
+                "sha": "abc123def456",
+                "commit": {
+                    "message": "fix: handle 404",
+                    "author": { "name": "Shawn", "date": "2026-01-02T03:04:05Z" }
+                },
+                "author": { "login": "ShawnLiuSZ" }
+            },
+            {
+                "sha": "",
+                "commit": { "message": "no sha", "author": { "name": "X", "date": "2026-01-01T00:00:00Z" } }
+            },
+            {
+                "sha": "fed987",
+                "commit": { "message": "no commit.author.name" },
+                "author": { "login": "bot" }
+            }
+        ]);
+        let got = super::parse_pr_commits(&json);
+        // 第一条完整解析；第二条 sha 为空被跳过。
+        assert_eq!(got.len(), 2, "空 sha 条目应被跳过");
+        assert_eq!(got[0].sha, "abc123de");
+        assert_eq!(got[0].message, "fix: handle 404");
+        assert_eq!(got[0].author, "Shawn");
+        assert_eq!(
+            got[0].date,
+            crate::common::iso8601_to_secs("2026-01-02T03:04:05Z")
+        );
+        // 第三条：commit.author.name 缺失 ⇒ 回退顶层 author.login。
+        assert_eq!(got[1].sha, "fed987");
+        assert_eq!(got[1].author, "bot");
+        assert_eq!(got[1].date, 0, "缺失日期应记 0");
+    }
+
+    /// #490：非数组 / 空数组应返回空列表，而非报错或 panic。
+    #[test]
+    fn parse_pr_commits_tolerates_non_array() {
+        assert!(super::parse_pr_commits(&serde_json::json!({})).is_empty());
+        assert!(super::parse_pr_commits(&serde_json::json!([])).is_empty());
     }
 }

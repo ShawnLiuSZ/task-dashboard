@@ -176,6 +176,8 @@ MCP Server 只提供工具（**能力层**）；要让 Agent 在「开始 / 中�
 
 - [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.7.10）
 
+- [`docs/issue-490-live-task-detail.md`](./docs/issue-490-live-task-detail.md) — **打开任务详情时实时拉取 GitHub 详情与评论（不落库）**：新增纯只读、零落库的实时通道，覆盖评论区、展示实时指派 / 标签与关联 PR 提交历史，与 `on_demand::ensure_task_available` 的落库版单 issue 拉取明确区分
+
 - [`docs/issue-327-p0-functional-defects.md`](./docs/issue-327-p0-functional-defects.md) — **code review P0 批次**：About 小窗「确定」按钮因 capability 未覆盖 `about` 窗口 + `core:window:default` 不含 `allow-close` 而静默失效；设置面板「界面语言」切换器被误复制成重复的主题选择器；记事重复内容暴露原始 `UNIQUE constraint` 报错；`projects.number_of_items` 误取项目编号（而非 `items.totalCount`），使多 Project 时写错写回目标
 
 - [`docs/issue-328-p1-data-safety.md`](./docs/issue-328-p1-data-safety.md) — **code review P1 批次（数据安全与健壮性，9 项）**：tasks 物理重建自称「单事务」实则无事务（中断即丢本地态、失败后无自愈路径）；MCP 一行坏 JSON / 超大 `Content-Length` 直接结束或 abort 进程；同步全败仍返回 `Ok` 谎报成功且跳过的账号日志永久停在 running；`graphql()` 无限流处理致项目状态与父子关系静默降级；GUI 写命令吞掉「0 行受影响」；查询错误被折叠成「不在任何 Project 中」；403 一律当限流使权限问题白等 30s；`search()` 单条坏数据拖垮整个数据源
