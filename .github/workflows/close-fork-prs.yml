@@ -1,0 +1,34 @@
+name: Close Fork PRs
+
+# GitHub 公开仓库**没有**「禁止 fork PR」的原生开关（Issues / Wiki 可关，Pull Requests
+# 不可关）⇒ 用本 workflow 兜底：非协作者（author_association 不是
+# OWNER / MEMBER / COLLABORATOR）提交的 PR 自动关闭并留言，引导走 issue。
+#
+# ⚠️ 安全性：事件用 `pull_request_target`——它以**默认分支上的本文件**运行、持有仓库
+# token（这是 `pull_request` 事件做不到的）。但本 workflow **绝不 checkout PR 代码、
+# 不执行 PR 里的任何内容**，只调 `gh pr close`：关闭动作与 PR 内容完全无关，无供应链风险。
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  close-fork-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close PR from non-collaborator
+        if: >-
+          github.event.pull_request.author_association != 'OWNER' &&
+          github.event.pull_request.author_association != 'MEMBER' &&
+          github.event.pull_request.author_association != 'COLLABORATOR'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_ASSOC: ${{ github.event.pull_request.author_association }}
+        run: |
+          gh pr close "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --comment "本仓库不接受来自 fork 的第三方 PR，已自动关闭。如有贡献意向请先开 issue 讨论，谢谢理解。"
+          echo "已自动关闭非协作者 PR #$PR_NUMBER（author_association=$PR_ASSOC）"
