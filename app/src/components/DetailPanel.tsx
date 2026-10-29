@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, openExternal } from '../api';
 import { AGENTS, agentLabel } from '../agents';
-import { type ProjectStatus, type Task, type TaskComment } from '../types';
+import { type ProjectStatus, type Task, type TaskComment, type LiveTaskDetail } from '../types';
 import { fmtTime, useI18n } from '../i18n';
 import ConfirmDialog from './ConfirmDialog';
 import TaskCommentsList from './TaskCommentsList';
@@ -27,6 +27,11 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
   // 看板一次渲染几百张卡 ⇒ 不能随 `list_tasks` 一起返回（IPC 载荷会被撑爆）。
   const [comments, setComments] = useState<TaskComment[]>([]);
   const [commentsLoading, setCommentsLoading] = useState(false);
+  // #490：实时拉取结果（只读 GitHub、零落库）。打开详情即拉一次，覆盖本地库展示。
+  const [live, setLive] = useState<LiveTaskDetail | null>(null);
+  const [liveLoading, setLiveLoading] = useState(false);
+  const [liveError, setLiveError] = useState<string | null>(null);
+  const [liveAt, setLiveAt] = useState(0);
   // #215：待确认的目标 Project 状态（确认框 → set_project_status 写回）。
   const [pendingStatus, setPendingStatus] = useState<string | null>(null);
   // 「已复制」提示的复位定时器：组件的卸载（切换任务、关闭面板）时需清理，
@@ -81,6 +86,45 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
     };
   }, [task.issueKey, task.accountId, task.latestCommentUrl]);
 
+  // #490：PR 编号用于拉取提交历史；优先主 PR 编号，否则回退 prs[0]。
+  // 用 useMemo 稳定：仅当编号真正变化时才让下方 effect 重跑——
+  // 同步后 `task.prs` 数组换新身份但编号不变 ⇒ 不触发重复实时拉取，
+  // 符合「仅打开时自动拉取」的诉求。
+  const livePrNumber = useMemo(() => {
+    if (task.prNumber > 0) return task.prNumber;
+    if (Array.isArray(task.prs) && task.prs.length > 0) return task.prs[0].number;
+    return 0;
+  }, [task.prNumber, task.prs]);
+
+  // #490：打开详情即实时拉取 GitHub 详情 + 评论 + 关联 PR 提交历史（只读、零落库）。
+  // 结果覆盖本地库展示（评论区 / 指派 / 标签 / PR 提交历史）；失败保留本地库数据。
+  // 组件因 `key={taskIdentity}` 在切换任务时重挂载，故 deps 用 issueKey/accountId 即可；
+  // PR 编号经 `livePrNumber` 稳定化（见上），编号真正变化时才重新拉提交历史。
+  useEffect(() => {
+    let cancelled = false;
+    setLive(null);
+    setLiveError(null);
+    setLiveLoading(true);
+    api
+      .fetchTaskDetailLive(task.issueKey, task.accountId, livePrNumber)
+      .then((d) => {
+        if (!cancelled) {
+          setLive(d);
+          setLiveAt(Date.now());
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setLiveError(String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLiveLoading(false);
+      });
+    return () => {
+      // 卸载 / 换任务后到达的响应不得再 setState。
+      cancelled = true;
+    };
+  }, [task.issueKey, task.accountId, livePrNumber]);
+
   // #196：当前 GitHub 状态键（与 Board.groupByProjectStatus 同规则）：
   // closed→done，有原文取原文，空→unclassified。详情状态区永远以此为准，
   // 不跟随 custom 列展示方式。
@@ -100,6 +144,10 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
       : task.prNumber > 0 && task.prUrl
         ? [{ number: task.prNumber, url: task.prUrl, state: task.prState || '' }]
         : [];
+  // #490：实时数据优先覆盖本地库展示（live 未加载时回退 DB 数据）。
+  const shownComments = live ? live.comments : comments;
+  const liveAssignees = live?.issue.assignees ?? [];
+  const liveLabels = live?.issue.labels ?? [];
   // 选项 = projectStatuses 名称；当前值不在其中时前置，保证永远可见且默认选中。
   const projectStatusOptions = useMemo(() => {
     const names = (projectStatuses ?? []).map((ps) => ps.name);
@@ -169,6 +217,19 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
       </div>
 
       <h2 className="detail-title">{task.title}</h2>
+
+      {/* #490：实时数据已加载时显示「实时」徽标 + 拉取时间；拉取中显示占位。 */}
+      <div className="tags">
+        {liveLoading && <span className="muted small">{t('detail.liveLoading')}</span>}
+        {live && (
+          <span className="live-badge" title={t('detail.liveBadge')}>
+            {t('detail.liveBadge')}
+            {liveAt > 0 && (
+              <span className="muted small"> · {fmtTime(Math.floor(liveAt / 1000), lang)}</span>
+            )}
+          </span>
+        )}
+      </div>
 
       <div className="tags">
         <span className={`own own-${task.ownership}`}>{t(`ownership.${task.ownership}`)}</span>
@@ -321,16 +382,19 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
           )}
         </div>
         <div className="muted small top-gap">
-          {task.assignees
-            ? t('detail.assignees', {
-                list: task.assignees
-                  .split(',')
-                  .filter(Boolean)
-                  .map((a) => `@${a}`)
-                  .join(' '),
-              })
-            : t('ownership.notassignee')}
+          {liveAssignees.length > 0
+            ? t('detail.assignees', { list: liveAssignees.map((a) => `@${a}`).join(' ') })
+            : task.assignees
+              ? t('detail.assignees', {
+                  list: task.assignees
+                    .split(',')
+                    .filter(Boolean)
+                    .map((a) => `@${a}`)
+                    .join(' '),
+                })
+              : t('ownership.notassignee')}
           {task.mentioned && ` · ${t('detail.mentionedSuffix')}`}
+          {liveLabels.length > 0 && ` · ${t('detail.labels', { list: liveLabels.join(', ') })}`}
         </div>
         {task.branch && (
           <div className="branch-line top-gap">
@@ -363,7 +427,9 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
           （前端测试跑在 node 环境，`useEffect` 不会执行 ⇒ 放在本文件内部测不到）。
           ⚠️ 列表为空时**整节不渲染**（不显示空标题）—— 评论表在首次同步前是空的，
           此时上面的「最新评论」按钮仍可用（它走 `tasks.latest_comment_url` 单值列）。 */}
-      <TaskCommentsList comments={comments} loading={commentsLoading} />
+      {/* #490：评论区优先展示实时拉取的评论（覆盖本地库）；未加载时回退 DB 评论。
+          加载态叠加 live 拉取中，避免评论区在实时数据到达前闪烁为空。 */}
+      <TaskCommentsList comments={shownComments} loading={commentsLoading || liveLoading} />
 
       {/* #278：关联 issue（父 / 子）—— 同步自 GitHub `parent` / `subIssues`（只读）。
           仅在确实有关联时渲染整节，避免每个详情都多一个空块；
@@ -421,6 +487,28 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
         </section>
       )}
 
+      {/* #490：实时拉取失败只做轻量提示，不阻断详情面板（保留本地库展示）。 */}
+      {liveError && (
+        <div className="muted small top-gap">{t('detail.liveError', { msg: liveError })}</div>
+      )}
+      {/* #490：关联 PR 的提交历史（实时拉取，不落库）。仅在确实有关联 PR 时渲染。 */}
+      {live && live.prCommits.length > 0 && (
+        <section className="detail-block">
+          <div className="block-title">
+            {t('detail.prCommitsTitle', { n: live.prCommits.length })}
+          </div>
+          <ul className="link-list">
+            {live.prCommits.map((c) => (
+              <li key={c.sha} className="link-line">
+                <span className="link-ref mono">{c.sha}</span>
+                <span className="link-title">{c.message.split('\n')[0]}</span>
+                {c.author && <span className="muted small">@{c.author}</span>}
+                {c.date > 0 && <span className="muted small">{fmtTime(c.date, lang)}</span>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {err && <div className="banner error">{err}</div>}
     </aside>
   );

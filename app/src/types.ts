@@ -72,6 +72,48 @@ export interface TaskComment {
   createdAt: number;
 }
 
+/**
+ * #490：关联 PR 的提交历史条目（实时拉取，不落库）。
+ */
+export interface LivePrCommit {
+  /** commit sha 前 8 位（展示用）。 */
+  sha: string;
+  /** 提交信息（首行）。 */
+  message: string;
+  /** 提交人（commit.author.name 或 author.login）。 */
+  author: string;
+  /** 提交时间（Unix 秒）；0 = 未知。 */
+  date: number;
+}
+
+/**
+ * #490：实时拉取的 issue 详情（只读 GitHub，不落库）。
+ */
+export interface LiveIssue {
+  number: number;
+  title: string;
+  url: string;
+  /** open / closed（已归一化为小写）。 */
+  state: string;
+  assignees: string[];
+  labels: string[];
+  /** issue 创建人 login（不含 @）。 */
+  author: string;
+  commentsCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * #490：`fetchTaskDetailLive` 的返回结构。
+ * `comments` 形状与 `TaskComment` 一致，前端可直接喂给评论列表。
+ */
+export interface LiveTaskDetail {
+  issue: LiveIssue;
+  comments: TaskComment[];
+  prCommits: LivePrCommit[];
+}
+
 export interface Task {
   issueKey: string;
   owner: string;

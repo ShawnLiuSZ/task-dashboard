@@ -157,3 +157,31 @@ describe('DetailPanel 的评论拉取接线（#472）', () => {
     expect(detailPanelRaw).toContain('listTaskComments(task.issueKey, task.accountId)');
   });
 });
+
+/**
+ * DetailPanel 的**实时拉取接线**（#490）。
+ *
+ * 与前一块同理：拉取逻辑在 `useEffect` 内，node 环境不执行 ⇒ 用源码静态断言锁定
+ * 「打开即拉、零落库、覆盖评论区、PR 提交历史按需渲染」这几条关键接线，防止回归。
+ */
+describe('DetailPanel 的实时拉取接线（#490）', () => {
+  it('打开详情即调用 fetchTaskDetailLive（实时、零落库）', () => {
+    expect(detailPanelRaw).toContain('fetchTaskDetailLive');
+  });
+
+  it('实时拉取必须带 issueKey 与 accountId（多账号不串号）', () => {
+    expect(detailPanelRaw).toContain('fetchTaskDetailLive(task.issueKey, task.accountId');
+  });
+
+  it('实时评论覆盖本地库评论（shownComments 优先用 live.comments）', () => {
+    expect(detailPanelRaw).toContain('live ? live.comments : comments');
+  });
+
+  it('关联 PR 提交历史仅在确实有时渲染', () => {
+    expect(detailPanelRaw).toContain('live.prCommits.length > 0');
+  });
+
+  it('实时拉取失败只做轻量提示，不阻断详情面板', () => {
+    expect(detailPanelRaw).toContain('detail.liveError');
+  });
+});

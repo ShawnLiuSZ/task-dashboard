@@ -1465,7 +1465,9 @@ impl GitHubClient {
 
     /// 限流感知的 GET：依据 `X-RateLimit-Remaining` / `X-RateLimit-Reset` / `Retry-After`
     /// 主动 sleep；遇 4xx/5xx 返回带状态码的错误。
-    fn get(&self, url: &str) -> Result<serde_json::Value, String> {
+    // `pub(crate)`：供 crate 内其它模块拉取任意 GitHub 端点（如 PR 提交历史），
+    // 无需走专门的 `fetch_*` 方法。
+    pub(crate) fn get(&self, url: &str) -> Result<serde_json::Value, String> {
         self.get_with_timeout(url, self.http_timeout())
     }
 

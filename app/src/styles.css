@@ -1250,6 +1250,20 @@ button.unassigned-tag:disabled {
   line-height: 1.5;
 }
 
+/* #490：详情面板「实时」徽标（打开即实时拉取 GitHub 数据，不落库）。 */
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--accent);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.4;
+  border: 0.5px solid var(--border);
+}
+
 .tags {
   display: flex;
   align-items: center;
@@ -1744,6 +1758,13 @@ button.unassigned-tag:disabled {
   flex: 0 0 auto;
   font-family: var(--font-mono);
   color: var(--text);
+}
+
+/* #490：PR 提交历史的 sha 用等宽字体突出。 */
+.link-ref.mono {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  color: var(--accent);
 }
 
 .link-title {

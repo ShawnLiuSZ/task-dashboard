@@ -556,6 +556,22 @@ fn list_task_comments_inner(
     crate::db::load_task_comments(conn, account_id, issue_key)
 }
 
+/// #490：打开任务详情时**实时**拉取 GitHub 的详情 + 评论 + 关联 PR 提交历史，
+/// **只读、零落库**（与 `on_demand::ensure_task_available` 写入 `tasks` 表不同）。
+///
+/// 前端在详情面板打开时调用一次，用返回数据覆盖本地库展示（评论区 / 指派 / 标签 /
+/// PR 提交历史）。拉取失败返回 `Err`，前端保留本地库展示并提示，不崩溃。
+#[tauri::command]
+pub fn fetch_task_detail_live(
+    state: State<'_, AppState>,
+    issue_key: String,
+    account_id: i64,
+    pr_number: i64,
+) -> Result<crate::on_demand::LiveTaskDetail, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    crate::on_demand::fetch_task_detail_live(&conn, &issue_key, account_id, pr_number)
+}
+
 /// #422 账号维度解析：`Option<i64>` → 实际用于过滤的账号 id。
 ///
 /// **返回 `None` 表示「聚合全部、不过滤」**（不是「无账号」）。契约：
