@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.11（未发布）— 任务详情：issue id 行与标题行固定吸顶 + 消除顶部透明边距（#500）**
+
+  - **现象**：滚动任务详情弹窗时，「issue id 行」（`fad-backend #1630`）与弹窗顶边之间冒出一段**纯白空隙**；且标题是吸顶头部的**兄弟节点** ⇒ 必然随内容滚走，滚动到一半还被头部盖住上半截。对用户截图逐像素测量：弹窗顶边 `y=5`，issue id 行文字 `y=46..55` ⇒ 中间 **35px 纯白空隙**；标题只剩 `y=11..21` 一条 11px 高的边露在头部上方。
+  - **根因 ①（透明边距）**：v0.7.10 的 `.detail-head` 用 `margin: -16px -18px 0`（负 margin 抵消 `.detail` 的 `padding-top` 做满宽吸顶），但 **`position: sticky` 会抵消负 margin** —— 钉到滚动容器 padding box 顶部时按 border box 对齐 ⇒ 钉住位置比正常流**低 16px** ⇒ 未滚动时正常、滚动后顶部凭空多出 16px 空隙。
+  - **根因 ②（标题不固定）**：sticky 只对**自身**生效，标题在头部之外 ⇒ **只改 CSS 永远做不到「标题不参与滚动」，必须改 DOM**。
+  - **修复 ①（DOM）**：`DetailPanel` 把「issue id 行」与「标题行」并入**同一个 sticky 容器**（新增 `.detail-head-row` 承载左右分列：`repo#编号` | 「关闭」），标题移入头部 ⇒ 两行一起被钉住。
+  - **修复 ②（CSS）**：头部容器**不再**是横向 flex（否则标题会被排到第一行右侧），左右分列下沉到 `.detail-head-row`；头部 `padding` 由 `16px 18px 8px` 调为 `16px 18px 10px`（多了一行标题）；`.detail-title` 下 margin 归零（`8px 0` → `8px 0 0`，否则与头部 padding 叠加出多余空白）。头部**不得有任何方向的负 margin**（sticky 会抵消它）。
+  - **渲染验证**（Chrome 无头，真实 CSS + 真实 DOM 复刻）：`head.top` 相对 `detail.top` = **1.00px**（= 弹窗自身 1px 边框）、`row.top` = **17.00px**、`title.top` = **52.00px** —— 滚动 120px 后三个值**完全不变** ⇒ 两行都固定；弹窗顶部 +2px 命中的始终是 `.detail-head` ⇒ **顶部无空隙、无内容透出**；标题始终完整在头部内、不被遮挡；弹窗内横向溢出 0。
+  - **测试**：新增 `app/src/components/detail-panel-head.test.tsx`（3 例，断言落在**真实 SSR 渲染产物**上：标题必须渲染在 `.detail-head` 内部且紧跟 `.detail-head-row` 之后）+ `styles.test.ts` 新增 4 例（并更新 #498 的 padding 断言）。**反向验证 4 处 mutation 全被捕获**：标题移回头部之外 / 头部改回横向 flex / 头部改回负 margin / 标题 margin 复原。
+  - **影响面**：前端 CSS + TSX + 测试；**零后端 / 零 DB schema / 零 i18n 改动**（i18n 仍为中英各 429 key）⇒ 无需 `check-mcp-columns.py`。
+  - 详见 [`issue-500-detail-header-sticky.md`](./issue-500-detail-header-sticky.md)
+
 - **v0.7.11（未发布）— 任务详情点击后整页全屏空白（#496）**
 
   - **现象**：点击任务卡片「查看详情」后**整个窗口变成一片空白**（整棵 React 树被卸载，webview 里什么都不剩），而不是「弹窗没弹出」或「遮罩太暗」。

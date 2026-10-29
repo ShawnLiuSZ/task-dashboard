@@ -1238,8 +1238,8 @@ button.unassigned-tag:disabled {
   z-index: 11;
 }
 
-/* #494 / #498：详情头部 sticky —— 内容很长（描述 / 会话 / 交接 / GitHub / 评论 / PR 提交历史），
- * 关闭按钮不能随内容滚走。
+/* #494 / #498 / #500：详情头部 sticky —— 内容很长（描述 / 会话 / 交接 / GitHub / 评论 / PR 提交历史），
+ * 「issue id 行」与「标题行」都不参与滚动（关闭按钮同理）。
  *
  * ⚠️ #498：**sticky 与负 margin 不可兼得**。
  * 原写法 `margin: -16px -18px 0`（负 margin 抵消 `.detail` 的 `padding-top` 让头部满宽）
@@ -1250,16 +1250,27 @@ button.unassigned-tag:disabled {
  *
  * 现在改成：**`.detail` 的 `padding-top` 归零 + 头部只用左右负 margin 撑满宽**
  * ⇒ 没有任何上下位移 ⇒ sticky 钉住位置与正常流位置一致 ⇒ 标题不再被盖。
- * 头部内容的顶部留白改由头部自己的 `padding-top: 16px` 提供（视觉与之前一致）。 */
+ * 头部内容的顶部留白改由头部自己的 `padding-top: 16px` 提供（视觉与之前一致）。
+ *
+ * ⚠️ #500：头部现在是**两行**（issue id 行 + 标题行）⇒ 容器自身不再是横向 flex，
+ *    左右分列（`repo#编号` | 「关闭」按钮）下沉到 `.detail-head-row`。
+ *    两行同属**同一个 sticky 容器** ⇒ 滚动时一起钉在弹窗顶部：
+ *    ① 标题不再被内容顶走（此前是头部的兄弟节点，滚动时被头部盖住上半截）；
+ *    ② 「透明边距」消失——sticky 钉住位置 == 正常流位置 == 弹窗内边缘，
+ *       滚动态与未滚动态**长得一模一样**。 */
 .detail-head {
   position: sticky;
   top: 0;
   z-index: 1;
   /* 只左右撑满宽（抵消 `.detail` 的左右 padding）；**不要上下负 margin**（见上方说明）。 */
   margin: 0 -18px;
-  padding: 16px 18px 8px;
+  padding: 16px 18px 10px;
   background: var(--surface);
   border-bottom: 0.5px solid var(--border);
+}
+
+/* #500：头部第一行 —— 左侧 `repo#编号`，右侧「关闭」按钮（横向分列）。 */
+.detail-head-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1282,7 +1293,8 @@ button.unassigned-tag:disabled {
 .detail-title {
   font-size: 0.875rem;
   font-weight: 500;
-  margin: 8px 0;
+  /* ⚠️ #500：标题已移入 sticky 头部 ⇒ 下 margin 归零（否则与头部 padding 叠加出多余空白）。 */
+  margin: 8px 0 0;
   line-height: 1.5;
 }
 

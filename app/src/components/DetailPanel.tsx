@@ -232,17 +232,21 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
         if (e.key === 'Escape' && escLayer.current?.isTop()) onClose();
       }}
     >
+      {/* #500：「issue id 行」与「标题行」合并进**同一个 sticky 容器** ⇒ 两行都不参与滚动。
+          此前标题是头部的兄弟节点（随内容滚走，滚动的中间态还会被头部盖掉上半部分）。 */}
       <div className="detail-head">
-        <div>
-          <span className="repo">{task.repo}</span>
-          <span className="num">#{task.number}</span>
+        <div className="detail-head-row">
+          <div>
+            <span className="repo">{task.repo}</span>
+            <span className="num">#{task.number}</span>
+          </div>
+          <button className="btn ghost" onClick={onClose}>
+            {t('btn.close')}
+          </button>
         </div>
-        <button className="btn ghost" onClick={onClose}>
-          {t('btn.close')}
-        </button>
-      </div>
 
-      <h2 className="detail-title">{task.title}</h2>
+        <h2 className="detail-title">{task.title}</h2>
+      </div>
 
       {/* #490：实时数据已加载时显示「实时」徽标 + 拉取时间；拉取中显示占位。 */}
       <div className="tags">
