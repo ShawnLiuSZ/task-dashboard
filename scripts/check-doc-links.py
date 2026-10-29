@@ -41,7 +41,17 @@ EXTERNAL_PREFIXES = ("http://", "https://", "mailto:", "tel:", "//")
 # （避免孤岛文档）」，但此前没有任何检查会碰到它。实测 `docs/` 下 **15 篇**知识库文档
 # 既不在 README 索引、也不在 CHANGELOG —— 它们只能靠「知道文件名」才找得到，
 # 等于写完就沉底（#330 一并补上反链 + 本检测防回归）。
-INDEX_FILES = ("README.md", "README.en.md", "docs/CHANGELOG.md", "docs/CHANGELOG.en.md")
+#
+# ⚠️ #504：知识库文档索引已从 README 迁到 **CONTRIBUTING.md**（README 只留入口指针）
+# ⇒ 这里必须把 `CONTRIBUTING.md` 也算作索引文件，否则迁出的 `docs/*.md`
+#    会全部变成「孤岛文档」而误报。
+INDEX_FILES = (
+    "README.md",
+    "README.en.md",
+    "CONTRIBUTING.md",
+    "docs/CHANGELOG.md",
+    "docs/CHANGELOG.en.md",
+)
 
 # 围栏代码块（``` 或 ~~~），以及行内代码 span（`...`）。
 # 这两处出现的「链接」是**被描述的语法示例**（本文档自己就会写 `](app/...)` 这类反例），
@@ -172,7 +182,7 @@ def main() -> int:
         problems = True
         print(
             f"✗ 孤岛文档 {len(orphans)} 篇"
-            "（须被 README / CHANGELOG 索引，见 AGENTS.md §5.5）："
+            "（须被 README / CONTRIBUTING / CHANGELOG 索引，见 AGENTS.md §5.5）："
         )
         for o in orphans:
             print(f"  - {o}")
@@ -183,7 +193,7 @@ def main() -> int:
             "  - 断链：补写缺失文档，或改为正确的相对路径；\n"
             "  - file:// → 用相对路径，例如 `../app/src-tauri/src/lib.rs`；\n"
             "  - 行号锚点 → 删掉 `#Lxxx`，把符号名写进链接文本（如 `[db.rs](../app/src-tauri/src/db.rs)`）；\n"
-            "  - 孤岛文档 → 在 README.md 的「文档」清单（或 CHANGELOG 对应版本块）里补一条反链。"
+            "  - 孤岛文档 → 在 CONTRIBUTING.md 的「文档索引」（或 README / CHANGELOG 对应版本块）里补一条反链。"
         )
         return 1
 
