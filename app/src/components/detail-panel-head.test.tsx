@@ -3,6 +3,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import DetailPanel from './DetailPanel';
 // 源码文本（`?raw`）—— 只读字符串，**不执行模块** ⇒ node 环境无 DOM 也能用。
 import detailPanelRaw from './DetailPanel.tsx?raw';
+// i18n 词条原文（`?raw`）—— 用于校验「事件白名单 ↔ 词条」一一对应。
+import zhRaw from '../i18n/locales/zh-CN.json?raw';
+import enRaw from '../i18n/locales/en-US.json?raw';
 import { I18nProvider } from '../i18n';
 import type { Task } from '../types';
 
@@ -156,5 +159,84 @@ describe('详情面板区块顺序（#504）', () => {
 
   it('描述区块仍然只在正文非空时渲染（顺序调整不得改变条件）', () => {
     expect(detailPanelRaw).toContain('liveBody.trim() &&');
+  });
+});
+
+/**
+ * Activity 时间线（#506）的**事件白名单 ↔ i18n 词条一致性**。
+ *
+ * ⚠️ 为什么必须锁：`t()` 对**缺失 key 会返回 key 本身**（还会打 warning）
+ * ⇒ 若组件里直接拼 `detail.ev.${item.event}`，一个未知事件就会把
+ * `detail.ev.whatever` 这种字符串**显示在界面上**。
+ *
+ * ⇒ 组件里用**白名单** `TIMELINE_EVENT_KEYS` 决定是否走专用词条，
+ *   清单外的统一走 `detail.ev.generic`。
+ *   这条用例锁死「白名单与 zh-CN 词条**一一对应**」——
+ *   少一个 ⇒ 界面上出现 `detail.ev.xxx`；多一个 ⇒ 死词条。
+ */
+describe('Activity 时间线事件白名单（#506）', () => {
+  /** 从源码里取出白名单里的事件名。 */
+  function whitelist(): string[] {
+    const m = detailPanelRaw.match(/const TIMELINE_EVENT_KEYS = new Set\(\[([\s\S]*?)\]\)/);
+    expect(m, '源码里应能找到 TIMELINE_EVENT_KEYS 白名单').not.toBeNull();
+    return (m![1].match(/'([^']+)'/g) ?? []).map((s) => s.replace(/'/g, ''));
+  }
+
+  /** zh-CN 里所有 `detail.ev.*` 词条（去掉前缀）。 */
+  function evWords(): string[] {
+    const dict = JSON.parse(zhRaw) as Record<string, string>;
+    return Object.keys(dict)
+      .filter((k) => k.startsWith('detail.ev.'))
+      .map((k) => k.slice('detail.ev.'.length));
+  }
+
+  it('白名单里的每个事件都有 zh-CN 词条', () => {
+    const words = new Set(evWords());
+    for (const e of whitelist()) {
+      expect(words.has(e), `白名单里的「${e}」缺少 detail.ev.${e} 词条`).toBe(true);
+    }
+  });
+
+  it('zh-CN 的每个 detail.ev.* 词条都在白名单里（无死词条）', () => {
+    const set = new Set(whitelist());
+    for (const w of evWords()) {
+      if (w === 'generic') continue; // 通用兜底，不对应具体事件
+      expect(set.has(w), `词条 detail.ev.${w} 没有对应的白名单事件`).toBe(true);
+    }
+  });
+
+  it('通用兜底词条存在（未知事件走它）', () => {
+    const dict = JSON.parse(zhRaw) as Record<string, string>;
+    expect(dict['detail.ev.generic']).toBeTruthy();
+    expect(dict['detail.timelineTitle']).toBeTruthy();
+  });
+
+  it('en-US 与 zh-CN 的事件词条**完全一致**（i18n:check 之外的第二道防线）', () => {
+    const en = JSON.parse(enRaw) as Record<string, string>;
+    const zh = JSON.parse(zhRaw) as Record<string, string>;
+    const enKeys = Object.keys(en)
+      .filter((k) => k.startsWith('detail.ev.'))
+      .sort();
+    const zhKeys = Object.keys(zh)
+      .filter((k) => k.startsWith('detail.ev.'))
+      .sort();
+    expect(enKeys).toEqual(zhKeys);
+  });
+
+  it('组件渲染事件短语时**必须**先过白名单（否则未知事件会把 key 显示在界面上）', () => {
+    // ⚠️ 结构断言：白名单判断必须出现在 `t(detail.ev.<event>)` 调用**之前**
+    //    （白名单分支内本来就有这个调用，所以不能断言「不出现」）。
+    expect(detailPanelRaw).toMatch(
+      /TIMELINE_EVENT_KEYS\.has\(item\.event\)[\s\S]{0,300}?t\(`detail\.ev\.\$\{item\.event\}`/,
+    );
+    // 未知事件必须走通用兜底（否则界面出现 `detail.ev.whatever`）。
+    expect(detailPanelRaw).toContain("t('detail.ev.generic'");
+  });
+
+  it('时间线区块确实渲染在详情面板里（源码锚点）', () => {
+    expect(detailPanelRaw).toContain("t('detail.timelineTitle')");
+    expect(detailPanelRaw).toContain('className="timeline-list"');
+    // 评论正文走 markdown 渲染（零依赖 + 安全白名单）。
+    expect(detailPanelRaw).toContain('renderMarkdown(item.body)');
   });
 });

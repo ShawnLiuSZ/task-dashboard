@@ -1,4 +1,10 @@
-import type { LiveIssue, LivePrCommit, LiveTaskDetail, TaskComment } from '../types';
+import type {
+  LiveIssue,
+  LivePrCommit,
+  LiveTaskDetail,
+  LiveTimelineItem,
+  TaskComment,
+} from '../types';
 
 /**
  * #496：把后端返回的**实时详情**规范化成「形状一定安全」的对象。
@@ -95,6 +101,43 @@ export function normalizeLivePrCommits(v: unknown): LivePrCommit[] {
 }
 
 /**
+ * 规范化 Activity 时间线（#506）。
+ *
+ * 非数组 → 空数组；逐条补齐字段。**评论项（`kind === 'comment'`）没有正文
+ * 时整条丢弃** —— 时间线里一条没有正文的评论毫无意义（且会渲染成空块）。
+ * 事件项没有正文是正常的（事件本身就是全部内容）。
+ */
+export function normalizeLiveTimeline(v: unknown): LiveTimelineItem[] {
+  if (!Array.isArray(v)) return [];
+  const out: LiveTimelineItem[] = [];
+  for (const item of v) {
+    if (typeof item !== 'object' || item === null) continue;
+    const o = item as Record<string, unknown>;
+    // ⚠️ `kind` 缺失时按 `event` 推断（`commented` ⇒ comment）——
+    // 后端一定会给 `kind`，但契约漂移时（载荷没有该字段）不应把评论当成事件丢掉正文。
+    const event = asString(o.event);
+    const kind =
+      asString(o.kind) === 'comment' || (asString(o.kind) === '' && event === 'commented')
+        ? 'comment'
+        : 'event';
+    const body = asString(o.body);
+    if (kind === 'comment' && !body) continue;
+    out.push({
+      kind,
+      event,
+      actor: asString(o.actor),
+      createdAt: asNumber(o.createdAt),
+      body,
+      url: asString(o.url),
+      label: asString(o.label),
+      assignee: asString(o.assignee),
+      refIssue: asString(o.refIssue),
+    });
+  }
+  return out;
+}
+
+/**
  * 规范化整份实时详情。
  *
  * `issue` 缺失时用**空 issue** 兜底（而不是返回 `null`）——
@@ -123,5 +166,7 @@ export function normalizeLiveDetail(v: unknown): LiveTaskDetail | null {
     issue: normalizeLiveIssue(o.issue) ?? emptyIssue,
     comments: normalizeLiveComments(o.comments),
     prCommits: normalizeLivePrCommits(o.prCommits),
+    // #506：Activity 时间线（缺失 ⇒ 空数组，不影响其余字段）。
+    timeline: normalizeLiveTimeline(o.timeline),
   };
 }

@@ -114,6 +114,37 @@ export interface LiveTaskDetail {
   issue: LiveIssue;
   comments: TaskComment[];
   prCommits: LivePrCommit[];
+  /**
+   * #506：Activity 时间线（评论 + 事件交织，按时间升序）。
+   *
+   * 对齐 orca 的 issue 详情 Activity 区块：一次 Timeline API 请求同时拿到
+   * 评论（带正文）与时间线事件（指派 / 标签 / 状态变更 / 交叉引用 / 项目列移动）。
+   */
+  timeline: LiveTimelineItem[];
+}
+
+/**
+ * #506：Activity 时间线的一个条目（评论 or 事件）。
+ */
+export interface LiveTimelineItem {
+  /** `comment`（评论正文）/ `event`（时间线事件）。 */
+  kind: string;
+  /** GitHub 事件名（`commented` / `assigned` / `labeled` / `closed` …）。 */
+  event: string;
+  /** 操作者 login（不含 @）；空串 = 未知。 */
+  actor: string;
+  /** 发生时间（Unix 秒）。 */
+  createdAt: number;
+  /** 评论正文（仅 `kind === 'comment'`）。 */
+  body: string;
+  /** 评论永久链接（仅 `kind === 'comment'`）。 */
+  url: string;
+  /** 标签事件的标签名。 */
+  label: string;
+  /** 指派事件的被指派人 login。 */
+  assignee: string;
+  /** 交叉引用 / 子 issue 事件指向的目标（如 `fad-backend#1629`）。 */
+  refIssue: string;
 }
 
 export interface Task {

@@ -127,6 +127,8 @@ cd app && npm run i18n:check
 
 - [`docs/issue-504-detail-panel-order-and-doc-index.md`](./docs/issue-504-detail-panel-order-and-doc-index.md) — **详情面板区块重排 + 知识库文档索引迁移**：三块实时拉取内容（描述 / 评论 / PR 提交历史）从分散在面板上下改为**聚在「交接任务」之后**（只动 JSX 顺序、不改渲染条件；三块皆条件渲染 ⇒ SSR 够不着 ⇒ 用源码顺序断言）；知识库文档索引从 README 整体迁到 `CONTRIBUTING.md`（README 358→181 行），连带把 `CONTRIBUTING.md` 加进 `check-doc-links.py` 的 `INDEX_FILES`（否则迁出的 `docs/*.md` 全成孤岛文档）
 
+- [`docs/issue-506-orca-activity-timeline.md`](./docs/issue-506-orca-activity-timeline.md) — **对齐 orca：issue 详情增加 Activity 时间线（评论正文 + 事件交织）+ 图片渲染**：参考 [stablyai/orca](https://github.com/stablyai/orca) 的 GitHub 集成 —— 其 issue 详情的 **Activity 区块把评论与时间线事件交织展示**（指派 / 交叉引用 / 状态变更 / 项目列移动），不离开应用就能看完整历史。实现走 GitHub **Timeline API**（一次请求同时拿到评论正文与事件）；后端解析为纯函数并**用真实抓取样本**做单测（#502 教训：测试数据形状必须等于真实形状）；前端新增「动态」区块 + markdown 白名单补 `img`（描述 / 评论里的图可见）
+
 - [`docs/issue-492-close-fork-prs.md`](./docs/issue-492-close-fork-prs.md) — **公开仓库自动关闭非协作者的 fork PR**：`pull_request_target` 按 `author_association` 判定，非 `OWNER`/`MEMBER`/`COLLABORATOR` 的 PR 自动关闭并引导走 issue（GitHub 无「禁止 fork PR」原生开关，此为等效防线）
 
 - [`docs/issue-494-detail-modal.md`](./docs/issue-494-detail-modal.md) — **任务详情由右侧抽屉改为居中 Modal 查看**：720px 居中弹窗 + 遮罩变暗 + 头部 sticky（内容长时关闭按钮不滚走），交互契约（Esc / 点遮罩 / 关闭按钮）完全不变，零 TSX 与后端改动

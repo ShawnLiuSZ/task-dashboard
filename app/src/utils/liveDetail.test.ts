@@ -4,6 +4,7 @@ import {
   normalizeLiveDetail,
   normalizeLiveIssue,
   normalizeLivePrCommits,
+  normalizeLiveTimeline,
 } from './liveDetail';
 
 /**
@@ -166,5 +167,94 @@ describe('normalizeLivePrCommits', () => {
 
   it('非数组 ⇒ 空数组', () => {
     expect(normalizeLivePrCommits(null)).toEqual([]);
+  });
+});
+
+/**
+ * Activity 时间线（#506）的规范化。
+ *
+ * 对齐 orca 的 issue 详情：一次 Timeline API 请求同时带回
+ * **评论（带正文）**与**时间线事件** ⇒ 前端要能安全地渲染两者。
+ */
+describe('normalizeLiveTimeline（#506）', () => {
+  /** 后端返回的一条评论项（形状见 `on_demand.rs::LiveTimelineItem`）。 */
+  const COMMENT = {
+    kind: 'comment',
+    event: 'commented',
+    actor: 'jackywoofsup',
+    createdAt: 1793212717,
+    body: '10-28 定：先暂停',
+    url: 'https://github.com/o/r/issues/1#issuecomment-1',
+    label: '',
+    assignee: '',
+    refIssue: '',
+  };
+
+  it('评论项原样保留（正文 / 链接 / 作者 / 时间）', () => {
+    const out = normalizeLiveTimeline([COMMENT]);
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe('comment');
+    expect(out[0].body).toBe('10-28 定：先暂停');
+    expect(out[0].url).toBe('https://github.com/o/r/issues/1#issuecomment-1');
+    expect(out[0].actor).toBe('jackywoofsup');
+    expect(out[0].createdAt).toBe(1793212717);
+  });
+
+  it('事件项保留（无正文是正常的）', () => {
+    const out = normalizeLiveTimeline([
+      {
+        kind: 'event',
+        event: 'cross-referenced',
+        actor: 'x',
+        createdAt: 1,
+        body: '',
+        url: '',
+        label: '',
+        assignee: '',
+        refIssue: 'fad-backend#1629',
+      },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe('event');
+    expect(out[0].refIssue).toBe('fad-backend#1629');
+  });
+
+  it('事件项缺字段逐项降级（不抛错）', () => {
+    const out = normalizeLiveTimeline([{ kind: 'event', event: 'closed' }]);
+    expect(out).toHaveLength(1);
+    expect(out[0].body).toBe('');
+    expect(out[0].createdAt).toBe(0);
+    expect(out[0].actor).toBe('');
+    expect(out[0].refIssue).toBe('');
+  });
+
+  it('没有正文的评论项被丢弃（渲染出来是空块）', () => {
+    const out = normalizeLiveTimeline([{ ...COMMENT, body: '' }]);
+    expect(out).toHaveLength(0);
+  });
+
+  it('非数组 ⇒ 空数组', () => {
+    expect(normalizeLiveTimeline(null)).toEqual([]);
+    expect(normalizeLiveTimeline({})).toEqual([]);
+    expect(normalizeLiveTimeline('x')).toEqual([]);
+  });
+
+  it('非对象条目被跳过', () => {
+    expect(normalizeLiveTimeline([null, 1, 'x', COMMENT])).toHaveLength(1);
+  });
+
+  it('kind 缺失时按 event 推断（commented ⇒ comment）', () => {
+    const out = normalizeLiveTimeline([{ event: 'commented', body: '正文' }]);
+    expect(out[0].kind).toBe('comment');
+    const ev = normalizeLiveTimeline([{ event: 'closed' }]);
+    expect(ev[0].kind).toBe('event');
+  });
+
+  it('normalizeLiveDetail 把 timeline 接上（缺失 ⇒ 空数组，不影响其余字段）', () => {
+    const withTl = normalizeLiveDetail({ issue: { number: 1 }, timeline: [COMMENT] });
+    expect(withTl?.timeline).toHaveLength(1);
+    const without = normalizeLiveDetail({ issue: { number: 1 } });
+    expect(without?.timeline).toEqual([]);
+    expect(without?.issue.number).toBe(1);
   });
 });

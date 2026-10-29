@@ -1,13 +1,49 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, openExternal } from '../api';
 import { AGENTS, agentLabel } from '../agents';
-import { type ProjectStatus, type Task, type TaskComment, type LiveTaskDetail } from '../types';
+import {
+  type ProjectStatus,
+  type Task,
+  type TaskComment,
+  type LiveTaskDetail,
+  type LiveTimelineItem,
+} from '../types';
 import { fmtTime, useI18n } from '../i18n';
 import ConfirmDialog from './ConfirmDialog';
 import TaskCommentsList from './TaskCommentsList';
 import { registerEscLayer, type EscLayer } from '../utils/escLayer';
 import { normalizeLiveDetail } from '../utils/liveDetail';
 import { renderMarkdown, shouldCollapseBody } from '../utils/markdown';
+
+/**
+ * #506：已知的时间线事件类型（与 i18n 词条 `detail.ev.*` 一一对应）。
+ *
+ * ⚠️ 必须是**白名单**：GitHub 的 timeline 事件远不止这些（`renamed` /
+ * `marked_as_duplicate` / `converted_to_draft` …），而 `t()` 对缺失 key
+ * 会**返回 key 本身** ⇒ 直接拼 `detail.ev.<event>` 会把
+ * `detail.ev.whatever` 显示在界面上。清单外的统一走 `detail.ev.generic`。
+ *
+ * ⚠️ 与 i18n 词条的一致性由 `detail-panel-head.test.tsx` 的用例锁定。
+ */
+const TIMELINE_EVENT_KEYS = new Set([
+  'assigned',
+  'unassigned',
+  'labeled',
+  'unlabeled',
+  'closed',
+  'reopened',
+  'cross-referenced',
+  'referenced',
+  'sub_issue_added',
+  'milestoned',
+  'demilestoned',
+  'locked',
+  'unlocked',
+  'review_requested',
+  'added_to_project_v2',
+  'removed_from_project_v2',
+  'project_v2_item_status_changed',
+]);
 
 interface Props {
   task: Task;
@@ -165,7 +201,34 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
   const liveAssignees = Array.isArray(liveIssue?.assignees) ? liveIssue.assignees : [];
   const liveLabels = Array.isArray(liveIssue?.labels) ? liveIssue.labels : [];
   const livePrCommits = Array.isArray(live?.prCommits) ? live.prCommits : [];
+  // #506：Activity 时间线（评论 + 事件交织，对齐 orca 的 issue 详情）。
+  const liveTimeline = Array.isArray(live?.timeline) ? live.timeline : [];
   const shownComments = live ? liveComments : comments;
+
+  // #506：时间线事件的**中文短语**。
+  //
+  // ⚠️ 只对**已知事件类型**用专用词条，其余一律走通用文案 ——
+  // `t()` 对缺失 key 会返回 key 本身（还会打 warning）⇒ 绝不能让
+  // `detail.ev.<未知事件>` 这种字符串出现在界面上。
+  const timelineEventText = (item: LiveTimelineItem): string => {
+    const target =
+      item.event === 'assigned' || item.event === 'unassigned'
+        ? item.assignee || item.actor
+        : item.event === 'labeled' || item.event === 'unlabeled'
+          ? item.label
+          : item.event === 'cross-referenced' ||
+              item.event === 'referenced' ||
+              item.event === 'sub_issue_added'
+            ? item.refIssue
+            : '';
+    const params = { who: target || item.actor, what: target };
+    if (TIMELINE_EVENT_KEYS.has(item.event)) {
+      const text = t(`detail.ev.${item.event}`, params);
+      // 目标为空时专用词条会留下 `{who}` / `{what}` 占位 ⇒ 退回通用文案。
+      return text.includes('{') ? t('detail.ev.generic', params) : text;
+    }
+    return t('detail.ev.generic', params);
+  };
 
   // #498：issue **正文**（body）——「具体的详细信息」就是它。
   // 后端实时拉取（#490）此前**只带标题**，正文从未被读取过。
@@ -403,6 +466,44 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
               {bodyExpanded ? t('detail.bodyCollapse') : t('detail.bodyExpand')}
             </button>
           )}
+        </section>
+      )}
+
+      {/* #506：**Activity 时间线**（评论 + 事件交织）—— 对齐 orca 的 issue 详情。
+          一次 Timeline API 请求同时拿到评论（带正文）与时间线事件
+          （指派 / 标签 / 状态变更 / 交叉引用 / 项目列移动 …）。
+          评论正文走 `utils/markdown.ts` 渲染（零依赖 + 安全白名单）。 */}
+      {liveTimeline.length > 0 && (
+        <section className="detail-block">
+          <div className="block-title">{t('detail.timelineTitle')}</div>
+          <ul className="timeline-list">
+            {liveTimeline.map((item, idx) => (
+              <li key={`${item.event}-${item.createdAt}-${idx}`} className="timeline-item">
+                <div className="timeline-meta">
+                  <span className="timeline-actor">
+                    {item.actor || t('detail.timelineUnknown')}
+                  </span>
+                  {item.createdAt > 0 && (
+                    <span className="muted small">{fmtTime(item.createdAt, lang)}</span>
+                  )}
+                </div>
+                {item.kind === 'comment' ? (
+                  <div
+                    className="timeline-body markdown"
+                    // ⚠️ 安全：`renderMarkdown` 的返回值已转义并限白名单标签。
+                    dangerouslySetInnerHTML={{ __html: renderMarkdown(item.body) }}
+                  />
+                ) : (
+                  <div className="muted small timeline-event">{timelineEventText(item)}</div>
+                )}
+                {item.url && (
+                  <button className="btn ghost small inline" onClick={() => openExternal(item.url)}>
+                    {t('detail.openInBrowser')}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
         </section>
       )}
 

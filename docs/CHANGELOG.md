@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.11（未发布）— 对齐 orca：issue 详情增加 Activity 时间线（评论正文 + 事件交织）+ 图片渲染（#506）**
+
+  - **参考**：用户指定 [stablyai/orca](https://github.com/stablyai/orca) 的 GitHub 接入与信息展示方式作为参照。其 issue 详情的核心是 **Activity 区块**：「把**评论与时间线事件交织**展示（assignments / mentions / cross-references / state changes / project column moves），不离开应用就能看完整历史」。
+  - **差距**：TaskBoard 此前**只有评论链接列表**（作者 / 时间 / 跳转 URL）—— **无评论正文、无时间线**；且 markdown 白名单**不含 `img`** ⇒ 描述 / 评论里的图片不显示。
+  - **后端**：走 GitHub **Timeline API**（`GET /repos/{o}/{r}/issues/{n}/timeline?per_page=100`）—— **一次请求**同时拿到**评论（带正文）**与**各类事件**；解析抽成纯函数 `parse_issue_timeline`；`LiveTaskDetail` 增加 `timeline` 字段（`LiveTimelineItem`），**不新增命令**、随 `fetch_task_detail_live` 一并返回（沿用 #490 零落库 + #496 `async`/`spawn_blocking` 范式）；拉取失败**降级为空数组**，不阻断详情面板其余内容。
+  - **前端**：详情面板新增「**动态**」区块（排在「描述」之后、「评论链接」之前），评论正文走既有的**零依赖** markdown 渲染；事件按类型给中文短语（指派 / 标签 / 状态变更 / 交叉引用 / 项目列移动 …）；markdown 白名单补 `img`（协议与链接**同一套**白名单，只放行 http/https）⇒ 描述与评论里的图片可见。
+  - **⚠️ 事件短语必须走白名单**：`t()` 对**缺失 key 会返回 key 本身** ⇒ 直接拼 `t(\`detail.ev.${event}\`)` 会把 `detail.ev.whatever` **显示在界面上** ⇒ 用 `TIMELINE_EVENT_KEYS`（17 个已知事件）+ `detail.ev.generic` 兜底，并用单测锁死「白名单 ↔ zh-CN 词条一一对应、无死词条」。
+  - **测试**：后端单测**用真实抓取样本**（`GET /repos/FoodsUp-Inc/fad-backend/issues/1630/timeline` 实抓 6 条）—— #502 教训「测试数据形状必须等于真实数据形状」；前端 +20 例（规范化 8 / img 6 / 白名单一致性 6）。**反向验证 4 处 mutation 全被捕获**（白名单删项 / 绕过白名单 / 去掉 img 处理 / 后端把 `event` 误读成 `type`）。
+  - **门禁**：Rust fmt/clippy/test ✓、tsc/lint/prettier/build/i18n ✓（中英各 449 key）、vitest 475 → **495** ✓、四 check ✓、scripts 143 ✓、MCP 68 ✓。**零 DB schema 改动**。
+  - **影响面**：`github.rs` / `on_demand.rs` / `types.ts` / `utils/liveDetail.ts` / `utils/markdown.ts` / `components/DetailPanel.tsx` / `styles.css` / i18n。
+  - 详见 [`issue-506-orca-activity-timeline.md`](./issue-506-orca-activity-timeline.md)
+
 - **v0.7.11（未发布）— 详情面板：body / 评论等实时信息移到「交接任务」下；知识库文档索引迁到 CONTRIBUTING.md（#504）**
 
   - **需求 ①（详情面板重排）**：用户要求「将 body 信息，评论等信息放在『交接任务』下边」。三块**实时拉取**的内容（#490 / #498 的产出）原先**分散在面板上下**（描述在最上、评论在中、PR 提交历史在最末）⇒ 改后聚成一段连续的「远端实况」，紧跟「交接任务」之后。**只动 JSX 顺序，不改任何渲染条件**。

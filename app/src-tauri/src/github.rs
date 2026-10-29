@@ -251,6 +251,139 @@ pub struct RawComment {
     pub created_at: i64,
 }
 
+/// #506：issue **Activity 时间线**的一个条目（评论 or 事件）。
+///
+/// 对齐 [stablyai/orca](https://github.com/stablyai/orca) 的 issue 详情：
+/// 它的 Activity 区块把**评论与时间线事件交织**展示
+/// （assignments / mentions / cross-references / state changes / project column moves），
+/// 不离开应用就能看完整历史。
+///
+/// GitHub 的 **Timeline API**（`/issues/{n}/timeline`）**一次请求**就同时返回
+/// 评论（`event: "commented"`，带 `body`）与各类事件 ⇒ 正是 orca 那个形态的数据源。
+#[derive(Debug, Clone)]
+pub struct RawTimelineItem {
+    /// `"comment"`（评论正文）/ `"event"`（时间线事件）。
+    pub kind: &'static str,
+    /// GitHub 的事件名：`commented` / `assigned` / `labeled` / `closed` /
+    /// `cross-referenced` / `sub_issue_added` / `project_v2_item_status_changed` …
+    pub event: String,
+    /// 操作者 login（不含 @）；空串 = 未知。
+    pub actor: String,
+    /// 发生时间（Unix 秒）；0 = 解析失败 / 字段缺失。
+    pub created_at: i64,
+    /// **评论正文**（仅 `kind = "comment"`）；空串 = 无正文。
+    pub body: String,
+    /// 评论永久链接（仅 `kind = "comment"`）—— 详情面板的跳转目标。
+    pub url: String,
+    /// 标签事件的标签名（`labeled` / `unlabeled`）。
+    pub label: String,
+    /// 指派事件的被指派人 login（`assigned` / `unassigned`）。
+    pub assignee: String,
+    /// 交叉引用 / 子 issue 事件指向的目标（如 `#1629` 或 `repo#1629`）。
+    pub ref_issue: String,
+}
+
+/// #506：解析 GitHub **Timeline API** 响应（**纯函数**，便于单测）。
+///
+/// ⚠️ 真实响应形状（实测 `GET /repos/{o}/{r}/issues/{n}/timeline`）：
+/// - **评论项**：`{"event":"commented","user":{"login":…},"body":…,"html_url":…,"created_at":…}`
+/// - **事件项**：`{"event":"assigned","actor":{"login":…},"assignee":{"login":…},"created_at":…}`
+///   - 标签事件多一个 `"label":{"name":…}`
+///   - 交叉引用多一个 `"source":{"type":"issue","issue":{…}}`
+///
+/// 解析策略：
+/// - **只认 `event` 字段**（timeline API 的事件项用它；`type` 是 GraphQL 的字段名，
+///   REST timeline 里没有 —— 早期误用 `type` 会把所有事件判成未知）；
+/// - `actor` 缺失时回退 `user`（评论项没有 `actor`，只有 `user`）；
+/// - 任何一条脏数据都**跳过**而不是让整条时间线失败。
+pub fn parse_issue_timeline(v: &serde_json::Value) -> Vec<RawTimelineItem> {
+    let Some(arr) = v.as_array() else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for e in arr {
+        let Some(event) = e.get("event").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        // 评论项用 `user`，事件项用 `actor`；两者都取，谁有算谁。
+        let actor = e
+            .get("actor")
+            .and_then(|a| a.get("login"))
+            .and_then(|x| x.as_str())
+            .or_else(|| {
+                e.get("user")
+                    .and_then(|u| u.get("login"))
+                    .and_then(|x| x.as_str())
+            })
+            .unwrap_or("")
+            .to_string();
+        let created_at = e
+            .get("created_at")
+            .and_then(|x| x.as_str())
+            .map(crate::common::iso8601_to_secs)
+            .unwrap_or(0);
+        let body = e
+            .get("body")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let url = e
+            .get("html_url")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let label = e
+            .get("label")
+            .and_then(|l| l.get("name"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let assignee = e
+            .get("assignee")
+            .and_then(|a| a.get("login"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        // 交叉引用 / 子 issue 的目标：`source.issue.number`（+ 仓库名）。
+        let ref_issue = e
+            .get("source")
+            .and_then(|s| s.get("issue"))
+            .map(|i| {
+                let n = i.get("number").and_then(|x| x.as_i64()).unwrap_or(0);
+                let repo = i
+                    .get("repository_url")
+                    .and_then(|x| x.as_str())
+                    .and_then(|u| u.rsplit('/').next())
+                    .unwrap_or("");
+                if n <= 0 {
+                    String::new()
+                } else if repo.is_empty() {
+                    format!("#{n}")
+                } else {
+                    format!("{repo}#{n}")
+                }
+            })
+            .unwrap_or_default();
+        let kind = if event == "commented" {
+            "comment"
+        } else {
+            "event"
+        };
+        out.push(RawTimelineItem {
+            kind,
+            event: event.to_string(),
+            actor,
+            created_at,
+            body,
+            url,
+            label,
+            assignee,
+            ref_issue,
+        });
+    }
+    out
+}
+
 /// 一个 PR 的精简信息，用于把「issue 对应的 PR」关联回看板卡片。
 #[derive(Debug, Deserialize, Clone)]
 pub struct RawPr {
@@ -1071,6 +1204,36 @@ impl GitHubClient {
             }
             None => Ok(None),
         }
+    }
+
+    /// #506：拉取 issue 的 **Activity 时间线**（评论 + 事件交织）。
+    ///
+    /// 用 GitHub 的 **Timeline API**（`/issues/{n}/timeline`）：**一次请求**同时返回
+    /// 评论（带正文）与时间线事件（指派 / 标签 / 状态变更 / 交叉引用 / 项目列移动 …）。
+    /// 这正是 [stablyai/orca](https://github.com/stablyai/orca) 的 issue 详情
+    /// Activity 区块的数据源。
+    ///
+    /// ⚠️ 返回值**按时间升序**（旧 → 新），与 GitHub 返回顺序一致。
+    /// 分页：只取**第 1 页**（`per_page=100`）—— 时间线以最近活动最受关注，
+    /// 更早的历史不值得为每次打开详情多付请求。
+    pub fn fetch_issue_timeline(
+        &self,
+        repo: &str,
+        number: i64,
+        repo_owner: &str,
+    ) -> Result<Vec<RawTimelineItem>, String> {
+        let full_repo = if !self.org.is_empty() {
+            format!("{}/{}", self.org, repo)
+        } else if !repo_owner.is_empty() {
+            format!("{}/{}", repo_owner, repo)
+        } else {
+            return Err("无法确定仓库 owner（org 为空且无 repo_owner）".to_string());
+        };
+        let url = format!(
+            "https://api.github.com/repos/{full_repo}/issues/{number}/timeline?per_page=100"
+        );
+        let v = self.get(&url)?;
+        Ok(parse_issue_timeline(&v))
     }
 
     /// #278：批量拉取同一仓库内一组 issue 的父子关系（GraphQL，只读）。
