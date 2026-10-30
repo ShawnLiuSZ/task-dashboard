@@ -129,6 +129,8 @@ cd app && npm run i18n:check
 
 - [`docs/issue-506-orca-activity-timeline.md`](./docs/issue-506-orca-activity-timeline.md) — **对齐 orca：issue 详情增加 Activity 时间线（评论正文 + 事件交织）+ 图片渲染**：参考 [stablyai/orca](https://github.com/stablyai/orca) 的 GitHub 集成 —— 其 issue 详情的 **Activity 区块把评论与时间线事件交织展示**（指派 / 交叉引用 / 状态变更 / 项目列移动），不离开应用就能看完整历史。实现走 GitHub **Timeline API**（一次请求同时拿到评论正文与事件）；后端解析为纯函数并**用真实抓取样本**做单测（#502 教训：测试数据形状必须等于真实形状）；前端新增「动态」区块 + markdown 白名单补 `img`（描述 / 评论里的图可见）
 
+- [`docs/issue-508-review-fixes.md`](./docs/issue-508-review-fixes.md) — **整体核查发现的 6 处缺陷修复**：安全面（跨进程契约 / XSS / URL 白名单 / 凭证）逐项核查**通过**，但发现 1 中 4 低 + 1 提示。①（中）Activity 时间线只取第 1 页 ⇒ GitHub Timeline API **按时间升序**返回 ⇒ 拿到的其实是**最旧的 100 条**，与注释声称的「最近活动」正好相反（事件 > 100 的 issue 永远只显示陈旧历史）—— 与 #472 评论侧同一缺陷形态；修法是首次请求**搭车**从 `Link` 头取 `rel="last"` 页码（**请求数不增加**）、多页时取末页。②事件文案兜底守卫判「渲染结果是否残留 `{`」**恒为 false**（`t()` 会把占位符替换成空串）⇒ 守卫从不触发、「在  中被引用」等残缺文案泄漏到界面；改为判**参数本身**。③时间线评论正文无 memo ⇒ 在输入框每敲一字都重解析最多 100 条 markdown（双 `useMemo`）。④死 i18n 词条 `detail.bodyEmpty`（改为「描述」为空时显示占位）。⑤代码围栏闭合判定过宽 ⇒ 内容里以围栏标记开头的行会提前终止围栏。⑥时间线请求限流时最坏挂 2 分钟（单独降 timeout 到 10s）
+
 - [`docs/issue-492-close-fork-prs.md`](./docs/issue-492-close-fork-prs.md) — **公开仓库自动关闭非协作者的 fork PR**：`pull_request_target` 按 `author_association` 判定，非 `OWNER`/`MEMBER`/`COLLABORATOR` 的 PR 自动关闭并引导走 issue（GitHub 无「禁止 fork PR」原生开关，此为等效防线）
 
 - [`docs/issue-494-detail-modal.md`](./docs/issue-494-detail-modal.md) — **任务详情由右侧抽屉改为居中 Modal 查看**：720px 居中弹窗 + 遮罩变暗 + 头部 sticky（内容长时关闭按钮不滚走），交互契约（Esc / 点遮罩 / 关闭按钮）完全不变，零 TSX 与后端改动

@@ -45,6 +45,31 @@ const TIMELINE_EVENT_KEYS = new Set([
   'project_v2_item_status_changed',
 ]);
 
+/**
+ * #506（复查修复）：需要**目标数据**才能写出有意义文案的事件。
+ *
+ * 这些事件专用词条里带 `{who}` / `{what}` 占位（如「在 {what} 中被引用」）。
+ * 但部分事件后端**暂无对应字段解析**（`milestoned` / `demilestoned` / `referenced`
+ * 取不到目标 issue，`review_requested` 取不到被请求审查者）⇒ 渲染出来是悬空占位
+ * （「在 中被引用」/「请求 <发起人> 审查」）。这类情况必须退回 `detail.ev.generic`，
+ * 不能把残缺信息显示到界面上。
+ *
+ * ⚠️ 与 `TIMELINE_EVENT_KEYS` 不同：这里只挑「词条含占位符」的事件，
+ * `closed` / `locked` / `added_to_project_v2` 等**固定文案**事件不需要目标，不在此列。
+ */
+const EVENTS_NEEDING_TARGET = new Set([
+  'assigned',
+  'unassigned',
+  'labeled',
+  'unlabeled',
+  'cross-referenced',
+  'referenced',
+  'sub_issue_added',
+  'milestoned',
+  'demilestoned',
+  'review_requested',
+]);
+
 interface Props {
   task: Task;
   onClose: () => void;
@@ -202,7 +227,17 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
   const liveLabels = Array.isArray(liveIssue?.labels) ? liveIssue.labels : [];
   const livePrCommits = Array.isArray(live?.prCommits) ? live.prCommits : [];
   // #506：Activity 时间线（评论 + 事件交织，对齐 orca 的 issue 详情）。
-  const liveTimeline = Array.isArray(live?.timeline) ? live.timeline : [];
+  // ⚠️ 必须 `useMemo` 稳定化：`liveTimeline` 若每次渲染都新建数组，
+  // 下面 `timelineCommentHtml` 的 deps 就会每次都变 ⇒ memo 失效（且触发
+  // `react-hooks/exhaustive-deps` 告警）。依赖 `live`（仅实时拉取返回时换新）。
+  const liveTimeline = useMemo(() => (Array.isArray(live?.timeline) ? live.timeline : []), [live]);
+  // #506（复查）：时间线评论正文**整体 memo** —— 否则在「交接任务」输入框每次按键触发整树
+  // 重渲染时，最多 100 条评论的 markdown 会被无谓地全部重解析（`renderMarkdown` 输入仍是
+  // 不可信的 GitHub 明文，安全性不受影响）。`idx` 与 `liveTimeline` 同序 ⇒ 渲染时直接按下标取。
+  const timelineCommentHtml = useMemo(
+    () => liveTimeline.map((it) => (it.kind === 'comment' ? renderMarkdown(it.body) : '')),
+    [liveTimeline],
+  );
   const shownComments = live ? liveComments : comments;
 
   // #506：时间线事件的**中文短语**。
@@ -221,13 +256,16 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
               item.event === 'sub_issue_added'
             ? item.refIssue
             : '';
-    const params = { who: target || item.actor, what: target };
-    if (TIMELINE_EVENT_KEYS.has(item.event)) {
-      const text = t(`detail.ev.${item.event}`, params);
-      // 目标为空时专用词条会留下 `{who}` / `{what}` 占位 ⇒ 退回通用文案。
-      return text.includes('{') ? t('detail.ev.generic', params) : text;
+    // ⚠️ #506 复查：需要目标数据却取不到时，**退回通用文案**——否则 `t()` 会把
+    // `{what}` 替换成空串（而不是保留占位符），旧守卫（判渲染结果里是否残留 `{`）
+    // 永远为 false ⇒ 守卫从不触发 ⇒ 「在 中被引用」「请求 <发起人> 审查」这类残缺文案泄漏到界面。
+    if (EVENTS_NEEDING_TARGET.has(item.event) && !target) {
+      return t('detail.ev.generic', { who: item.actor, what: '' });
     }
-    return t('detail.ev.generic', params);
+    if (TIMELINE_EVENT_KEYS.has(item.event)) {
+      return t(`detail.ev.${item.event}`, { who: target || item.actor, what: target });
+    }
+    return t('detail.ev.generic', { who: item.actor, what: target });
   };
 
   // #498：issue **正文**（body）——「具体的详细信息」就是它。
@@ -450,18 +488,23 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
           顺序：描述（正文）→ 评论链接 → 关联 PR 提交历史。 */}
 
       {/* #498：issue **正文**（描述）——用户要的「具体的详细信息」。
-          实时数据未到达时没有正文可显示 ⇒ 整节不渲染。
+          实时数据未到达时不渲染整节（`live` 尚未加载 ⇒ 既没有正文、也没有「无正文」结论）。
           正文是 markdown 源文本 ⇒ 经 `utils/markdown.ts` 渲染成**安全** HTML
-          （先 HTML 转义、只允许白名单标签、链接协议只放行 http/https）。 */}
-      {liveBody.trim() && (
+          （先 HTML 转义、只允许白名单标签、链接协议只放行 http/https）。
+          #506 复查：无正文时显示「（无正文）」占位 ⇒ 启用此前死掉的 `detail.bodyEmpty` 词条。 */}
+      {live && (
         <section className="detail-block">
           <div className="block-title">{t('detail.bodyTitle')}</div>
-          <div
-            className={`detail-body markdown${bodyLong && !bodyExpanded ? ' collapsed' : ''}`}
-            // ⚠️ 安全：`renderMarkdown` 的返回值已转义并限白名单标签（见 utils/markdown.ts）。
-            dangerouslySetInnerHTML={{ __html: bodyHtml }}
-          />
-          {bodyLong && (
+          {liveBody.trim() ? (
+            <div
+              className={`detail-body markdown${bodyLong && !bodyExpanded ? ' collapsed' : ''}`}
+              // ⚠️ 安全：`renderMarkdown` 的返回值已转义并限白名单标签（见 utils/markdown.ts）。
+              dangerouslySetInnerHTML={{ __html: bodyHtml }}
+            />
+          ) : (
+            <div className="muted small">{t('detail.bodyEmpty')}</div>
+          )}
+          {liveBody.trim() && bodyLong && (
             <button className="btn ghost small" onClick={() => setBodyExpanded((v) => !v)}>
               {bodyExpanded ? t('detail.bodyCollapse') : t('detail.bodyExpand')}
             </button>
@@ -490,8 +533,9 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
                 {item.kind === 'comment' ? (
                   <div
                     className="timeline-body markdown"
-                    // ⚠️ 安全：`renderMarkdown` 的返回值已转义并限白名单标签。
-                    dangerouslySetInnerHTML={{ __html: renderMarkdown(item.body) }}
+                    // ⚠️ 安全：`timelineCommentHtml` 已用 `renderMarkdown` 预先渲染
+                    // （先转义、只允许白名单标签、链接协议只放行 http/https）。
+                    dangerouslySetInnerHTML={{ __html: timelineCommentHtml[idx] }}
                   />
                 ) : (
                   <div className="muted small timeline-event">{timelineEventText(item)}</div>

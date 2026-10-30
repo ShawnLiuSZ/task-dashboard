@@ -32,6 +32,8 @@ const SEARCH_GATE_MS: u128 = 2000;
 /// 单次请求主动 sleep 上限（毫秒）。某些场景下 `Retry-After` 可能给出极大值，
 /// 这里限制上限以免一次同步被挂死——超出后直接放弃本次调用。
 const MAX_BACKOFF_MS: u64 = 30_000;
+/// #506：时间线拉取是 best-effort 加分项，限流时单独降超时，避免拖累整块详情呈现。
+const TIMELINE_TIMEOUT_SECS: u64 = 10;
 
 /// #278：`Issue.subIssues` 受 GraphQL feature flag 保护，缺 `GraphQL-Features: sub_issues`
 /// 头时该字段可能恒返回 null。值只含 flag 名，header 名在 `GitHubClient::graphql` 里给。
@@ -747,6 +749,36 @@ pub fn comments_url(full_repo: &str, number: i64, page: u64) -> String {
     )
 }
 
+/// #506：从 GitHub 响应头 `Link` 里解析 `rel="last"` 的页码。
+///
+/// 形如：
+/// `<https://api.github.com/...&page=2>; rel="next", <https://api.github.com/...&page=5>; rel="last"`
+///
+/// 没有 `Link` 头（仅一页）或解析失败时返回 `None`。
+///
+/// ⚠️ 抽成**纯函数**是为了让「末页是哪页」可被单测覆盖 —— `fetch_issue_timeline`
+/// 内部的 HTTP 调用硬编码 `api.github.com`、**不可 mock**，URL 拼装若留在命令式
+/// 代码里就永远测不到（与 `comments_url` 同样的考量，#472 的评论分页缺陷正是因此逃过 CI）。
+pub fn last_page_from_link(link: &Option<String>) -> Option<u64> {
+    let link = link.as_ref()?;
+    for part in link.split(',') {
+        // 每段：`<url>; rel="last"`
+        let (url, rel) = part.split_once(';')?;
+        let rel = rel.trim();
+        if rel != "rel=\"last\"" && rel != "rel='last'" {
+            continue;
+        }
+        // 取 url 里的 page=N（去掉尖括号再按 ? / & 切分 query）。
+        let url = url.trim().trim_start_matches('<').trim_end_matches('>');
+        let page = url.split(['?', '&']).find_map(|kv| {
+            let (k, v) = kv.split_once('=')?;
+            (k == "page").then_some(v)
+        })?;
+        return page.parse::<u64>().ok();
+    }
+    None
+}
+
 impl GitHubClient {
     /// 构造客户端。`login` / `org` 为空时仍允许（外部调用方可能用不到）。
     ///
@@ -1214,8 +1246,11 @@ impl GitHubClient {
     /// Activity 区块的数据源。
     ///
     /// ⚠️ 返回值**按时间升序**（旧 → 新），与 GitHub 返回顺序一致。
-    /// 分页：只取**第 1 页**（`per_page=100`）—— 时间线以最近活动最受关注，
-    /// 更早的历史不值得为每次打开详情多付请求。
+    /// 分页：时间线以**最近活动**最受关注，故取**最后一页**（`per_page=100`），
+    /// 即最近的 100 条；更早的历史不值得为每次打开详情多付请求。
+    /// 末页页码从首次请求的 `Link` 响应头 `rel="last"` 取得，无多页时只发 1 次请求。
+    ///
+    /// ⚠️ best-effort：超时单独降到 [`TIMELINE_TIMEOUT_SECS`]，限流时不会拖累整块详情呈现。
     pub fn fetch_issue_timeline(
         &self,
         repo: &str,
@@ -1229,11 +1264,24 @@ impl GitHubClient {
         } else {
             return Err("无法确定仓库 owner（org 为空且无 repo_owner）".to_string());
         };
-        let url = format!(
+        let base = format!(
             "https://api.github.com/repos/{full_repo}/issues/{number}/timeline?per_page=100"
         );
-        let v = self.get(&url)?;
-        Ok(parse_issue_timeline(&v))
+        // 先取第 1 页，顺便从 `Link` 头拿到末页页码（最常见：仅 1 页，只发 1 次请求）。
+        let mut link: Option<String> = None;
+        let first = self.get_with_link(&base, &mut link)?;
+        let items = parse_issue_timeline(&first);
+        // 无多页 ⇒ 直接返回第 1 页（最近 100 条就是全部）。
+        let last_page = last_page_from_link(&link);
+        if last_page.is_none() || last_page == Some(1) {
+            return Ok(items);
+        }
+        // 多页 ⇒ 取**末页**（最近的 100 条）；失败不致命，退回第 1 页结果。
+        let last_url = format!("{base}&page={}", last_page.unwrap());
+        match self.get_with_timeout(&last_url, TIMELINE_TIMEOUT_SECS) {
+            Ok(v) => Ok(parse_issue_timeline(&v)),
+            Err(_) => Ok(items),
+        }
     }
 
     /// #278：批量拉取同一仓库内一组 issue 的父子关系（GraphQL，只读）。
@@ -1669,9 +1717,22 @@ impl GitHubClient {
     }
 
     fn get_with_timeout(&self, url: &str, timeout_secs: u64) -> Result<serde_json::Value, String> {
-        match self.get_impl(url, timeout_secs, false)? {
+        match self.get_impl(url, timeout_secs, false, None)? {
             Some(v) => Ok(v),
             // not_found_as_none = false 时 get_impl 不会返回 None；仅为类型完备。
+            None => Err(format!("GitHub API 错误 (404): {url}")),
+        }
+    }
+
+    /// 同 [`Self::get_with_timeout`]，但额外捕获响应头里的 `Link`（用于分页，
+    /// 避免为「最后一页是哪一页」额外发一次请求）。仅时间线拉取用到。
+    fn get_with_link(
+        &self,
+        url: &str,
+        link: &mut Option<String>,
+    ) -> Result<serde_json::Value, String> {
+        match self.get_impl(url, TIMELINE_TIMEOUT_SECS, false, Some(link))? {
+            Some(v) => Ok(v),
             None => Err(format!("GitHub API 错误 (404): {url}")),
         }
     }
@@ -1681,18 +1742,22 @@ impl GitHubClient {
     /// v0.4.1 (#250)：单 issue 按需拉取必须把「远端没有这个 issue」与
     /// 「网络 / 鉴权 / 限流失败」区分开——前者是正常业务结论，后者要带原因上抛给 agent。
     fn get_opt(&self, url: &str) -> Result<Option<serde_json::Value>, String> {
-        self.get_impl(url, self.http_timeout(), true)
+        self.get_impl(url, self.http_timeout(), true, None)
     }
 
     /// [`Self::get_with_timeout`] 与 [`Self::get_opt`] 的共用实现。
     ///
     /// 限流感知的 GET：依据 `X-RateLimit-Remaining` / `X-RateLimit-Reset` / `Retry-After`
     /// 主动 sleep；遇 4xx/5xx 返回带状态码的错误（`not_found_as_none` 时 404 例外）。
+    ///
+    /// `link_capture`：成功时把响应头 `Link` 写回（用于分页，如时间线末页定位），
+    /// 不需要时传 `None`。
     fn get_impl(
         &self,
         url: &str,
         timeout_secs: u64,
         not_found_as_none: bool,
+        link_capture: Option<&mut Option<String>>,
     ) -> Result<Option<serde_json::Value>, String> {
         // v0.3.49 (#143)：删除原来 Search 每页固定 1s sleep，改为 search() 入口的
         // 共享限流门（精确到 2s 间隔）。其余路径走核心配额，仍尊重响应头的
@@ -1783,6 +1848,14 @@ impl GitHubClient {
 
             let elapsed_ms = start.elapsed().as_millis();
             log_api_call("GET", url, status.as_u16(), elapsed_ms, "");
+            // #506：捕获 `Link` 响应头（分页用，如时间线末页定位）。
+            if let Some(cap) = link_capture {
+                *cap = resp
+                    .headers()
+                    .get("Link")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+            }
             // #235：成功路径此前只记状态码，响应体完全没留 —— 这里补上。
             // 先取文本再解析（`Response::json()` 会消费 body）；失败文案保持原样。
             let body_text = resp
@@ -2556,6 +2629,38 @@ mod tests {
                 "total={total} 不该需要超过 2 页"
             );
         }
+    }
+
+    /// #506：从 `Link` 响应头解析末页页码（时间线分页用）。
+    #[test]
+    fn last_page_from_link_parses_last_page() {
+        // 只有一页时 GitHub 不返回 Link 头。
+        assert_eq!(super::last_page_from_link(&None), None);
+        assert_eq!(super::last_page_from_link(&Some(String::new())), None);
+        // 多页：末页在 rel="last"。
+        let link = "<https://api.github.com/repos/o/r/issues/1/timeline?per_page=100&page=2>; rel=\"next\", <https://api.github.com/repos/o/r/issues/1/timeline?per_page=100&page=5>; rel=\"last\"";
+        assert_eq!(super::last_page_from_link(&Some(link.to_string())), Some(5));
+    }
+
+    /// #506：末页页码必须是 `rel="last"` 那段，不能被 `rel="next"` 带偏。
+    #[test]
+    fn last_page_from_link_ignores_next_and_uses_last() {
+        let link = "<https://api.github.com/repos/o/r/issues/1/timeline?per_page=100&page=9>; rel=\"next\", <https://api.github.com/repos/o/r/issues/1/timeline?per_page=100&page=10>; rel=\"last\"";
+        assert_eq!(
+            super::last_page_from_link(&Some(link.to_string())),
+            Some(10)
+        );
+    }
+
+    /// #506：单引号 / URL 顺序不同的写法也要能解析。
+    #[test]
+    fn last_page_from_link_handles_variants() {
+        let link =
+            "<https://api.github.com/repos/o/r/issues/1/timeline?page=3&per_page=100>; rel='last'";
+        assert_eq!(super::last_page_from_link(&Some(link.to_string())), Some(3));
+        // 末页不是数字 ⇒ 解析失败返回 None。
+        let bad = "<https://api.github.com/repos/o/r/issues/1/timeline?page=last>; rel=\"last\"";
+        assert_eq!(super::last_page_from_link(&Some(bad.to_string())), None);
     }
 
     /// #327：项目条目数必须取 `items.totalCount`，不能取 `number`（那是项目编号）。
