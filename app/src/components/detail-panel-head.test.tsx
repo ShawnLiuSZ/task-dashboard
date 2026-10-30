@@ -233,10 +233,24 @@ describe('Activity 时间线事件白名单（#506）', () => {
     expect(detailPanelRaw).toContain("t('detail.ev.generic'");
   });
 
+  it('需要目标数据却取不到时退回 generic（#506 复查，不泄漏悬空占位）', () => {
+    // ⚠️ 旧写法用 `text.includes('{')` 判守卫 —— 但 `t()` 会把 `{what}` 替换成空串，
+    // 占位符根本不会留在结果里 ⇒ 守卫**永不触发** ⇒ 「在 中被引用」「请求 <发起人> 审查」
+    // 这类残缺文案泄漏到界面。守卫必须基于「目标是否为空」判断。
+    expect(detailPanelRaw).toMatch(
+      /EVENTS_NEEDING_TARGET\.has\(item\.event\) && !target[\s\S]{0,200}?t\('detail\.ev\.generic'/,
+    );
+    // 旧写法不得再出现。
+    expect(detailPanelRaw).not.toContain("text.includes('{')");
+    // EVENTS_NEEDING_TARGET 必须覆盖这些「取不到目标」的事件。
+    expect(detailPanelRaw).toContain("'milestoned'");
+    expect(detailPanelRaw).toContain("'review_requested'");
+  });
+
   it('时间线区块确实渲染在详情面板里（源码锚点）', () => {
     expect(detailPanelRaw).toContain("t('detail.timelineTitle')");
     expect(detailPanelRaw).toContain('className="timeline-list"');
-    // 评论正文走 markdown 渲染（零依赖 + 安全白名单）。
-    expect(detailPanelRaw).toContain('renderMarkdown(item.body)');
+    // 评论正文走 markdown 渲染（零依赖 + 安全白名单）；整体 memo 后源码里是 `it.body`。
+    expect(detailPanelRaw).toContain('renderMarkdown(it.body)');
   });
 });

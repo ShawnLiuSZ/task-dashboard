@@ -6,6 +6,20 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.11（未发布）— 整体核查修复：时间线取末页 / 事件文案守卫 / 时间线 memo / 死词条 / 代码围栏闭合 / 时间线超时（#508）**
+
+  - **背景**：对 #506 等一批已合入改动（28 文件、+3549 行）做**整体代码核查**。安全面（跨进程契约 / XSS / URL 白名单 / 凭证处理）逐项**通过**，未发现漏洞；发现 **1 个中、4 个低**的功能缺陷 + 1 个提示项，其中缺陷① 会在特定数据规模下**直接让新功能失效**。
+  - **缺陷①（中）时间线只取第 1 页 ⇒ 拿到的其实是「最旧的 100 条」**：GitHub Timeline API 按**时间升序**返回 ⇒ `page` 缺省 = 第 1 页 = **最旧**的 100 条，而代码注释却写着「时间线以最近活动最受关注」—— 与实际行为**正好相反**。事件总数 > 100 的 issue（长期 Epic、反复指派）永远只显示几个月前的陈旧历史；紧邻的「评论链接」走 `fetch_comments` 取**末页**显示最新评论 ⇒ 同一面板两块时间范围对不上。**这正是 #472 已踩过、并写了两条测试钉住的同一缺陷形态**（评论侧修好了，时间线侧原样重犯）。修法：`get_impl` 增 `link_capture` 参数（成功时把响应头 `Link` 写回）⇒ 首次请求**搭车**拿到 `rel="last"` 页码（**请求数不增加**），多页时再请求一次**末页**；末页页码解析抽成纯函数 `last_page_from_link` 便于单测。
+  - **缺陷②（低）事件文案的兜底守卫从不触发**：`t()` 是把 `{what}` **替换成空串**（不保留占位符）⇒ 旧写法判「渲染结果里是否残留 `{`」**恒为 false** ⇒ 守卫形同虚设 ⇒ 「设置了里程碑 」+ 空白、「在  中被引用」、「请求 <发起人> 审查」这类残缺文案泄漏到界面。修法：守卫改判**参数本身**（目标为空即退回 `detail.ev.generic`），并新增 `EVENTS_NEEDING_TARGET` 精确圈出「词条含占位符」的事件（`closed` / `locked` 等固定文案事件不在此列）。
+  - **缺陷③（低）时间线评论正文在渲染期逐条跑 markdown 渲染，无 memo**：面板有 7 个 `useState` ⇒ 在「交接任务」输入框里**每敲一个字**都触发整树重渲染 ⇒ 最多 100 条评论的 markdown 全部重解析。修法：`liveTimeline` 与 `timelineCommentHtml` **双 `useMemo`**（⚠️ 前者必须稳定化，否则后者依赖每次都变 ⇒ memo 失效，并触发 `react-hooks/exhaustive-deps` 告警 ⇒ `--max-warnings 0` 直接失败）。
+  - **缺陷④（低）死 i18n 词条 `detail.bodyEmpty`**：中英各加了一个却**全仓无引用**。修法：让「描述」区块在 `live` 已加载但正文为空时显示「（无正文）」占位；整节渲染条件从「正文非空」改为「`live` 已加载」（避免面板刚打开就闪一个「（无正文）」）。
+  - **缺陷⑤（低）代码围栏的闭合判定过宽**：旧写法用「以围栏标记开头」判定 ⇒ 内容里**任何以围栏标记开头的行**（如「如何写代码块」的说明）都提前终止围栏 ⇒ 后续内容被当成普通段落、输出错乱。修法：收紧为「trim 后**精确等于**围栏标记」（与 GitHub 行为一致）。
+  - **缺陷⑥（提示）时间线请求限流时最坏挂约 2 分钟**：`get_impl` 在 429/403 时最多重试 3 次、每次 sleep 上限 30s。修法：时间线这次调用单独降 timeout（新增 `TIMELINE_TIMEOUT_SECS = 10`），失败就空数组，不拖累整块详情（命令已 `async` + `spawn_blocking`，**不会卡 UI**）。
+  - **测试**：后端 +3（`last_page_from_link` 的 `rel="last"` / `rel="next"` 干扰 / 单引号与非数字变体）；前端 +3（围栏闭合 2 + 守卫结构 1）。**反向验证**：把 `rel="last"` 判成 `rel="next"` / 把围栏闭合改回宽松判定 / 把守卫改回判渲染结果 —— 三处 mutation 分别被对应用例捕获。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓、tsc / lint / prettier / build / i18n ✓、vitest 31 文件 **498** ✓、scripts 143 ✓、四 check ✓。**零 DB schema 改动**、零新命令、零新 i18n 词条（`detail.bodyEmpty` 从死词条变为在用）。
+  - **影响面**：`github.rs` / `components/DetailPanel.tsx` / `utils/markdown.ts` + 2 个测试文件；文档 1 篇。
+  - 详见 [`issue-508-review-fixes.md`](./issue-508-review-fixes.md)
+
 - **v0.7.11（未发布）— 对齐 orca：issue 详情增加 Activity 时间线（评论正文 + 事件交织）+ 图片渲染（#506）**
 
   - **参考**：用户指定 [stablyai/orca](https://github.com/stablyai/orca) 的 GitHub 接入与信息展示方式作为参照。其 issue 详情的核心是 **Activity 区块**：「把**评论与时间线事件交织**展示（assignments / mentions / cross-references / state changes / project column moves），不离开应用就能看完整历史」。

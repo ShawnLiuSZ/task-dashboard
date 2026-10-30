@@ -111,6 +111,22 @@ describe('renderMarkdown — 结构', () => {
     const html = renderMarkdown('```\n未闭合');
     expect(html).toContain('未闭合');
   });
+
+  // #506 复查：结束标记必须**精确等于** ``` ，内容里「以 ``` 开头但带其它文字」的行
+  // 不得误判为结束标记（否则其后的内容会被当成普通段落、输出错乱）。
+  it('内容行以 ``` 开头但带文字，不提前闭合围栏', () => {
+    const md = '```\n这里是说明：用 ```bash 写围栏\n真实代码 const a = 1;\n```';
+    const html = renderMarkdown(md);
+    // 围栏内整段都是代码，故不应出现被「提前终止」后误生成的段落 <p>。
+    expect(html).toContain('<pre><code>这里是说明：用 ```bash 写围栏\n真实代码 const a = 1;');
+    expect(html).not.toContain('<p>');
+  });
+
+  it('真正的结束标记（单独一行 ```）仍正常闭合', () => {
+    const html = renderMarkdown('```\ncode\n```');
+    // 闭合后不会有残留的 ``` 出现在代码内容之外。
+    expect(html).toBe('<pre><code>code</code></pre>');
+  });
 });
 
 describe('renderMarkdown — 行内', () => {

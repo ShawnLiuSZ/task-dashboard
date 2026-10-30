@@ -161,7 +161,11 @@ export function renderMarkdown(src: string): string {
       const marker = fence[1];
       const buf: string[] = [];
       i += 1;
-      while (i < lines.length && !lines[i].trim().startsWith(marker)) {
+      // ⚠️ #506 复查：结束标记必须**精确等于** `marker`（去掉首尾空白后），
+      // 不允许「以 marker 开头但后面跟其它内容」的行提前终止围栏。
+      // 否则正文里贴「如何写代码块」的说明（` ```some text `）会被误判为结束标记，
+      // 其后的内容被当成普通段落解析、输出错乱。
+      while (i < lines.length && lines[i].trim() !== marker) {
         buf.push(lines[i]);
         i += 1;
       }
