@@ -145,6 +145,12 @@ export interface LiveTimelineItem {
   assignee: string;
   /** 交叉引用 / 子 issue 事件指向的目标（如 `fad-backend#1629`）。 */
   refIssue: string;
+  /** 里程碑事件的里程碑标题（`milestoned` / `demilestoned`）。 */
+  milestone: string;
+  /** 审查请求事件的**被请求审查者** login（`review_requested`）。 */
+  requestedReviewer: string;
+  /** 被引用的**提交** SHA（`referenced`）。 */
+  commitSha: string;
 }
 
 export interface Task {

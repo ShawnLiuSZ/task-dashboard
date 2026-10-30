@@ -14,6 +14,7 @@ import TaskCommentsList from './TaskCommentsList';
 import { registerEscLayer, type EscLayer } from '../utils/escLayer';
 import { normalizeLiveDetail } from '../utils/liveDetail';
 import { renderMarkdown, shouldCollapseBody } from '../utils/markdown';
+import { timelineEventTarget } from '../utils/timelineEvent';
 
 /**
  * #506：已知的时间线事件类型（与 i18n 词条 `detail.ev.*` 一一对应）。
@@ -246,16 +247,8 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
   // `t()` 对缺失 key 会返回 key 本身（还会打 warning）⇒ 绝不能让
   // `detail.ev.<未知事件>` 这种字符串出现在界面上。
   const timelineEventText = (item: LiveTimelineItem): string => {
-    const target =
-      item.event === 'assigned' || item.event === 'unassigned'
-        ? item.assignee || item.actor
-        : item.event === 'labeled' || item.event === 'unlabeled'
-          ? item.label
-          : item.event === 'cross-referenced' ||
-              item.event === 'referenced' ||
-              item.event === 'sub_issue_added'
-            ? item.refIssue
-            : '';
+    // #510：目标取值抽成纯函数（`utils/timelineEvent.ts`）⇒ 可直接单测。
+    const target = timelineEventTarget(item);
     // ⚠️ #506 复查：需要目标数据却取不到时，**退回通用文案**——否则 `t()` 会把
     // `{what}` 替换成空串（而不是保留占位符），旧守卫（判渲染结果里是否残留 `{`）
     // 永远为 false ⇒ 守卫从不触发 ⇒ 「在 中被引用」「请求 <发起人> 审查」这类残缺文案泄漏到界面。

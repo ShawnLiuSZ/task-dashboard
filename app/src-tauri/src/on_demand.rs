@@ -536,6 +536,12 @@ pub struct LiveTimelineItem {
     pub assignee: String,
     /// 交叉引用 / 子 issue 事件指向的目标（如 `fad-backend#1629`）。
     pub ref_issue: String,
+    /// 里程碑事件的里程碑标题（`milestoned` / `demilestoned`）。
+    pub milestone: String,
+    /// 审查请求事件的**被请求审查者** login（`review_requested`）。
+    pub requested_reviewer: String,
+    /// 被引用的**提交** SHA（`referenced`）。
+    pub commit_sha: String,
 }
 
 /// 实时拉取入口（**纯联网**，需联网；不可单测）。返回结构见 [`LiveTaskDetail`]。
@@ -628,6 +634,10 @@ pub fn fetch_task_detail_live(
             label: t.label,
             assignee: t.assignee,
             ref_issue: t.ref_issue,
+            // #510：里程碑 / 审查请求 / 被引用提交的目标。
+            milestone: t.milestone,
+            requested_reviewer: t.requested_reviewer,
+            commit_sha: t.commit_sha,
         })
         .collect();
 
@@ -1076,6 +1086,10 @@ mod tests {
                 label: String::new(),
                 assignee: String::new(),
                 ref_issue: String::new(),
+                // #510：里程碑 / 审查请求 / 被引用提交的目标。
+                milestone: String::new(),
+                requested_reviewer: String::new(),
+                commit_sha: String::new(),
             }],
         };
         let v = serde_json::to_value(&detail).expect("LiveTaskDetail 应可序列化");
@@ -1144,6 +1158,78 @@ mod tests {
             t0.contains_key("refIssue"),
             "timeline[0].refIssue 应为驼峰，实际 {:?}",
             t0.keys().collect::<Vec<_>>()
+        );
+        // #510：新增的三个多词字段**同样**必须是驼峰 —— 与 `refIssue` 同型风险点
+        // （漏写 `rename_all` ⇒ 前端读到 undefined ⇒ 事件目标显示为空）。
+        for key in ["milestone", "requestedReviewer", "commitSha"] {
+            assert!(
+                t0.contains_key(key),
+                "timeline[0].{key} 应为驼峰，实际 {:?}",
+                t0.keys().collect::<Vec<_>>()
+            );
+        }
+        for key in ["requested_reviewer", "commit_sha"] {
+            assert!(
+                !t0.contains_key(key),
+                "timeline[0].{key} 不应出现（前端读的是驼峰）"
+            );
+        }
+    }
+
+    /// #510：**真实样本**回归 —— 里程碑 / 审查请求 / 被引用提交三类事件的**目标**解析。
+    ///
+    /// ⚠️ 样本来源（2026-10-30 实抓；**只裁掉与解析无关的字段**，
+    ///    保留全部被解析字段与它们的**真实形状**）：
+    /// - `GET /repos/rust-lang/rust/issues/149752/timeline` ⇒ `milestoned` ×2 + `demilestoned` ×1
+    ///   （真实形状：`milestone` 是**对象**，且**只有 `title`** —— 不是字符串）
+    /// - `GET /repos/rust-lang/rust/issues/164994/timeline` ⇒ `review_requested` ×1
+    ///   （真实形状：被请求审查者在 `requested_reviewer.login`，与 `actor` **不是同一人**）
+    /// - `GET /repos/ShawnLiuSZ/task-dashboard/issues/508/timeline` ⇒ `referenced` ×1
+    ///   （真实形状：目标是**提交** `commit_id`，**没有** `source.issue` ⇒ `ref_issue` 恒空）
+    ///
+    /// ⚠️ 这正是 #502 的教训所在：自己造的数据会把「`milestone` 是对象」这类
+    /// 真实形状差异整整放过一轮 ⇒ 这里必须用真实样本。
+    #[test]
+    fn parse_issue_timeline_reads_milestone_reviewer_and_commit_targets() {
+        let raw = r#"[{"actor":{"login":"Mark-Simulacrum"},"created_at":"2026-01-16T17:21:47Z","event":"milestoned","milestone":{"title":"1.94.0"}},{"actor":{"login":"Mark-Simulacrum"},"created_at":"2026-01-16T17:22:39Z","event":"demilestoned","milestone":{"title":"1.94.0"}},{"actor":{"login":"Mark-Simulacrum"},"created_at":"2026-01-16T17:22:39Z","event":"milestoned","milestone":{"title":"1.93.0"}},{"actor":{"login":"yashaggarwal85d"},"created_at":"2026-10-29T14:44:51Z","event":"review_requested","requested_reviewer":{"login":"mu001999"},"requested_team":null},{"actor":{"login":"ShawnLiuSZ"},"commit_id":"4529cace624aaedf5ead35dbef2783e8cc3c576c","commit_url":"https://api.github.com/repos/ShawnLiuSZ/task-dashboard/commits/4529cace624aaedf5ead35dbef2783e8cc3c576c","created_at":"2026-10-30T07:10:15Z","event":"referenced"}]"#;
+        let v: serde_json::Value = serde_json::from_str(raw).expect("样本应是合法 JSON");
+        let items = crate::github::parse_issue_timeline(&v);
+        assert_eq!(items.len(), 5, "真实响应有 5 条，实际 {}", items.len());
+
+        // 里程碑：目标在 `milestone.title`（对象，不是字符串）。
+        assert_eq!(items[0].event, "milestoned");
+        assert_eq!(items[0].milestone, "1.94.0");
+        assert_eq!(items[0].actor, "Mark-Simulacrum");
+
+        // 移除里程碑：形状与设置**完全相同**（同一个 `milestone` 字段）。
+        assert_eq!(items[1].event, "demilestoned");
+        assert_eq!(items[1].milestone, "1.94.0");
+
+        // 同一次操作里换到另一个里程碑。
+        assert_eq!(items[2].milestone, "1.93.0");
+
+        // 审查请求：被请求审查者在 `requested_reviewer.login`，
+        // 且**与 `actor`（发起请求的人）不是同一人** —— 这正是旧实现取错的地方。
+        let rr = items
+            .iter()
+            .find(|i| i.event == "review_requested")
+            .expect("应有 review_requested 事件");
+        assert_eq!(rr.requested_reviewer, "mu001999");
+        assert_eq!(rr.actor, "yashaggarwal85d");
+        assert_ne!(
+            rr.requested_reviewer, rr.actor,
+            "被请求审查者不得与发起请求的人混为一谈"
+        );
+
+        // 被引用：目标是**提交**，**没有** `source.issue` ⇒ `ref_issue` 恒空。
+        let rf = items
+            .iter()
+            .find(|i| i.event == "referenced")
+            .expect("应有 referenced 事件");
+        assert_eq!(rf.commit_sha, "4529cace624aaedf5ead35dbef2783e8cc3c576c");
+        assert_eq!(
+            rf.ref_issue, "",
+            "referenced 事件没有 source.issue ⇒ ref_issue 必须为空"
         );
     }
 

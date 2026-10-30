@@ -436,7 +436,7 @@
   "detail.ev.closed": "closed the issue",
   "detail.ev.reopened": "reopened the issue",
   "detail.ev.cross-referenced": "cross-referenced {what}",
-  "detail.ev.referenced": "was referenced in {what}",
+  "detail.ev.referenced": "was referenced in commit {what}",
   "detail.ev.sub_issue_added": "added the sub-issue {what}",
   "detail.ev.milestoned": "set the milestone {what}",
   "detail.ev.demilestoned": "removed the milestone {what}",

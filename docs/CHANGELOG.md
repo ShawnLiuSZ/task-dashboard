@@ -6,6 +6,20 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.7.11（未发布）— 补齐时间线事件的目标字段：里程碑 / 被请求审查者 / 被引用提交（#510）**
+
+  - **背景**：#508 的整体核查把 4 类「白名单里有、后端却没有数据源」的事件降级成了通用文案（「更新了 issue」）—— 机制修对了，但**根因**（目标取错字段 / 后端压根没解析）还在，用户看到的仍是无信息量的描述。
+  - **真实字段来源（2026-10-30 实抓确认）**：用户名下所有仓库（`ShawnLiuSZ/*` + `FoodsUp-Inc/*`）经 `GET /repos/{o}/{r}/milestones` 逐一核查 ⇒ **全部没有任何 milestone** ⇒ 样本取自**公开仓库** `rust-lang/rust` 与 `ShawnLiuSZ/task-dashboard`，**只裁掉与解析无关的字段**、保留被解析字段的**真实形状**。
+  - **三个字段的真实形状都出乎直觉**（⇒ #502 教训「测试数据形状必须等于真实数据形状」）：`milestone` 是**对象**且**只有 `title`**（不是字符串）；`referenced` 的目标是**提交**（`commit_id`）**不是** issue（**没有** `source.issue`）；`review_requested` 的**被请求审查者**在 `requested_reviewer.login`，与 `actor`（发起请求的人）**不是同一人**。
+  - **后端**：`RawTimelineItem` / `LiveTimelineItem` 各增 3 个字段（`milestone` / `requested_reviewer` / `commit_sha` ⇒ 前端 `milestone` / `requestedReviewer` / `commitSha`）+ 对应解析。⚠️ 三个都是**多词字段** ⇒ 与 #496 同型风险点 ⇒ 键名断言同步覆盖（漏写 `rename_all` ⇒ 前端读到 `undefined` ⇒ 目标为空 ⇒ 界面回到残缺文案，**且不报错不崩**）。
+  - **前端**：类型与规范化层（`utils/liveDetail.ts`）同步 3 个字段（缺失时**降级为空串**，绝不给 `undefined`）；「各事件的目标从哪个字段取」从组件闭包里**抽成纯函数** `utils/timelineEvent.ts::timelineEventTarget`（原先不可直接调用、只能靠源码结构断言 ⇒ 抽成纯函数后可**直接**单测）；`referenced` 显示**短 SHA**（7 位，与 GitHub 一致）。
+  - **i18n**：`detail.ev.referenced` 措辞改为「在**提交** {what} 中被引用」/ "was referenced in **commit** {what}"（目标是提交不是 issue）。**零新 key**（仍 449）。
+  - **兜底不变**：`EVENTS_NEEDING_TARGET` 不变 ⇒ 目标取不到时**仍**退回通用文案（#508 的守卫继续生效，不显示悬空占位）。
+  - **测试**：后端 +1（**真实样本** 5 条：`milestoned` / `demilestoned` / `review_requested` / `referenced`，含 `assert_ne!(requested_reviewer, actor)` 与「`referenced` 的 `ref_issue` 必须为空」）；前端 +9（纯函数 6 + 规范化 2 + 组件委派 1）。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓、tsc / lint / prettier / build / i18n ✓、vitest 32 文件 **507** ✓、scripts 143 ✓、四 check ✓。**零 DB schema 改动**、零新命令。
+  - **影响面**：`github.rs` / `on_demand.rs` / `types.ts` / `utils/liveDetail.ts` / `utils/timelineEvent.ts`（新）/ `components/DetailPanel.tsx` / i18n ×2 + 3 个测试文件。
+  - 详见 [`issue-510-timeline-event-targets.md`](./issue-510-timeline-event-targets.md)
+
 - **v0.7.11（未发布）— 整体核查修复：时间线取末页 / 事件文案守卫 / 时间线 memo / 死词条 / 代码围栏闭合 / 时间线超时（#508）**
 
   - **背景**：对 #506 等一批已合入改动（28 文件、+3549 行）做**整体代码核查**。安全面（跨进程契约 / XSS / URL 白名单 / 凭证处理）逐项**通过**，未发现漏洞；发现 **1 个中、4 个低**的功能缺陷 + 1 个提示项，其中缺陷① 会在特定数据规模下**直接让新功能失效**。
