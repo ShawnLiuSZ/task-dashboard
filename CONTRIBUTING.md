@@ -117,7 +117,7 @@ cd app && npm run i18n:check
 
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — 设计要点（多源拉取、归属三分、四态维护、PR 关联）与 GitHub Actions 在线打包说明
 
-- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.7.10）
+- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.8.0）
 
 - [`docs/issue-490-live-task-detail.md`](./docs/issue-490-live-task-detail.md) — **打开任务详情时实时拉取 GitHub 详情与评论（不落库）**：新增纯只读、零落库的实时通道，覆盖评论区、展示实时指派 / 标签与关联 PR 提交历史，与 `on_demand::ensure_task_available` 的落库版单 issue 拉取明确区分
 
@@ -303,7 +303,7 @@ cd app && npm run i18n:check
 
 - [`PRD.md`](./PRD.md) — requirements and decision evolution (including the dropped Projects v2 approach, ownership design, API pitfalls)
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — design notes (multi-source fetch, three-way ownership, four-state maintenance, PR linking) and GitHub Actions CI packaging
-- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — per-version update & fix log (v0.3.1 → latest v0.7.10)
+- [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — per-version update & fix log (v0.3.1 → latest v0.8.0)
 
 - [`docs/issue-327-p0-functional-defects.md`](./docs/issue-327-p0-functional-defects.md) — **code review P0 batch**: the About window's "OK" button failed silently (no capability covered the `about` window, and `core:window:default` lacks `allow-close`); the settings panel's language switcher had been duplicated into a second theme selector; duplicate note content leaked a raw `UNIQUE constraint` error; `projects.number_of_items` read the project number instead of `items.totalCount`, so the wrong project was written when an issue belonged to several
 
