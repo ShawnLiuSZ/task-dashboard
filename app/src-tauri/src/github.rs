@@ -283,6 +283,21 @@ pub struct RawTimelineItem {
     pub assignee: String,
     /// 交叉引用 / 子 issue 事件指向的目标（如 `#1629` 或 `repo#1629`）。
     pub ref_issue: String,
+    /// 里程碑事件的**里程碑标题**（`milestoned` / `demilestoned`）。
+    ///
+    /// ⚠️ 真实响应里 `milestone` 是个对象，只有 `title` 字段
+    /// （实测 `{"title":"1.94.0"}`），不是字符串。
+    pub milestone: String,
+    /// 审查请求事件的**被请求审查者** login（`review_requested`）。
+    ///
+    /// ⚠️ 别拿 `actor` 顶替 —— `actor` 是**发起请求的人**，
+    /// 被请求审查者在 `requested_reviewer.login`（实测两者是不同的人）。
+    pub requested_reviewer: String,
+    /// 被引用的**提交** SHA（`referenced`）。
+    ///
+    /// ⚠️ GitHub 的 `referenced` 事件指向的是**提交**（`commit_id`），
+    /// **不是** issue ⇒ 它没有 `source.issue`，`ref_issue` 恒空。
+    pub commit_sha: String,
 }
 
 /// #506：解析 GitHub **Timeline API** 响应（**纯函数**，便于单测）。
@@ -371,6 +386,26 @@ pub fn parse_issue_timeline(v: &serde_json::Value) -> Vec<RawTimelineItem> {
         } else {
             "event"
         };
+        // #510：里程碑事件的目标（真实响应里 `milestone` 是对象，只有 `title`）。
+        let milestone = e
+            .get("milestone")
+            .and_then(|m| m.get("title"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        // #510：审查请求的**被请求审查者**（不是 `actor`＝发起请求的人）。
+        let requested_reviewer = e
+            .get("requested_reviewer")
+            .and_then(|r| r.get("login"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        // #510：`referenced` 事件指向的是**提交**（`commit_id`），不是 issue。
+        let commit_sha = e
+            .get("commit_id")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
         out.push(RawTimelineItem {
             kind,
             event: event.to_string(),
@@ -381,6 +416,9 @@ pub fn parse_issue_timeline(v: &serde_json::Value) -> Vec<RawTimelineItem> {
             label,
             assignee,
             ref_issue,
+            milestone,
+            requested_reviewer,
+            commit_sha,
         });
     }
     out

@@ -228,6 +228,32 @@ describe('normalizeLiveTimeline（#506）', () => {
     expect(out[0].refIssue).toBe('');
   });
 
+  // #510：新增的三个目标字段必须被规范化层**如实带过**，
+  // 否则事件目标为空 ⇒ 界面出现「在  中被引用」这类残缺文案。
+  it('里程碑 / 被请求审查者 / 被引用提交三个字段被带过（#510）', () => {
+    const out = normalizeLiveTimeline([
+      {
+        kind: 'event',
+        event: 'review_requested',
+        actor: 'yashaggarwal85d',
+        requestedReviewer: 'mu001999',
+        milestone: '1.94.0',
+        commitSha: '4529cace624aaedf5ead35dbef2783e8cc3c576c',
+      },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].requestedReviewer).toBe('mu001999');
+    expect(out[0].milestone).toBe('1.94.0');
+    expect(out[0].commitSha).toBe('4529cace624aaedf5ead35dbef2783e8cc3c576c');
+  });
+
+  it('新增的三个字段缺失时降级为空串（不抛错、不给 undefined）', () => {
+    const out = normalizeLiveTimeline([{ kind: 'event', event: 'closed' }]);
+    expect(out[0].milestone).toBe('');
+    expect(out[0].requestedReviewer).toBe('');
+    expect(out[0].commitSha).toBe('');
+  });
+
   it('没有正文的评论项被丢弃（渲染出来是空块）', () => {
     const out = normalizeLiveTimeline([{ ...COMMENT, body: '' }]);
     expect(out).toHaveLength(0);

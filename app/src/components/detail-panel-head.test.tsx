@@ -247,6 +247,13 @@ describe('Activity 时间线事件白名单（#506）', () => {
     expect(detailPanelRaw).toContain("'review_requested'");
   });
 
+  it('事件目标取值走纯函数（#510：内联回组件 ⇒ 不可单测）', () => {
+    // 目标取值逻辑（各事件从哪个字段取）原先埋在组件闭包里，只能靠源码结构断言；
+    // 抽成 `utils/timelineEvent.ts` 的纯函数后可被**直接**单测（真实样本形状）。
+    expect(detailPanelRaw).toContain('timelineEventTarget(item)');
+    expect(detailPanelRaw).toContain("from '../utils/timelineEvent'");
+  });
+
   it('时间线区块确实渲染在详情面板里（源码锚点）', () => {
     expect(detailPanelRaw).toContain("t('detail.timelineTitle')");
     expect(detailPanelRaw).toContain('className="timeline-list"');

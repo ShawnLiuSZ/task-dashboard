@@ -132,6 +132,10 @@ export function normalizeLiveTimeline(v: unknown): LiveTimelineItem[] {
       label: asString(o.label),
       assignee: asString(o.assignee),
       refIssue: asString(o.refIssue),
+      // #510：里程碑 / 审查请求 / 被引用提交的目标。
+      milestone: asString(o.milestone),
+      requestedReviewer: asString(o.requestedReviewer),
+      commitSha: asString(o.commitSha),
     });
   }
   return out;

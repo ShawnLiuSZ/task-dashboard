@@ -436,7 +436,7 @@
   "detail.ev.closed": "关闭了 issue",
   "detail.ev.reopened": "重新打开 issue",
   "detail.ev.cross-referenced": "交叉引用了 {what}",
-  "detail.ev.referenced": "在 {what} 中被引用",
+  "detail.ev.referenced": "在提交 {what} 中被引用",
   "detail.ev.sub_issue_added": "添加了子 issue {what}",
   "detail.ev.milestoned": "设置了里程碑 {what}",
   "detail.ev.demilestoned": "移除了里程碑 {what}",
