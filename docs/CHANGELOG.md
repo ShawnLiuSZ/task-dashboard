@@ -6,7 +6,7 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **v0.7.11（未发布）— 补齐时间线事件的目标字段：里程碑 / 被请求审查者 / 被引用提交（#510）**
+- **v0.8.0（2026-10-30）— 补齐时间线事件的目标字段：里程碑 / 被请求审查者 / 被引用提交（#510）**
 
   - **背景**：#508 的整体核查把 4 类「白名单里有、后端却没有数据源」的事件降级成了通用文案（「更新了 issue」）—— 机制修对了，但**根因**（目标取错字段 / 后端压根没解析）还在，用户看到的仍是无信息量的描述。
   - **真实字段来源（2026-10-30 实抓确认）**：用户名下所有仓库（`ShawnLiuSZ/*` + `FoodsUp-Inc/*`）经 `GET /repos/{o}/{r}/milestones` 逐一核查 ⇒ **全部没有任何 milestone** ⇒ 样本取自**公开仓库** `rust-lang/rust` 与 `ShawnLiuSZ/task-dashboard`，**只裁掉与解析无关的字段**、保留被解析字段的**真实形状**。
@@ -20,7 +20,7 @@
   - **影响面**：`github.rs` / `on_demand.rs` / `types.ts` / `utils/liveDetail.ts` / `utils/timelineEvent.ts`（新）/ `components/DetailPanel.tsx` / i18n ×2 + 3 个测试文件。
   - 详见 [`issue-510-timeline-event-targets.md`](./issue-510-timeline-event-targets.md)
 
-- **v0.7.11（未发布）— 整体核查修复：时间线取末页 / 事件文案守卫 / 时间线 memo / 死词条 / 代码围栏闭合 / 时间线超时（#508）**
+- **v0.8.0（2026-10-30）— 整体核查修复：时间线取末页 / 事件文案守卫 / 时间线 memo / 死词条 / 代码围栏闭合 / 时间线超时（#508）**
 
   - **背景**：对 #506 等一批已合入改动（28 文件、+3549 行）做**整体代码核查**。安全面（跨进程契约 / XSS / URL 白名单 / 凭证处理）逐项**通过**，未发现漏洞；发现 **1 个中、4 个低**的功能缺陷 + 1 个提示项，其中缺陷① 会在特定数据规模下**直接让新功能失效**。
   - **缺陷①（中）时间线只取第 1 页 ⇒ 拿到的其实是「最旧的 100 条」**：GitHub Timeline API 按**时间升序**返回 ⇒ `page` 缺省 = 第 1 页 = **最旧**的 100 条，而代码注释却写着「时间线以最近活动最受关注」—— 与实际行为**正好相反**。事件总数 > 100 的 issue（长期 Epic、反复指派）永远只显示几个月前的陈旧历史；紧邻的「评论链接」走 `fetch_comments` 取**末页**显示最新评论 ⇒ 同一面板两块时间范围对不上。**这正是 #472 已踩过、并写了两条测试钉住的同一缺陷形态**（评论侧修好了，时间线侧原样重犯）。修法：`get_impl` 增 `link_capture` 参数（成功时把响应头 `Link` 写回）⇒ 首次请求**搭车**拿到 `rel="last"` 页码（**请求数不增加**），多页时再请求一次**末页**；末页页码解析抽成纯函数 `last_page_from_link` 便于单测。
@@ -34,7 +34,7 @@
   - **影响面**：`github.rs` / `components/DetailPanel.tsx` / `utils/markdown.ts` + 2 个测试文件；文档 1 篇。
   - 详见 [`issue-508-review-fixes.md`](./issue-508-review-fixes.md)
 
-- **v0.7.11（未发布）— 对齐 orca：issue 详情增加 Activity 时间线（评论正文 + 事件交织）+ 图片渲染（#506）**
+- **v0.8.0（2026-10-30）— 对齐 orca：issue 详情增加 Activity 时间线（评论正文 + 事件交织）+ 图片渲染（#506）**
 
   - **参考**：用户指定 [stablyai/orca](https://github.com/stablyai/orca) 的 GitHub 接入与信息展示方式作为参照。其 issue 详情的核心是 **Activity 区块**：「把**评论与时间线事件交织**展示（assignments / mentions / cross-references / state changes / project column moves），不离开应用就能看完整历史」。
   - **差距**：TaskBoard 此前**只有评论链接列表**（作者 / 时间 / 跳转 URL）—— **无评论正文、无时间线**；且 markdown 白名单**不含 `img`** ⇒ 描述 / 评论里的图片不显示。
@@ -46,7 +46,7 @@
   - **影响面**：`github.rs` / `on_demand.rs` / `types.ts` / `utils/liveDetail.ts` / `utils/markdown.ts` / `components/DetailPanel.tsx` / `styles.css` / i18n。
   - 详见 [`issue-506-orca-activity-timeline.md`](./issue-506-orca-activity-timeline.md)
 
-- **v0.7.11（未发布）— 详情面板：body / 评论等实时信息移到「交接任务」下；知识库文档索引迁到 CONTRIBUTING.md（#504）**
+- **v0.8.0（2026-10-30）— 详情面板：body / 评论等实时信息移到「交接任务」下；知识库文档索引迁到 CONTRIBUTING.md（#504）**
 
   - **需求 ①（详情面板重排）**：用户要求「将 body 信息，评论等信息放在『交接任务』下边」。三块**实时拉取**的内容（#490 / #498 的产出）原先**分散在面板上下**（描述在最上、评论在中、PR 提交历史在最末）⇒ 改后聚成一段连续的「远端实况」，紧跟「交接任务」之后。**只动 JSX 顺序，不改任何渲染条件**。
   - **断言落点**：三块皆**条件渲染**（正文非空 / 有评论 / 有 PR），而前端测试跑在 node 环境（无 DOM）⇒ `useEffect` 不执行 ⇒ SSR 产物里根本没有它们 ⇒ **渲染断言够不着** ⇒ 改用**源码顺序断言**（精确 JSX 片段作锚点，两两比较 `indexOf`）。⚠️ 锚点必须用精确片段而非裸词 —— 裸词会命中注释里的同一字符串，断言就成了「恒真」。
@@ -57,7 +57,7 @@
   - **影响面**：前端 `DetailPanel.tsx`（仅 JSX 顺序）+ 1 个测试文件；文档 4 篇；工具 `check-doc-links.py`。**零后端 / 零 DB schema / 零 i18n 改动**。
   - 详见 [`issue-504-detail-panel-order-and-doc-index.md`](./issue-504-detail-panel-order-and-doc-index.md)
 
-- **v0.7.11（未发布）— 任务详情：issue 正文在 CRLF 行尾下死循环，导致详情面板整块消失（#502）**
+- **v0.8.0（2026-10-30）— 任务详情：issue 正文在 CRLF 行尾下死循环，导致详情面板整块消失（#502）**
 
   - **现象**：用户反馈「实时拉取信息，为什么没有拉取 issue 的 body、评论记录等信息展示在详情中」。排查结论：**拉到了，但渲染时炸了** —— `renderMarkdown` 在真实正文上**死循环**，渲染期抛 `RangeError` ⇒ React 卸载整棵树 ⇒ **详情面板（连同 body / 评论 / PR 提交历史）整块消失**。
   - **根因①**：**JavaScript 的 `.` 不匹配 `\r`**（`.` 排除 `\n` `\r` `\u2028` `\u2029`），而 GitHub issue 正文**普遍是 CRLF 行尾**（Windows 编辑器粘贴的常见形态）⇒ `markdown.ts` 里**带 `$` 锚点**的块级正则（标题 / 无序列表 / 有序列表 / 代码围栏）在 CRLF 行上**整行失配**。
@@ -72,7 +72,7 @@
   - **影响面**：仅 `app/src/utils/markdown.ts` + 单测；**零后端 / 零 DB schema / 零 i18n 改动**。
   - 详见 [`issue-502-markdown-crlf-infinite-loop.md`](./issue-502-markdown-crlf-infinite-loop.md)
 
-- **v0.7.11（未发布）— 任务详情：issue id 行与标题行固定吸顶 + 消除顶部透明边距（#500）**
+- **v0.8.0（2026-10-30）— 任务详情：issue id 行与标题行固定吸顶 + 消除顶部透明边距（#500）**
 
   - **现象**：滚动任务详情弹窗时，「issue id 行」（`fad-backend #1630`）与弹窗顶边之间冒出一段**纯白空隙**；且标题是吸顶头部的**兄弟节点** ⇒ 必然随内容滚走，滚动到一半还被头部盖住上半截。对用户截图逐像素测量：弹窗顶边 `y=5`，issue id 行文字 `y=46..55` ⇒ 中间 **35px 纯白空隙**；标题只剩 `y=11..21` 一条 11px 高的边露在头部上方。
   - **根因 ①（透明边距）**：v0.7.10 的 `.detail-head` 用 `margin: -16px -18px 0`（负 margin 抵消 `.detail` 的 `padding-top` 做满宽吸顶），但 **`position: sticky` 会抵消负 margin** —— 钉到滚动容器 padding box 顶部时按 border box 对齐 ⇒ 钉住位置比正常流**低 16px** ⇒ 未滚动时正常、滚动后顶部凭空多出 16px 空隙。
@@ -84,7 +84,7 @@
   - **影响面**：前端 CSS + TSX + 测试；**零后端 / 零 DB schema / 零 i18n 改动**（i18n 仍为中英各 429 key）⇒ 无需 `check-mcp-columns.py`。
   - 详见 [`issue-500-detail-header-sticky.md`](./issue-500-detail-header-sticky.md)
 
-- **v0.7.11（未发布）— 任务详情点击后整页全屏空白（#496）**
+- **v0.8.0（2026-10-30）— 任务详情点击后整页全屏空白（#496）**
 
   - **现象**：点击任务卡片「查看详情」后**整个窗口变成一片空白**（整棵 React 树被卸载，webview 里什么都不剩），而不是「弹窗没弹出」或「遮罩太暗」。
   - **根因**：#490 新增的实时拉取结构体 `LiveTaskDetail` **漏写 `#[serde(rename_all = "camelCase")]`**（其兄弟结构 `LiveIssue` / `LiveComment` / `LivePrCommit` 都有，唯独最外层漏了）⇒ 后端发回 `pr_commits`，前端 `types.ts` 期望 `prCommits` ⇒ `live.prCommits` 为 `undefined` ⇒ `DetailPanel` 渲染 `live.prCommits.length` 抛 `TypeError` ⇒ React 卸载整棵树 ⇒ 全屏空白。`issue` / `comments` 是单个单词、camelCase 与否同名 ⇒ **只有 `pr_commits` 暴露问题**，且崩在「实时数据到达后」，本地库阶段一切正常。
@@ -96,7 +96,7 @@
   - **影响面**：零 DB schema 改动（无需 `check-mcp-columns.py`）· 零 i18n 改动（复用既有 `detail.liveError`）。
   - 详见 [`issue-496-live-detail-blank.md`](./issue-496-live-detail-blank.md)
 
-- **v0.7.11（未发布）— 任务详情：sticky 头部遮挡标题 + 未展示 issue 正文（#498）**
+- **v0.8.0（2026-10-30）— 任务详情：sticky 头部遮挡标题 + 未展示 issue 正文（#498）**
 
   - **现象 ①（标题行挡住标题）**：`.detail-head` 用 `margin: -16px -18px 0`（负 margin 抵消 `.detail` 的 `padding-top` 做满宽吸顶），但 **`position: sticky` 会抵消负 margin**——钉到滚动容器 padding box 顶部时按 border box 对齐 ⇒ 头部整体下移 16px ⇒ 盖住紧随其后的 `.detail-title`。Chrome 无头实测（真实 CSS + 真实 DOM）：`head 底部 354.9` vs `title 顶部 346.9` ⇒ **重叠 8px，标题文字被盖 6px**。
   - **现象 ②（没有具体的详细信息）**：`RawTask` **没有 `body` 字段** ⇒ GitHub REST 响应的 `body` 从未被读取 ⇒ 详情面板从来只显示标题，没有正文描述。这与 #490 当时约定的「展示范围覆盖 body」不符（那一轮只做了评论区 / 指派 / 标签 / PR 提交历史，**body 漏做**）。
@@ -109,7 +109,7 @@
   - **影响面**：i18n 新增 4 词条（中英各 429 key）；**零 DB schema 改动**（无需 `check-mcp-columns.py`）。
   - 详见 [`issue-498-detail-body-and-sticky-head.md`](./issue-498-detail-body-and-sticky-head.md)
 
-- **v0.7.11（未发布）— 任务详情由右侧抽屉改为居中 Modal 查看（#494）**
+- **v0.8.0（2026-10-30）— 任务详情由右侧抽屉改为居中 Modal 查看（#494）**
 
   - **形态变更**：详情面板从「右侧 50% 抽屉」（`top:46px; right:0; width:50%`，盖住看板右半屏）改为**居中弹窗**（`top/left:50%` + `translate(-50%,-50%)`、720px 宽、圆角 + 阴影），弹窗外看板卡片仍可见。
   - **交互契约不变**：Esc 关闭 / 点击遮罩关闭 / 关闭按钮全部照旧（Esc 分层 `utils/escLayer.ts` 未动），**零 TSX / 后端 / DB 改动**——只改 `styles.css` 三条规则。
@@ -119,7 +119,7 @@
   - **测试**：`styles.test.ts` 新增 4 条静态断言（居中且不得回退抽屉 / 尺寸与内部滚动 / 头部 sticky / 遮罩），其中「不得有 `width: 50%`」用负向前查排除 `max-width` 误判。
   - 详见 [`issue-494-detail-modal.md`](./issue-494-detail-modal.md)
 
-- **v0.7.11（未发布）— 公开仓库自动关闭非协作者的 fork PR（#492）**
+- **v0.8.0（2026-10-30）— 公开仓库自动关闭非协作者的 fork PR（#492）**
 
   - **背景**：仓库保持公开，但 GitHub **没有**「公开仓库禁止 fork PR」的原生开关（Issues / Wiki 可关，Pull Requests 不可关）⇒ 任何人都能 fork 后开 PR，产生通知噪音。
   - **方案**：新增 `.github/workflows/close-fork-prs.yml`，监听 `pull_request_target`（opened / reopened），按 `author_association` 判定——非 `OWNER` / `MEMBER` / `COLLABORATOR` 的 PR 自动关闭并留言引导走 issue。`gh pr close --comment` 一步完成，零第三方 action。
@@ -127,7 +127,7 @@
   - **验证**：`check-workflow-yaml.py` + `test_workflow_yaml.py`（正向回归扫描全部 workflow）通过。
   - 详见 [`issue-492-close-fork-prs.md`](./issue-492-close-fork-prs.md)
 
-- **v0.7.11（未发布）— 打开任务详情时实时拉取 GitHub 详情与评论（不落库）（#490）**
+- **v0.8.0（2026-10-30）— 打开任务详情时实时拉取 GitHub 详情与评论（不落库）（#490）**
 
   - **需求**：查看任务详情（打开 `DetailPanel`）时，从 GitHub **实时拉取**该任务的详细信息与评论，**不写入本地数据库**；覆盖评论区（评论链接列表），并展示实时指派 / 标签、以及关联 PR 的提交历史。
   - **与 `on_demand::ensure_task_available` 的区别**：后者也会拉单 issue，但会把结果**写入 `tasks` 表**（给 MCP 写路径兜底）；本功能新增一条**纯只读、零落库**的实时通道——数据只在单次请求里回传前端，绝不触碰 SQLite，因此不污染同步的「手动态不被覆盖」语义、也不引入双源冲突。

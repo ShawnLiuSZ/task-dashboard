@@ -1,7 +1,7 @@
 {
   "name": "taskboard",
   "private": true,
-  "version": "0.7.10",
+  "version": "0.8.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
