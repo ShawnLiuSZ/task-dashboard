@@ -1357,6 +1357,48 @@ button.unassigned-tag:disabled {
   margin: 2px 0;
 }
 
+/* #512：**嵌套层级**（按缩进还原）—— 子列表紧贴父条目，缩进一档。
+ * ⚠️ 默认的 `ul ul { margin-block-start: 1em }` 会把子列表推得离父条目很远，
+ * 与 GitHub 的观感不符 ⇒ 收紧上下间距。 */
+.markdown li > ul,
+.markdown li > ol {
+  margin: 2px 0 2px;
+  padding-left: 18px;
+}
+
+/* #512：**任务列表**的只读复选框（`- [ ]` / `- [x]`）。
+ * ⚠️ `disabled` ⇒ 不可交互（内容是只读视图，用户不该在这里勾选）。 */
+.markdown input[type='checkbox'].task-list-item-checkbox {
+  margin: 0 6px 0 0;
+  vertical-align: middle;
+  accent-color: var(--accent);
+}
+
+/* #512：**GFM 表格**（38% 的真实 issue body 里有表格）。 */
+.markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 8px;
+  font-size: calc(var(--font-size-base) * 0.95);
+  /* 表格可能比弹窗宽 ⇒ 允许横向滚动（issue 正文里的宽表很常见）。 */
+  display: block;
+  overflow-x: auto;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid var(--border);
+  padding: 5px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown th {
+  background: var(--surface-2);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .markdown code {
   font-family: var(--font-mono);
   font-size: calc(var(--font-size-base) * 0.92);

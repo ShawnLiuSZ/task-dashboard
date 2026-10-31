@@ -320,3 +320,145 @@ describe('renderMarkdown — 图片（#506）', () => {
     expect(html).toContain('<a href="https://example.com"');
   });
 });
+
+/**
+ * #512：任务列表 / 嵌套层级 / GFM 表格。
+ *
+ * ## 为什么补这三样（数据驱动，不是猜）
+ *
+ * 扫了用户实际在看的仓库 **121 个真实 issue body**，统计本渲染器**不支持**的构造：
+ *
+ * | 构造 | 出现率 | 修复前的样子 |
+ * |---|---|---|
+ * | 任务列表 `- [ ]` / `- [x]` | **104 / 121（86%）** | `<li>[ ] 待办 A</li>`（复选框丢失） |
+ * | 嵌套列表（缩进子项） | **53 / 121（44%）** | 子项变成与父项**平级**（缩进层级丢失） |
+ * | GFM 表格 | **46 / 121（38%）** | 整段变成 `\| 字段 \| 说明 \|` 的原始文本 |
+ *
+ * ⇒ 用户报的「内容没有按原有样式显示」就是这三项。
+ *
+ * ⚠️ 用例的**输入形状取自真实 body**（`FoodsUp-Inc/fad-backend` 的任务列表 /
+ * 嵌套列表 / 表格），不是自己编的最小例子 —— #502 的教训。
+ */
+describe('renderMarkdown — 任务列表（#512）', () => {
+  it('未勾选 `- [ ]` ⇒ 只读复选框', () => {
+    const html = renderMarkdown('- [ ] 待办 A');
+    expect(html).toContain('<input type="checkbox" class="task-list-item-checkbox" disabled />');
+    expect(html).toContain('待办 A');
+    // ⚠️ 标记本身不得残留在文本里。
+    expect(html).not.toContain('[ ]');
+  });
+
+  it('已勾选 `- [x]` ⇒ 带 checked', () => {
+    const html = renderMarkdown('- [x] 已完成 B');
+    expect(html).toContain('checked disabled');
+    expect(html).not.toContain('[x]');
+  });
+
+  it('复选框是**只读**的（disabled，无 name / value ⇒ 不可提交、不可交互）', () => {
+    const html = renderMarkdown('- [ ] 待办');
+    expect(html).toContain('disabled');
+    expect(html).not.toMatch(/<input[^>]*\sname=/);
+    expect(html).not.toMatch(/<input[^>]*\svalue=/);
+    expect(html).not.toMatch(/<input[^>]*on[a-z]+=/i);
+  });
+
+  it('普通列表项**不受影响**（没有复选框）', () => {
+    const html = renderMarkdown('- 普通项');
+    expect(html).toBe('<ul><li>普通项</li></ul>');
+  });
+
+  it('`[x]` 后面必须跟空格（否则不是任务标记）', () => {
+    const html = renderMarkdown('- [x]紧跟文字');
+    expect(html).not.toContain('checkbox');
+    expect(html).toContain('[x]紧跟文字');
+  });
+});
+
+describe('renderMarkdown — 嵌套层级（#512）', () => {
+  it('缩进子项挂在上一个条目**内部**（不再是平级）', () => {
+    const html = renderMarkdown(['- 父项', '  - 子项 1', '  - 子项 2'].join('\n'));
+    expect(html).toBe('<ul><li>父项<ul><li>子项 1</li><li>子项 2</li></ul></li></ul>');
+  });
+
+  it('两级嵌套逐层收进', () => {
+    const html = renderMarkdown(['- A', '  - B', '    - C'].join('\n'));
+    expect(html).toBe('<ul><li>A<ul><li>B<ul><li>C</li></ul></li></ul></li></ul>');
+  });
+
+  it('不同父项各自持有自己的子列表', () => {
+    const html = renderMarkdown(['- A', '  - A1', '- B', '    - B1'].join('\n'));
+    expect(html).toBe('<ul><li>A<ul><li>A1</li></ul></li><li>B<ul><li>B1</li></ul></li></ul>');
+  });
+
+  it('有序列表的嵌套子项也保序', () => {
+    const html = renderMarkdown(['1. 一', '   1. 一一'].join('\n'));
+    expect(html).toBe('<ol><li>一<ol><li>一一</li></ol></li></ol>');
+  });
+
+  it('类型变化（`-` → `1.`）另起一个列表（与 GitHub 一致）', () => {
+    const html = renderMarkdown(['- a', '1. b'].join('\n'));
+    expect(html).toBe('<ul><li>a</li></ul><ol><li>b</li></ol>');
+  });
+
+  it('tab 缩进按 4 空格计（GitHub 口径）', () => {
+    const html = renderMarkdown('- 父项\n\t- 子项');
+    expect(html).toBe('<ul><li>父项<ul><li>子项</li></ul></li></ul>');
+  });
+});
+
+describe('renderMarkdown — GFM 表格（#512）', () => {
+  it('表头 + 分隔行 + 数据行 ⇒ <table>', () => {
+    const html = renderMarkdown(['| 字段 | 说明 |', '| --- | --- |', '| a | 1 |'].join('\n'));
+    expect(html).toContain('<table>');
+    expect(html).toContain('<thead><tr><th>字段</th><th>说明</th></tr></thead>');
+    expect(html).toContain('<tbody><tr><td>a</td><td>1</td></tr></tbody>');
+  });
+
+  it('单元格首尾空白被 trim（GFM 口径）', () => {
+    const html = renderMarkdown(['| a | b |', '| --- | --- |', '| 1 | 2 |'].join('\n'));
+    expect(html).toContain('<th>a</th>');
+    expect(html).not.toContain('<th> a </th>');
+  });
+
+  it('分隔行决定对齐方式', () => {
+    const html = renderMarkdown(
+      ['| l | c | r |', '| :-- | :-: | --: |', '| 1 | 2 | 3 |'].join('\n'),
+    );
+    expect(html).toContain('<th align="left">l</th>');
+    expect(html).toContain('<th align="center">c</th>');
+    expect(html).toContain('<th align="right">r</th>');
+  });
+
+  it('单元格内容走行内解析（粗体 / 链接）', () => {
+    const html = renderMarkdown(
+      ['| a | b |', '| --- | --- |', '| **粗** | [链](https://e.com) |'].join('\n'),
+    );
+    expect(html).toContain('<strong>粗</strong>');
+    expect(html).toContain('<a href="https://e.com"');
+  });
+
+  it('列数不足补空、过多截断（GFM 口径）', () => {
+    const html = renderMarkdown(['| a | b |', '| --- | --- |', '| 1 |'].join('\n'));
+    expect(html).toContain('<td>1</td><td></td>');
+    const html2 = renderMarkdown(['| a |', '| --- |', '| 1 | 2 |'].join('\n'));
+    expect(html2).toContain('<td>1</td></tr>');
+    expect(html2).not.toContain('<td>2</td>');
+  });
+
+  it('只有表头没有数据行 ⇒ 没有 <tbody>', () => {
+    const html = renderMarkdown(['| a | b |', '| --- | --- |'].join('\n'));
+    expect(html).toContain('</thead>');
+    expect(html).not.toContain('<tbody>');
+  });
+
+  it('**不是**分隔行的下一行 ⇒ 仍是普通段落（不误判成表格）', () => {
+    const html = renderMarkdown(['| a | b |', '普通文字'].join('\n'));
+    expect(html).not.toContain('<table>');
+  });
+
+  it('单元格里的 HTML 被转义（不产生真实节点）', () => {
+    const html = renderMarkdown(['| a |', '| --- |', '| <script>x</script> |'].join('\n'));
+    expect(html).not.toMatch(/<script/i);
+    expect(html).toContain('&lt;script&gt;');
+  });
+});
