@@ -2,6 +2,26 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.8.1 (unreleased) — Task detail body was not shown in its original style: task lists / nesting / GFM tables added (#513)**
+
+  - **Symptom**: the user reported "the content shown in the task detail is not displayed according to the original HTML style". **This is not ugly styling — the renderer was missing features.** The hand-written markdown renderer introduced in #498 explicitly does not support tables / task lists / nested lists, and at the time **nobody measured how common those actually are**.
+  - **Diagnosis (data-driven, not guesswork)**: scanned **121 real issue bodies** across the four repos the user actually works in (`FoodsUp-Inc/fad-backend` / `pq-backend` / `foodsup-client-web` / `foodsup-client`), counting the constructs the renderer **does not support** (code fences are stripped before the table check, so a `|` inside code is not mistaken for a table):
+    - **Task lists** `- [ ]` / `- [x]`: **104 / 121 (86%)** ⇒ rendered as `<li>[ ] 待办 A</li>` before the fix (the checkbox was lost)
+    - **Nested lists** (indented children): **53 / 121 (44%)** ⇒ the indentation level was lost, children ended up **flat** next to their parent
+    - **GFM tables**: **46 / 121 (38%)** ⇒ the whole table rendered as raw `| 字段 | 说明 |` text
+    - list continuation 4% / footnotes 1% / `<details>`·autolinks·reference links **0%** ⇒ not addressed here
+  - **Task lists**: `- [ ]` / `- [x]` ⇒ a **read-only** checkbox (`type=checkbox` + `disabled`, with **no** `name` / `value` / event attributes ⇒ not submittable, not interactive, no script surface); `[x]` must be followed by a space to count as a marker.
+  - **Nesting**: the list branch went from the flat "one `<li>` per line" implementation to **building a tree from the indentation** — tabs expand to **4** spaces (GitHub's rule), children are attached **inside** the preceding item (`<li>parent<ul><li>child</li></ul></li>`), and a type change (`-` → `1.`) starts a separate list. ⚠️ Two invariants: every branch **must consume at least one line** (otherwise it loops forever — the #502 lesson), and when `next === k` it **must advance forcibly** (otherwise content is lost).
+  - **GFM tables**: a line containing `|` whose **next** line is a delimiter row ⇒ `<table>`; `:---` / `:---:` / `---:` in the delimiter row drive `align`; cell contents go through the inline renderer (**already escaped**); too few columns are padded, too many are truncated; cell whitespace is trimmed (GFM's rule).
+  - **CSS**: nested sub-lists get tighter vertical spacing (the default `ul ul { margin-block-start: 1em }` pushes them far away from their parent, unlike GitHub); the checkbox is baseline-aligned and uses the theme colour; tables get borders, a header background, and horizontal scrolling for wide tables (`display:block` + `overflow-x:auto`).
+  - **⚠️ The list branch was rewritten wholesale ⇒ high regression risk** ⇒ all **44** existing markdown unit tests stay **green**.
+  - **All 3 mutations caught** by reverse verification: task markers no longer recognised / nesting flattened / the table branch made unreachable. ⚠️ The reverse-verification script itself hit a trap: counting failures by `grep`-ing vitest's output reported "5 failed" as "0 failed" three times in a row ⇒ switched to judging by **exit code only** (methodology discipline ①).
+  - **Visual verification** (headless Chrome + the real `styles.css` + the real render output, measured with injected readings): nesting indent **18px** (18px per level) · 2 checkboxes / 1 checked / all `disabled` / no `name`·`value` · table 3 columns / 1px border / alignment `['none','left','right']` · page horizontal overflow **0**. ⚠️ The first version of the probe measured the child `<ul>`'s border-box `left`, which is **naturally equal** to the parent `<li>`'s left ⇒ the reading was always 0 and it nearly looked like "the nesting did not work" ⇒ changed to measure the child `<li>`.
+  - **Gates**: Rust fmt / clippy(--all-targets) / test ✓ (no Rust changes this round), tsc / lint / prettier / build / i18n ✓ (449 keys per locale, **zero new entries**), vitest 32 files **526** ✓, scripts 143 ✓, four check scripts ✓. **Zero backend / zero DB schema / zero i18n / zero new dependencies**.
+  - **Still unsupported (known boundary)**: list continuation (4%), footnotes (1%), and **raw HTML** (deliberately unsupported — the security model chosen in #498, escaped to literal text).
+  - **Touched**: `app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`.
+  - See [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
+
 - **v0.8.0 (2026-10-30) — Timeline event targets completed: milestone / requested reviewer / referenced commit (#510)**
 
   - **Context**: #508's overall review downgraded 4 event kinds that were "in the whitelist but with no data source on the backend" to a generic phrase ("updated the issue") — the **mechanism** was fixed, but the **root cause** (wrong field read / never parsed at all) was not, so the UI still showed nothing informative.

@@ -23,13 +23,36 @@
  * ## 支持的语法
  *
  * 块级：代码块（``` / ~~~）、标题（# ~ ######）、无序列表（`-` `*` `+`）、
- * 有序列表（`1.`）、引用（`>`）、水平线（`---`）、段落。
+ * 有序列表（`1.`）、引用（`>`）、水平线（`---`）、段落、
+ * **GFM 表格**（`| a | b |` + `| --- | --- |` 分隔行）。
  *
  * 行内：`` `code` ``、`**粗体**`、`*斜体*` / `_斜体_`、`~~删除线~~`、
  * `[文字](链接)`。
  *
- * 不支持（按纯文本原样显示）：表格、任务列表、HTML、引用式链接、嵌套列表。
- * 表格在 issue body 里不常见，真出现时以原始文本呈现（不丢内容）。
+ * 列表增强（#512）：**任务列表**（`- [ ]` / `- [x]`）渲染成只读复选框；
+ * **嵌套层级**按缩进还原（tab = 4 空格），子项挂在上一个条目内部。
+ *
+ * 不支持（按纯文本原样显示）：原始 HTML、引用式链接、脚注、列表续行。
+ * ⚠️ 原始 HTML **刻意不支持**（转义成字面文本）—— 见上面的安全模型第 2 条。
+ *
+ * ## #512：为什么补这三样（数据驱动）
+ *
+ * 扫了用户实际在看的仓库 **121 个真实 issue body**，统计本渲染器**不支持**的构造：
+ *
+ * | 构造 | 出现率 | 修复前的样子 |
+ * |---|---|---|
+ * | **任务列表** `- [ ]` / `- [x]` | **104 / 121（86%）** | `<li>[ ] 待办 A</li>`（复选框丢失） |
+ * | **嵌套列表**（缩进子项） | **53 / 121（44%）** | 缩进层级丢失 ⇒ 子项变成与父项**平级** |
+ * | **GFM 表格** | **46 / 121（38%）** | 整段变成 `\| 字段 \| 说明 \|` 的原始文本 |
+ * | 列表续行 | 5 / 121（4%） | 仍按纯文本（占比低，暂不支持） |
+ * | 脚注 `[^x]` | 2 / 121（1%） | 仍按纯文本 |
+ *
+ * ⇒ 用户看到的「内容没有按原有样式显示」就是这三项。
+ *
+ * ⚠️ **不引入 markdown 库**（AGENTS.md §2.5「不引入新依赖」）：仓库前端零运行时依赖，
+ * #498 已经拒绝过 `marked`（几百 KB + 一条新供应链面）⇒ 继续扩展自写实现。
+ * 这三项都**不扩大 XSS 面**：复选框是 `type=checkbox` + `disabled`（无 name / value /
+ * 事件属性），表格只产我们自己的标签，单元格内容仍走 `renderInline`（已转义）。
  */
 
 /** HTML 转义：把 5 个危险字符换成实体。 */
@@ -120,6 +143,219 @@ function isHr(line: string): boolean {
   return /^ {0,3}([-*_])\s*(\1\s*){2,}$/.test(line);
 }
 
+/* ================================================================== *
+ * 列表（#512）：任务列表 + 嵌套层级
+ * ================================================================== */
+
+/** 一个列表项（扁平的一行：缩进 + 项目符号 + 文本）。 */
+interface ListItem {
+  /** 缩进宽度（空格数；tab 按 [`TAB_WIDTH`] 展开）。 */
+  indent: number;
+  /** 是否有序列表项（`1.` / `1)`）。 */
+  ordered: boolean;
+  /** 任务列表状态：`null` = 普通项 / `true` = 已勾选 / `false` = 未勾选。 */
+  task: boolean | null;
+  /** 条目文本（已剥离任务标记 `[ ]` / `[x]`）。 */
+  text: string;
+}
+
+/**
+ * 列表项匹配：缩进 + 项目符号（`-` `*` `+` / `1.` `1)`）+ 文本。
+ *
+ * ⚠️ 与旧实现（两个独立正则 `^\s*[-*+]\s+(.*)$` / `^\s*\d+[.)]\s+(.*)$`）
+ * **等价** —— 保持一致才能让「段落分支的终止条件」与「列表分支的判定」不打架
+ * （#502 的教训：两套独立写法曾在 CRLF 上互相矛盾 ⇒ 死循环）。
+ */
+const LIST_ITEM_RE = /^(\s*)(?:([-*+])|(\d+)[.)])\s+(.*)$/;
+
+/** 任务列表标记：`[ ]`（未勾选）/ `[x]`（已勾选），后跟至少一个空格。 */
+const TASK_MARK_RE = /^\[([ xX])\]\s+(.*)$/;
+
+/** tab 展开成多少空格（GitHub 口径）。 */
+const TAB_WIDTH = 4;
+
+/** 解析一行是否为列表项；不是则返回 `null`。 */
+export function parseListItem(line: string): ListItem | null {
+  const m = LIST_ITEM_RE.exec(line);
+  if (!m) return null;
+  const indentSrc = m[1] ?? '';
+  let indent = 0;
+  for (const ch of indentSrc) indent += ch === '\t' ? TAB_WIDTH : 1;
+  const ordered = m[3] !== undefined;
+  let text = m[4] ?? '';
+  let task: boolean | null = null;
+  const t = TASK_MARK_RE.exec(text);
+  if (t) {
+    task = (t[1] ?? ' ').toLowerCase() === 'x';
+    text = t[2] ?? '';
+  }
+  return { indent, ordered, task, text };
+}
+
+/**
+ * 任务列表项的前缀：**只读**复选框。
+ *
+ * ⚠️ 安全：`type="checkbox"` + `disabled`，**无** `name` / `value` / 任何事件属性
+ * ⇒ 不可提交、不可交互、无脚本执行面。
+ */
+function taskPrefix(task: boolean | null): string {
+  if (task === null) return '';
+  return task
+    ? '<input type="checkbox" class="task-list-item-checkbox" checked disabled /> '
+    : '<input type="checkbox" class="task-list-item-checkbox" disabled /> ';
+}
+
+/**
+ * 渲染一层列表（同一缩进 + 同一类型的条目）。
+ *
+ * 子项（缩进更深的那一段）挂在上一个条目**内部** ⇒ `<li>…<ul>…</ul></li>`，
+ * 与 GitHub 的嵌套层级一致。
+ *
+ * @param items 扁平列表项
+ * @param start 起始下标
+ * @param end 结束下标（不含）
+ * @param indent 本层缩进
+ * @param ordered 本层类型（`ul` / `ol`）
+ * @returns `[html, next]` —— `next` 指向第一个**不属于本层**的条目下标
+ */
+function renderListLevel(
+  items: ListItem[],
+  start: number,
+  end: number,
+  indent: number,
+  ordered: boolean,
+): [string, number] {
+  const parts: string[] = [];
+  let i = start;
+  while (i < end) {
+    const it = items[i]!;
+    if (it.indent < indent) break; // 更浅 ⇒ 属于上层
+    // 更深的项**不应**出现在本层（子项由下面的递归吃掉）⇒ 防御性跳过，
+    // 保证 `i` 一定前进（#502：任何分支都必须消费至少一行）。
+    if (it.indent > indent) {
+      i += 1;
+      continue;
+    }
+    if (it.ordered !== ordered) break; // 类型变了 ⇒ 另起一个列表
+    i += 1;
+    // 子项范围：紧随其后、缩进更深的**连续**一段。
+    let childEnd = i;
+    while (childEnd < end && items[childEnd]!.indent > indent) childEnd += 1;
+    let childHtml = '';
+    if (childEnd > i) {
+      childHtml = renderListChildren(items, i, childEnd);
+      i = childEnd;
+    }
+    parts.push(`<li>${taskPrefix(it.task)}${renderInline(it.text)}${childHtml}</li>`);
+  }
+  const tag = ordered ? 'ol' : 'ul';
+  return [`<${tag}>${parts.join('')}</${tag}>`, i];
+}
+
+/**
+ * 渲染一段**子项**：按 (缩进, 类型) 切成若干「同层列表」依次输出。
+ *
+ * ⚠️ 子层里也可能出现「类型变化」（`- a` → `  1. b`）⇒ 分段输出多个列表，
+ * 与 GitHub 一致（类型变了就是另一个列表）。
+ */
+function renderListChildren(items: ListItem[], start: number, end: number): string {
+  let out = '';
+  let k = start;
+  while (k < end) {
+    const indent = items[k]!.indent;
+    const ordered = items[k]!.ordered;
+    const [html, next] = renderListLevel(items, k, end, indent, ordered);
+    out += html;
+    // ⚠️ 防御：`next === k` 说明该层一条都没消费 ⇒ 必须前进，否则死循环。
+    k = next === k ? k + 1 : next;
+  }
+  return out;
+}
+
+/** 渲染整段列表项（顶层）：按 (缩进, 类型) 分段，输出一个或多个列表。 */
+export function renderListItems(items: ListItem[]): string {
+  let out = '';
+  let k = 0;
+  while (k < items.length) {
+    const indent = items[k]!.indent;
+    const ordered = items[k]!.ordered;
+    const [html, next] = renderListLevel(items, k, items.length, indent, ordered);
+    out += html;
+    k = next === k ? k + 1 : next;
+  }
+  return out;
+}
+
+/* ================================================================== *
+ * GFM 表格（#512）
+ * ================================================================== */
+
+/** 表格单元格的对齐方式。 */
+type TableAlign = '' | 'left' | 'center' | 'right';
+
+/**
+ * 切分表格行：去掉首尾的 `|`，按 `|` 切成单元格，并**去掉每个单元格的首尾空白**
+ * （GFM 口径：`| a | b |` 的两个单元格是 `a` / `b`，不是 ` a ` / ` b `）。
+ */
+function splitTableRow(line: string): string[] {
+  let t = line.trim();
+  if (t.startsWith('|')) t = t.slice(1);
+  if (t.endsWith('|')) t = t.slice(0, -1);
+  return t.split('|').map((c) => c.trim());
+}
+
+/** 判断一行是否是 GFM 表格的**分隔行**（`| --- | :--: | --: |`）。 */
+export function isTableDelimiter(line: string): boolean {
+  const t = line.trim();
+  if (!t.includes('-')) return false;
+  const cells = splitTableRow(t);
+  if (cells.length === 0) return false;
+  return cells.every((c) => /^:?-{1,}:?$/.test(c.trim()));
+}
+
+/** 从分隔行的一个单元格推出对齐方式（`:---` 左 / `:--:` 中 / `---:` 右）。 */
+function tableCellAlign(cell: string): TableAlign {
+  const c = cell.trim();
+  const left = c.startsWith(':');
+  const right = c.endsWith(':');
+  if (left && right) return 'center';
+  if (right) return 'right';
+  if (left) return 'left';
+  return '';
+}
+
+/** 对齐属性（空串 = 不带属性；取值是固定集合 ⇒ 无注入面）。 */
+function alignAttr(align: TableAlign): string {
+  return align ? ` align="${align}"` : '';
+}
+
+/**
+ * 渲染 GFM 表格。
+ *
+ * @param header 表头单元格（已转义）
+ * @param aligns 各列对齐方式
+ * @param rows 数据行（每行是已转义的单元格数组）
+ */
+function renderTable(header: string[], aligns: TableAlign[], rows: string[][]): string {
+  const cols = header.length;
+  const ths = header
+    .map((c, ci) => `<th${alignAttr(aligns[ci] ?? '')}>${renderInline(c)}</th>`)
+    .join('');
+  const trs = rows
+    .map((cells) => {
+      // GFM：列数不足补空、过多则截断。
+      const tds: string[] = [];
+      for (let ci = 0; ci < cols; ci += 1) {
+        const cell = cells[ci] ?? '';
+        tds.push(`<td${alignAttr(aligns[ci] ?? '')}>${renderInline(cell)}</td>`);
+      }
+      return `<tr>${tds.join('')}</tr>`;
+    })
+    .join('');
+  const body = trs ? `<tbody>${trs}</tbody>` : '';
+  return `<table><thead><tr>${ths}</tr></thead>${body}</table>`;
+}
+
 /**
  * 把 markdown 源文本渲染为安全 HTML。
  *
@@ -202,20 +438,32 @@ export function renderMarkdown(src: string): string {
     }
 
     // ⑤ 列表：连续的无序 / 有序行合并成一个列表块。
-    const bullet = line.match(/^\s*[-*+]\s+(.*)$/);
-    const ordered = line.match(/^\s*\d+[.)]\s+(.*)$/);
-    if (bullet || ordered) {
-      const isOrdered = Boolean(ordered);
-      const items: string[] = [];
+    //    #512：改用 `parseListItem` + `renderListItems` ⇒ 支持**任务列表**
+    //    （`- [ ]` / `- [x]`）与**嵌套层级**（按缩进还原）。
+    if (parseListItem(line)) {
+      const items: ListItem[] = [];
       while (i < lines.length) {
-        const cur = lines[i];
-        const m = isOrdered ? cur.match(/^\s*\d+[.)]\s+(.*)$/) : cur.match(/^\s*[-*+]\s+(.*)$/);
-        if (!m) break;
-        items.push(`<li>${renderInline(m[1])}</li>`);
+        const it = parseListItem(lines[i]!);
+        if (!it) break;
+        items.push(it);
         i += 1;
       }
-      const tag = isOrdered ? 'ol' : 'ul';
-      out.push(`<${tag}>${items.join('')}</${tag}>`);
+      out.push(renderListItems(items));
+      continue;
+    }
+
+    // ⑤-bis GFM 表格：当前行含 `|` 且**下一行是分隔行**（`| --- | --- |`）。
+    //    #512：此前整段表格会以原始文本呈现（38% 的真实 issue body 里有表格）。
+    if (line.includes('|') && i + 1 < lines.length && isTableDelimiter(lines[i + 1]!)) {
+      const header = splitTableRow(line);
+      const aligns = splitTableRow(lines[i + 1]!).map(tableCellAlign);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i]!.trim() && lines[i]!.includes('|')) {
+        rows.push(splitTableRow(lines[i]!));
+        i += 1;
+      }
+      out.push(renderTable(header, aligns, rows));
       continue;
     }
 
