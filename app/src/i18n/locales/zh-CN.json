@@ -3,7 +3,6 @@
   "topbar.singleAccount": "单账号",
   "topbar.allAccounts": "全部账号",
   "app.title": "TaskBoard",
-  "topbar.openCount": "未完成 {n} 条",
   "topbar.addNote": "新建备忘录",
   "topbar.lastSync": "上次同步 {time}",
   "btn.syncing": "同步中…",

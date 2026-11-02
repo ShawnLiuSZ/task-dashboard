@@ -5,6 +5,12 @@
 > 分支：`feature/issue-484-topbar-open-count`
 >
 > 类别：前端 / 信息口径（顶栏）
+>
+> ⚠️ **后续（#516）**：本 issue 引入的顶栏计数与 `app/src/utils/openCount.ts`
+> **已被移除** —— 那个数字的口径依赖四重筛选（仓库 / 关键词 / 账号模式 / 归属），
+> 文案却不体现任何前提，且它本来就不等于看板各列之和 ⇒ 有信息成本、无澄清收益。
+> 详见 [`issue-516-remove-topbar-open-count.md`](./issue-516-remove-topbar-open-count.md)。
+> **本文档作为 v0.7.10 的历史记录保留**，其中的口径描述反映的是当时的状态。
 
 ## 背景 / 动机
 
@@ -66,6 +72,6 @@
 ## 相关链接
 
 - Issue：[#484](https://github.com/ShawnLiuSZ/task-dashboard/issues/484)
-- 源码：[`app/src/utils/openCount.ts`](../app/src/utils/openCount.ts)、[`app/src/App.tsx`](../app/src/App.tsx)
+- 源码：[`app/src/App.tsx`](../app/src/App.tsx)；`app/src/utils/openCount.ts`（**已于 #516 删除** ⇒ 见 [`issue-516-remove-topbar-open-count.md`](./issue-516-remove-topbar-open-count.md)）
 - 关联：#259（顶栏计数初版）、#485（按项目视图丢失表外状态任务，另行处理）
 - CHANGELOG：[`docs/CHANGELOG.md`](./CHANGELOG.md)

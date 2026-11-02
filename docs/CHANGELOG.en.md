@@ -2,6 +2,21 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.8.2 (unreleased) — Removed the "N open" counter from the top bar (its meaning depended on several filters and was easy to misread) (#516)**
+
+  - **Context**: the user first asked "what does the number 19 next to the logo mean", and after the semantics were explained, decided to **remove the number entirely**.
+  - **Why removing it is right**: that counter (added in v0.7.10, #484) depends on **four filters** — the repository filter on the left, the keyword search on top, the account mode, and the ownership filter (assigned to me / unclaimed / assigned to others; the backend filters by ownership before sending the rows) ⇒ at any moment three different readings are plausible (the total / mine / the current filtered set), while the label ("N open") expresses **none of those preconditions**.
+  - **⚠️ Structural reason**: it **never equalled the sum of the board's columns** anyway (the board's "done" column still lists issues that are closed on GitHub — as #484's own comment notes) ⇒ it is display that costs information but buys no clarity.
+  - **Change ①**: `App.tsx` drops the `<span>` **together with the now-unused `countOpenIssues` import and the `openCount` useMemo** — ⚠️ `tsconfig` enables `noUnusedLocals` / `noUnusedParameters`, so removing only the JSX makes the build **fail outright**.
+  - **Change ②**: delete the **now-dead** `app/src/utils/openCount.ts` + `openCount.test.ts` (nothing references them). Rationale: this repo does not keep dead code / dead entries — the same as `detail.bodyEmpty` (an i18n key added but referenced nowhere), which the #508 review treated as a low-severity defect.
+  - **Change ③**: remove the **dead entry** `topbar.openCount` (one occurrence in each of `zh-CN.json` and `en-US.json`) ⇒ i18n key count 449 → **448**.
+  - **Verification**: headless Chrome with the real CSS — the top bar's left side now shows **only the brand name plus the memo button** (the number is gone) with **no leftover gap** (React removes the node outright; `.topbar-left` is a flex row with a gap, so one fewer child leaves no empty box), and the right-hand side is unaffected; **0** remaining references to `openCount` / `countOpenIssues` / `topbar.openCount` anywhere in the repo.
+  - **Gates**: Rust fmt / clippy(--all-targets) / test ✓ (no Rust changes this round), tsc / lint / prettier / build / i18n ✓ (448 keys), vitest 31 files **520** ✓ (was 32 / 526 ⇒ minus the 6 cases in the deleted `openCount.test.ts`), scripts 143 ✓, four check scripts ✓. **Zero backend / zero DB schema / zero new dependencies**.
+  - **History left intact**: the **v0.7.10 (#484)** entry in `docs/CHANGELOG.md` records why the label was changed from "N tasks" to "N open" back then — that is **version history** and is deliberately kept; today's removal is a new product decision.
+  - **Side effect and where it could go**: the top bar loses the at-a-glance "how much is left to do" signal. If it should come back, the **left sidebar** is a better home (it already carries the ownership / account context, so the same number is self-explanatory) or **the board's column headers** (same source as the column contents, so it cannot contradict itself).
+  - **Touched**: `app/src/App.tsx` + i18n ×2; deleted `utils/openCount.ts` and its test.
+  - See [`issue-516-remove-topbar-open-count.md`](./issue-516-remove-topbar-open-count.md)
+
 - **v0.8.1 (2026-11-02) — Task detail body was not shown in its original style: task lists / nesting / GFM tables added (#513)**
 
   - **Symptom**: the user reported "the content shown in the task detail is not displayed according to the original HTML style". **This is not ugly styling — the renderer was missing features.** The hand-written markdown renderer introduced in #498 explicitly does not support tables / task lists / nested lists, and at the time **nobody measured how common those actually are**.
