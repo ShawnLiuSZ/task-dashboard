@@ -102,6 +102,50 @@ describe('侧边栏窄窗收起 #265', () => {
     expect(decls('.sidebar.collapsed .sidebar-group-title')).toMatch(/display\s*:\s*none/);
     expect(decls('.sidebar.collapsed .sidebar-empty')).toMatch(/display\s*:\s*none/);
   });
+
+  // #516：账号分组标题行（含「未完成 N 条」计数）整体收起 —— 纯图标模式放不下文字。
+  it('收起态隐藏账号分组标题行（含未完成计数）', () => {
+    expect(decls('.sidebar.collapsed .sidebar-group-head')).toMatch(/display\s*:\s*none/);
+  });
+});
+
+/**
+ * 侧边栏账号名完整显示 + 自动换行（#516）。
+ *
+ * 背景：`.sidebar-item` 用 `white-space: nowrap` + `.sidebar-item-label` 用
+ * `text-overflow: ellipsis` ⇒ 长 org 名（如 `@user (FoodsUp-Inc-Group)`）被单行截断，
+ * 而 `title` 写的又是「切换到该账号的看板」⇒ **截断后认不出是哪个账号**；
+ * 折叠态（56px 纯图标）下文字标签整个隐藏，更是只剩一个匿名图标。
+ *
+ * 口径与同型修复一致（见 `.session-card-title` / `.session-meta-value`）：
+ * 去截断 + 允许断行；`overflow-wrap: anywhere` 兜底**无空格**的长 org 名
+ * （`break-word` 只在合适断点断，这类串仍会顶出侧栏）。
+ *
+ * vitest 无布局引擎，沿用 `?raw` 静态断言。
+ */
+describe('侧边栏账号名完整显示', () => {
+  it('.sidebar-group.accounts .sidebar-item 不再使用省略截断', () => {
+    const d = decls('.sidebar-group.accounts .sidebar-item');
+    expect(d).not.toMatch(/text-overflow\s*:\s*ellipsis/);
+    expect(d).not.toMatch(/white-space\s*:\s*nowrap/);
+  });
+
+  it('.sidebar-group.accounts .sidebar-item-label 允许自动换行', () => {
+    const d = decls('.sidebar-group.accounts .sidebar-item-label');
+    expect(d).not.toMatch(/text-overflow\s*:\s*ellipsis/);
+    expect(d).not.toMatch(/overflow\s*:\s*hidden/);
+    expect(d).toMatch(/white-space\s*:\s*normal/);
+    // `anywhere` 而非 `break-word`：org 名可能无空格长串。
+    expect(d).toMatch(/overflow-wrap\s*:\s*anywhere/);
+    // flex 子项必须允许收缩，否则长串不换行而是顶出侧栏。
+    expect(d).toMatch(/min-width\s*:\s*0/);
+  });
+
+  it('账号分组标题行把标题与计数横向排开', () => {
+    const d = decls('.sidebar-group-head');
+    expect(d).toMatch(/display\s*:\s*flex/);
+    expect(d).toMatch(/justify-content\s*:\s*space-between/);
+  });
 });
 
 /**

@@ -5,6 +5,14 @@
 > 分支：`feature/issue-484-topbar-open-count`
 >
 > 类别：前端 / 信息口径（顶栏）
+>
+> ⚠️ **后续（#516）**：本 issue 引入的顶栏计数已**移到左侧账号分组标题行** ——
+> 那个数字的口径依赖四重筛选（仓库 / 关键词 / 账号模式 / 归属），文案却不体现任何前提，
+> 且它本来就不等于看板各列之和 ⇒ 放在顶栏有信息成本、无澄清收益；
+> 放到账号列表旁边后上下文自明。
+> 计数口径本身**未变**（`app/src/utils/openCount.ts` **保留**，仍是纯函数 + 单测守着）。
+> 详见 [`issue-516-sidebar-open-count-and-account-name.md`](./issue-516-sidebar-open-count-and-account-name.md)。
+> **本文档作为 v0.7.10 的历史记录保留**，其中的口径描述反映的是当时的状态。
 
 ## 背景 / 动机
 
@@ -66,6 +74,6 @@
 ## 相关链接
 
 - Issue：[#484](https://github.com/ShawnLiuSZ/task-dashboard/issues/484)
-- 源码：[`app/src/utils/openCount.ts`](../app/src/utils/openCount.ts)、[`app/src/App.tsx`](../app/src/App.tsx)
+- 源码：[`app/src/App.tsx`](../app/src/App.tsx)、[`app/src/utils/openCount.ts`](../app/src/utils/openCount.ts)（**#516 起计数展示移至左侧账号分组**，口径与实现未变 ⇒ 见 [`issue-516-sidebar-open-count-and-account-name.md`](./issue-516-sidebar-open-count-and-account-name.md)）
 - 关联：#259（顶栏计数初版）、#485（按项目视图丢失表外状态任务，另行处理）
 - CHANGELOG：[`docs/CHANGELOG.md`](./CHANGELOG.md)

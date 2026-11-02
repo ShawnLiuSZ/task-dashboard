@@ -6,6 +6,23 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.8.2（未发布）— 顶栏「未完成 N 条」计数移到左侧账号分组 + 账号名完整显示不再截断（#516）**
+
+  - **背景**：用户先问「状态栏 logo 旁边的数字 19 是什么意思」，解释完口径后决定去掉那个数字；讨论「副作用（少了一个『还剩多少要做』的信号）如何补回」时，选定**放在左侧 Sidebar**，并追加要求「**账号显示全、可以自动换行**」。
+  - **为什么顶栏那个数字该搬走**：它的值**依赖四重筛选**（左侧仓库筛选 / 顶部关键词搜索 / 账号模式 / 归属筛选 —— 后端 `list_tasks` 按 ownership 过滤后才下发）⇒ 同一时刻有三种合理解读（总数 / 我的 / 当前筛选下的），而文案「未完成 {n} 条」**不体现任何前提**；⚠️ 且它**本来就不等于看板各列之和**（看板「已完成」列仍列出 GitHub 上已关闭的任务）⇒ 有信息成本、无澄清收益。
+  - **改动 ①（计数搬家）**：从顶栏品牌名右侧移到**左侧账号分组标题行**（新增 `.sidebar-group-head`，标题在左、计数在右）。**紧邻账号列表 ⇒ 「这些账号下还剩多少」上下文自明**；计数 **> 0 才渲染**（不显示「未完成 0 条」噪音）；`title` 给出完整口径（「当前视图未完成 N 条（不含 GitHub 已关闭与看板已完成）」）。口径本身**不变**（仍是 `countOpenIssues`：排除 GitHub 已关闭 + 看板已完成），仍与 `visible` 同源 ⇒ 仓库筛选与关键词搜索继续生效。
+  - **改动 ②（账号名完整显示 + 自动换行）**：⚠️ 实测原样式 `.sidebar-item` 用 `white-space: nowrap` + `.sidebar-item-label` 用 `text-overflow: ellipsis` ⇒ **长 org 名被单行截断**，而 `title` 写的又是「切换到该账号的看板」⇒ **截断后完全认不出是哪个账号**；折叠态（56px 纯图标）下文字标签整个隐藏，更是只剩**匿名图标**。修法与仓库同型修复一致（`.session-card-title` / `.session-meta-value`）：去截断 + `white-space: normal` + `overflow-wrap: anywhere`（兜底**无空格**的长 org 名，`break-word` 只在合适断点断）+ `min-width: 0`（flex 子项必须允许收缩）+ `align-items: flex-start`（多行时图标不再垂直居中到整块文本的中线）。
+  - **改动 ③（`title` 用账号全名）**：折叠态下文字全隐藏 ⇒ `title` 是**唯一**能分辨账号的线索 ⇒ 改为「`@login (org)` · 切换到该账号的看板」。
+  - **改动 ④（折叠态）**：`.sidebar.collapsed .sidebar-group-head { display: none }`（标题与计数都靠文字表达，纯图标模式放不下）。
+  - **词条**：删 `topbar.openCount`（随顶栏展示下线 ⇒ 不留死词条），加 `sidebar.openCount` / `sidebar.openCountTitle` ⇒ i18n key 数 449 → **450**（删 1 加 2，中英同步）。
+  - **⚠️ 断言范式修正**：「折叠态隐藏标题行」是 **CSS 行为**（`display:none`），SSR 的 DOM 里元素仍在 ⇒ 该断言归 `styles.test.ts`（`?raw` 静态断言），组件测试只断言 DOM 层可验证的部分。
+  - **验证**：Chrome 无头 + 真实 `styles.css` 实测 —— 截断标签数 **0** · 长账号名高度 **70px** vs 短名 **18px**（确实换行成 4 行）· 末字符全部在侧栏内 · 计数在标题右侧且可见 · 侧栏横向溢出 **0** · 图标与首行文字 top 差 **2px**（对齐）。
+  - **测试**：+17（新增 `components/sidebar.test.tsx` 7 例 · `styles.test.ts` +4 · `utils/openCount.test.ts` 6 例恢复）⇒ vitest 32 → **33 文件 / 520 → 537 例**。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓（本次零 Rust 改动）· tsc / lint / prettier / build / i18n ✓（450 key）· scripts 143 ✓ · 四 check ✓。**零后端 / 零 DB schema / 零新依赖**。
+  - **连带修**：`docs/issue-484-topbar-open-count.md`（v0.7.10 历史文档）里「`openCount.ts` 已于 #516 删除」的说法已不成立（该文件**保留**）⇒ 按「旧文档若被新文档取代，在文档顶部标注已被 <new-doc> 取代」更新后续说明。
+  - **影响面**：`App.tsx` · `components/Sidebar.tsx` · `styles.css` · i18n ×2。
+  - 详见 [`issue-516-sidebar-open-count-and-account-name.md`](./issue-516-sidebar-open-count-and-account-name.md)
+
 - **v0.8.1（2026-11-02）— 任务详情正文没按原有样式显示：补齐任务列表 / 嵌套层级 / GFM 表格（#513）**
 
   - **现象**：用户反馈「任务详情显示的内容没有按 html 原有样式显示」。**不是样式不好看，是渲染器缺功能** —— #498 引入的自写 markdown 渲染器明确不支持表格 / 任务列表 / 嵌套列表，而当时**没量过真实数据里到底有多常见**。

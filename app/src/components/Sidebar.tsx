@@ -8,6 +8,9 @@ export type NavKey =
 interface Props {
   accounts: Account[];
   activeAccountId: number | null;
+  /** #516：当前视图的**未完成 issue 数**（排除 GitHub 已关闭 / 看板已完成）。
+   *  显示在账号分组标题行 —— 紧邻账号列表 ⇒ 「哪个账号下的多少条」自明。 */
+  openCount?: number;
   /** #422：当前展示视图模式。聚合（'all'）时不高亮任何单个账号，
    *  否则用户会以为处于单账号视图、实际看到全部账号的任务。 */
   viewMode?: 'single' | 'all';
@@ -89,6 +92,7 @@ function NavItem({
 export default function Sidebar({
   accounts,
   activeAccountId,
+  openCount = 0,
   viewMode = 'single',
   nav,
   collapsed = false,
@@ -117,7 +121,20 @@ export default function Sidebar({
       </div>
 
       <div className="sidebar-group accounts">
-        <div className="sidebar-group-title">{t('sidebar.accountsTitle')}</div>
+        {/* #516：分组标题行 —— 右侧带「未完成 N 条」。
+            计数紧邻**账号列表** ⇒ 「这些账号下还剩多少」的上下文自明
+            （原先放在顶栏时，离账号/归属/搜索这些筛选前提都很远 ⇒ 容易被误读）。 */}
+        <div className="sidebar-group-head">
+          <span className="sidebar-group-title">{t('sidebar.accountsTitle')}</span>
+          {openCount > 0 && (
+            <span
+              className="sidebar-open-count muted small"
+              title={t('sidebar.openCountTitle', { n: openCount })}
+            >
+              {t('sidebar.openCount', { n: openCount })}
+            </span>
+          )}
+        </div>
         {accounts.length === 0 && (
           <div className="sidebar-empty muted small">{t('sidebar.noAccounts')}</div>
         )}
@@ -132,7 +149,10 @@ export default function Sidebar({
               key={a.id}
               icon={ICON.user}
               label={label}
-              title={t('sidebar.switchAccount')}
+              // #516：title 必须是**账号全名** —— 折叠态（56px）下文字标签整个隐藏，
+              // 账号只剩一个图标，title 是唯一能分辨「这是哪个账号」的线索
+              // （原先写的是「切换账号」，折叠态下完全认不出账号）。
+              title={`${label} · ${t('sidebar.switchAccount')}`}
               active={active}
               onClick={() => onSwitchAccount(a.id)}
             />

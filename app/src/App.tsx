@@ -418,9 +418,13 @@ function BoardApp() {
     });
   }, [tasks, repo, deferredQuery]);
 
-  // #484：顶栏数字 =「我的未完成 issue 数」（排除 closed / done）。
-  // 与 visible 同源 ⇒ 仓库筛选与关键词搜索仍然生效；看板「已完成」列仍展示已关闭任务，
-  // 因此该数字本就**不该**等于各列之和，文案已显式写明「未完成」。
+  // #516：未完成 issue 数（排除 closed / done）⇒ 显示在**左侧账号分组标题行**。
+  // 与 visible 同源 ⇒ 仓库筛选与关键词搜索仍然生效。
+  //
+  // ⚠️ 为什么不再放顶栏（v0.7.10 ~ v0.8.1 的做法）：那个数字离「哪个账号 / 哪种归属
+  // / 搜了什么」这些前提都很远 ⇒ 同一时刻有三种合理解读（总数 / 我的 / 当前筛选下的），
+  // 且它本来就不等于看板各列之和（看板「已完成」列仍列出 GitHub 上已关闭的任务）。
+  // 放进账号分组后，上下文（账号列表）就在旁边 ⇒ 口径自明。
   const openCount = useMemo(() => countOpenIssues(visible), [visible]);
 
   const doSync = async () => {
@@ -546,9 +550,11 @@ function BoardApp() {
     <div className="app">
       <header className="topbar">
         <div className="topbar-left">
-          {/* #259：品牌 + 当前视图条数；账号切换移到左侧 Sidebar。 */}
+          {/* #259：品牌 + 账号切换移到左侧 Sidebar。 */}
           <span className="app-title">{t('app.title')}</span>
-          <span className="muted">{t('topbar.openCount', { n: openCount })}</span>
+          {/* #516：顶栏的「未完成 N 条」计数已移除 —— 数字含义依赖归属/账号/搜索
+              多重筛选，容易被误读（曾被问「这个数字是什么意思」）；看板各列本身
+              已给出分布，不需要再叠一个总数。 */}
           {/* #447：新建备忘录入口移到顶栏，点击弹出 Modal。 */}
           <button
             type="button"
@@ -649,6 +655,8 @@ function BoardApp() {
           activeAccountId={settings?.activeAccountId ?? null}
           // #422：聚合视图下不高亮单个账号，避免误导。
           viewMode={settings?.viewMode}
+          // #516：未完成数放在账号分组标题行（紧邻账号列表 ⇒ 口径自明）。
+          openCount={openCount}
           nav={nav}
           collapsed={sidebarCollapsed}
           onNavigate={setNav}

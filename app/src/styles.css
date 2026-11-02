@@ -2306,6 +2306,60 @@ button.unassigned-tag:disabled {
   text-overflow: ellipsis;
 }
 
+/* #516：账号分组标题行 —— 左侧标题 + 右侧「未完成 N 条」计数。
+ * 计数紧邻账号列表 ⇒ 「这些账号下还剩多少」的上下文自明。 */
+.sidebar-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 0 10px 2px;
+}
+
+/* 标题移进 head 行后，去掉自身的左右 padding（改由 head 行统一提供，避免叠加成 20px）。 */
+.sidebar-group-head .sidebar-group-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 0 4px;
+}
+
+.sidebar-open-count {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* #516：账号名**完整显示 + 自动换行**。
+ * 原先 `.sidebar-item` 用 `white-space: nowrap` + `.sidebar-item-label` 用
+ * `text-overflow: ellipsis` ⇒ 长 org 名（如 `@user (FoodsUp-Inc-Group)`）被单行截断，
+ * 而 `title` 写的又是「切换账号」⇒ 截断后完全认不出是哪个账号；
+ * 折叠态（56px）下文字标签整个隐藏，更是只剩一个匿名图标。
+ *
+ * 口径与同型修复一致（见 `.session-card-title` / `.session-meta-value`）：
+ * 去截断 + 允许断行；`overflow-wrap: anywhere` 兜底**无空格**的长 org 名
+ * （`break-word` 只在合适断点断，这类串仍会顶出侧栏）。 */
+.sidebar-group.accounts .sidebar-item {
+  white-space: normal;
+  align-items: flex-start;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.sidebar-group.accounts .sidebar-item-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+/* 图标与**首行**文字对齐（多行时不再垂直居中到整块文本的中线）。 */
+.sidebar-group.accounts .sidebar-icon {
+  margin-top: 2px;
+}
+
 .sidebar-footer {
   margin-top: auto;
   padding-top: 8px;
@@ -2336,6 +2390,13 @@ button.unassigned-tag:disabled {
 }
 
 .sidebar.collapsed .sidebar-group-title {
+  display: none;
+}
+
+/* #516：折叠态（56px 纯图标）下，账号分组标题行整体隐藏 ——
+ * 标题与「未完成 N 条」计数都靠文字表达，纯图标模式下都放不下。
+ * （账号的辨认靠 `.sidebar-item` 的 title 提示 ⇒ title 必须是账号全名。） */
+.sidebar.collapsed .sidebar-group-head {
   display: none;
 }
 
