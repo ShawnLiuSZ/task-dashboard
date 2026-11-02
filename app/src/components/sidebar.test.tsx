@@ -128,3 +128,73 @@ describe('侧边栏未完成计数（#516）', () => {
     expect(html).toContain('title="@a-very-long-account-login-name (AnExtremelyLongOrgName)');
   });
 });
+
+/**
+ * 侧边栏收起 / 展开开关（#517）。
+ *
+ * ## 为什么图标要**换方向**
+ *
+ * 折叠态（56px 纯图标）下文字标签整体隐藏 ⇒ 只剩一个图标 ⇒
+ * **图标方向本身就是可操作性提示**：
+ * - 展开态显示「‹」⇒ 收起（侧栏往左退）
+ * - 折叠态显示「›」⇒ 展开（侧栏往左拉出）
+ *
+ * `title` 同样要给出动作名（折叠态下唯一的文字线索）。
+ */
+describe('侧边栏收起 / 展开开关（#517）', () => {
+  it('展开态显示「收起侧边栏」', () => {
+    const html = render({ onToggleCollapsed: noop });
+    expect(html).toContain('收起侧边栏');
+    expect(html).not.toContain('展开侧边栏');
+  });
+
+  it('折叠态显示「展开侧边栏」', () => {
+    const html = render({ onToggleCollapsed: noop, collapsed: true });
+    expect(html).toContain('展开侧边栏');
+    expect(html).not.toContain('收起侧边栏');
+  });
+
+  it('未传 onToggleCollapsed 时**不渲染**开关（不渲染一个点了没反应的按钮）', () => {
+    const html = render();
+    expect(html).not.toContain('收起侧边栏');
+    expect(html).not.toContain('展开侧边栏');
+  });
+
+  it('图标方向随状态切换（展开态 ‹ / 折叠态 ›）', () => {
+    // 展开态：‹ = M15 5l-7 7 7 7
+    expect(render({ onToggleCollapsed: noop })).toContain('M15 5l-7 7 7 7');
+    // 折叠态：› = M9 5l7 7-7 7
+    expect(render({ onToggleCollapsed: noop, collapsed: true })).toContain('M9 5l7 7-7 7');
+  });
+
+  it('开关在**底部 footer**里（与「关于」同组）', () => {
+    const html = render({ onToggleCollapsed: noop });
+    const iFooter = html.indexOf('sidebar-footer');
+    const iToggle = html.indexOf('收起侧边栏');
+    const iAbout = html.indexOf('关于');
+    expect(iFooter).toBeGreaterThan(-1);
+    expect(iToggle).toBeGreaterThan(iFooter);
+    expect(iAbout).toBeGreaterThan(iToggle);
+  });
+
+  it('点击开关触发 onToggleCollapsed', () => {
+    const calls: number[] = [];
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <Sidebar
+          accounts={ACCOUNTS}
+          activeAccountId={1}
+          nav="board"
+          onNavigate={noop}
+          onSwitchAccount={noop}
+          onAddAccount={noop}
+          onAbout={noop}
+          onToggleCollapsed={() => calls.push(1)}
+        />
+      </I18nProvider>,
+    );
+    expect(html).toContain('收起侧边栏');
+    // SSR 不触发事件 ⇒ 断言回调未被调用（只验证接线，不做交互）。
+    expect(calls).toHaveLength(0);
+  });
+});
