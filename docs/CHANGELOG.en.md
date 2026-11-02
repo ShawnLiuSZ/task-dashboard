@@ -2,7 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **v0.8.1 (unreleased) — Task detail body was not shown in its original style: task lists / nesting / GFM tables added (#513)**
+- **v0.8.1 (2026-11-02) — Task detail body was not shown in its original style: task lists / nesting / GFM tables added (#513)**
 
   - **Symptom**: the user reported "the content shown in the task detail is not displayed according to the original HTML style". **This is not ugly styling — the renderer was missing features.** The hand-written markdown renderer introduced in #498 explicitly does not support tables / task lists / nested lists, and at the time **nobody measured how common those actually are**.
   - **Diagnosis (data-driven, not guesswork)**: scanned **121 real issue bodies** across the four repos the user actually works in (`FoodsUp-Inc/fad-backend` / `pq-backend` / `foodsup-client-web` / `foodsup-client`), counting the constructs the renderer **does not support** (code fences are stripped before the table check, so a `|` inside code is not mistaken for a table):
