@@ -21,6 +21,8 @@
   "sidebar.synclogs": "同步日志",
   "sidebar.accounts": "账号登录",
   "sidebar.about": "关于",
+  "sidebar.collapse": "收起侧边栏",
+  "sidebar.expand": "展开侧边栏",
   "syncLogs.title": "同步日志",
   "syncLogs.pruneExpired": "清理过期日志",
   "syncLogs.clearAll": "清理全部日志",

@@ -21,6 +21,8 @@
   "sidebar.synclogs": "Sync Logs",
   "sidebar.accounts": "Account Login",
   "sidebar.about": "About",
+  "sidebar.collapse": "Collapse sidebar",
+  "sidebar.expand": "Expand sidebar",
   "syncLogs.title": "Sync logs",
   "syncLogs.pruneExpired": "Prune expired logs",
   "syncLogs.clearAll": "Clear all logs",

@@ -6,6 +6,21 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.8.2（未发布）— 增加侧边栏收起 / 展开功能（手动开关 + 偏好持久化）（#519）**
+
+  - **现状**：侧边栏**已有**折叠态（#265），但它是**纯响应式**的 —— `sidebarCollapsed = window.innerWidth < 900`，**不持久化**、**没有手动开关** ⇒ 想把侧栏收起来给看板让路**只能把窗口拖窄**。
+  - **⚠️ 关键设计：把「用户显式选择」与「环境约束」分开**。① **环境约束**（#265）：窗口 < 900px 时 200px 侧栏 + 看板**放不下** ⇒ 强制收起，这是**物理限制**；② **用户偏好**：手动收起 / 展开，是**明确的选择**。若只存一个布尔（`collapsed = narrow || manual`），窄窗下点「展开」**恒无效** ⇒ 用户以为按钮坏了 ⇒ 用**三态**偏好表达「用户是否明确表过态」：`'auto'`（从未明确选择 ⇒ 跟随窗口宽度，保持 #265 行为）/ `'collapsed'`（任何宽度都收起）/ `'expanded'`（任何宽度都展开，**覆盖**窄窗强制）。**优先级：用户显式选择 > 环境默认。**
+  - **新增 `app/src/utils/sidebarPrefs.ts`**：三态偏好读写（`localStorage` 键 `taskboard.sidebarCollapsed`，与 `taskboard.lang` / `taskboard.fontSize` 同族）+ 两个**纯函数** `resolveSidebarCollapsed(pref, narrowWindow)` / `nextSidebarPref(pref, narrowWindow)`。判定逻辑抽成纯函数而非内联在组件里 —— 它是**产品语义**（「显式选择 > 环境默认」），必须有独立单测守着（与 `countOpenIssues` 同一处理方式）。**非法值**（手改 localStorage / 旧版本残留）⇒ 回落到 `'auto'`；**localStorage 不可用**（隐私模式）⇒ 静默降级、不抛错。
+  - **`App.tsx`**：把单一 `sidebarCollapsed` 拆成 `narrowWindow`（环境）+ `sidebarPref`（偏好），并新增 `toggleSidebarCollapsed`。
+  - **`Sidebar.tsx`**：底部 footer 新增切换项（`onToggleCollapsed` prop），**图标方向随状态翻转**（展开态 `‹` 收起 / 折叠态 `›` 展开）—— 折叠态下文字标签整体隐藏，**图标方向本身就是可操作性提示**，`title` 同样给出动作名；`onToggleCollapsed` 为空时**不渲染**（不渲染一个点了没反应的按钮）。
+  - **零新 CSS**：折叠态既有规则已覆盖（`.sidebar.collapsed` 56px + `.sidebar-item { justify-content: center }` + `.sidebar-item-label { display: none }`）。
+  - **词条**：加 `sidebar.collapse` / `sidebar.expand`（中英各 2 条）⇒ i18n key 数 450 → **452**。
+  - **验证**：Chrome 无头 + 真实 `styles.css` 实测 —— 展开宽 **200** / 折叠宽 **56** · 主区两态都占满剩余宽度 · 折叠态文字标签与账号标题行均隐藏 · 切换图标居中 · 折叠态横向溢出 **0** · 两态图标 path **方向相反**（`M15 5l-7 7 7 7` / `M9 5l7 7-7 7`）。
+  - **测试**：+18（新增 `utils/sidebarPrefs.test.ts` 12 例 · `components/sidebar.test.tsx` +6）⇒ vitest 33 → **34 文件 / 537 → 555 例**。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓（本次零 Rust 改动）· tsc / lint / prettier / build / i18n ✓（452 key）· scripts 143 ✓ · 四 check ✓。**零后端 / 零 DB schema / 零新依赖**。
+  - **影响面**：`utils/sidebarPrefs.ts`（新）+ `utils/sidebarPrefs.test.ts`（新）· `App.tsx` · `components/Sidebar.tsx` · i18n ×2。
+  - 详见 [`issue-519-sidebar-collapse-toggle.md`](./issue-519-sidebar-collapse-toggle.md)
+
 - **v0.8.2（未发布）— 顶栏「未完成 N 条」计数移到左侧账号分组 + 账号名完整显示不再截断（#516）**
 
   - **背景**：用户先问「状态栏 logo 旁边的数字 19 是什么意思」，解释完口径后决定去掉那个数字；讨论「副作用（少了一个『还剩多少要做』的信号）如何补回」时，选定**放在左侧 Sidebar**，并追加要求「**账号显示全、可以自动换行**」。

@@ -12,6 +12,12 @@ import { coalescedLoad, createLoadCoalescer } from './utils/coalescedLoad';
 import { countHiddenChanged, snapshotTasks } from './utils/syncHint';
 import { taskIdentity } from './utils/taskIdentity';
 import { countOpenIssues } from './utils/openCount';
+import {
+  getSidebarPref,
+  nextSidebarPref,
+  resolveSidebarCollapsed,
+  setSidebarPref,
+} from './utils/sidebarPrefs';
 import { useEscLayer } from './utils/useEscLayer';
 import { fmtTime, I18nProvider, useI18n } from './i18n';
 import Board from './components/Board';
@@ -57,10 +63,16 @@ function BoardApp() {
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [lastWarning, setLastWarning] = useState<string | null>(null);
-  // #265：窗口宽度 < 900px 时侧边栏自动收起为纯图标模式（响应式，不持久化）。
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+  // #265：窗口宽度 < 900px 时侧边栏自动收起为纯图标模式（**环境约束**：200px 侧栏
+  // + 看板在窄窗口里放不下）。
+  const [narrowWindow, setNarrowWindow] = useState(
     typeof window !== 'undefined' ? window.innerWidth < 900 : false,
   );
+  // #517：用户手动收起的偏好（**三态**，持久化到 localStorage）：
+  // 'auto' = 从未明确选择 ⇒ 跟随窗口宽度；'collapsed' / 'expanded' = 用户明确选择
+  // ⇒ **优先于**窄窗强制（否则窄窗下点「展开」会没反应）。
+  const [sidebarPref, setSidebarPrefState] = useState(() => getSidebarPref());
+  const sidebarCollapsed = resolveSidebarCollapsed(sidebarPref, narrowWindow);
   // #258：部分失败 warning 与成功结果互斥展示（琥珀色 warn vs 绿色 ok）。
   // #178：上次同步中新变、但被当前筛选藏住的任务数（>0 时给提示+一键清除）。
   const [hiddenAfterSync, setHiddenAfterSync] = useState(0);
@@ -123,13 +135,22 @@ function BoardApp() {
     return () => clearTimeout(t);
   }, [noteNotice]);
 
-  // #265：监听窗口尺寸变化，窗口 < 900px 时自动收起侧边栏为纯图标模式。
+  // #265：监听窗口尺寸变化 ⇒ 记录是否处于窄窗（< 900px）。
   // 状态值与上次相同（同为 false / true）时 setState 为 no-op，不会触发多余重渲染，无需手抖防抖。
   useEffect(() => {
-    const onResize = () => setSidebarCollapsed(window.innerWidth < 900);
+    const onResize = () => setNarrowWindow(window.innerWidth < 900);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  // #517：收起 / 展开侧边栏 —— 写入**三态**偏好并持久化。
+  const toggleSidebarCollapsed = useCallback(() => {
+    setSidebarPrefState((prev) => {
+      const next = nextSidebarPref(prev, narrowWindow);
+      setSidebarPref(next);
+      return next;
+    });
+  }, [narrowWindow]);
 
   // #258：同步结果分级展示——warning 非空（部分账号/数据源失败）走琥珀色 warn
   // banner，不再混进绿色成功 banner；两者互斥展示。
@@ -657,6 +678,8 @@ function BoardApp() {
           viewMode={settings?.viewMode}
           // #516：未完成数放在账号分组标题行（紧邻账号列表 ⇒ 口径自明）。
           openCount={openCount}
+          // #517：手动收起 / 展开侧边栏。
+          onToggleCollapsed={toggleSidebarCollapsed}
           nav={nav}
           collapsed={sidebarCollapsed}
           onNavigate={setNav}
