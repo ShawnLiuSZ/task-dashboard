@@ -13,6 +13,8 @@
   "sidebar.accountsTitle": "账号",
   "sidebar.noAccounts": "暂无账号",
   "sidebar.switchAccount": "切换到该账号的看板",
+  "sidebar.openCount": "未完成 {n} 条",
+  "sidebar.openCountTitle": "当前视图未完成 {n} 条（不含 GitHub 已关闭与看板已完成）",
   "sidebar.addAccount": "添加账号",
   "sidebar.settings": "设置",
   "sidebar.agents": "Agent 接入",

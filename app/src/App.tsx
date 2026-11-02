@@ -11,6 +11,7 @@ import { taskListSignature } from './utils/taskSig';
 import { coalescedLoad, createLoadCoalescer } from './utils/coalescedLoad';
 import { countHiddenChanged, snapshotTasks } from './utils/syncHint';
 import { taskIdentity } from './utils/taskIdentity';
+import { countOpenIssues } from './utils/openCount';
 import { useEscLayer } from './utils/useEscLayer';
 import { fmtTime, I18nProvider, useI18n } from './i18n';
 import Board from './components/Board';
@@ -417,6 +418,15 @@ function BoardApp() {
     });
   }, [tasks, repo, deferredQuery]);
 
+  // #516：未完成 issue 数（排除 closed / done）⇒ 显示在**左侧账号分组标题行**。
+  // 与 visible 同源 ⇒ 仓库筛选与关键词搜索仍然生效。
+  //
+  // ⚠️ 为什么不再放顶栏（v0.7.10 ~ v0.8.1 的做法）：那个数字离「哪个账号 / 哪种归属
+  // / 搜了什么」这些前提都很远 ⇒ 同一时刻有三种合理解读（总数 / 我的 / 当前筛选下的），
+  // 且它本来就不等于看板各列之和（看板「已完成」列仍列出 GitHub 上已关闭的任务）。
+  // 放进账号分组后，上下文（账号列表）就在旁边 ⇒ 口径自明。
+  const openCount = useMemo(() => countOpenIssues(visible), [visible]);
+
   const doSync = async () => {
     setSyncing(true);
     setError(null);
@@ -645,6 +655,8 @@ function BoardApp() {
           activeAccountId={settings?.activeAccountId ?? null}
           // #422：聚合视图下不高亮单个账号，避免误导。
           viewMode={settings?.viewMode}
+          // #516：未完成数放在账号分组标题行（紧邻账号列表 ⇒ 口径自明）。
+          openCount={openCount}
           nav={nav}
           collapsed={sidebarCollapsed}
           onNavigate={setNav}
