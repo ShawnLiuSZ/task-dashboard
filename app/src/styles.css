@@ -149,7 +149,12 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 10px 16px;
+  /* #520：`titleBarStyle: "Overlay"` + `hiddenTitle: true` ⇒ 原生标题栏变成透明覆盖层，
+     **macOS 交通灯浮在 webview 左上角**（约 x 13..70）⇒ 顶栏左侧必须让出这段位置，
+     否则「TaskBoard」标题与交通灯重叠。
+     ⚠️ 变量化便于按实测微调（不同 macOS 版本交通灯位置略有差异）。
+     ⚠️ 只影响主窗口 —— About 小窗用的是 `.about-window`，不套 `.topbar`。 */
+  padding: 10px 16px 10px var(--titlebar-inset, 78px);
   background: var(--surface);
   border-bottom: 0.5px solid var(--border);
   flex: 0 0 auto;
@@ -157,6 +162,33 @@ body {
   position: sticky;
   left: 0;
   z-index: 5;
+}
+
+/* #520：顶栏的「收起 / 展开侧边栏」按钮（**仅图标**，无文字）。
+   ⚠️ Overlay 标题栏模式下顶栏即窗口标题栏 ⇒ 这个位置是拖拽窗口的天然抓手，
+   故按钮需要 `data-tauri-drag-region="false"` 显式排除（否则点击会被当成拖拽）。 */
+.topbar-collapse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.topbar-collapse:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.topbar-collapse .btn-icon {
+  width: 15px;
+  height: 15px;
 }
 
 .topbar-left,

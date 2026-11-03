@@ -58,6 +58,20 @@
   - **影响面**：`app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`。
   - 详见 [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.3（未发布）— 收起侧边栏按钮移到窗口标题栏位置（仅 icon，无文字）（#522）**
+
+  - **需求**：用户截图标注 —— 把「收起侧边栏」按钮移到**窗口标题栏位置**（紧跟窗口标题「TaskBoard」右侧，红框处），且**只用 icon、不要文字**。
+  - **⚠️ 关键约束：原生标题栏不在 DOM 里**。截图第一行（三个交通灯 + 窗口标题）是 **macOS 原生标题栏**，第二行才是应用自己的顶栏 ⇒ 普通 DOM 按钮**放不进去**（由 NSWindow 绘制，webview 碰不到）⇒ 唯一可行做法是把窗口改成 **`titleBarStyle: "Overlay"` + `hiddenTitle: true`**（VS Code 模式）：原生标题栏变成透明覆盖层、内容延伸到顶部、原生标题文字隐藏 ⇒ 应用的 `.app-title`「TaskBoard」上移到第一行、折叠图标紧随其后 ⇒ **视觉位置与原生标题栏里的按钮完全一致**。
+  - **Overlay 带来的三个连带项（逐条处理）**：① **拖拽区** —— Overlay 下没有原生标题栏可拖 ⇒ 顶栏声明 `data-tauri-drag-region="deep"`（⚠️ Tauri 的规则：**可点击元素默认阻止拖拽** ⇒ 搜索框 / 下拉 / 按钮照常可点，不必逐个排除；拖拽脚本由 window 核心插件注入，本仓已在用 `getCurrentWindow()` ⇒ 该插件已装载）。② **交通灯让位** —— 顶栏左侧留出位置（CSS 变量 `--titlebar-inset`，默认 78px；⚠️ 只影响主窗口，About 小窗用 `.about-window`）。③ **按钮本身排除拖拽** —— `data-tauri-drag-region="false"`，否则点击会被当成拖窗口。
+  - **图标按钮的可访问名**：只有图标 ⇒ `title` + `aria-label` 都给动作名；图标**方向随状态翻转**（展开态 `‹` = 收起 / 折叠态 `›` = 展开）。
+  - **侧栏侧同步清理**：底部开关**移除**（是「移动」不是「复制」）⇒ 连带清掉失效的 `onToggleCollapsed` prop 与两个图标常量。
+  - **验证（真机实测，`tauri dev` + `screencapture`）**：⚠️ 这一项**只有真 app 能验**（交通灯位置 / 标题栏高度 / 拖拽行为都不是 webview 的事，headless Chrome 复现不出来）。实测顶部一行 = `○○○  TaskBoard  ‹  │ 📝 新建备忘录 …` ⇒ 折叠图标**紧跟标题右侧**（与红框位置一致）· 仅图标无文字 · 交通灯与标题不重叠 · 顶栏右侧搜索 / 同步 / 设置全部正常 · 侧栏与看板无错位无裁切 · 侧栏账号名仍完整显示 + 自动换行（#516 未被破坏）。
+  - **测试**：+3（`panel-wiring.test.ts` 新增 7 条 App 级接线断言 · `sidebar.test.tsx` 断言改写）⇒ vitest 34 文件 / 555 → **558** 例。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓ · tsc / lint / prettier / build / i18n ✓（452 key，**零新词条**）· scripts 143 ✓ · 四 check ✓。**零后端逻辑 / 零 DB schema / 零新依赖**。
+  - **⚠️ 已知风险**：**窗口外观变了** —— 原生标题栏（独立一行、标题居中）消失、应用顶栏顶到最上面（这是达成「按钮放在标题栏位置」的必要代价）；Overlay 模式另有 Tauri 官方列出的限制：「标题栏高度随 OS 版本不同」「未聚焦时无法拖动窗口」（tauri#4316）。
+  - **影响面**：`src-tauri/tauri.conf.json`（main 窗口标题栏样式）· `App.tsx` · `styles.css` · `components/Sidebar.tsx` + 2 个测试文件。
+  - 详见 [`issue-522-topbar-collapse-toggle.md`](./issue-522-topbar-collapse-toggle.md)
+
 - **v0.8.0（2026-10-30）— 补齐时间线事件的目标字段：里程碑 / 被请求审查者 / 被引用提交（#510）**
 
   - **背景**：#508 的整体核查把 4 类「白名单里有、后端却没有数据源」的事件降级成了通用文案（「更新了 issue」）—— 机制修对了，但**根因**（目标取错字段 / 后端压根没解析）还在，用户看到的仍是无信息量的描述。
