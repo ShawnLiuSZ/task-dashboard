@@ -58,6 +58,17 @@
   - **影响面**：`app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`。
   - 详见 [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.3（未发布）— 收起侧边栏按钮的图标换成「侧栏面板」形状（固定，不随状态翻转）（#525）**
+
+  - **需求**：用户给了一张图标截图（**圆角矩形 + 左侧竖分隔线**），要求把顶栏的收起侧边栏按钮**换成这个图标**。
+  - **图形按截图逐像素反推**：原图墨迹 bbox = **16×14 px**，逐行扫描发现关键特征是 —— **左边框与竖分隔线是两条独立的线、中间留 1px 细缝**（不是实心侧栏），竖线**紧贴左边框**（距左边框中心仅 3 px）、长度占框高 60%、圆角半径占框高 1/3。⇒ 24×24 viewBox 里定为：外框 x 4..20 / y 4..20 / r = 5，竖线 x = 7、y 7.5..16.5。
+  - **⚠️ 为什么「固定」而不随状态翻转**：面板形状本身就表达「侧栏」；而「‹ / ›」箭头会让人误以为是「往左 / 往右移动窗口」而不是「收起 / 展开侧栏」；展开/收起的状态由**侧栏宽度本身**（200px ↔ 56px）体现，不必让图标再表达一遍；动作由 hover 的 `title` / `aria-label` 说明（VS Code 的 toggle-sidebar 也是固定图标）。
+  - **验证**：把**从 `App.tsx` 提取的同一段按钮 markup** 放进复现页（真实 `.topbar` / `.btn-icon` / `.topbar-collapse` 样式）+ Chrome 无头渲染，与用户原图并排比对 ⇒ **形状一致**。
+  - **测试**：断言改写为「图标是侧栏面板形状且**固定不翻转**」，并断言**不再出现**旧的箭头写法（`'M15 5l-7 7 7 7'` / `'M9 5l7 7-7 7'`）⇒ vitest 34 文件 / **558** 例（用例数不变，改的是断言内容）。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓ · tsc / lint / prettier / build / i18n ✓ · scripts 143 ✓ · 四 check ✓。**零 Rust 改动 / 零 DB schema / 零新依赖 / 零新 i18n 词条**。
+  - **影响面**：`app/src/App.tsx`（`<path>` 换成面板图标两条子路径、去掉状态翻转逻辑）· `app/src/panel-wiring.test.ts`（断言改写）。
+  - 详见 [`issue-525-sidebar-panel-icon.md`](./issue-525-sidebar-panel-icon.md)
+
 - **v0.8.3（未发布）— 菜单栏 TaskBoard 图标旁不再显示「处理中 N」数字（#524）**
 
   - **现象**：用户在 **macOS 状态菜单栏**看到 TaskBoard 应用图标**旁边有一个裸数字「13」**（截图里 `[TaskBoard 图标] 13`）⇒ 一个「不知含义、且随每次同步不断变化」的数字常驻在菜单栏。

@@ -76,13 +76,14 @@ padding: 10px 16px 10px var(--titlebar-inset, 78px);
   onClick={toggleSidebarCollapsed}
 >
   <svg …>
-    {/* 图标方向随状态翻转：展开态「‹」= 收起、折叠态「›」= 展开。 */}
+    {/* 「侧栏面板」图标（#525）：固定，不随状态翻转。 */}
     <path d={sidebarCollapsed ? 'M9 5l7 7-7 7' : 'M15 5l-7 7 7 7'} />
   </svg>
 </button>
 ```
 
 ⚠️ **图标按钮必须有可访问名** ⇒ `title` + `aria-label` 都给动作名（不能只有图标）。
+⚠️ 图标形状见 [#525](./issue-525-sidebar-panel-icon.md)（**侧栏面板**形状，固定不翻转）。
 
 ## 验证
 
@@ -111,7 +112,7 @@ padding: 10px 16px 10px var(--titlebar-inset, 78px);
 
 | 位置 | 内容 |
 |---|---|
-| `panel-wiring.test.ts`（**新增** describe） | 顶栏声明拖拽区 / 折叠按钮紧跟 `.app-title` / **只有图标没有文字**（`title`+`aria-label` 齐备）/ 显式排除拖拽 / 图标方向随状态翻转 / 点击走 `toggleSidebarCollapsed`（写三态偏好）/ 侧栏不再接收回调 |
+| `panel-wiring.test.ts`（**新增** describe） | 顶栏声明拖拽区 / 折叠按钮紧跟 `.app-title` / **只有图标没有文字**（`title`+`aria-label` 齐备）/ 显式排除拖拽 / 图标是**侧栏面板**形状且固定不翻转（#525）/ 点击走 `toggleSidebarCollapsed`（写三态偏好）/ 侧栏不再接收回调 |
 | `sidebar.test.tsx`（改写） | 侧栏底部**不再**渲染折叠开关（已移到顶栏）+ 底部只剩「关于」 |
 
 ### 门禁

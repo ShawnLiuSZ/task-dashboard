@@ -54,6 +54,17 @@
   - **Touched**: `app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`.
   - See [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.3 (unreleased) — The sidebar collapse button now uses a "sidebar panel" icon (fixed, no longer flipping with state) (#525)**
+
+  - **Requirement**: the user supplied an icon screenshot (**a rounded rectangle with a vertical divider on the left**) and asked for the top bar's collapse button to **use that icon**.
+  - **The shape was reverse-engineered pixel by pixel from the screenshot**: the ink bbox is **16×14 px**, and a row-by-row scan revealed the key detail — the **left border and the vertical divider are two separate lines with a 1 px gap** between them (not a filled panel), the divider sits **right against the left border** (just 3 px from its centre), is 60% of the frame height, and the corner radius is about a third of the frame height. ⇒ In a 24×24 viewBox: frame x 4..20 / y 4..20 / r = 5, divider at x = 7, y 7.5..16.5.
+  - **⚠️ Why "fixed" instead of flipping with state**: the panel shape *is* the "sidebar" affordance; and a "‹ / ›" arrow reads as "move the window left/right" rather than "collapse/expand the sidebar"; the expanded/collapsed state is already conveyed by the **sidebar's own width** (200px ↔ 56px), so the icon need not say it twice; the action is named by the hover `title` / `aria-label` (VS Code's toggle-sidebar is a fixed icon too).
+  - **Verification**: the **very same button markup extracted from `App.tsx`** was placed in a replica page (with the real `.topbar` / `.btn-icon` / `.topbar-collapse` styles) and rendered headless, then compared side by side with the user's image ⇒ **the shape matches**.
+  - **Tests**: the assertion became "the icon is a sidebar panel and **does not flip**", and it now also asserts that the **old arrow paths are gone** (`'M15 5l-7 7 7 7'` / `'M9 5l7 7-7 7'`) ⇒ vitest 34 files / **558** cases (same case count, different assertion).
+  - **Gates**: Rust fmt / clippy(--all-targets) / test ✓, tsc / lint / prettier / build / i18n ✓, scripts 143 ✓, four check scripts ✓. **Zero Rust changes / zero DB schema / zero new dependencies / zero new i18n entries**.
+  - **Touched**: `app/src/App.tsx` (the `<path>` becomes two panel sub-paths, the state-flip logic is dropped) · `app/src/panel-wiring.test.ts` (assertion rewritten).
+  - See [`issue-525-sidebar-panel-icon.md`](./issue-525-sidebar-panel-icon.md)
+
 - **v0.8.3 (unreleased) — The "N in progress" number no longer sits next to the TaskBoard icon in the macOS menu bar (#524)**
 
   - **Symptom**: the user saw a bare number **"13"** next to the TaskBoard icon in the **macOS status menu bar** (screenshot: `[TaskBoard icon] 13`) ⇒ a number whose meaning is unclear, and which changes on every sync, permanently occupied the menu bar.

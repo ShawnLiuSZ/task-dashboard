@@ -438,8 +438,16 @@ describe('侧边栏折叠开关在顶栏（#520）', () => {
     expect(btn).toMatch(/data-tauri-drag-region="false"/);
   });
 
-  it('图标**方向随状态翻转**（展开态 ‹ = 收起 / 折叠态 › = 展开）', () => {
-    expect(appRaw).toContain("sidebarCollapsed ? 'M9 5l7 7-7 7' : 'M15 5l-7 7 7 7'");
+  it('图标是**侧栏面板**形状（圆角矩形 + 左侧竖分隔线）且**固定不翻转**', () => {
+    // #525：换成用户指定的「侧栏面板」图标（圆角矩形 + 左侧竖线）。
+    // ⚠️ **固定**：面板形状本身就表达「侧栏」，动作由 title 说明；
+    // 展开/收起的状态由**侧栏宽度本身**体现（原来的「‹ / ›」箭头
+    // 会让人以为是「往左 / 往右移动窗口」）。
+    expect(appRaw).toContain('M9 4h6a5 5 0 0 1 5 5v6a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9a5 5 0 0 1 5-5z');
+    expect(appRaw).toContain('M7 7.5v9');
+    // 不得再出现旧的箭头翻转写法。
+    expect(appRaw).not.toContain("'M15 5l-7 7 7 7'");
+    expect(appRaw).not.toContain("'M9 5l7 7-7 7'");
   });
 
   it('点击切换走 `toggleSidebarCollapsed`（写三态偏好）', () => {
