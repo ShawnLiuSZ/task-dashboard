@@ -58,7 +58,7 @@
   - **影响面**：`app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`。
   - 详见 [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
-- **v0.8.3（未发布）— 收起侧边栏按钮的图标换成「侧栏面板」形状（固定，不随状态翻转）（#525）**
+- **v0.8.3（2026-11-03）— 收起侧边栏按钮的图标换成「侧栏面板」形状（固定，不随状态翻转）（#525）**
 
   - **需求**：用户给了一张图标截图（**圆角矩形 + 左侧竖分隔线**），要求把顶栏的收起侧边栏按钮**换成这个图标**。
   - **图形按截图逐像素反推**：原图墨迹 bbox = **16×14 px**，逐行扫描发现关键特征是 —— **左边框与竖分隔线是两条独立的线、中间留 1px 细缝**（不是实心侧栏），竖线**紧贴左边框**（距左边框中心仅 3 px）、长度占框高 60%、圆角半径占框高 1/3。⇒ 24×24 viewBox 里定为：外框 x 4..20 / y 4..20 / r = 5，竖线 x = 7、y 7.5..16.5。
@@ -69,7 +69,7 @@
   - **影响面**：`app/src/App.tsx`（`<path>` 换成面板图标两条子路径、去掉状态翻转逻辑）· `app/src/panel-wiring.test.ts`（断言改写）。
   - 详见 [`issue-525-sidebar-panel-icon.md`](./issue-525-sidebar-panel-icon.md)
 
-- **v0.8.3（未发布）— 菜单栏 TaskBoard 图标旁不再显示「处理中 N」数字（#524）**
+- **v0.8.3（2026-11-03）— 菜单栏 TaskBoard 图标旁不再显示「处理中 N」数字（#524）**
 
   - **现象**：用户在 **macOS 状态菜单栏**看到 TaskBoard 应用图标**旁边有一个裸数字「13」**（截图里 `[TaskBoard 图标] 13`）⇒ 一个「不知含义、且随每次同步不断变化」的数字常驻在菜单栏。
   - **根因**：`app/src-tauri/src/lib.rs::refresh_tray`（**每次同步后**调用）里 `set_title` 传入数字字符串 ⇒ macOS 菜单栏把 `set_title` 的文字**常驻显示在图标右侧**。数字口径 = `status = 'doing' AND candidate_done = 0` ⇒ **「处理中」的任务数**。
@@ -83,7 +83,7 @@
   - **影响面**：`app/src-tauri/src/lib.rs`（`refresh_tray` + 1 条回归测试）。
   - 详见 [`issue-524-tray-title-number.md`](./issue-524-tray-title-number.md)
 
-- **v0.8.3（未发布）— 收起侧边栏按钮移到窗口标题栏位置（仅 icon，无文字）（#522）**
+- **v0.8.3（2026-11-03）— 收起侧边栏按钮移到窗口标题栏位置（仅 icon，无文字）（#522）**
 
   - **需求**：用户截图标注 —— 把「收起侧边栏」按钮移到**窗口标题栏位置**（紧跟窗口标题「TaskBoard」右侧，红框处），且**只用 icon、不要文字**。
   - **⚠️ 关键约束：原生标题栏不在 DOM 里**。截图第一行（三个交通灯 + 窗口标题）是 **macOS 原生标题栏**，第二行才是应用自己的顶栏 ⇒ 普通 DOM 按钮**放不进去**（由 NSWindow 绘制，webview 碰不到）⇒ 唯一可行做法是把窗口改成 **`titleBarStyle: "Overlay"` + `hiddenTitle: true`**（VS Code 模式）：原生标题栏变成透明覆盖层、内容延伸到顶部、原生标题文字隐藏 ⇒ 应用的 `.app-title`「TaskBoard」上移到第一行、折叠图标紧随其后 ⇒ **视觉位置与原生标题栏里的按钮完全一致**。

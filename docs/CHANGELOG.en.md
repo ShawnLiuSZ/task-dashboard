@@ -54,7 +54,7 @@
   - **Touched**: `app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`.
   - See [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
-- **v0.8.3 (unreleased) — The sidebar collapse button now uses a "sidebar panel" icon (fixed, no longer flipping with state) (#525)**
+- **v0.8.3 (2026-11-03) — The sidebar collapse button now uses a "sidebar panel" icon (fixed, no longer flipping with state) (#525)**
 
   - **Requirement**: the user supplied an icon screenshot (**a rounded rectangle with a vertical divider on the left**) and asked for the top bar's collapse button to **use that icon**.
   - **The shape was reverse-engineered pixel by pixel from the screenshot**: the ink bbox is **16×14 px**, and a row-by-row scan revealed the key detail — the **left border and the vertical divider are two separate lines with a 1 px gap** between them (not a filled panel), the divider sits **right against the left border** (just 3 px from its centre), is 60% of the frame height, and the corner radius is about a third of the frame height. ⇒ In a 24×24 viewBox: frame x 4..20 / y 4..20 / r = 5, divider at x = 7, y 7.5..16.5.
@@ -65,7 +65,7 @@
   - **Touched**: `app/src/App.tsx` (the `<path>` becomes two panel sub-paths, the state-flip logic is dropped) · `app/src/panel-wiring.test.ts` (assertion rewritten).
   - See [`issue-525-sidebar-panel-icon.md`](./issue-525-sidebar-panel-icon.md)
 
-- **v0.8.3 (unreleased) — The "N in progress" number no longer sits next to the TaskBoard icon in the macOS menu bar (#524)**
+- **v0.8.3 (2026-11-03) — The "N in progress" number no longer sits next to the TaskBoard icon in the macOS menu bar (#524)**
 
   - **Symptom**: the user saw a bare number **"13"** next to the TaskBoard icon in the **macOS status menu bar** (screenshot: `[TaskBoard icon] 13`) ⇒ a number whose meaning is unclear, and which changes on every sync, permanently occupied the menu bar.
   - **Root cause**: in `app/src-tauri/src/lib.rs::refresh_tray` (called **after every sync**) `set_title` was handed the number as a string ⇒ macOS renders a tray title **permanently beside the icon**. The number counts `status = 'doing' AND candidate_done = 0` ⇒ the tasks **in progress**.
@@ -79,7 +79,7 @@
   - **Touched**: `app/src-tauri/src/lib.rs` (`refresh_tray` + one regression test).
   - See [`issue-524-tray-title-number.md`](./issue-524-tray-title-number.md)
 
-- **v0.8.3 (unreleased) — The sidebar collapse button moved to the window title bar position (icon only, no text) (#522)**
+- **v0.8.3 (2026-11-03) — The sidebar collapse button moved to the window title bar position (icon only, no text) (#522)**
 
   - **Requirement**: the user supplied a screenshot marking where the "collapse sidebar" button should go — the **window title bar position** (immediately right of the window title "TaskBoard", the boxed area), **icon only, no text**.
   - **⚠️ Key constraint: the native title bar is not in the DOM**. The first row of the screenshot (three traffic lights + the window title) is the **macOS native title bar**; the app's own top bar is the second row ⇒ a plain DOM button **cannot go there** (it is drawn by NSWindow, out of the webview's reach) ⇒ the only viable route is `titleBarStyle: "Overlay"` + `hiddenTitle: true` (the VS Code pattern): the native title bar becomes a transparent overlay, the content extends to the top of the window, and the native title text is hidden ⇒ the app's own `.app-title` "TaskBoard" moves up to the first row with the collapse icon right behind it ⇒ **visually exactly where a button in the native title bar would sit**.
