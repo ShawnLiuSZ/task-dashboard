@@ -58,6 +58,45 @@
   - **影响面**：`app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`。
   - 详见 [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.3（未发布）— 收起侧边栏按钮的图标换成「侧栏面板」形状（固定，不随状态翻转）（#525）**
+
+  - **需求**：用户给了一张图标截图（**圆角矩形 + 左侧竖分隔线**），要求把顶栏的收起侧边栏按钮**换成这个图标**。
+  - **图形按截图逐像素反推**：原图墨迹 bbox = **16×14 px**，逐行扫描发现关键特征是 —— **左边框与竖分隔线是两条独立的线、中间留 1px 细缝**（不是实心侧栏），竖线**紧贴左边框**（距左边框中心仅 3 px）、长度占框高 60%、圆角半径占框高 1/3。⇒ 24×24 viewBox 里定为：外框 x 4..20 / y 4..20 / r = 5，竖线 x = 7、y 7.5..16.5。
+  - **⚠️ 为什么「固定」而不随状态翻转**：面板形状本身就表达「侧栏」；而「‹ / ›」箭头会让人误以为是「往左 / 往右移动窗口」而不是「收起 / 展开侧栏」；展开/收起的状态由**侧栏宽度本身**（200px ↔ 56px）体现，不必让图标再表达一遍；动作由 hover 的 `title` / `aria-label` 说明（VS Code 的 toggle-sidebar 也是固定图标）。
+  - **验证**：把**从 `App.tsx` 提取的同一段按钮 markup** 放进复现页（真实 `.topbar` / `.btn-icon` / `.topbar-collapse` 样式）+ Chrome 无头渲染，与用户原图并排比对 ⇒ **形状一致**。
+  - **测试**：断言改写为「图标是侧栏面板形状且**固定不翻转**」，并断言**不再出现**旧的箭头写法（`'M15 5l-7 7 7 7'` / `'M9 5l7 7-7 7'`）⇒ vitest 34 文件 / **558** 例（用例数不变，改的是断言内容）。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓ · tsc / lint / prettier / build / i18n ✓ · scripts 143 ✓ · 四 check ✓。**零 Rust 改动 / 零 DB schema / 零新依赖 / 零新 i18n 词条**。
+  - **影响面**：`app/src/App.tsx`（`<path>` 换成面板图标两条子路径、去掉状态翻转逻辑）· `app/src/panel-wiring.test.ts`（断言改写）。
+  - 详见 [`issue-525-sidebar-panel-icon.md`](./issue-525-sidebar-panel-icon.md)
+
+- **v0.8.3（未发布）— 菜单栏 TaskBoard 图标旁不再显示「处理中 N」数字（#524）**
+
+  - **现象**：用户在 **macOS 状态菜单栏**看到 TaskBoard 应用图标**旁边有一个裸数字「13」**（截图里 `[TaskBoard 图标] 13`）⇒ 一个「不知含义、且随每次同步不断变化」的数字常驻在菜单栏。
+  - **根因**：`app/src-tauri/src/lib.rs::refresh_tray`（**每次同步后**调用）里 `set_title` 传入数字字符串 ⇒ macOS 菜单栏把 `set_title` 的文字**常驻显示在图标右侧**。数字口径 = `status = 'doing' AND candidate_done = 0` ⇒ **「处理中」的任务数**。
+  - **⚠️ 与应用内那个「未完成 N 条」是两个不同口径**（菜单栏 = 处理中；应用内 = 排除 closed / done 的未完成）⇒ 这两个数字**不是同一个**，此前一度被混为一谈。
+  - **修复**：菜单栏图标旁**不再**显示数字（`set_title::<&str>(None)` ⇒ 只留图标）；数字信息改由 **tooltip** 承载（hover 可见「TaskBoard · 处理中 N」）⇒ **信息不丢、菜单栏干净**。⚠️ 不是「删掉整个 refresh_tray」—— tooltip 里的数字是有用信息，只是**不该常驻**。
+  - **回归测试（+1）**：走**源码静态检查**（`include_str!("lib.rs")`，与本模块既有的 tray 回归同一手法）—— `refresh_tray` 需要真实 `AppHandle`，单测无法构造，而缺陷的本质就是「标题设成了什么」。
+  - **⚠️ 一个值得记的测试坑**：`include_str!` 嵌的是**本文件自己** ⇒ **断言串与代码注释都会进入被扫文本** ⇒ 直接写字面量会让断言**命中自己** ⇒ **恒真** ⇒ 断言串必须用 `format!` **拼出来**，且**代码注释里也不能**写出旧实现的完整调用串（同型坑：前端 `?raw` 源码断言也踩过）。
+  - **反向验证**：临时改回旧实现 ⇒ 用例 **FAILED**；还原 ⇒ **ok** ⇒ 断言确有判别力。
+  - **验证（真机实测）**：⚠️ 菜单栏是 OS 绘制的 ⇒ **只有真 app 能验**（`tauri dev` + `screencapture`）。实测同时存在两个 TaskBoard 菜单栏图标（用户装着的 v0.8.2 + 刚编译的 dev 版）：**左边（旧版）右侧有「13」**、**右边（新版）只剩图标** ✓ ⇒ 用户**升级到新版本**后即生效。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓（266+27+**1**）· tsc / lint / prettier / build / i18n ✓ · vitest 34 文件 **558** 例 ✓ · scripts 143 ✓ · 四 check ✓。**零前端改动 / 零 DB schema / 零新依赖 / 零新 i18n 词条**。
+  - **影响面**：`app/src-tauri/src/lib.rs`（`refresh_tray` + 1 条回归测试）。
+  - 详见 [`issue-524-tray-title-number.md`](./issue-524-tray-title-number.md)
+
+- **v0.8.3（未发布）— 收起侧边栏按钮移到窗口标题栏位置（仅 icon，无文字）（#522）**
+
+  - **需求**：用户截图标注 —— 把「收起侧边栏」按钮移到**窗口标题栏位置**（紧跟窗口标题「TaskBoard」右侧，红框处），且**只用 icon、不要文字**。
+  - **⚠️ 关键约束：原生标题栏不在 DOM 里**。截图第一行（三个交通灯 + 窗口标题）是 **macOS 原生标题栏**，第二行才是应用自己的顶栏 ⇒ 普通 DOM 按钮**放不进去**（由 NSWindow 绘制，webview 碰不到）⇒ 唯一可行做法是把窗口改成 **`titleBarStyle: "Overlay"` + `hiddenTitle: true`**（VS Code 模式）：原生标题栏变成透明覆盖层、内容延伸到顶部、原生标题文字隐藏 ⇒ 应用的 `.app-title`「TaskBoard」上移到第一行、折叠图标紧随其后 ⇒ **视觉位置与原生标题栏里的按钮完全一致**。
+  - **Overlay 带来的三个连带项（逐条处理）**：① **拖拽区** —— Overlay 下没有原生标题栏可拖 ⇒ 顶栏声明 `data-tauri-drag-region="deep"`（⚠️ Tauri 的规则：**可点击元素默认阻止拖拽** ⇒ 搜索框 / 下拉 / 按钮照常可点，不必逐个排除；拖拽脚本由 window 核心插件注入，本仓已在用 `getCurrentWindow()` ⇒ 该插件已装载）。② **交通灯让位** —— 顶栏左侧留出位置（CSS 变量 `--titlebar-inset`，默认 78px；⚠️ 只影响主窗口，About 小窗用 `.about-window`）。③ **按钮本身排除拖拽** —— `data-tauri-drag-region="false"`，否则点击会被当成拖窗口。
+  - **图标按钮的可访问名**：只有图标 ⇒ `title` + `aria-label` 都给动作名；图标**方向随状态翻转**（展开态 `‹` = 收起 / 折叠态 `›` = 展开）。
+  - **侧栏侧同步清理**：底部开关**移除**（是「移动」不是「复制」）⇒ 连带清掉失效的 `onToggleCollapsed` prop 与两个图标常量。
+  - **验证（真机实测，`tauri dev` + `screencapture`）**：⚠️ 这一项**只有真 app 能验**（交通灯位置 / 标题栏高度 / 拖拽行为都不是 webview 的事，headless Chrome 复现不出来）。实测顶部一行 = `○○○  TaskBoard  ‹  │ 📝 新建备忘录 …` ⇒ 折叠图标**紧跟标题右侧**（与红框位置一致）· 仅图标无文字 · 交通灯与标题不重叠 · 顶栏右侧搜索 / 同步 / 设置全部正常 · 侧栏与看板无错位无裁切 · 侧栏账号名仍完整显示 + 自动换行（#516 未被破坏）。
+  - **测试**：+3（`panel-wiring.test.ts` 新增 7 条 App 级接线断言 · `sidebar.test.tsx` 断言改写）⇒ vitest 34 文件 / 555 → **558** 例。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓ · tsc / lint / prettier / build / i18n ✓（452 key，**零新词条**）· scripts 143 ✓ · 四 check ✓。**零后端逻辑 / 零 DB schema / 零新依赖**。
+  - **⚠️ 已知风险**：**窗口外观变了** —— 原生标题栏（独立一行、标题居中）消失、应用顶栏顶到最上面（这是达成「按钮放在标题栏位置」的必要代价）；Overlay 模式另有 Tauri 官方列出的限制：「标题栏高度随 OS 版本不同」「未聚焦时无法拖动窗口」（tauri#4316）。
+  - **影响面**：`src-tauri/tauri.conf.json`（main 窗口标题栏样式）· `App.tsx` · `styles.css` · `components/Sidebar.tsx` + 2 个测试文件。
+  - 详见 [`issue-522-topbar-collapse-toggle.md`](./issue-522-topbar-collapse-toggle.md)
+
 - **v0.8.0（2026-10-30）— 补齐时间线事件的目标字段：里程碑 / 被请求审查者 / 被引用提交（#510）**
 
   - **背景**：#508 的整体核查把 4 类「白名单里有、后端却没有数据源」的事件降级成了通用文案（「更新了 issue」）—— 机制修对了，但**根因**（目标取错字段 / 后端压根没解析）还在，用户看到的仍是无信息量的描述。

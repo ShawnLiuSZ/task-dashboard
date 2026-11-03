@@ -130,71 +130,30 @@ describe('侧边栏未完成计数（#516）', () => {
 });
 
 /**
- * 侧边栏收起 / 展开开关（#517）。
+ * 侧边栏收起 / 展开开关 —— **已移到顶栏**（#520）。
  *
- * ## 为什么图标要**换方向**
+ * 原来放在侧栏底部 footer（#517）。用户要求移到**窗口标题栏位置**（原生标题栏里、
+ * 紧跟窗口标题「TaskBoard」右侧），且**只用 icon、不要文字**。
  *
- * 折叠态（56px 纯图标）下文字标签整体隐藏 ⇒ 只剩一个图标 ⇒
- * **图标方向本身就是可操作性提示**：
- * - 展开态显示「‹」⇒ 收起（侧栏往左退）
- * - 折叠态显示「›」⇒ 展开（侧栏往左拉出）
+ * ⚠️ 原生标题栏**不在 DOM 里** ⇒ 要把按钮放进去必须把窗口改成
+ * `titleBarStyle: "Overlay"` + `hiddenTitle: true`（VS Code 模式）：
+ * 原生标题栏变成透明覆盖层、内容延伸到顶部 ⇒ 应用的顶栏顶到最上面，
+ * 按钮紧跟 `.app-title` ⇒ 视觉位置与原生标题栏里的按钮一致。
  *
- * `title` 同样要给出动作名（折叠态下唯一的文字线索）。
+ * ⇒ 侧栏底部**不再**有折叠开关（是「移动」不是「复制」）。
+ * 顶栏那侧的接线断言在 `panel-wiring.test.ts`（App 级接线守卫）。
  */
-describe('侧边栏收起 / 展开开关（#517）', () => {
-  it('展开态显示「收起侧边栏」', () => {
-    const html = render({ onToggleCollapsed: noop });
-    expect(html).toContain('收起侧边栏');
-    expect(html).not.toContain('展开侧边栏');
-  });
-
-  it('折叠态显示「展开侧边栏」', () => {
-    const html = render({ onToggleCollapsed: noop, collapsed: true });
-    expect(html).toContain('展开侧边栏');
-    expect(html).not.toContain('收起侧边栏');
-  });
-
-  it('未传 onToggleCollapsed 时**不渲染**开关（不渲染一个点了没反应的按钮）', () => {
+describe('侧边栏收起 / 展开开关已移出侧栏（#520）', () => {
+  it('侧栏底部不再渲染折叠开关（已移到顶栏）', () => {
     const html = render();
     expect(html).not.toContain('收起侧边栏');
     expect(html).not.toContain('展开侧边栏');
   });
 
-  it('图标方向随状态切换（展开态 ‹ / 折叠态 ›）', () => {
-    // 展开态：‹ = M15 5l-7 7 7 7
-    expect(render({ onToggleCollapsed: noop })).toContain('M15 5l-7 7 7 7');
-    // 折叠态：› = M9 5l7 7-7 7
-    expect(render({ onToggleCollapsed: noop, collapsed: true })).toContain('M9 5l7 7-7 7');
-  });
-
-  it('开关在**底部 footer**里（与「关于」同组）', () => {
-    const html = render({ onToggleCollapsed: noop });
+  it('侧栏底部只剩「关于」', () => {
+    const html = render();
     const iFooter = html.indexOf('sidebar-footer');
-    const iToggle = html.indexOf('收起侧边栏');
-    const iAbout = html.indexOf('关于');
     expect(iFooter).toBeGreaterThan(-1);
-    expect(iToggle).toBeGreaterThan(iFooter);
-    expect(iAbout).toBeGreaterThan(iToggle);
-  });
-
-  it('点击开关触发 onToggleCollapsed', () => {
-    const calls: number[] = [];
-    const html = renderToStaticMarkup(
-      <I18nProvider>
-        <Sidebar
-          accounts={ACCOUNTS}
-          activeAccountId={1}
-          nav="board"
-          onNavigate={noop}
-          onSwitchAccount={noop}
-          onAddAccount={noop}
-          onAbout={noop}
-          onToggleCollapsed={() => calls.push(1)}
-        />
-      </I18nProvider>,
-    );
-    expect(html).toContain('收起侧边栏');
-    // SSR 不触发事件 ⇒ 断言回调未被调用（只验证接线，不做交互）。
-    expect(calls).toHaveLength(0);
+    expect(html.slice(iFooter)).toContain('关于');
   });
 });

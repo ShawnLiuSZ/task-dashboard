@@ -569,10 +569,44 @@ function BoardApp() {
 
   return (
     <div className="app">
-      <header className="topbar">
+      {/* #520：`titleBarStyle: "Overlay"` ⇒ 顶栏**就是**窗口标题栏（交通灯浮在其上）。
+          ⇒ 顶栏是拖拽窗口的天然抓手，用 `data-tauri-drag-region="deep"` 声明。
+          ⚠️ Tauri 的规则：**可点击元素（button / input / select…）默认阻止拖拽**
+          ⇒ 搜索框、下拉、按钮都照常可点，不必逐个排除。 */}
+      <header className="topbar" data-tauri-drag-region="deep">
         <div className="topbar-left">
           {/* #259：品牌 + 账号切换移到左侧 Sidebar。 */}
           <span className="app-title">{t('app.title')}</span>
+          {/* #520：收起 / 展开侧边栏 —— **仅图标**，紧跟品牌名（原生标题栏位置）。
+              ⚠️ `data-tauri-drag-region="false"` 显式排除拖拽（否则点击会被当成拖窗口）。 */}
+          <button
+            type="button"
+            className="topbar-collapse"
+            data-tauri-drag-region="false"
+            title={sidebarCollapsed ? t('sidebar.expand') : t('sidebar.collapse')}
+            aria-label={sidebarCollapsed ? t('sidebar.expand') : t('sidebar.collapse')}
+            onClick={toggleSidebarCollapsed}
+          >
+            <svg
+              className="btn-icon"
+              viewBox="0 0 24 24"
+              width="15"
+              height="15"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              {/* #525：「侧栏面板」图标（圆角矩形 + 左侧竖分隔线，竖线与边框之间留细缝）。
+                  ⚠️ **固定图标，不随状态翻转** —— 面板形状本身就表达「侧栏」，
+                  动作由 hover 的 title 说明；展开/收起的状态由**侧栏宽度本身**体现。
+                  （原来的「‹ / ›」箭头会让人以为是「往左/往右移动窗口」。） */}
+              <path d="M9 4h6a5 5 0 0 1 5 5v6a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9a5 5 0 0 1 5-5z" />
+              <path d="M7 7.5v9" />
+            </svg>
+          </button>
           {/* #516：顶栏的「未完成 N 条」计数已移除 —— 数字含义依赖归属/账号/搜索
               多重筛选，容易被误读（曾被问「这个数字是什么意思」）；看板各列本身
               已给出分布，不需要再叠一个总数。 */}
@@ -678,8 +712,6 @@ function BoardApp() {
           viewMode={settings?.viewMode}
           // #516：未完成数放在账号分组标题行（紧邻账号列表 ⇒ 口径自明）。
           openCount={openCount}
-          // #517：手动收起 / 展开侧边栏。
-          onToggleCollapsed={toggleSidebarCollapsed}
           nav={nav}
           collapsed={sidebarCollapsed}
           onNavigate={setNav}

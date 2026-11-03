@@ -11,8 +11,6 @@ interface Props {
   /** #516：当前视图的**未完成 issue 数**（排除 GitHub 已关闭 / 看板已完成）。
    *  显示在账号分组标题行 —— 紧邻账号列表 ⇒ 「哪个账号下的多少条」自明。 */
   openCount?: number;
-  /** #517：点击「收起 / 展开侧边栏」。 */
-  onToggleCollapsed?: () => void;
   /** #422：当前展示视图模式。聚合（'all'）时不高亮任何单个账号，
    *  否则用户会以为处于单账号视图、实际看到全部账号的任务。 */
   viewMode?: 'single' | 'all';
@@ -60,10 +58,6 @@ const ICON = {
     'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z M14 2v6h6 M16 13H8 M16 17H8 M10 9H8',
   sessions: 'M9 11l3 3L22 4 M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11',
   about: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z M12 16v-4 M12 8h.01',
-  // #517：侧边栏收起 / 展开。展开态显示「‹」（收起 = 侧栏往左退），折叠态显示
-  // 「›」（展开 = 侧栏往左拉出）⇒ 图标方向本身就是可操作性提示。
-  collapse: 'M15 5l-7 7 7 7',
-  expand: 'M9 5l7 7-7 7',
 };
 
 /* ---------- 导航项 ---------- */
@@ -99,7 +93,6 @@ export default function Sidebar({
   accounts,
   activeAccountId,
   openCount = 0,
-  onToggleCollapsed,
   viewMode = 'single',
   nav,
   collapsed = false,
@@ -195,18 +188,8 @@ export default function Sidebar({
       </div>
 
       <div className="sidebar-footer">
-        {/* #517：收起 / 展开侧边栏。
-            ⚠️ 折叠态（56px）下文字标签整体隐藏 ⇒ 只剩图标 ⇒
-            **图标方向**（‹ 收起 / › 展开）与 `title` 是仅有的可操作性提示。 */}
-        {onToggleCollapsed && (
-          <NavItem
-            icon={collapsed ? ICON.expand : ICON.collapse}
-            label={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
-            title={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
-            active={false}
-            onClick={onToggleCollapsed}
-          />
-        )}
+        {/* #520：收起 / 展开开关已**移到顶栏**（紧跟品牌名，原生标题栏位置）⇒
+            这里只留「关于」。 */}
         <NavItem icon={ICON.about} label={t('sidebar.about')} active={false} onClick={onAbout} />
       </div>
     </nav>

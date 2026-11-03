@@ -13,6 +13,7 @@ import notesRaw from './components/NotesPanel.tsx?raw';
 // #470：编辑弹窗（Esc 走 window 级分层）。
 import editorModalRaw from './components/NoteEditorModal.tsx?raw';
 import sessionsRaw from './components/SessionsPanel.tsx?raw';
+import sidebarRaw from './components/Sidebar.tsx?raw';
 import settingsRaw from './components/SettingsPanel.tsx?raw';
 import logsRaw from './components/SyncLogsPanel.tsx?raw';
 import escHookRaw from './utils/useEscLayer.ts?raw';
@@ -375,5 +376,91 @@ describe('SessionsPanel 复制按钮（#329）', () => {
     expect(fn).toMatch(/try \{[\s\S]*await navigator\.clipboard\.writeText/);
     expect(fn).toMatch(/catch \(e\)/);
     expect(sessionsRaw).toMatch(/copiedTimer\.current !== null\) window\.clearTimeout/);
+  });
+});
+
+/**
+ * 侧边栏收起 / 展开开关的**位置与形态**（#520）。
+ *
+ * ## 背景
+ *
+ * #517 把开关放在**侧栏底部**。用户要求移到**窗口标题栏位置**（原生标题栏里、
+ * 紧跟窗口标题「TaskBoard」右侧），且**只用 icon、不要文字**。
+ *
+ * ## 为什么需要改窗口配置
+ *
+ * **原生标题栏不在 DOM 里** ⇒ 普通 DOM 按钮放不进去。唯一可行的做法是把窗口改成
+ * `titleBarStyle: "Overlay"` + `hiddenTitle: true`（VS Code 模式）：
+ * 原生标题栏变成透明覆盖层、内容延伸到顶部 ⇒ 应用的顶栏顶到最上面，
+ * 按钮紧跟 `.app-title` ⇒ **视觉位置**与「原生标题栏里的按钮」一致。
+ *
+ * ## Overlay 带来的三个连带项（必须都处理，否则窗口会变得难用）
+ *
+ * 1. **拖拽区**：Overlay 下内容不再有原生标题栏可拖 ⇒ 顶栏必须声明
+ *    `data-tauri-drag-region="deep"`（Tauri 的规则：**可点击元素默认阻止拖拽**
+ *    ⇒ 搜索框 / 下拉 / 按钮照常可点，不必逐个排除）。
+ * 2. **交通灯让位**：macOS 交通灯浮在 webview 左上角 ⇒ 顶栏左侧要留出位置
+ *    （CSS 变量 `--titlebar-inset`）。
+ * 3. **按钮本身要排除拖拽**：折叠按钮在顶栏里 ⇒ 必须
+ *    `data-tauri-drag-region="false"`，否则点击会被当成拖窗口。
+ *
+ * ⚠️ 窗口配置在 `tauri.conf.json`（Rust 侧，不在本文件范围内）⇒ 这里锁前端接线，
+ * 窗口配置由 `scripts/check-workflow-yaml.py` 之外的独立核对保证（见 issue 文档）。
+ */
+describe('侧边栏折叠开关在顶栏（#520）', () => {
+  it('顶栏声明了拖拽区（Overlay 模式下没有原生标题栏可拖）', () => {
+    expect(appRaw).toMatch(/className="topbar"[^>]*data-tauri-drag-region="deep"/);
+  });
+
+  it('折叠按钮在**顶栏**里，紧跟品牌名 `.app-title`', () => {
+    const iTitle = appRaw.indexOf('className="app-title"');
+    const iBtn = appRaw.indexOf('className="topbar-collapse"');
+    expect(iTitle, '顶栏应有品牌名').toBeGreaterThan(-1);
+    expect(iBtn, '顶栏应有折叠按钮').toBeGreaterThan(iTitle);
+  });
+
+  it('折叠按钮**只有图标、没有文字**（`title` / `aria-label` 提供动作名）', () => {
+    const btn = appRaw.match(/className="topbar-collapse"[\s\S]*?<\/button>/)?.[0] ?? '';
+    expect(btn, '应能取到折叠按钮的 JSX').not.toBe('');
+    // ⚠️ 不能出现 `{t('sidebar.collapse')}` 这类**可见文字**节点。
+    expect(btn).not.toMatch(/\{t\('sidebar\.(collapse|expand)'\)\}\s*<\/svg>/);
+    // 但必须有 title / aria-label（图标按钮的可访问名）。
+    expect(btn).toMatch(
+      /title=\{sidebarCollapsed \? t\('sidebar\.expand'\) : t\('sidebar\.collapse'\)\}/,
+    );
+    expect(btn).toMatch(
+      /aria-label=\{sidebarCollapsed \? t\('sidebar\.expand'\) : t\('sidebar\.collapse'\)\}/,
+    );
+  });
+
+  it('折叠按钮显式**排除拖拽**（否则点击会被当成拖窗口）', () => {
+    const btn = appRaw.match(/className="topbar-collapse"[\s\S]*?<\/button>/)?.[0] ?? '';
+    expect(btn).toMatch(/data-tauri-drag-region="false"/);
+  });
+
+  it('图标是**侧栏面板**形状（圆角矩形 + 左侧竖分隔线）且**固定不翻转**', () => {
+    // #525：换成用户指定的「侧栏面板」图标（圆角矩形 + 左侧竖线）。
+    // ⚠️ **固定**：面板形状本身就表达「侧栏」，动作由 title 说明；
+    // 展开/收起的状态由**侧栏宽度本身**体现（原来的「‹ / ›」箭头
+    // 会让人以为是「往左 / 往右移动窗口」）。
+    expect(appRaw).toContain(
+      'M9 4h6a5 5 0 0 1 5 5v6a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9a5 5 0 0 1 5-5z',
+    );
+    expect(appRaw).toContain('M7 7.5v9');
+    // 不得再出现旧的箭头翻转写法。
+    expect(appRaw).not.toContain("'M15 5l-7 7 7 7'");
+    expect(appRaw).not.toContain("'M9 5l7 7-7 7'");
+  });
+
+  it('点击切换走 `toggleSidebarCollapsed`（写三态偏好）', () => {
+    expect(appRaw).toMatch(/onClick=\{toggleSidebarCollapsed\}/);
+    expect(appRaw).toMatch(/const toggleSidebarCollapsed = useCallback\(/);
+    expect(appRaw).toMatch(/nextSidebarPref\(prev, narrowWindow\)/);
+    expect(appRaw).toMatch(/setSidebarPref\(next\)/);
+  });
+
+  it('侧栏**不再**接收折叠回调（开关已移出侧栏，是「移动」不是「复制」）', () => {
+    expect(appRaw).not.toMatch(/onToggleCollapsed=/);
+    expect(sidebarRaw).not.toMatch(/onToggleCollapsed/);
   });
 });

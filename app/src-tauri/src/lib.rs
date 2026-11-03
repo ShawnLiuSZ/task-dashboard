@@ -218,11 +218,18 @@ fn refresh_tray(app: &AppHandle) {
         n
     };
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_title(if count > 0 {
-            Some(count.to_string())
-        } else {
-            None
-        });
+        // #524：菜单栏图标旁**不再**显示「处理中 N」的数字。
+        //
+        // 缺陷形态：`set_title` 传入数字字符串 ⇒ 在 macOS 菜单栏里把数字**常驻**
+        // 显示在应用图标右侧 ⇒ 用户看到的是一个「不知含义、且随每次同步不断变化」
+        // 的裸数字（曾被问「这个 13 是什么意思」）。
+        //
+        // ⚠️ 这段注释里**不能**写出旧实现的完整调用串：`#524` 的回归测试用
+        // `include_str!("lib.rs")` 扫源码 ⇒ 注释里出现同一字符串会让断言恒真。
+        //
+        // 为什么保留 tooltip：数字本身是有用信息（有多少任务在处理中），只是
+        // **不该常驻在菜单栏**；改由 hover 时的 tooltip 承载 ⇒ 信息不丢、菜单栏干净。
+        let _ = tray.set_title::<&str>(None);
         let _ = tray.set_tooltip(Some(format!("TaskBoard · 处理中 {}", count)));
     }
 }
@@ -582,6 +589,42 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+
+    /// #524 回归：菜单栏图标旁**不得**再常驻显示「处理中 N」的数字。
+    ///
+    /// 缺陷形态：`set_title` 传入数字字符串 ⇒ 一个「不知含义、且随每次同步不断变化」
+    /// 的裸数字常驻在 macOS 菜单栏的应用图标右侧（曾被问「这个 13 是什么意思」）。
+    ///
+    /// 断言走**源码静态检查**（与本模块既有的 tray 回归同一手法）：`refresh_tray`
+    /// 需要真实 `AppHandle`，单测无法构造；而缺陷的本质就是「标题设成了什么」。
+    ///
+    /// ⚠️ 断言串**必须用 `format!` 拼出来**：直接写字面量会命中**本测试自己的
+    /// 源码**（`include_str!` 嵌的就是这个文件）⇒ 断言恒真 ⇒ 变成「恒真的测试」。
+    /// 同型坑：仓库前端 `?raw` 源码断言也踩过（注释里出现同一字符串 ⇒ 恒真）。
+    #[test]
+    fn tray_does_not_set_a_numeric_title() {
+        let src = include_str!("lib.rs");
+        let body = src
+            .split("fn refresh_tray(app: &AppHandle) {")
+            .nth(1)
+            .expect("应存在 refresh_tray");
+        let body = &body[..body.find("\n}").unwrap_or(body.len())];
+        let numeric_title = format!("set_title(Some({}.to_string()))", "count");
+        assert!(
+            !body.contains(&numeric_title),
+            "菜单栏图标旁不得再常驻显示数字 —— #524 缺陷"
+        );
+        let cleared = format!("set_title::<&str>({})", "None");
+        assert!(
+            body.contains(&cleared),
+            "应显式清空 tray 标题（菜单栏只留图标）"
+        );
+        // ⚠️ tooltip 仍带数字（hover 可见）⇒ 信息不丢，只是不再常驻打扰。
+        assert!(
+            body.contains("set_tooltip"),
+            "tooltip 应保留 —— 数字信息改由 hover 承载"
+        );
+    }
 
     /// #431 回归：托盘「显示看板」菜单项必须走 `show_window`（显示语义），
     /// **不能**走 `toggle_window`（切换语义）。
