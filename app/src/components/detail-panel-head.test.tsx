@@ -84,8 +84,14 @@ function render(): string {
  * ② 标题紧跟在 `.detail-head-row` **之后**（issue id 行在上、标题行在下）；
  * ③ 头部容器在标题**之后**闭合（标题没有被挪到头部外面）。
  */
+// #526：头部右侧的动作组 `<div class="detail-head-actions">` 包住了「在新窗口打开」
+// 与「关闭」两个按钮 ⇒ 按钮不再**直接**是 `.detail-head-row` 的子节点。
+//
+// ⚠️ 不变式**保持不变**（#500 的守卫）：issue id 行 → 按钮 → 标题行 三者的嵌套顺序不变，
+// 且标题行仍在 `.detail-head` 内闭合（没被挪到头部外面）。
+// 正则里用 `[\s\S]*?` 容纳动作组内的按钮（含带 `<svg>` 的图标按钮）。
 const HEAD_BLOCK_RE =
-  /<div class="detail-head"><div class="detail-head-row"><div><span class="repo">[^<]*<\/span><span class="num">[^<]*<\/span><\/div><button[^>]*>[^<]*<\/button><\/div><h2 class="detail-title">[^<]*<\/h2><\/div>/;
+  /<div class="detail-head"><div class="detail-head-row"><div><span class="repo">[^<]*<\/span><span class="num">[^<]*<\/span><\/div><div class="detail-head-actions">[\s\S]*?<\/div><\/div><h2 class="detail-title">[^<]*<\/h2><\/div>/;
 
 describe('任务详情头部结构（#500）', () => {
   it('「issue id 行」与「标题行」必须同属一个 sticky 头部容器', () => {
@@ -93,9 +99,12 @@ describe('任务详情头部结构（#500）', () => {
   });
 
   it('「关闭」按钮与 issue id 行同处第一行（.detail-head-row）', () => {
+    // #526：按钮现在包在 `.detail-head-actions` 里（仍与 issue id 行同处第一行）。
     expect(render()).toMatch(
-      /<div class="detail-head-row"><div><span class="repo">fad-backend<\/span><span class="num">#1630<\/span><\/div><button class="btn ghost"/,
+      /<div class="detail-head-row"><div><span class="repo">fad-backend<\/span><span class="num">#1630<\/span><\/div><div class="detail-head-actions">/,
     );
+    // 「关闭」按钮必须落在动作组**内**（不能被挪到头部外面）。
+    expect(render()).toMatch(/<div class="detail-head-actions">[^]*?<button class="btn ghost">/);
   });
 
   it('标题行渲染的是 issue 标题本身', () => {

@@ -12,6 +12,7 @@ import { coalescedLoad, createLoadCoalescer } from './utils/coalescedLoad';
 import { countHiddenChanged, snapshotTasks } from './utils/syncHint';
 import { taskIdentity } from './utils/taskIdentity';
 import { countOpenIssues } from './utils/openCount';
+import { mergeProjectStatuses, pickPrimaryProjectStatuses } from './utils/projectStatuses';
 import {
   getSidebarPref,
   nextSidebarPref,
@@ -250,32 +251,16 @@ function BoardApp() {
                 }),
               ),
           );
-          const merged = new Map<string, ProjectStatus>();
-          for (const list of results) {
-            for (const ps of list) {
-              // 去重：同名状态只保留第一个（按首次出现顺序）
-              if (!merged.has(ps.name)) merged.set(ps.name, ps);
-            }
-          }
-          setProjectStatuses([...merged.values()].sort((a, b) => a.name.localeCompare(b.name)));
+          // #530：合并逻辑抽到 `utils/projectStatuses.ts` ⇒ 与任务详情独立窗
+          // （#527）**共用同一份实现**，两处不会显示不一致的状态列表。
+          setProjectStatuses(mergeProjectStatuses(results));
           return;
         }
 
-        // 单账号视图：取条目数最多的项目（主项目）的状态，按 order_index 排序
+        // 单账号视图：取「主项目」的状态（状态数最多的那个 Project），按 order_index 排序
+        // ⚠️ 同样走共用实现（#530）—— 独立窗也用这个，两处一致。
         const all = await api.listProjectStatuses(activeId);
-        const byProject = new Map<string, typeof all>();
-        for (const ps of all) {
-          const arr = byProject.get(ps.projectGithubId) ?? [];
-          arr.push(ps);
-          byProject.set(ps.projectGithubId, arr);
-        }
-        let best: typeof all = [];
-        for (const arr of byProject.values()) {
-          if (arr.length > best.length) best = arr;
-        }
-        // 确保按 order_index 正序（后端已按此排序，但重新过滤后可能丢失）
-        best.sort((a, b) => a.orderIndex - b.orderIndex);
-        setProjectStatuses(best);
+        setProjectStatuses(pickPrimaryProjectStatuses(all));
       } catch (e) {
         // 项目状态决定看板列，失败必须可见，否则列静默缺失用户无从判断。
         console.warn('加载项目状态选项失败:', e);
@@ -776,6 +761,13 @@ function BoardApp() {
                   tasks={visible}
                   selected={selected}
                   onSelect={setSelected}
+                  // #531：卡片上的「在新窗口打开」⇒ 直接开独立详情窗（#527），
+                  // 不经过 modal（点卡片本体仍开 modal）。
+                  onOpenInNewWindow={(task) => {
+                    void api
+                      .openTaskDetailWindow(task.issueKey, task.accountId)
+                      .catch((e) => reportError(e));
+                  }}
                   boardMode={boardMode}
                   projectStatuses={projectStatuses}
                   accountColumns={accountColumns}
@@ -836,6 +828,16 @@ function BoardApp() {
             key={taskIdentity(selectedTask)}
             task={selectedTask}
             projectStatuses={projectStatuses}
+            // #526：modal **不再实时获取**任务详情（`live={false}`）⇒
+            // 打开面板零 GitHub 请求；完整详情（正文 / 时间线 / PR 提交）请用
+            // 「在新窗口打开」。⚠️ 本地库**没有** body / timeline 列 ⇒
+            // modal 里看不到正文是**预期行为**，不是数据丢了。
+            live={false}
+            onOpenInNewWindow={() => {
+              void api
+                .openTaskDetailWindow(selectedTask.issueKey, selectedTask.accountId)
+                .catch((e) => reportError(e));
+            }}
             onClose={() => setSelected(null)}
             onChanged={() => {
               void load();

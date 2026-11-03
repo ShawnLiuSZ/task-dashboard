@@ -58,6 +58,63 @@
   - **影响面**：`app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`。
   - 详见 [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.4（未发布）— 「在新窗口打开」按钮直接放到任务卡片上（#531）**
+
+  - **需求**：用户截图标注详情面板头部的「在新窗口打开」图标，要求**把这个功能直接放到任务卡片上** ⇒ 看板卡片上直接开独立详情窗，**不必先点开 modal**。
+  - **位置**：`.card-bottom`（日期 / 「N 条评论」那一行）—— 那里本来就是操作元素的位置。
+  - **⚠️ 必须 `stopPropagation`**：卡片本体是 `<article onClick={() => onSelectKey(...)}>` ⇒ 不拦住就会**同时**开出 modal 与独立窗。
+  - **⚠️ 接线只在 `cardProps` 里带一次**：`Board` 里有**四处** `<TaskCard>`（project / unclassified / 四态 / 自定义列）⇒ 回调只在 `cardProps` 带 ⇒ 四处自动都有，**不会漏其中几个**。`App.tsx` 的 `<Board onOpenInNewWindow={...} />` 直接调 `api.openTaskDetailWindow(task.issueKey, task.accountId)`（**不经过 modal**）；点卡片本体仍开 modal（行为不变）。
+  - **视觉**：按钮 18×18 · 图标 12px · `--text-3` 淡灰 · hover 才变深 ⇒ 卡片密度高，按钮抢眼会变成噪音。图标与详情面板头部**同一个**（「外开」：方框 + 右上角箭头）⇒ 用户一眼认得。
+  - **实测（复现页：vite 直接 import **真实** `TaskCard` + 真实 `styles.css`）**：按钮存在且在 `.card-bottom` 内 ✓ · 尺寸 18×18 / 图标 12×12 ✓ · `title` / `aria-label` = 「在新窗口打开」✓ · **贴右对齐**（`margin-left: auto`）✓ · 与底栏其它元素（日期 / 评论链接）**不重叠** ✓。
+  - **测试**：+4（按钮渲染 / 没回调不渲染 / **必须 `stopPropagation`**（源码断言）· `cardProps` 带了该回调）⇒ vitest 36 文件 / 577 → **581** 例。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓（零 Rust 改动）· tsc / lint / prettier / build / i18n ✓（456 key）· scripts 143 ✓ · 四 check ✓。零 DB schema / 零新依赖。
+  - **影响面**：`components/TaskCard.tsx`（按钮）· `components/Board.tsx`（`cardProps` + Props）· `App.tsx`（接线）· `styles.css`（`.card-open-window`）。
+  - 详见 [`issue-527-task-detail-window.md`](./issue-527-task-detail-window.md) 的「卡片上的『在新窗口打开』按钮」一节
+
+- **v0.8.4（未发布）— 修任务详情独立窗的 GitHub 状态选项与主窗口 modal 不一致（#530）**
+
+  - **现象**：用户对比**同一个任务**（`fad-backend#1660`）在两处的「执行状态」列表 —— **主窗口 modal 8 项**（`需求池 / 产品规划 / 待开发处理 / 开发中 / …`）而**独立窗 18 项**（多了英文那套 `Todo / In Progress / Done / Planning / …`）⇒ 同一个任务两个界面不一致。
+  - **根因：数据源相同，筛选逻辑不同**。`listProjectStatuses(accountId)` 返回的是该账号**所有 Project** 的状态；主窗口在**单账号视图**下会**只取「主项目」**的状态，而独立窗（#527 实现时）**直接用了全量** ⇒ 把其它 Project 的状态也列了出来。
+  - **修法：抽成共用纯函数**（`app/src/utils/projectStatuses.ts`）：`pickPrimaryProjectStatuses(all)`（取「主项目」= **状态数最多**的那个 Project 的状态，按 `orderIndex` 升序）· `mergeProjectStatuses(lists)`（跨账号合并 + 按**状态名**去重 + 按名排序）⇒ `App.tsx`（单账号 / 聚合两个分支）与 `TaskDetailWindow.tsx` **都改成调它们** ⇒ 不会再分叉。
+    ⚠️ 抽取时**逐字保留**原行为：「主项目」判据是**状态数最多**（状态表里没有条目数字段），状态数相同时取先遇到的（`Map` 插入序）。
+  - **真机实测**：独立窗状态行变成 `需求池 | 产品规划 | 待开发处理 | 开发中 | 开发完成/测试中 | 测试通过/待上线 | 完成/上线 | 取消` ⇒ **与 modal 完全一致**（8 项，英文那套被正确过滤）。
+  - **测试**：+6（`utils/projectStatuses.test.ts` 新建：主项目选取 / `orderIndex` 重排 / **不合并其它 Project** / 空输入 / 跨账号合并去重 / 大小写敏感）⇒ vitest 35 → **36 文件 / 571 → 577** 例。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓（零 Rust 改动）· tsc / lint / prettier / build / i18n ✓（456 key）· scripts 143 ✓ · 四 check ✓。零 DB schema / 零新依赖。
+  - **影响面**：`utils/projectStatuses.ts`（新）+ `.test.ts`（新）· `App.tsx`（两处改调共用实现）· `components/TaskDetailWindow.tsx`（改调共用实现）。
+  - 详见 [`issue-527-task-detail-window.md`](./issue-527-task-detail-window.md) 的「顺带修的状态选项不一致」一节
+
+- **v0.8.4（未发布）— 修 GitHub 状态行：状态名不再被压成竖排、同名状态去重（#529）**
+
+  - **现象**：用户在任务详情独立窗口里看到「执行状态 / GitHub 状态」那一行**巨大且文字竖排**，报「怎么会有这么大状态」。
+  - **根因 ①（排版）**：`.seg`（flex 容器）**没有 `flex-wrap`**（默认 nowrap）⇒ 20+ 个状态项硬塞在一行；`.seg-btn` 又是 `flex: 1`（basis 0% ⇒ **均分**宽度）⇒ 每个只有 1/N 宽 ⇒「In Progress」「优先测试上线」被压成**竖排**文字（一个字符一行），整行高度被最长的那个撑到 ~90px。
+    ⇒ 修：`.seg { flex-wrap: wrap; }` + `.seg-btn { flex: 0 0 auto; white-space: nowrap; }` ⇒ 按内容宽度、**放不下就换行**、文字不再竖排。
+  - **根因 ②（数据重复）**：`project_statuses` 表按 **(account, project, option)** 存 ⇒ 多个 GitHub Project 各有一套 Todo / In Progress / Done ⇒ 聚合起来**重复三遍**（实测某账号 21 项里 3 组同名）。
+    ⇒ 修：`projectStatusOptions` **精确去重**（区分大小写）。
+    ⚠️ **同名去重是安全的**：写回目标是按**任务所属的 Project** 解析的（后端 `resolve_project_write_target`）⇒ 状态名只作为名字传过去 ⇒ 同名项功能完全等价。
+    ⚠️ **必须区分大小写**：`In Progress` 与 `In progress` 是**两个不同 Project 的不同 option**（option_id 不同）⇒ 合并会写错 option_id。
+  - **实测（复现页 + 真机）**：状态项 21 → **14**（去重）· 渲染 **1 行、28px 高**（原来 1 行但被竖排文字撑到 ~90px）· 按钮宽度 34~78px（按内容，不再均分压缩）· 文字**横排单行**。真机实测状态行为一行：`需求池 | 产品规划 | 排期 | 开发中 | 开发完成 | 开发完成评审中 | 测试通过评审上线 | 市场上线 | 设计稿`。
+  - **测试**：+3（去重 / 大小写不同不去重 / 当前状态不在列表时仍前置可见）⇒ vitest 35 文件 / 568 → **571** 例。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓ · tsc / lint / prettier / build / i18n ✓（456 key）· scripts 143 ✓ · 四 check ✓。零 Rust 改动 / 零 DB schema / 零新依赖。
+  - **影响面**：`components/DetailPanel.tsx`（状态选项去重）· `styles.css`（`.seg` / `.seg-btn`）。
+  - 详见 [`issue-527-task-detail-window.md`](./issue-527-task-detail-window.md) 的「顺带修的状态行布局缺陷」一节
+
+- **v0.8.4（未发布）— 任务详情可在新窗口打开（完整信息）+ modal 去掉实时获取任务详情（#527）**
+
+  - **需求**：用户原话 —— 「查看 task 任务时，现在是以 modal 框展示，希望实现：可以在新窗口打开详情，这个详情中显示目前 modal 框中的所有信息，然后 modal 框中将实时获取任务详情的功能去掉。」
+  - **拆分**：原先详情面板**每次打开都实时拉一次 GitHub**，而详情里的信息**装不下**一个 720px 弹窗（正文 + 时间线 + PR 提交 + 评论）⇒ 拆成两种形态：**modal**（`live={false}` ⇒ **零 GitHub 请求**，只做「操作面板」）/ **独立窗**（`live` ⇒ **完整信息**）。
+  - **⚠️ modal 里看不到正文是预期行为，不是数据丢了**：本地库**没有** issue body / timeline 列（`tasks` 表只有 `comments_count`）⇒ 正文只存在于实时拉取结果里 ⇒ 完整详情请用「在新窗口打开」。
+  - **后端**：新增 `get_task(issue_key, account_id)`（复用 `rows_to_tasks` + 内存过滤 ⇒ **零 SQL 改动**，且与看板**字段同源**）与 `open_task_detail_window(issue_key, account_id)`（`WebviewWindowBuilder` 建窗，label = `task-detail-{账号}-{issueKey清洗}` ⇒ 同一任务重复打开**聚焦**旧窗）。
+  - **⚠️ 任务标识用 `initialization_script` 注入 `window.__TASK_DETAIL__`**（页面脚本执行**之前**注入 ⇒ **无竞态**；且与 dev/prod 的 URL 解析规则无关）—— URL query 要为两种环境各写一套、事件（`emit_to`）有「先发后听」的窗口期。
+  - **⚠️ capability 的 `windows` 支持 glob**（Tauri v2 用 `Pattern::new(window)` 匹配）⇒ 新增 `task-detail` capability（`windows: ["task-detail-*"]`）一个 glob 覆盖所有动态 label 的详情窗。
+  - **前端**：`DetailPanel` 加 `live`（默认 true）/ `variant`（modal|window）/ `onOpenInNewWindow` 三个 prop（`live=false` ⇒ 实时拉取的 effect **直接早退**；`variant='window'` ⇒ 根元素加 `.detail-window` 去掉绝对定位/圆角/阴影/宽度上限）；新增 `TaskDetailWindow.tsx`；`main.tsx` 按 label **前缀** 三分支路由（about / task-detail / 主窗口）；`App.tsx` 的 modal 传 `live={false}` + 「在新窗口打开」回调。
+  - **验证（真机端到端，`tauri dev` + `screencapture`）**：⚠️ 新窗口创建 / capability / 注入 / 路由**只有真 app 能验**。实测新窗口标题 = `fad-backend#551 · TaskBoard`（= 传入的 issue_key）· **占满整个窗口**（不是居中小卡片）· 「实时」徽标 + 时间戳到位 · GitHub 状态选项 / 会话 / 交接 / 业务背景全部渲染 ✓；**用户自己点「新窗口打开」也成功开出 `fad-backend#1198`** ⇒ 真实用户路径同样跑通 ✓。
+  - **测试**：+11（新增 `components/task-detail-window.test.tsx` 10 例 · Rust `pick_task_by_issue_key_matches_exactly` 1 例，走**真实落库 + 真实查询路径**）⇒ vitest 34 → **35 文件 / 558 → 568 例**；Rust lib 268 + 集成 27。
+  - **⚠️ 改了两个既有结构断言**（不是绕过）：`about-window.test.ts`（路由二元 → 三元 ⇒ 断言改用正则按顺序匹配，Prettier 会折行故不能用连续子串）· `detail-panel-head.test.tsx`（头部多了 `.detail-head-actions` 包装 ⇒ 正则允许这层包装，**但 #500 的不变式不变**：issue id 行 → 按钮 → 标题行的嵌套顺序、标题仍在 `.detail-head` 内闭合）。
+  - **⚠️ 有些断言只能落在源码上**：node 环境无 DOM ⇒ `renderToStaticMarkup` **不执行 effect** ⇒「`live=false` 时不发请求」这条**运行时**行为无法用渲染断言验证 ⇒ 走 `?raw` 源码断言（仓库既有范式）。**反向验证**：删掉早退分支 ⇒ 用例 FAILED；还原 ⇒ ok。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓ · tsc / lint / prettier / build / i18n ✓（456 key）· vitest 35 文件 568 例 ✓ · scripts 143 ✓ · 四 check ✓。**零 DB schema / 零新依赖**。
+  - **影响面**：`src-tauri/commands.rs` · `src-tauri/lib.rs` · `capabilities/task-detail.json`（新）· `components/DetailPanel.tsx` · `components/TaskDetailWindow.tsx`（新）· `main.tsx` · `App.tsx` · `api.ts` · `styles.css` · i18n ×2 + 2 个既有测试文件（断言改写）。
+  - 详见 [`issue-527-task-detail-window.md`](./issue-527-task-detail-window.md)
+
 - **v0.8.3（2026-11-03）— 收起侧边栏按钮的图标换成「侧栏面板」形状（固定，不随状态翻转）（#525）**
 
   - **需求**：用户给了一张图标截图（**圆角矩形 + 左侧竖分隔线**），要求把顶栏的收起侧边栏按钮**换成这个图标**。

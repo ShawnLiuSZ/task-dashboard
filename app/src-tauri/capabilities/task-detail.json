@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "task-detail",
+  "description": "任务详情独立窗权限（#526）：可关闭自身窗口；其余走 core:default",
+  "windows": ["task-detail-*"],
+  "permissions": ["core:default", "core:window:allow-close"]
+}
