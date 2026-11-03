@@ -132,6 +132,36 @@ effect** ⇒ 「`live=false` 时不发请求」这条**运行时**行为无法�
 
 **反向验证**：删掉 `if (!liveEnabled) { … return; }` 早退分支 ⇒ 用例 **FAILED**；还原 ⇒ **ok**。
 
+## 顺带修的状态行布局缺陷（#529）
+
+用户在新窗口里看到「执行状态 / GitHub 状态」那一行**巨大且文字竖排**，报「怎么会有这么大状态」。
+
+### 两个叠加的根因
+
+| # | 根因 | 修法 |
+|---|---|---|
+| ① | `.seg`（flex 容器）**没有 `flex-wrap`**（默认 nowrap）⇒ 20+ 个状态项硬塞在一行；`.seg-btn` 又是 `flex: 1`（basis 0% ⇒ **均分**宽度）⇒ 每个只有 1/N 宽 ⇒ 「In Progress」「优先测试上线」被压成**竖排**文字（一个字符一行），整行高度被最长的那个撑到 ~90px | `.seg { flex-wrap: wrap; }` + `.seg-btn { flex: 0 0 auto; white-space: nowrap; }` ⇒ 按内容宽度、**放不下就换行**、文字不再竖排 |
+| ② | `project_statuses` 表按 **(account, project, option)** 存 ⇒ 多个 GitHub Project 各有一套 Todo / In Progress / Done ⇒ 聚合起来**重复三遍**（实测某账号 21 项里 3 组同名） | `projectStatusOptions` **精确去重**（区分大小写） |
+
+⚠️ **为什么同名去重是安全的**：写回目标是按**任务所属的 Project** 解析的
+（后端 `resolve_project_write_target`）⇒ 状态名只作为「名字」传过去 ⇒
+同名项在 UI 上**功能完全等价**（都写到本任务所属 Project 的那个 option）。
+
+⚠️ **为什么必须区分大小写**：`In Progress` 与 `In progress` 是**两个不同 Project 的不同
+option**（option_id 不同）⇒ 合并会写错 option_id ⇒ 精确匹配。
+
+### 实测（复现页 + 真机）
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| 状态项数 | 21（含 3 组重复） | **14**（去重后） |
+| 渲染行数 | 1 行（但被竖排文字撑到 ~90px 高） | **1 行、28px 高** |
+| 按钮宽度 | 均分压缩 | 34~78px（按内容） |
+| 文字 | **竖排**（一字符一行） | 横排单行 |
+
+真机实测（`tauri dev` + `screencapture`）：状态行变成一行横排
+`需求池 | 产品规划 | 排期 | 开发中 | 开发完成 | 开发完成评审中 | 测试通过评审上线 | 市场上线 | 设计稿`。
+
 ## 影响面
 
 | 文件 | 改动 |

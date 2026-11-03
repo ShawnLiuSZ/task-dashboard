@@ -7,7 +7,7 @@ import detailPanelRaw from './DetailPanel.tsx?raw';
 import appRaw from '../App.tsx?raw';
 import taskDetailWindowRaw from './TaskDetailWindow.tsx?raw';
 import { I18nProvider } from '../i18n';
-import type { Task } from '../types';
+import type { ProjectStatus, Task } from '../types';
 
 /**
  * 任务详情**独立窗口**（#526）。
@@ -74,10 +74,18 @@ const TASK: Task = {
   accountId: 1,
 };
 
-function renderPanel(props: Partial<React.ComponentProps<typeof DetailPanel>> = {}): string {
+function renderPanel(
+  props: Partial<React.ComponentProps<typeof DetailPanel>> = {},
+  taskPatch: Partial<Task> = {},
+): string {
   return renderToStaticMarkup(
     <I18nProvider>
-      <DetailPanel task={TASK} onClose={() => {}} onChanged={() => {}} {...props} />
+      <DetailPanel
+        task={{ ...TASK, ...taskPatch }}
+        onClose={() => {}}
+        onChanged={() => {}}
+        {...props}
+      />
     </I18nProvider>,
   );
 }
@@ -133,6 +141,58 @@ describe('modal 不再实时获取任务详情（#526）', () => {
     expect(appRaw).toMatch(
       /\.openTaskDetailWindow\(selectedTask\.issueKey, selectedTask\.accountId\)/,
     );
+  });
+});
+
+describe('GitHub 状态行不再挤成竖排（#529）', () => {
+  it('同名状态**去重**（精确匹配，区分大小写）', () => {
+    // ⚠️ 多个 GitHub Project 各有一套 Todo / In Progress / Done ⇒ 聚合起来重复三遍。
+    // 去重**安全**：写回目标是按**任务所属的 Project** 解析的（后端
+    // `resolve_project_write_target`）⇒ 状态名只作为名字传过去 ⇒ 同名项功能等价。
+    const statuses = [
+      { name: 'Todo', orderIndex: 0 },
+      { name: 'In Progress', orderIndex: 1 },
+      { name: 'Done', orderIndex: 2 },
+      { name: 'Todo', orderIndex: 3 },
+      { name: 'In Progress', orderIndex: 4 },
+      { name: 'Done', orderIndex: 5 },
+    ];
+    // ⚠️ 当前状态设为 'Todo'（在列表里）⇒ 不触发「当前值不在列表则前置」分支
+    // ⇒ 按钮总数就等于去重后的状态数，断言更干净。
+    const html = renderPanel(
+      { projectStatuses: statuses as ProjectStatus[] },
+      { projectStatus: 'Todo' },
+    );
+    // 数「按钮内容恰为该状态名」的次数（按钮内容后面紧跟 `</button>`）。
+    const countOf = (name: string) => html.split(`>${name}</button>`).length - 1;
+    expect(countOf('Todo')).toBe(1);
+    expect(countOf('In Progress')).toBe(1);
+    expect(countOf('Done')).toBe(1);
+    // 三个不同名各一个 ⇒ 总共 3 个按钮（去重前是 6 个）。
+    expect(html.split('class="seg-btn').length - 1).toBe(3);
+    // 且「未标注」（不在列表的当前值）**没有**被前置进来。
+    expect(html).not.toContain('未标注');
+  });
+
+  it('**大小写不同**的状态不去重（`In Progress` 与 `In progress` 是不同 option）', () => {
+    // 合并它们会写错 option_id ⇒ 必须精确匹配。
+    const html = renderPanel({
+      projectStatuses: [
+        { name: 'In Progress', orderIndex: 0 },
+        { name: 'In progress', orderIndex: 1 },
+      ] as ProjectStatus[],
+    });
+    expect(html).toContain('>In Progress<');
+    expect(html).toContain('>In progress<');
+  });
+
+  it('当前状态不在列表里时仍**前置可见**（不被去重逻辑吞掉）', () => {
+    const html = renderPanel({
+      projectStatuses: [{ name: 'Todo', orderIndex: 0 }] as ProjectStatus[],
+    });
+    // 当前值 = 'unclassified'（不在列表）⇒ 必须出现在第一个（`detail.unlabeled`）。
+    // ⚠️ 按钮上还有 `disabled` / `title` 属性 ⇒ 正则用 `[^>]*` 而不是直接 `>`。
+    expect(html).toMatch(/class="seg-btn on"[^>]*>未标注<\/button>/);
   });
 });
 

@@ -58,6 +58,21 @@
   - **影响面**：`app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`。
   - 详见 [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.4（未发布）— 修 GitHub 状态行：状态名不再被压成竖排、同名状态去重（#529）**
+
+  - **现象**：用户在任务详情独立窗口里看到「执行状态 / GitHub 状态」那一行**巨大且文字竖排**，报「怎么会有这么大状态」。
+  - **根因 ①（排版）**：`.seg`（flex 容器）**没有 `flex-wrap`**（默认 nowrap）⇒ 20+ 个状态项硬塞在一行；`.seg-btn` 又是 `flex: 1`（basis 0% ⇒ **均分**宽度）⇒ 每个只有 1/N 宽 ⇒「In Progress」「优先测试上线」被压成**竖排**文字（一个字符一行），整行高度被最长的那个撑到 ~90px。
+    ⇒ 修：`.seg { flex-wrap: wrap; }` + `.seg-btn { flex: 0 0 auto; white-space: nowrap; }` ⇒ 按内容宽度、**放不下就换行**、文字不再竖排。
+  - **根因 ②（数据重复）**：`project_statuses` 表按 **(account, project, option)** 存 ⇒ 多个 GitHub Project 各有一套 Todo / In Progress / Done ⇒ 聚合起来**重复三遍**（实测某账号 21 项里 3 组同名）。
+    ⇒ 修：`projectStatusOptions` **精确去重**（区分大小写）。
+    ⚠️ **同名去重是安全的**：写回目标是按**任务所属的 Project** 解析的（后端 `resolve_project_write_target`）⇒ 状态名只作为名字传过去 ⇒ 同名项功能完全等价。
+    ⚠️ **必须区分大小写**：`In Progress` 与 `In progress` 是**两个不同 Project 的不同 option**（option_id 不同）⇒ 合并会写错 option_id。
+  - **实测（复现页 + 真机）**：状态项 21 → **14**（去重）· 渲染 **1 行、28px 高**（原来 1 行但被竖排文字撑到 ~90px）· 按钮宽度 34~78px（按内容，不再均分压缩）· 文字**横排单行**。真机实测状态行为一行：`需求池 | 产品规划 | 排期 | 开发中 | 开发完成 | 开发完成评审中 | 测试通过评审上线 | 市场上线 | 设计稿`。
+  - **测试**：+3（去重 / 大小写不同不去重 / 当前状态不在列表时仍前置可见）⇒ vitest 35 文件 / 568 → **571** 例。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓ · tsc / lint / prettier / build / i18n ✓（456 key）· scripts 143 ✓ · 四 check ✓。零 Rust 改动 / 零 DB schema / 零新依赖。
+  - **影响面**：`components/DetailPanel.tsx`（状态选项去重）· `styles.css`（`.seg` / `.seg-btn`）。
+  - 详见 [`issue-527-task-detail-window.md`](./issue-527-task-detail-window.md) 的「顺带修的状态行布局缺陷」一节
+
 - **v0.8.4（未发布）— 任务详情可在新窗口打开（完整信息）+ modal 去掉实时获取任务详情（#527）**
 
   - **需求**：用户原话 —— 「查看 task 任务时，现在是以 modal 框展示，希望实现：可以在新窗口打开详情，这个详情中显示目前 modal 框中的所有信息，然后 modal 框中将实时获取任务详情的功能去掉。」

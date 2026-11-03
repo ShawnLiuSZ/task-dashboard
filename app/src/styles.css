@@ -1594,10 +1594,17 @@ button.unassigned-tag:disabled {
   background: var(--surface-2);
   border-radius: 7px;
   padding: 2px;
+  /* #529：GitHub 状态项可能有 20+ 个 ⇒ 必须允许**换行**。
+     原来没有 `flex-wrap`（默认 nowrap）⇒ 全部挤在一行里。 */
+  flex-wrap: wrap;
 }
 
 .seg-btn {
-  flex: 1;
+  /* #529：原来是 `flex: 1`（basis 0% ⇒ 所有项**均分**宽度）⇒ 状态多时每个被压到
+     1/N 宽 ⇒ 「In Progress」被挤成**竖排**文字（一个字符一行）。
+     改为按内容宽度（不均分），配合父级 `flex-wrap: wrap` ⇒ 放不下就换行。 */
+  flex: 0 0 auto;
+  white-space: nowrap;
   border: none;
   background: transparent;
   border-radius: 5px;

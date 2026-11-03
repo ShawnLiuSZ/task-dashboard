@@ -54,6 +54,21 @@
   - **Touched**: `app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`.
   - See [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.4 (unreleased) — Fixed the GitHub status row: status names are no longer squeezed into vertical text, and duplicate names are de-duplicated (#529)**
+
+  - **Symptom**: in the task-detail standalone window the "status / GitHub status" row was **enormous and rendered its labels vertically**; the user reported "why is this status so huge".
+  - **Root cause ① (layout)**: `.seg` (the flex container) had **no `flex-wrap`** (default nowrap) ⇒ 20+ status items were crammed into one row; and `.seg-btn` was `flex: 1` (basis 0% ⇒ widths **shared equally**) ⇒ each got only 1/N of the width ⇒ "In Progress" and "优先测试上线" were squeezed into **vertical** text (one character per line), and the tallest item stretched the whole row to ~90px.
+    ⇒ Fix: `.seg { flex-wrap: wrap; }` + `.seg-btn { flex: 0 0 auto; white-space: nowrap; }` ⇒ width follows the content, it **wraps when it runs out of room**, and the labels stop going vertical.
+  - **Root cause ② (duplicated data)**: the `project_statuses` table stores rows per **(account, project, option)** ⇒ several GitHub Projects each have their own Todo / In Progress / Done ⇒ aggregating them repeats them **three times** (measured: 3 identical groups among 21 items on one account).
+    ⇒ Fix: `projectStatusOptions` **de-duplicates exactly** (case-sensitive).
+    ⚠️ **De-duplicating by name is safe**: the write-back target is resolved from the **task's own Project** (backend `resolve_project_write_target`) ⇒ the status name is only passed as a name ⇒ same-named entries are functionally identical.
+    ⚠️ **Case must matter**: `In Progress` and `In progress` are **different options of different Projects** (different option_id) ⇒ merging them would write the wrong option_id.
+  - **Measured (replica page + real app)**: 21 → **14** items (de-duplicated) · rendered in **1 row, 28px tall** (previously one row stretched to ~90px by the vertical text) · button widths 34~78px (content-sized, no longer equal-shared) · labels **horizontal, single line**. In the real app the row reads: `需求池 | 产品规划 | 排期 | 开发中 | 开发完成 | 开发完成评审中 | 测试通过评审上线 | 市场上线 | 设计稿`.
+  - **Tests**: +3 (de-duplication / case-sensitivity / the current status still prepended when absent) ⇒ vitest 35 files / 568 → **571** cases.
+  - **Gates**: Rust fmt / clippy(--all-targets) / test ✓, tsc / lint / prettier / build / i18n ✓ (456 keys), scripts 143 ✓, four check scripts ✓. Zero Rust changes / zero DB schema / zero new dependencies.
+  - **Touched**: `components/DetailPanel.tsx` (de-duplicate the status options) · `styles.css` (`.seg` / `.seg-btn`).
+  - See the "status-row layout defect fixed along the way" section of [`issue-527-task-detail-window.md`](./issue-527-task-detail-window.md)
+
 - **v0.8.4 (unreleased) — Task details can now open in their own window (full information), and the modal no longer fetches task details live (#527)**
 
   - **Requirement** (verbatim): "查看 task 任务时，现在是以 modal 框展示，希望实现：可以在新窗口打开详情，这个详情中显示目前 modal 框中的所有信息，然后 modal 框中将实时获取任务详情的功能去掉。"

@@ -306,9 +306,29 @@ export default function DetailPanel({
   const bodyLong = shouldCollapseBody(liveBody);
   const [bodyExpanded, setBodyExpanded] = useState(false);
   // 选项 = projectStatuses 名称；当前值不在其中时前置，保证永远可见且默认选中。
+  //
+  // #529：**同名状态去重**（精确匹配，区分大小写）。
+  //
+  // ⚠️ 为什么会有重复：`project_statuses` 表按 **(account, project, option)** 存 ⇒
+  // 多个 GitHub Project 各有一套自己的状态（常见：每个 Project 都有
+  // Todo / In Progress / Done）⇒ 聚合起来就是「Todo、In Progress、Done、Todo、
+  // In Progress、Done…」这种重复列表（实测某个账号 24 项里 3 组同名）。
+  //
+  // ⚠️ 为什么去重**安全**：写回目标是按**任务所属的 Project** 解析的
+  // （后端 `resolve_project_write_target`）⇒ 状态名只作为「名字」传过去 ⇒
+  // 同名的多个 option 在 UI 上**功能完全等价**（都写到本任务所属 Project 的那个 option）。
+  //
+  // ⚠️ 为什么**区分大小写**：`In Progress` 与 `In progress` 是**两个不同 Project 的
+  // 不同 option**（option_id 不同）⇒ 合并会写错 option_id ⇒ 必须精确匹配。
   const projectStatusOptions = useMemo(() => {
-    const names = (projectStatuses ?? []).map((ps) => ps.name);
-    if (!names.includes(currentProjectStatus)) return [currentProjectStatus, ...names];
+    const names: string[] = [];
+    const seen = new Set<string>();
+    for (const ps of projectStatuses ?? []) {
+      if (seen.has(ps.name)) continue;
+      seen.add(ps.name);
+      names.push(ps.name);
+    }
+    if (!seen.has(currentProjectStatus)) return [currentProjectStatus, ...names];
     return names;
   }, [projectStatuses, currentProjectStatus]);
   const projectStatusLabel = (name: string) =>
