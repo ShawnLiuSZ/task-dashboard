@@ -58,6 +58,20 @@
   - **影响面**：`app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`。
   - 详见 [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.3（未发布）— 菜单栏 TaskBoard 图标旁不再显示「处理中 N」数字（#524）**
+
+  - **现象**：用户在 **macOS 状态菜单栏**看到 TaskBoard 应用图标**旁边有一个裸数字「13」**（截图里 `[TaskBoard 图标] 13`）⇒ 一个「不知含义、且随每次同步不断变化」的数字常驻在菜单栏。
+  - **根因**：`app/src-tauri/src/lib.rs::refresh_tray`（**每次同步后**调用）里 `set_title` 传入数字字符串 ⇒ macOS 菜单栏把 `set_title` 的文字**常驻显示在图标右侧**。数字口径 = `status = 'doing' AND candidate_done = 0` ⇒ **「处理中」的任务数**。
+  - **⚠️ 与应用内那个「未完成 N 条」是两个不同口径**（菜单栏 = 处理中；应用内 = 排除 closed / done 的未完成）⇒ 这两个数字**不是同一个**，此前一度被混为一谈。
+  - **修复**：菜单栏图标旁**不再**显示数字（`set_title::<&str>(None)` ⇒ 只留图标）；数字信息改由 **tooltip** 承载（hover 可见「TaskBoard · 处理中 N」）⇒ **信息不丢、菜单栏干净**。⚠️ 不是「删掉整个 refresh_tray」—— tooltip 里的数字是有用信息，只是**不该常驻**。
+  - **回归测试（+1）**：走**源码静态检查**（`include_str!("lib.rs")`，与本模块既有的 tray 回归同一手法）—— `refresh_tray` 需要真实 `AppHandle`，单测无法构造，而缺陷的本质就是「标题设成了什么」。
+  - **⚠️ 一个值得记的测试坑**：`include_str!` 嵌的是**本文件自己** ⇒ **断言串与代码注释都会进入被扫文本** ⇒ 直接写字面量会让断言**命中自己** ⇒ **恒真** ⇒ 断言串必须用 `format!` **拼出来**，且**代码注释里也不能**写出旧实现的完整调用串（同型坑：前端 `?raw` 源码断言也踩过）。
+  - **反向验证**：临时改回旧实现 ⇒ 用例 **FAILED**；还原 ⇒ **ok** ⇒ 断言确有判别力。
+  - **验证（真机实测）**：⚠️ 菜单栏是 OS 绘制的 ⇒ **只有真 app 能验**（`tauri dev` + `screencapture`）。实测同时存在两个 TaskBoard 菜单栏图标（用户装着的 v0.8.2 + 刚编译的 dev 版）：**左边（旧版）右侧有「13」**、**右边（新版）只剩图标** ✓ ⇒ 用户**升级到新版本**后即生效。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓（266+27+**1**）· tsc / lint / prettier / build / i18n ✓ · vitest 34 文件 **558** 例 ✓ · scripts 143 ✓ · 四 check ✓。**零前端改动 / 零 DB schema / 零新依赖 / 零新 i18n 词条**。
+  - **影响面**：`app/src-tauri/src/lib.rs`（`refresh_tray` + 1 条回归测试）。
+  - 详见 [`issue-524-tray-title-number.md`](./issue-524-tray-title-number.md)
+
 - **v0.8.3（未发布）— 收起侧边栏按钮移到窗口标题栏位置（仅 icon，无文字）（#522）**
 
   - **需求**：用户截图标注 —— 把「收起侧边栏」按钮移到**窗口标题栏位置**（紧跟窗口标题「TaskBoard」右侧，红框处），且**只用 icon、不要文字**。

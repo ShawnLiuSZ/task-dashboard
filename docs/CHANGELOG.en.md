@@ -54,6 +54,20 @@
   - **Touched**: `app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`.
   - See [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.3 (unreleased) — The "N in progress" number no longer sits next to the TaskBoard icon in the macOS menu bar (#524)**
+
+  - **Symptom**: the user saw a bare number **"13"** next to the TaskBoard icon in the **macOS status menu bar** (screenshot: `[TaskBoard icon] 13`) ⇒ a number whose meaning is unclear, and which changes on every sync, permanently occupied the menu bar.
+  - **Root cause**: in `app/src-tauri/src/lib.rs::refresh_tray` (called **after every sync**) `set_title` was handed the number as a string ⇒ macOS renders a tray title **permanently beside the icon**. The number counts `status = 'doing' AND candidate_done = 0` ⇒ the tasks **in progress**.
+  - **⚠️ It is a different figure from the app's own "N open"** (menu bar = in progress; in-app = not closed / not done) ⇒ the two numbers are **not** the same thing, which had them conflated.
+  - **Fix**: the number is **no longer shown beside the icon** (`set_title::<&str>(None)` ⇒ icon only); the figure moves into the **tooltip** (hover shows "TaskBoard · N in progress") ⇒ **no information is lost, the menu bar stays clean**. ⚠️ Deliberately not "delete `refresh_tray` altogether" — the tooltip figure is useful, it just should not be permanently on screen.
+  - **Regression test (+1)**: a **source-level static check** (`include_str!("lib.rs")`, the same technique as this module's existing tray regressions) — `refresh_tray` needs a real `AppHandle` that a unit test cannot build, and the defect *is* "what the title was set to".
+  - **⚠️ A test pitfall worth remembering**: `include_str!` embeds **the file itself** ⇒ **both the assertion string and the code comments enter the scanned text** ⇒ writing the literal directly makes the assertion **match itself** and be **vacuously true** ⇒ the assertion string must be assembled with `format!`, and the **code comments must not** spell out the old call verbatim (same family of trap as the frontend's `?raw` source assertions).
+  - **Reverse verification**: temporarily restoring the old implementation ⇒ the case **FAILED**; reverting ⇒ **ok** ⇒ the assertion really discriminates.
+  - **Verification (real app)**: ⚠️ the menu bar is drawn by the OS ⇒ **only the real app can verify this** (`tauri dev` + `screencapture`). The capture shows **two** TaskBoard menu-bar icons (the installed v0.8.2 and the freshly built dev build): the **left (old) one still shows "13"**, the **right (new) one shows the icon alone** ✓ ⇒ the fix lands once the user upgrades.
+  - **Gates**: Rust fmt / clippy(--all-targets) / test ✓ (266 + 27 + **1**), tsc / lint / prettier / build / i18n ✓, vitest 34 files / **558** cases ✓, scripts 143 ✓, four check scripts ✓. **Zero frontend changes / zero DB schema / zero new dependencies / zero new i18n entries**.
+  - **Touched**: `app/src-tauri/src/lib.rs` (`refresh_tray` + one regression test).
+  - See [`issue-524-tray-title-number.md`](./issue-524-tray-title-number.md)
+
 - **v0.8.3 (unreleased) — The sidebar collapse button moved to the window title bar position (icon only, no text) (#522)**
 
   - **Requirement**: the user supplied a screenshot marking where the "collapse sidebar" button should go — the **window title bar position** (immediately right of the window title "TaskBoard", the boxed area), **icon only, no text**.
