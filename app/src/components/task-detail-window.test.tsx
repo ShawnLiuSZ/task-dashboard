@@ -6,6 +6,9 @@ import TaskDetailWindow from './TaskDetailWindow';
 import detailPanelRaw from './DetailPanel.tsx?raw';
 import appRaw from '../App.tsx?raw';
 import taskDetailWindowRaw from './TaskDetailWindow.tsx?raw';
+import taskCardRaw from './TaskCard.tsx?raw';
+import boardRaw from './Board.tsx?raw';
+import TaskCard from './TaskCard';
 import { I18nProvider } from '../i18n';
 import type { ProjectStatus, Task } from '../types';
 
@@ -193,6 +196,41 @@ describe('GitHub 状态行不再挤成竖排（#529）', () => {
     // 当前值 = 'unclassified'（不在列表）⇒ 必须出现在第一个（`detail.unlabeled`）。
     // ⚠️ 按钮上还有 `disabled` / `title` 属性 ⇒ 正则用 `[^>]*` 而不是直接 `>`。
     expect(html).toMatch(/class="seg-btn on"[^>]*>未标注<\/button>/);
+  });
+});
+
+/** 渲染一张任务卡片（#531 的按钮在其底部）。 */
+function renderCard(props: Partial<React.ComponentProps<typeof TaskCard>> = {}): string {
+  return renderToStaticMarkup(
+    <I18nProvider>
+      {/* ⚠️ `active` 是必填 prop ⇒ 不能靠 Partial<> 省略（TS 会报 undefined 不兼容）。 */}
+      <TaskCard task={TASK} active={false} onSelectKey={() => {}} {...props} />
+    </I18nProvider>,
+  );
+}
+
+describe('任务卡片上的「在新窗口打开」按钮（#531）', () => {
+  it('按钮渲染在卡片底部，带可访问名', () => {
+    const html = renderCard({ onOpenInNewWindow: () => {} });
+    expect(html).toContain('class="card-open-window"');
+    expect(html).toContain('aria-label="在新窗口打开"');
+  });
+
+  it('没传回调时**不渲染**该按钮（不做死按钮）', () => {
+    const html = renderCard();
+    expect(html).not.toContain('card-open-window');
+  });
+
+  it('⚠️ 必须 `stopPropagation`（卡片本体 onClick 会打开 modal）', () => {
+    // ⚠️ 源码断言：SSR 不跑事件 ⇒ 「点击不冒泡」只能在源码层锁。
+    expect(taskCardRaw).toMatch(
+      /className="card-open-window"[\s\S]*?onClick=\{\(e\) => \{\s*e\.stopPropagation\(\);\s*onOpenInNewWindow\(task\);/,
+    );
+  });
+
+  it('看板的 `cardProps` 带了该回调 ⇒ 四处 <TaskCard> 自动都有', () => {
+    // ⚠️ 只在 cardProps 里带一次（否则四处 <TaskCard> 会漏掉其中几个）。
+    expect(boardRaw).toMatch(/const cardProps = \(task: Task\) => \(\{[\s\S]*?onOpenInNewWindow,/);
   });
 });
 

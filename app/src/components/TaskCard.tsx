@@ -15,6 +15,13 @@ interface Props {
       #329 起统一用 `taskIdentity`，生产端必须同口径，否则点击后查不回任务、详情面板不可达。
       ⚠️ 写操作仍用 `task.issueKey`（后端按 `issue_key` 定位），两者不可混用。 */
   onSelectKey: (key: string) => void;
+  /**
+   * #531：在**新窗口**打开该任务的详情（完整信息：正文 / 时间线 / PR 提交 / 实时评论）。
+   *
+   * ⚠️ 卡片本体是「点击 ⇒ 打开 modal」⇒ 这个按钮必须 `stopPropagation`，
+   * 否则点它会**同时**开出 modal 与独立窗。
+   */
+  onOpenInNewWindow?: (task: Task) => void;
   /** v0.3.22+：仓库颜色索引（0-19），用于仓库名标签配色。 */
   repoIndex?: number;
   /** v0.3.43+：自定义列视图下，卡片右上角显示 project.status（gh_status）徽章。 */
@@ -37,7 +44,14 @@ function openLink(url: string, e: MouseEvent) {
 
 // v0.3.49 (#145+#150)：memo 包裹（props 全为稳定引用/原始值时跳过重渲染）
 // + 键盘可达（role=button/tabIndex/Enter-Space）+ 可访问名称。
-function TaskCard({ task, active, onSelectKey, repoIndex, showGhStatus }: Props) {
+function TaskCard({
+  task,
+  active,
+  onSelectKey,
+  onOpenInNewWindow,
+  repoIndex,
+  showGhStatus,
+}: Props) {
   const t = useT();
   const mine = task.ownership === 'assigned';
   const assigneeNames = task.assignees ? task.assignees.split(',').filter(Boolean) : [];
@@ -232,6 +246,40 @@ function TaskCard({ task, active, onSelectKey, repoIndex, showGhStatus }: Props)
           </a>
         )}
         {task.candidateDone && <span className="candidate-tag">{t('card.candidateTag')}</span>}
+        {/* #531：在新窗口打开详情（完整信息）。
+            ⚠️ 必须 `stopPropagation` —— 卡片本体 onClick 会打开 modal，
+            不拦住就会「同时」开出 modal 与独立窗。
+            ⚠️ `openLink` 也要调用：卡片内的链接走它（阻止默认跳转 + 冒泡）。 */}
+        {onOpenInNewWindow && (
+          <button
+            type="button"
+            className="card-open-window"
+            title={t('detail.openInNewWindow')}
+            aria-label={t('detail.openInNewWindow')}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenInNewWindow(task);
+            }}
+          >
+            <svg
+              className="card-open-window-icon"
+              viewBox="0 0 24 24"
+              width="12"
+              height="12"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              {/* 「外开」图标：方框 + 右上角箭头（与详情面板头部同一个图标）。 */}
+              <path d="M14 4h6v6" />
+              <path d="M20 4l-9 9" />
+              <path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" />
+            </svg>
+          </button>
+        )}
       </div>
       {/* #214：认领二次确认（失败经全局错误横幅可见；成功靠后端事件重查）。 */}
       {confirmClaim && (

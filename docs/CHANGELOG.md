@@ -58,6 +58,19 @@
   - **影响面**：`app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`。
   - 详见 [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.4（未发布）— 「在新窗口打开」按钮直接放到任务卡片上（#531）**
+
+  - **需求**：用户截图标注详情面板头部的「在新窗口打开」图标，要求**把这个功能直接放到任务卡片上** ⇒ 看板卡片上直接开独立详情窗，**不必先点开 modal**。
+  - **位置**：`.card-bottom`（日期 / 「N 条评论」那一行）—— 那里本来就是操作元素的位置。
+  - **⚠️ 必须 `stopPropagation`**：卡片本体是 `<article onClick={() => onSelectKey(...)}>` ⇒ 不拦住就会**同时**开出 modal 与独立窗。
+  - **⚠️ 接线只在 `cardProps` 里带一次**：`Board` 里有**四处** `<TaskCard>`（project / unclassified / 四态 / 自定义列）⇒ 回调只在 `cardProps` 带 ⇒ 四处自动都有，**不会漏其中几个**。`App.tsx` 的 `<Board onOpenInNewWindow={...} />` 直接调 `api.openTaskDetailWindow(task.issueKey, task.accountId)`（**不经过 modal**）；点卡片本体仍开 modal（行为不变）。
+  - **视觉**：按钮 18×18 · 图标 12px · `--text-3` 淡灰 · hover 才变深 ⇒ 卡片密度高，按钮抢眼会变成噪音。图标与详情面板头部**同一个**（「外开」：方框 + 右上角箭头）⇒ 用户一眼认得。
+  - **实测（复现页：vite 直接 import **真实** `TaskCard` + 真实 `styles.css`）**：按钮存在且在 `.card-bottom` 内 ✓ · 尺寸 18×18 / 图标 12×12 ✓ · `title` / `aria-label` = 「在新窗口打开」✓ · **贴右对齐**（`margin-left: auto`）✓ · 与底栏其它元素（日期 / 评论链接）**不重叠** ✓。
+  - **测试**：+4（按钮渲染 / 没回调不渲染 / **必须 `stopPropagation`**（源码断言）· `cardProps` 带了该回调）⇒ vitest 36 文件 / 577 → **581** 例。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓（零 Rust 改动）· tsc / lint / prettier / build / i18n ✓（456 key）· scripts 143 ✓ · 四 check ✓。零 DB schema / 零新依赖。
+  - **影响面**：`components/TaskCard.tsx`（按钮）· `components/Board.tsx`（`cardProps` + Props）· `App.tsx`（接线）· `styles.css`（`.card-open-window`）。
+  - 详见 [`issue-527-task-detail-window.md`](./issue-527-task-detail-window.md) 的「卡片上的『在新窗口打开』按钮」一节
+
 - **v0.8.4（未发布）— 修任务详情独立窗的 GitHub 状态选项与主窗口 modal 不一致（#530）**
 
   - **现象**：用户对比**同一个任务**（`fad-backend#1660`）在两处的「执行状态」列表 —— **主窗口 modal 8 项**（`需求池 / 产品规划 / 待开发处理 / 开发中 / …`）而**独立窗 18 项**（多了英文那套 `Todo / In Progress / Done / Planning / …`）⇒ 同一个任务两个界面不一致。

@@ -3628,3 +3628,35 @@ button.unassigned-tag:disabled {
   text-align: center;
   color: var(--text-2);
 }
+
+/* #531：任务卡片上的「在新窗口打开详情」按钮。
+ *
+ * ⚠️ 卡片本体是「点击 ⇒ 打开 modal」⇒ 该按钮必须 `stopPropagation`（JS 侧已处理），
+ * 否则点它会同时开出 modal 与独立窗。
+ *
+ * 视觉上刻意做得很轻（淡灰、12px 图标）：卡片密度高，按钮抢眼会变成噪音；
+ * hover 时才变深 ⇒ 需要时找得到，不需要时不打扰。 */
+.card-open-window {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin-left: auto;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.card-open-window:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.card-open-window-icon {
+  width: 12px;
+  height: 12px;
+}

@@ -761,6 +761,13 @@ function BoardApp() {
                   tasks={visible}
                   selected={selected}
                   onSelect={setSelected}
+                  // #531：卡片上的「在新窗口打开」⇒ 直接开独立详情窗（#527），
+                  // 不经过 modal（点卡片本体仍开 modal）。
+                  onOpenInNewWindow={(task) => {
+                    void api
+                      .openTaskDetailWindow(task.issueKey, task.accountId)
+                      .catch((e) => reportError(e));
+                  }}
                   boardMode={boardMode}
                   projectStatuses={projectStatuses}
                   accountColumns={accountColumns}

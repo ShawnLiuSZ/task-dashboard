@@ -54,6 +54,19 @@
   - **Touched**: `app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`.
   - See [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.4 (unreleased) — The "open in new window" button now sits directly on the task card (#531)**
+
+  - **Requirement**: the user marked the "open in new window" icon in the detail panel's header and asked for **that feature to move onto the task card** ⇒ a board card opens the standalone detail window directly, with **no need to open the modal first**.
+  - **Where**: `.card-bottom` (the row with the date and "N comments") — already the place for action elements.
+  - **⚠️ It must `stopPropagation`**: the card itself is `<article onClick={() => onSelectKey(...)}>` ⇒ without it the modal and the standalone window would open **at the same time**.
+  - **⚠️ The callback is passed only once, via `cardProps`**: `Board` renders **four** `<TaskCard>`s (project / unclassified / four-state / custom columns) ⇒ passing it only in `cardProps` means all four get it and **none is missed**. `App.tsx`'s `<Board onOpenInNewWindow={...} />` calls `api.openTaskDetailWindow(task.issueKey, task.accountId)` directly (**without going through the modal**); clicking the card body still opens the modal (behaviour unchanged).
+  - **Looks**: button 18×18 · icon 12px · `--text-3` pale grey · darkens only on hover ⇒ cards are dense, a loud button would be noise. The icon is the **same one** as in the detail panel header ("open outward": a box with an arrow to the top right) ⇒ instantly recognisable.
+  - **Measured (replica page: vite imports the **real** `TaskCard` + the real `styles.css`)**: the button exists and is inside `.card-bottom` ✓ · 18×18 button / 12×12 icon ✓ · `title` / `aria-label` = "Open in new window" ✓ · **flush right** (`margin-left: auto`) ✓ · **no overlap** with the other footer elements (date / comments link) ✓.
+  - **Tests**: +4 (button rendered / not rendered without the callback / **must `stopPropagation`** (source assertion) / `cardProps` carries the callback) ⇒ vitest 36 files / 577 → **581** cases.
+  - **Gates**: Rust fmt / clippy(--all-targets) / test ✓ (zero Rust changes), tsc / lint / prettier / build / i18n ✓ (456 keys), scripts 143 ✓, four check scripts ✓. Zero DB schema / zero new dependencies.
+  - **Touched**: `components/TaskCard.tsx` (the button) · `components/Board.tsx` (`cardProps` + Props) · `App.tsx` (wiring) · `styles.css` (`.card-open-window`).
+  - See the "『open in new window』 button on the card" section of [`issue-527-task-detail-window.md`](./issue-527-task-detail-window.md)
+
 - **v0.8.4 (unreleased) — Fixed the GitHub status options in the task-detail standalone window not matching the main window's modal (#530)**
 
   - **Symptom**: comparing the **same task** (`fad-backend#1660`) in both places, the **main window's modal showed 8** status options (`需求池 / 产品规划 / 待开发处理 / 开发中 / …`) while the **standalone window showed 18** (the English set `Todo / In Progress / Done / Planning / …` on top) ⇒ two different lists for one task.

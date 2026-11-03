@@ -22,6 +22,13 @@ interface Props {
   projectStatuses?: ProjectStatus[];
   /** v0.3.28+：自定义列配置（按账号配置看板列）。 */
   accountColumns?: AccountColumn[];
+  /**
+   * #531：卡片上的「在新窗口打开详情」按钮（#527 的独立窗）。
+   *
+   * ⚠️ 只在 `cardProps` 里带一次 ⇒ 四处 `<TaskCard>`（project / unclassified /
+   * 四态 / 自定义列）**自动都有**，不会漏。
+   */
+  onOpenInNewWindow?: (task: Task) => void;
 }
 
 // GitHub Project Status 原文到显示用键的映射（用于分组去重）。
@@ -128,6 +135,7 @@ function Board({
   tasks,
   selected,
   onSelect,
+  onOpenInNewWindow,
   boardMode = 'project',
   projectStatuses,
   accountColumns,
@@ -201,6 +209,8 @@ function Board({
 
   const cardProps = (task: Task) => ({
     repoIndex: repoIndexMap.get(task.repo) ?? 0,
+    // #531：卡片上的「在新窗口打开」⇒ 只在这里带一次，四处 <TaskCard> 自动都有。
+    onOpenInNewWindow,
   });
 
   // v0.3.43+: "status" (legacy) gracefully degrades to "project"
