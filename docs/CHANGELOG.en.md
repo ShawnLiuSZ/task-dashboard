@@ -54,6 +54,18 @@
   - **Touched**: `app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`.
   - See [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.4 (unreleased) — Fixed the GitHub status options in the task-detail standalone window not matching the main window's modal (#530)**
+
+  - **Symptom**: comparing the **same task** (`fad-backend#1660`) in both places, the **main window's modal showed 8** status options (`需求池 / 产品规划 / 待开发处理 / 开发中 / …`) while the **standalone window showed 18** (the English set `Todo / In Progress / Done / Planning / …` on top) ⇒ two different lists for one task.
+  - **Root cause: same data source, different filtering**. `listProjectStatuses(accountId)` returns the statuses of **every** Project of that account; the main window in **single-account view** keeps only the **primary Project's** statuses, while the standalone window (as first written in #527) used the **full set** ⇒ other Projects' statuses leaked in.
+  - **Fix: extract shared pure functions** (`app/src/utils/projectStatuses.ts`): `pickPrimaryProjectStatuses(all)` (the primary Project = the one with the **most statuses**, sorted by `orderIndex`) · `mergeProjectStatuses(lists)` (cross-account merge + de-duplicate by **status name** + sort by name) ⇒ **both** `App.tsx` (single-account and aggregate branches) **and** `TaskDetailWindow.tsx` now call them ⇒ the two can no longer diverge.
+    ⚠️ The extraction preserves the original behaviour **verbatim**: "primary Project" means **the most statuses** (the status table has no item-count column), ties broken by first-seen (`Map` insertion order).
+  - **Measured in the real app**: the standalone window's status row reads `需求池 | 产品规划 | 待开发处理 | 开发中 | 开发完成/测试中 | 测试通过/待上线 | 完成/上线 | 取消` ⇒ **exactly matching the modal** (8 items; the English set is correctly filtered out).
+  - **Tests**: +6 (new `utils/projectStatuses.test.ts`: primary-Project selection / `orderIndex` re-sorting / **does not merge other Projects' statuses** / empty input / cross-account merge & de-dup / case sensitivity) ⇒ vitest 35 → **36 files / 571 → 577** cases.
+  - **Gates**: Rust fmt / clippy(--all-targets) / test ✓ (zero Rust changes), tsc / lint / prettier / build / i18n ✓ (456 keys), scripts 143 ✓, four check scripts ✓. Zero DB schema / zero new dependencies.
+  - **Touched**: `utils/projectStatuses.ts` (new) + `.test.ts` (new) · `App.tsx` (both branches now call the shared helpers) · `components/TaskDetailWindow.tsx` (now calls the shared helper).
+  - See the "status-option mismatch fixed along the way" section of [`issue-527-task-detail-window.md`](./issue-527-task-detail-window.md)
+
 - **v0.8.4 (unreleased) — Fixed the GitHub status row: status names are no longer squeezed into vertical text, and duplicate names are de-duplicated (#529)**
 
   - **Symptom**: in the task-detail standalone window the "status / GitHub status" row was **enormous and rendered its labels vertically**; the user reported "why is this status so huge".

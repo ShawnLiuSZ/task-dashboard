@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { api } from '../api';
+import { pickPrimaryProjectStatuses } from '../utils/projectStatuses';
 import { useI18n } from '../i18n';
 import type { ProjectStatus, Task } from '../types';
 import DetailPanel from './DetailPanel';
@@ -63,7 +64,11 @@ export default function TaskDetailWindow() {
           return;
         }
         setTask(loaded);
-        setProjectStatuses(statuses);
+        // #530：⚠️ **必须**与主窗口的单账号视图用**同一套**选取逻辑 ——
+        // `listProjectStatuses` 返回的是该账号**所有 Project** 的状态，直接用会
+        // 比主窗口的 modal **多出一大截**（实测 18 项 vs 8 项）⇒ 同一个任务在两个
+        // 界面显示的状态选项不一致。
+        setProjectStatuses(pickPrimaryProjectStatuses(statuses));
       })
       .catch((e) => {
         if (!cancelled) setErr(String(e));

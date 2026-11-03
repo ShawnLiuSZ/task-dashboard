@@ -58,6 +58,18 @@
   - **影响面**：`app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`。
   - 详见 [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.4（未发布）— 修任务详情独立窗的 GitHub 状态选项与主窗口 modal 不一致（#530）**
+
+  - **现象**：用户对比**同一个任务**（`fad-backend#1660`）在两处的「执行状态」列表 —— **主窗口 modal 8 项**（`需求池 / 产品规划 / 待开发处理 / 开发中 / …`）而**独立窗 18 项**（多了英文那套 `Todo / In Progress / Done / Planning / …`）⇒ 同一个任务两个界面不一致。
+  - **根因：数据源相同，筛选逻辑不同**。`listProjectStatuses(accountId)` 返回的是该账号**所有 Project** 的状态；主窗口在**单账号视图**下会**只取「主项目」**的状态，而独立窗（#527 实现时）**直接用了全量** ⇒ 把其它 Project 的状态也列了出来。
+  - **修法：抽成共用纯函数**（`app/src/utils/projectStatuses.ts`）：`pickPrimaryProjectStatuses(all)`（取「主项目」= **状态数最多**的那个 Project 的状态，按 `orderIndex` 升序）· `mergeProjectStatuses(lists)`（跨账号合并 + 按**状态名**去重 + 按名排序）⇒ `App.tsx`（单账号 / 聚合两个分支）与 `TaskDetailWindow.tsx` **都改成调它们** ⇒ 不会再分叉。
+    ⚠️ 抽取时**逐字保留**原行为：「主项目」判据是**状态数最多**（状态表里没有条目数字段），状态数相同时取先遇到的（`Map` 插入序）。
+  - **真机实测**：独立窗状态行变成 `需求池 | 产品规划 | 待开发处理 | 开发中 | 开发完成/测试中 | 测试通过/待上线 | 完成/上线 | 取消` ⇒ **与 modal 完全一致**（8 项，英文那套被正确过滤）。
+  - **测试**：+6（`utils/projectStatuses.test.ts` 新建：主项目选取 / `orderIndex` 重排 / **不合并其它 Project** / 空输入 / 跨账号合并去重 / 大小写敏感）⇒ vitest 35 → **36 文件 / 571 → 577** 例。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓（零 Rust 改动）· tsc / lint / prettier / build / i18n ✓（456 key）· scripts 143 ✓ · 四 check ✓。零 DB schema / 零新依赖。
+  - **影响面**：`utils/projectStatuses.ts`（新）+ `.test.ts`（新）· `App.tsx`（两处改调共用实现）· `components/TaskDetailWindow.tsx`（改调共用实现）。
+  - 详见 [`issue-527-task-detail-window.md`](./issue-527-task-detail-window.md) 的「顺带修的状态选项不一致」一节
+
 - **v0.8.4（未发布）— 修 GitHub 状态行：状态名不再被压成竖排、同名状态去重（#529）**
 
   - **现象**：用户在任务详情独立窗口里看到「执行状态 / GitHub 状态」那一行**巨大且文字竖排**，报「怎么会有这么大状态」。
