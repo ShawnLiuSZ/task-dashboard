@@ -54,7 +54,7 @@
   - **Touched**: `app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`.
   - See [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
-- **v0.8.4 (unreleased) — The "open in new window" button now sits directly on the task card (#531)**
+- **v0.8.4 (2026-11-03) — The "open in new window" button now sits directly on the task card (#531)**
 
   - **Requirement**: the user marked the "open in new window" icon in the detail panel's header and asked for **that feature to move onto the task card** ⇒ a board card opens the standalone detail window directly, with **no need to open the modal first**.
   - **Where**: `.card-bottom` (the row with the date and "N comments") — already the place for action elements.
@@ -67,7 +67,7 @@
   - **Touched**: `components/TaskCard.tsx` (the button) · `components/Board.tsx` (`cardProps` + Props) · `App.tsx` (wiring) · `styles.css` (`.card-open-window`).
   - See the "『open in new window』 button on the card" section of [`issue-527-task-detail-window.md`](./issue-527-task-detail-window.md)
 
-- **v0.8.4 (unreleased) — Fixed the GitHub status options in the task-detail standalone window not matching the main window's modal (#530)**
+- **v0.8.4 (2026-11-03) — Fixed the GitHub status options in the task-detail standalone window not matching the main window's modal (#530)**
 
   - **Symptom**: comparing the **same task** (`fad-backend#1660`) in both places, the **main window's modal showed 8** status options (`需求池 / 产品规划 / 待开发处理 / 开发中 / …`) while the **standalone window showed 18** (the English set `Todo / In Progress / Done / Planning / …` on top) ⇒ two different lists for one task.
   - **Root cause: same data source, different filtering**. `listProjectStatuses(accountId)` returns the statuses of **every** Project of that account; the main window in **single-account view** keeps only the **primary Project's** statuses, while the standalone window (as first written in #527) used the **full set** ⇒ other Projects' statuses leaked in.
@@ -79,7 +79,7 @@
   - **Touched**: `utils/projectStatuses.ts` (new) + `.test.ts` (new) · `App.tsx` (both branches now call the shared helpers) · `components/TaskDetailWindow.tsx` (now calls the shared helper).
   - See the "status-option mismatch fixed along the way" section of [`issue-527-task-detail-window.md`](./issue-527-task-detail-window.md)
 
-- **v0.8.4 (unreleased) — Fixed the GitHub status row: status names are no longer squeezed into vertical text, and duplicate names are de-duplicated (#529)**
+- **v0.8.4 (2026-11-03) — Fixed the GitHub status row: status names are no longer squeezed into vertical text, and duplicate names are de-duplicated (#529)**
 
   - **Symptom**: in the task-detail standalone window the "status / GitHub status" row was **enormous and rendered its labels vertically**; the user reported "why is this status so huge".
   - **Root cause ① (layout)**: `.seg` (the flex container) had **no `flex-wrap`** (default nowrap) ⇒ 20+ status items were crammed into one row; and `.seg-btn` was `flex: 1` (basis 0% ⇒ widths **shared equally**) ⇒ each got only 1/N of the width ⇒ "In Progress" and "优先测试上线" were squeezed into **vertical** text (one character per line), and the tallest item stretched the whole row to ~90px.
@@ -94,7 +94,7 @@
   - **Touched**: `components/DetailPanel.tsx` (de-duplicate the status options) · `styles.css` (`.seg` / `.seg-btn`).
   - See the "status-row layout defect fixed along the way" section of [`issue-527-task-detail-window.md`](./issue-527-task-detail-window.md)
 
-- **v0.8.4 (unreleased) — Task details can now open in their own window (full information), and the modal no longer fetches task details live (#527)**
+- **v0.8.4 (2026-11-03) — Task details can now open in their own window (full information), and the modal no longer fetches task details live (#527)**
 
   - **Requirement** (verbatim): "查看 task 任务时，现在是以 modal 框展示，希望实现：可以在新窗口打开详情，这个详情中显示目前 modal 框中的所有信息，然后 modal 框中将实时获取任务详情的功能去掉。"
   - **Split**: the detail panel used to **fetch from GitHub on every open**, and its content **does not fit** a 720px popup (body + timeline + PR commits + comments) ⇒ two shapes: the **modal** (`live={false}` ⇒ **zero GitHub requests**, an "action panel" only) and the **standalone window** (`live` ⇒ **complete information**).

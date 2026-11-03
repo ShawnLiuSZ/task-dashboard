@@ -58,7 +58,7 @@
   - **影响面**：`app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`。
   - 详见 [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
-- **v0.8.4（未发布）— 「在新窗口打开」按钮直接放到任务卡片上（#531）**
+- **v0.8.4（2026-11-03）— 「在新窗口打开」按钮直接放到任务卡片上（#531）**
 
   - **需求**：用户截图标注详情面板头部的「在新窗口打开」图标，要求**把这个功能直接放到任务卡片上** ⇒ 看板卡片上直接开独立详情窗，**不必先点开 modal**。
   - **位置**：`.card-bottom`（日期 / 「N 条评论」那一行）—— 那里本来就是操作元素的位置。
@@ -71,7 +71,7 @@
   - **影响面**：`components/TaskCard.tsx`（按钮）· `components/Board.tsx`（`cardProps` + Props）· `App.tsx`（接线）· `styles.css`（`.card-open-window`）。
   - 详见 [`issue-527-task-detail-window.md`](./issue-527-task-detail-window.md) 的「卡片上的『在新窗口打开』按钮」一节
 
-- **v0.8.4（未发布）— 修任务详情独立窗的 GitHub 状态选项与主窗口 modal 不一致（#530）**
+- **v0.8.4（2026-11-03）— 修任务详情独立窗的 GitHub 状态选项与主窗口 modal 不一致（#530）**
 
   - **现象**：用户对比**同一个任务**（`fad-backend#1660`）在两处的「执行状态」列表 —— **主窗口 modal 8 项**（`需求池 / 产品规划 / 待开发处理 / 开发中 / …`）而**独立窗 18 项**（多了英文那套 `Todo / In Progress / Done / Planning / …`）⇒ 同一个任务两个界面不一致。
   - **根因：数据源相同，筛选逻辑不同**。`listProjectStatuses(accountId)` 返回的是该账号**所有 Project** 的状态；主窗口在**单账号视图**下会**只取「主项目」**的状态，而独立窗（#527 实现时）**直接用了全量** ⇒ 把其它 Project 的状态也列了出来。
@@ -83,7 +83,7 @@
   - **影响面**：`utils/projectStatuses.ts`（新）+ `.test.ts`（新）· `App.tsx`（两处改调共用实现）· `components/TaskDetailWindow.tsx`（改调共用实现）。
   - 详见 [`issue-527-task-detail-window.md`](./issue-527-task-detail-window.md) 的「顺带修的状态选项不一致」一节
 
-- **v0.8.4（未发布）— 修 GitHub 状态行：状态名不再被压成竖排、同名状态去重（#529）**
+- **v0.8.4（2026-11-03）— 修 GitHub 状态行：状态名不再被压成竖排、同名状态去重（#529）**
 
   - **现象**：用户在任务详情独立窗口里看到「执行状态 / GitHub 状态」那一行**巨大且文字竖排**，报「怎么会有这么大状态」。
   - **根因 ①（排版）**：`.seg`（flex 容器）**没有 `flex-wrap`**（默认 nowrap）⇒ 20+ 个状态项硬塞在一行；`.seg-btn` 又是 `flex: 1`（basis 0% ⇒ **均分**宽度）⇒ 每个只有 1/N 宽 ⇒「In Progress」「优先测试上线」被压成**竖排**文字（一个字符一行），整行高度被最长的那个撑到 ~90px。
@@ -98,7 +98,7 @@
   - **影响面**：`components/DetailPanel.tsx`（状态选项去重）· `styles.css`（`.seg` / `.seg-btn`）。
   - 详见 [`issue-527-task-detail-window.md`](./issue-527-task-detail-window.md) 的「顺带修的状态行布局缺陷」一节
 
-- **v0.8.4（未发布）— 任务详情可在新窗口打开（完整信息）+ modal 去掉实时获取任务详情（#527）**
+- **v0.8.4（2026-11-03）— 任务详情可在新窗口打开（完整信息）+ modal 去掉实时获取任务详情（#527）**
 
   - **需求**：用户原话 —— 「查看 task 任务时，现在是以 modal 框展示，希望实现：可以在新窗口打开详情，这个详情中显示目前 modal 框中的所有信息，然后 modal 框中将实时获取任务详情的功能去掉。」
   - **拆分**：原先详情面板**每次打开都实时拉一次 GitHub**，而详情里的信息**装不下**一个 720px 弹窗（正文 + 时间线 + PR 提交 + 评论）⇒ 拆成两种形态：**modal**（`live={false}` ⇒ **零 GitHub 请求**，只做「操作面板」）/ **独立窗**（`live` ⇒ **完整信息**）。
