@@ -2,7 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **v0.8.2 (unreleased) — Added a manual collapse / expand toggle for the sidebar, with the preference persisted (#519)**
+- **v0.8.2 (2026-11-03) — Added a manual collapse / expand toggle for the sidebar, with the preference persisted (#519)**
 
   - **Status quo**: the sidebar **already had** a collapsed state (#265), but it was **purely responsive** — `sidebarCollapsed = window.innerWidth < 900`, **not persisted** and with **no manual switch** ⇒ the only way to reclaim the space was to drag the window narrower.
   - **⚠️ Key design: separate the "explicit user choice" from the "environmental constraint"**. ① **Environmental constraint** (#265): below 900px a 200px sidebar plus the board simply **does not fit** ⇒ collapsing is forced — a *physical* limit. ② **User preference**: collapsing / expanding by hand is an *explicit* choice. With a single boolean (`collapsed = narrow || manual`), clicking "expand" in a narrow window is **permanently ineffective** ⇒ the button looks broken ⇒ hence a **three-state** preference expressing "has the user ever said anything?": `'auto'` (never chose ⇒ follow the window width, preserving #265) / `'collapsed'` (always collapsed) / `'expanded'` (always expanded, **overriding** the narrow-window forcing). **Priority: an explicit user choice beats the environmental default.**
@@ -17,7 +17,7 @@
   - **Touched**: `utils/sidebarPrefs.ts` (new) + `utils/sidebarPrefs.test.ts` (new) · `App.tsx` · `components/Sidebar.tsx` · i18n ×2.
   - See [`issue-519-sidebar-collapse-toggle.md`](./issue-519-sidebar-collapse-toggle.md)
 
-- **v0.8.2 (unreleased) — The top bar's "N open" counter moved into the left sidebar's account group, and account names are no longer truncated (#516)**
+- **v0.8.2 (2026-11-03) — The top bar's "N open" counter moved into the left sidebar's account group, and account names are no longer truncated (#516)**
 
   - **Context**: the user first asked "what does the number 19 next to the logo mean", and after the semantics were explained decided to drop the number; discussing how to bring back the lost "how much is left to do" signal, they picked **the left sidebar** and added one more requirement: "**show the accounts in full, with automatic line wrapping**".
   - **Why the top bar was the wrong place**: the value depends on **four filters** (the repository filter on the left, the keyword search on top, the account mode, and the ownership filter — the backend filters by ownership before sending the rows) ⇒ three readings are plausible at any moment (the total / mine / the current filtered set), while the label "N open" expresses **none** of those preconditions. ⚠️ And it **never equalled the sum of the board's columns** anyway (the board's "done" column still lists issues closed on GitHub) ⇒ display that costs information but buys no clarity.
