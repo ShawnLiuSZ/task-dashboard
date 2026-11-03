@@ -46,8 +46,13 @@ describe('About 小窗结构与路由（#325）', () => {
   it('main.tsx：about 窗口只渲染 AboutWindow，不挂载 App', () => {
     // 通过窗口 label 区分；非 about 才渲染 App（避免连 DB / 跑同步）。
     expect(mainRaw).toContain('getCurrentWindow().label');
-    expect(mainRaw).toContain("currentWindowLabel() === 'about'");
-    expect(mainRaw).toContain('isAboutWindow ? <AboutWindow /> : <App />');
+    // #526：路由变成**三分支**（about / task-detail / 主窗口）⇒
+    // ⚠️ Prettier 会把三元链折行 ⇒ 不能再用「连续子串」断言，改用正则按顺序匹配。
+    expect(mainRaw).toContain("windowLabel === 'about'");
+    expect(mainRaw).toContain("windowLabel.startsWith('task-detail')");
+    expect(mainRaw).toMatch(
+      /isAboutWindow[\s\S]*<AboutWindow \/>[\s\S]*isTaskDetailWindow[\s\S]*<TaskDetailWindow \/>[\s\S]*<App \/>/,
+    );
   });
 
   it('AboutWindow：三行信息 + 确定按钮均使用 i18n key', () => {

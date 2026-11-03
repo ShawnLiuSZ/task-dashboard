@@ -43,6 +43,12 @@ export const api = {
       accountId: accountId ?? null,
     }),
   syncNow: () => invoke<SyncResult>('sync_now'),
+  // #526：取**单条**任务（任务详情独立窗口用；字段与看板同源）。
+  getTask: (issueKey: string, accountId: number) =>
+    invoke<Task | null>('get_task', { issueKey, accountId }),
+  // #526：在**新窗口**打开任务详情（完整信息，含实时数据）。
+  openTaskDetailWindow: (issueKey: string, accountId: number) =>
+    invoke<void>('open_task_detail_window', { issueKey, accountId }),
   updateStatus: (key: string, status: string) =>
     invoke<void>('update_task_status', { key, status }),
   recordSession: (key: string, sessionId: string, agent?: string) =>

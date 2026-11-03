@@ -77,9 +77,36 @@ interface Props {
   onChanged: () => void;
   /** #196：项目 Status 选项（用于 GitHub 状态行的选项与排序；缺省时只展示当前值）。 */
   projectStatuses?: ProjectStatus[];
+  /**
+   * #526：是否**实时获取**任务详情（`fetch_task_detail_live`）。
+   *
+   * - `true`（默认）：完整详情 —— 正文 / 时间线 / PR 提交 / 评论都用实时数据。
+   * - `false`：**只读本地库**（评论走 `list_task_comments`）⇒ **不发任何 GitHub 请求**。
+   *
+   * ⚠️ 为什么 modal 关掉它：本地库**没有** issue body / timeline 列（正文只在实时
+   * 拉取里）⇒ modal 会退化成「操作面板」（状态行 / 指派 / 会话 / 交接等）。
+   * 完整详情请用「在新窗口打开」。
+   */
+  live?: boolean;
+  /**
+   * #526：呈现形态。
+   * - `'modal'`（默认）：居中弹窗（`.detail` 绝对定位 + 圆角 + 阴影）。
+   * - `'window'`：**占满整个窗口**（独立详情窗）—— 去掉绝对定位 / 圆角 / 阴影 / 宽度上限。
+   */
+  variant?: 'modal' | 'window';
+  /** #526：点「在新窗口打开」时调用（仅 modal 形态显示该按钮）。 */
+  onOpenInNewWindow?: () => void;
 }
 
-export default function DetailPanel({ task, onClose, onChanged, projectStatuses }: Props) {
+export default function DetailPanel({
+  task,
+  onClose,
+  onChanged,
+  projectStatuses,
+  live: liveEnabled = true,
+  variant = 'modal',
+  onOpenInNewWindow,
+}: Props) {
   const { t, lang } = useI18n();
   const [busy, setBusy] = useState(false);
   const [sessionInput, setSessionInput] = useState(task.sessionId ?? '');
@@ -167,7 +194,17 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
   // 结果覆盖本地库展示（评论区 / 指派 / 标签 / PR 提交历史）；失败保留本地库数据。
   // 组件因 `key={taskIdentity}` 在切换任务时重挂载，故 deps 用 issueKey/accountId 即可；
   // PR 编号经 `livePrNumber` 稳定化（见上），编号真正变化时才重新拉提交历史。
+  //
+  // #526：`liveEnabled === false`（主窗口的 modal）⇒ **完全不发** GitHub 请求
+  // ⇒ 打开面板零网络开销、也不会因为网络慢而让面板「空着」。
+  // ⚠️ 依赖里必须带 `liveEnabled` —— 否则从「不拉」切到「要拉」时 effect 不会重跑。
   useEffect(() => {
+    if (!liveEnabled) {
+      setLive(null);
+      setLiveError(null);
+      setLiveLoading(false);
+      return;
+    }
     let cancelled = false;
     setLive(null);
     setLiveError(null);
@@ -196,7 +233,7 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
       // 卸载 / 换任务后到达的响应不得再 setState。
       cancelled = true;
     };
-  }, [task.issueKey, task.accountId, livePrNumber]);
+  }, [task.issueKey, task.accountId, livePrNumber, liveEnabled]);
 
   // #196：当前 GitHub 状态键（与 Board.groupByProjectStatus 同规则）：
   // closed→done，有原文取原文，空→unclassified。详情状态区永远以此为准，
@@ -317,9 +354,9 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
 
   return (
     <aside
-      className="detail"
+      className={variant === 'window' ? 'detail detail-window' : 'detail'}
       role="dialog"
-      aria-modal="true"
+      aria-modal={variant === 'modal' ? 'true' : undefined}
       aria-label={`${task.repo}#${task.number}`}
       onKeyDown={(e) => {
         // #329：确认框叠在面板之上时不响应 Esc（见 escLayer 注册处说明）。
@@ -334,9 +371,44 @@ export default function DetailPanel({ task, onClose, onChanged, projectStatuses 
             <span className="repo">{task.repo}</span>
             <span className="num">#{task.number}</span>
           </div>
-          <button className="btn ghost" onClick={onClose}>
-            {t('btn.close')}
-          </button>
+          <div className="detail-head-actions">
+            {/* #526：在新窗口打开完整详情（正文 / 时间线 / PR 提交 / 实时评论）。
+                ⚠️ 只在 modal 形态显示 —— 独立窗里再开一个同款窗没有意义。
+                ⌘/Ctrl + 点 ⇒ 新窗口（macOS 习惯）。 */}
+            {variant === 'modal' && onOpenInNewWindow && (
+              <button
+                className="btn ghost"
+                title={t('detail.openInNewWindow')}
+                aria-label={t('detail.openInNewWindow')}
+                onClick={(e) => {
+                  // ⌘/Ctrl + 点 ⇒ 新窗口；普通点 ⇒ 也新窗口（这个按钮**只**做这一件事）。
+                  e.stopPropagation();
+                  onOpenInNewWindow();
+                }}
+              >
+                <svg
+                  className="btn-icon"
+                  viewBox="0 0 24 24"
+                  width="14"
+                  height="14"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  {/* 「外开」图标：方框 + 右上角箭头。 */}
+                  <path d="M14 4h6v6" />
+                  <path d="M20 4l-9 9" />
+                  <path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" />
+                </svg>
+              </button>
+            )}
+            <button className="btn ghost" onClick={onClose}>
+              {t('btn.close')}
+            </button>
+          </div>
         </div>
 
         <h2 className="detail-title">{task.title}</h2>

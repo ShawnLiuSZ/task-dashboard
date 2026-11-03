@@ -836,6 +836,16 @@ function BoardApp() {
             key={taskIdentity(selectedTask)}
             task={selectedTask}
             projectStatuses={projectStatuses}
+            // #526：modal **不再实时获取**任务详情（`live={false}`）⇒
+            // 打开面板零 GitHub 请求；完整详情（正文 / 时间线 / PR 提交）请用
+            // 「在新窗口打开」。⚠️ 本地库**没有** body / timeline 列 ⇒
+            // modal 里看不到正文是**预期行为**，不是数据丢了。
+            live={false}
+            onOpenInNewWindow={() => {
+              void api
+                .openTaskDetailWindow(selectedTask.issueKey, selectedTask.accountId)
+                .catch((e) => reportError(e));
+            }}
             onClose={() => setSelected(null)}
             onChanged={() => {
               void load();

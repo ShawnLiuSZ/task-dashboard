@@ -556,6 +556,98 @@ fn list_task_comments_inner(
     crate::db::load_task_comments(conn, account_id, issue_key)
 }
 
+/// #526：按 `(issue_key, account_id)` 取**单条**任务（任务详情**独立窗口**用）。
+///
+/// ⚠️ **为什么不在 SQL 里直接过滤**：任务列表查询（`rows_to_tasks`）已经很完整，
+/// 而本命令的调用方是「每开一个详情窗调一次」⇒ 单账号几百行，内存里过滤的成本可忽略；
+/// 复用既有查询 ⇒ **零 SQL 改动**，且详情窗与看板显示的字段**完全同源**
+/// （不会出现「详情窗少一个字段」的分叉）。
+///
+/// ⚠️ **账号维度必需**：`issue_key` 的值是 `repo#number`（不含 owner），多账号下会重复
+/// ⇒ 只按 issue_key 取会拿到**别的账号**的同号 issue（与 `list_task_comments` 同理）。
+#[tauri::command]
+pub async fn get_task(
+    app: AppHandle,
+    issue_key: String,
+    account_id: i64,
+) -> Result<Option<Task>, String> {
+    // #329 范式：`async fn` + `spawn_blocking` —— 主线程仅派发即返回。
+    // ⚠️ 本命令只做**本地读**（不联网）⇒ 持锁读库与 `list_tasks` 同款，无 beachball 风险。
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let rows = rows_to_tasks(&conn, None, Some(account_id))?;
+        Ok(pick_task_by_issue_key(rows, &issue_key))
+    })
+    .await
+    .map_err(|e| format!("读取任务线程异常: {e}"))?
+}
+
+/// `get_task` 的**纯函数版**（按 issue_key 从任务列表里挑出那一条）。
+///
+/// 抽出来的理由与 `list_task_comments_inner` 相同：命令体需要真实 `AppHandle` 与
+/// 数据库连接，单测无法构造；把「挑哪一条」这一步抽成纯函数后即可直接测，
+/// 且与生产命令**共用同一份实现**（不是复制品）。
+///
+/// ⚠️ **账号维度已在调用方过滤**（`rows_to_tasks(..., Some(account_id))`）⇒ 这里
+/// 只按 `issue_key` 匹配即可。
+fn pick_task_by_issue_key(rows: Vec<Task>, issue_key: &str) -> Option<Task> {
+    rows.into_iter().find(|t| t.issue_key == issue_key)
+}
+
+/// #526：在**独立窗口**打开任务详情（完整信息：正文 / 时间线 / PR 提交 / 评论）。
+///
+/// **窗口标识**：`task-detail-{account_id}-{issue_key 清洗}` ⇒ 同一任务重复打开时
+/// **聚焦已有窗口**，而不是开一堆重复窗口。
+///
+/// **任务标识的传递方式**：用 `initialization_script` 在页面脚本执行**之前**注入
+/// `window.__TASK_DETAIL__` ⇒
+/// - **无竞态**：窗口一加载就能读到（URL query / 事件都可能有「先发后听」的窗口期）；
+/// - **不依赖 URL 规则**：`WebviewUrl::App("index.html")` 在 dev（dev server）与
+///   prod（打包资源）下都能解析，不必为两种环境各写一套 URL 拼接。
+#[tauri::command]
+pub async fn open_task_detail_window(
+    app: AppHandle,
+    issue_key: String,
+    account_id: i64,
+) -> Result<(), String> {
+    let label = format!(
+        "task-detail-{}-{}",
+        account_id,
+        sanitize_window_label(&issue_key)
+    );
+    // 同一任务已开着 ⇒ 聚焦即可（不重复建窗）。
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    let payload = serde_json::json!({ "issueKey": issue_key, "accountId": account_id });
+    let script = format!("window.__TASK_DETAIL__ = {};", payload);
+    tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App("index.html".into()))
+        .title(format!("{} · TaskBoard", issue_key))
+        .inner_size(920.0, 860.0)
+        .min_inner_size(520.0, 420.0)
+        .initialization_script(&script)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 窗口 label 清洗：只保留字母 / 数字 / `-` / `_`（`issue_key` 形如 `repo#number`，
+/// 含 `#` 等不适合做窗口标识的字符）。非 ASCII 一律替换 ⇒ label 恒为合法标识符。
+fn sanitize_window_label(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 /// #490：打开任务详情时**实时**拉取 GitHub 的详情 + 评论 + 关联 PR 提交历史，
 /// **只读、零落库**（与 `on_demand::ensure_task_available` 写入 `tasks` 表不同）。
 ///
@@ -2386,6 +2478,42 @@ pub async fn scan_agent_hosts(app: AppHandle) -> Result<crate::hooks::AgentScanR
 
 #[cfg(test)]
 mod tests {
+    // ⚠️ 本用例插在原模块的 `use super::*;` **之前**（模块头被替换过）⇒
+    // 这里必须自己导入一次，否则用例里看不到 `Task` / `pick_task_by_issue_key`。
+    use super::*;
+
+    /// #526：`get_task` 的「挑哪一条」纯函数 —— 必须**精确**匹配 issue_key。
+    ///
+    /// ⚠️ `issue_key` 形如 `repo#number`（不含 owner）⇒ **多个账号下会重复**
+    /// （`seed_account_tasks` 生成的键是 `a#{n}`）⇒ 只按 issue_key 匹配会拿到
+    /// 别的账号的同号 issue ⇒ 账号维度必须在**查询层**就过滤掉（`rows_to_tasks`
+    /// 的 `account_filter`），本函数只负责在同一批任务里挑出唯一那条。
+    ///
+    /// 走**真实落库 + 真实查询路径**（`mem_conn` + `seed_account_tasks` +
+    /// `rows_to_tasks`）⇒ 能同时覆盖 issue_key 生成规则 / 账号过滤 / mapper 字段顺序，
+    /// 而不只是测一个孤立的过滤函数。
+    #[test]
+    fn pick_task_by_issue_key_matches_exactly() {
+        let conn = mem_conn();
+        seed_account_tasks(
+            &conn,
+            5,
+            "me",
+            &[(551, "assigned", "me"), (1198, "notassignee", "x")],
+        );
+        // 同号 issue 在**另一个账号**下也存在 ⇒ 只应命中本账号那条。
+        seed_account_tasks(&conn, 6, "other", &[(551, "assigned", "other")]);
+
+        let rows = rows_to_tasks(&conn, None, Some(5)).unwrap();
+        let got = pick_task_by_issue_key(rows.clone(), "a#1198").expect("应命中");
+        assert_eq!(got.number, 1198);
+        assert_eq!(got.account_id, 5, "必须是本账号的那条");
+        // 同号但属于别的账号 ⇒ 在本账号的批次里命中的仍是本账号那条。
+        let same_num = pick_task_by_issue_key(rows.clone(), "a#551").expect("应命中");
+        assert_eq!(same_num.account_id, 5);
+        // 不命中 ⇒ None（不是随便返回一条）。
+        assert!(pick_task_by_issue_key(rows, "a#9999").is_none());
+    }
 
     /// #429 回归：**执行生产代码 `active_sessions_sql()` 返回的那条 SQL**。
     ///

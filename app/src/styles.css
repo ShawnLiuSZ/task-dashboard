@@ -1309,6 +1309,31 @@ button.unassigned-tag:disabled {
   gap: 8px;
 }
 
+/* #526：头部右侧的动作组（「在新窗口打开」+「关闭」）。 */
+.detail-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+/* #526：任务详情的**独立窗口**形态 —— 占满整个窗口。
+ * `.detail` 默认是「居中弹窗」（绝对定位 + 固定宽 + 圆角 + 阴影）⇒ 独立窗里
+ * 那些约束全都要去掉，否则详情只占窗口中间一小块。 */
+.detail.detail-window {
+  position: static;
+  transform: none;
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  height: 100%;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0 24px 24px;
+  background: var(--bg);
+}
+
 /* 点击空白处关闭详情：遮罩覆盖整个窗口（弹窗化后含顶栏），点击即关闭；
  * 弹窗 z-index 更高、点击不穿透。遮罩色用 `--overlay`，与仓库既有 `.modal-mask` 一致。 */
 .detail-backdrop {
@@ -3582,4 +3607,17 @@ button.unassigned-tag:disabled {
   max-width: 280px;
   margin-top: 4px;
   justify-content: center;
+}
+
+/* #526：任务详情独立窗的错误 / 加载态。 */
+.detail-window-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
+  padding: 40px;
+  text-align: center;
+  color: var(--text-2);
 }
