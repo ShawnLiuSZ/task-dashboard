@@ -154,5 +154,11 @@ jobs:
       - name: 版本号一致性校验
         run: python3 scripts/check-versions.py
 
+      # #533：Overlay 窗口（透明标题栏）必须显式授予 `allow-start-dragging`，
+      # 否则 macOS 菜单栏那条路的窗口拖动会被 ACL 拒绝 ⇒ **窗口完全拖不动**
+      # （`core:window:default` 不含该项 ⇒ 编译/测试/CI 全绿，只有用户拖才发现）。
+      - name: capability 权限校验
+        run: python3 scripts/check-capabilities.py
+
       - name: scripts 单测
         run: python3 -m unittest discover -s scripts -p 'test_*.py' -v

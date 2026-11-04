@@ -154,7 +154,23 @@ body {
      否则「TaskBoard」标题与交通灯重叠。
      ⚠️ 变量化便于按实测微调（不同 macOS 版本交通灯位置略有差异）。
      ⚠️ 只影响主窗口 —— About 小窗用的是 `.about-window`，不套 `.topbar`。 */
-  padding: 10px 16px 10px var(--titlebar-inset, 78px);
+  /* ⚠️ #533：顶部留白由 10px 收到 **4px** ⇒ 顶栏内容与 macOS **交通灯**垂直对齐。
+   *
+   * 实测（用户截图逐像素量测，retina 2x ÷ 2 后）：交通灯纵向 y=7..20（**中心 13**），
+   * 而顶栏内容（「TaskBoard」标题中心 16、「新建备忘录」按钮中心 20）**整体偏低 3~7px**
+   * ⇒ 视觉上「标题行没跟红绿灯对齐」。
+   *
+   * ⚠️ 交通灯是 **macOS 原生绘制**的，Tauri v2 **未暴露**交通灯位置 API
+   * （`grep traffic_light` 无 pub fn）⇒ CSS / 配置层面**动不了它**
+   * ⇒ 只能反过来把**我们的内容上移**到与它对齐（padding-top 10 → 4）。
+   *
+   * 实测（复现页 + 模拟交通灯，中心 y=13）：padding-top=4 时标题/折叠按钮/新建按钮
+   * 三者中心都在 **17.5**（组内已对齐 ✓）但比交通灯低 4.5px ⇒ padding-top 收到 **0**
+   * ⇒ 中心 13.5，与交通灯中心 13 只差 0.5px（视觉上同一水平中线）。
+   *
+   * ⚠️ 三个元素组内**本来就对齐**（`.topbar-left` 是 `align-items: center` 的 flex）⇒
+   * 只需整体平移，不必逐个微调。 */
+  padding: 0 16px 10px var(--titlebar-inset, 78px);
   background: var(--surface);
   border-bottom: 0.5px solid var(--border);
   flex: 0 0 auto;
