@@ -58,6 +58,18 @@
   - **影响面**：`app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`。
   - 详见 [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.6（未发布）— 顶栏改用固定高度的标题栏区：修「立即同步」按钮被窗口上沿裁切 + 与交通灯齐平（#536）**
+
+  - **现象（v0.8.5 用户实测反馈）**：「立即同步」蓝色按钮的**上半截被窗口上沿裁掉了**，且右侧那组（上次同步 / 账号选择 / 立即同步）「太靠上」。
+  - **根因（比 #533 深一层）**：⚠️ **Overlay 模式下 macOS 把 webview 顶部**上推**了约 5.4px**（实测）⇒ webview 的 y=0 其实在**窗口上沿之外**。
+    ⇒ 于是两个目标**互相冲突**：① 与交通灯垂直对齐（交通灯中心实测 **13.9** 逻辑 px）· ② 行内最高的元素（带 16px 图标的 `.btn.primary`，高 **28.8px**）**不被裁**（上沿必须 ≥ 窗口顶）。
+    ⇒ 纯 padding 只能满足其一：`padding-top: 0` ⇒ 内容中心 **11.2**（比交通灯**高** 2.7px）且按钮**被裁 5.4px**；`padding-top: 6` ⇒ 按钮不裁但内容中心 **16.6**（比交通灯**低** 2.7px）。
+  - **修法：固定高度的「标题栏区」+ 垂直居中** —— `.topbar { height: var(--titlebar-height, 40px); padding: 0 16px 0 var(--titlebar-inset, 78px); }` ⇒ 内容在标题栏区里居中（上下有缓冲 ⇒ **不裁**），高度可调 ⇒ 中心能落在交通灯中心上。
+  - **实测（复现页：真实 CSS + 真实 `.topbar`（含 select 与带图标的 primary 按钮）+ 模拟 webview 上推 5.4px + `overflow:hidden` 模拟裁切）**：标题 / select / 主按钮中心（窗口坐标）**14.1**（三者一致）· 相对交通灯中心（13.9）偏移 **+0.2px** ✓ · **主按钮被裁 0** ✓ · 主按钮上沿距窗口顶 **1.1px** 缓冲 ✓。
+  - **门禁**：tsc / lint / prettier / build ✓ · vitest 36 文件 581 ✓ · scripts 151 ✓ · 四 check ✓（含 capability 校验）· Rust 零改动 / 零 DB schema / 零新依赖。
+  - **影响面**：`app/src/styles.css`（`.topbar` 改为固定高度 + 居中，`--titlebar-height` 变量化）。
+  - 详见 [`issue-533-window-drag-and-titlebar-align.md`](./issue-533-window-drag-and-titlebar-align.md) 的「补充：#533 的第一版修法『过头了』」一节
+
 - **v0.8.5（2026-11-04）— 修 v0.8.4 窗口拖不动 + 顶栏与交通灯未对齐（#533）**
 
   - **现象（用户报 v0.8.4）**：① **窗口完全拖不动**（拖不到屏幕任意位置）；② 顶栏「TaskBoard + 折叠按钮 + 新建备忘录」那段与 macOS **交通灯没对齐**。

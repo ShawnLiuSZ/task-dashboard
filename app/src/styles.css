@@ -154,23 +154,30 @@ body {
      否则「TaskBoard」标题与交通灯重叠。
      ⚠️ 变量化便于按实测微调（不同 macOS 版本交通灯位置略有差异）。
      ⚠️ 只影响主窗口 —— About 小窗用的是 `.about-window`，不套 `.topbar`。 */
-  /* ⚠️ #533：顶部留白由 10px 收到 **4px** ⇒ 顶栏内容与 macOS **交通灯**垂直对齐。
+  /* ⚠️ #533：顶栏做成**固定高度的「标题栏区」**（不再靠 padding 调节）。
    *
-   * 实测（用户截图逐像素量测，retina 2x ÷ 2 后）：交通灯纵向 y=7..20（**中心 13**），
-   * 而顶栏内容（「TaskBoard」标题中心 16、「新建备忘录」按钮中心 20）**整体偏低 3~7px**
-   * ⇒ 视觉上「标题行没跟红绿灯对齐」。
+   * 背景：Overlay 模式下 macOS 把 webview 顶部**上推**了约 **5.4px**（实测）
+   * ⇒ webview 的 y=0 其实在**窗口上沿之外**。
+   *
+   * 于是「把内容尽量靠上」有两个**互相冲突**的目标：
+   * ① 与 macOS **交通灯**垂直对齐（交通灯中心实测 **13.9** 逻辑 px）
+   * ② 行内最高的元素（带 16px 图标的 `.btn.primary`，高 **28.8px**）**不被窗口上沿裁掉**
+   * ⇒ 纯 padding 无论取 0 还是 4 都只能满足其一：
+   * padding-top=0 ⇒ 内容中心 11.2（比交通灯**高** 2.7px）且按钮**被裁 5.4px**；
+   * padding-top=6 ⇒ 按钮不裁了，但内容中心 16.6（比交通灯**低** 2.7px）。
+   *
+   * ⇒ 改用「**固定高度 + align-items: center**」：内容在标题栏区里垂直居中，
+   * 上下各有 ~4.6px 缓冲（不裁）⇒ 高度取 40px 时内容中心落在窗口 **14.6**，与交通灯中心 13.9 差 0.7px；
+   * 且最高元素（primary 按钮）的上沿距窗口顶还有 **1.6px** 缓冲（不会被裁）。
    *
    * ⚠️ 交通灯是 **macOS 原生绘制**的，Tauri v2 **未暴露**交通灯位置 API
    * （`grep traffic_light` 无 pub fn）⇒ CSS / 配置层面**动不了它**
-   * ⇒ 只能反过来把**我们的内容上移**到与它对齐（padding-top 10 → 4）。
+   * ⇒ 只能反过来让**我们的内容**去对齐它。
    *
-   * 实测（复现页 + 模拟交通灯，中心 y=13）：padding-top=4 时标题/折叠按钮/新建按钮
-   * 三者中心都在 **17.5**（组内已对齐 ✓）但比交通灯低 4.5px ⇒ padding-top 收到 **0**
-   * ⇒ 中心 13.5，与交通灯中心 13 只差 0.5px（视觉上同一水平中线）。
-   *
-   * ⚠️ 三个元素组内**本来就对齐**（`.topbar-left` 是 `align-items: center` 的 flex）⇒
-   * 只需整体平移，不必逐个微调。 */
-  padding: 0 16px 10px var(--titlebar-inset, 78px);
+   * ⚠️ `--titlebar-height` 变量化便于按实测微调（不同 macOS 版本 / 显示缩放下
+   * webview 上推量略有差异 ⇒ 交通灯中心会差 1~2px）。 */
+  height: var(--titlebar-height, 40px);
+  padding: 0 16px 0 var(--titlebar-inset, 78px);
   background: var(--surface);
   border-bottom: 0.5px solid var(--border);
   flex: 0 0 auto;

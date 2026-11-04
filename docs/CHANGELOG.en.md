@@ -54,6 +54,18 @@
   - **Touched**: `app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`.
   - See [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.6 (unreleased) — The top bar now uses a fixed-height title bar area: fixes the "Sync now" button being clipped by the window edge and aligns it with the traffic lights (#536)**
+
+  - **Symptom (reported by a v0.8.5 user)**: the top half of the blue **"Sync now"** button was **clipped by the window's top edge**, and the right-hand group (last sync / account picker / Sync now) sat **too high**.
+  - **Root cause (one level deeper than #533)**: ⚠️ in Overlay mode **macOS pushes the webview's top up by about 5.4px** (measured) ⇒ the webview's y=0 is actually **outside the window's top edge**.
+    ⇒ Two goals therefore **conflict**: ① align vertically with the traffic lights (measured centre **13.9** logical px) · ② the tallest element in the row (`.btn.primary` with its 16px icon, **28.8px** tall) must **not be clipped** (its top edge must be ≥ the window top).
+    ⇒ Padding alone can satisfy only one: `padding-top: 0` ⇒ content centre **11.2** (2.7px **above** the traffic lights) and the button **clipped by 5.4px**; `padding-top: 6` ⇒ the button is fine but the content centre is **16.6** (2.7px **below** the traffic lights).
+  - **Fix: a fixed-height "title bar area" with vertical centring** — `.topbar { height: var(--titlebar-height, 40px); padding: 0 16px 0 var(--titlebar-inset, 78px); }` ⇒ the content is centred inside the area (buffer above and below ⇒ **not clipped**) while the height stays tunable ⇒ the centre can land on the traffic lights' centre.
+  - **Measured (replica page: real CSS + the real `.topbar` (including the select and the icon-bearing primary button) + a simulated 5.4px webview push-up + `overflow:hidden` to simulate the clipping)**: title / select / primary-button centres (window coordinates) **14.1** (all three identical) · **+0.2px** relative to the traffic lights' centre (13.9) ✓ · primary button **clipped by 0** ✓ · its top edge **1.1px** below the window top ✓.
+  - **Gates**: tsc / lint / prettier / build ✓, vitest 36 files / 581 ✓, scripts 151 ✓, four check scripts ✓ (including the capability check). Zero Rust changes / zero DB schema / zero new dependencies.
+  - **Touched**: `app/src/styles.css` (`.topbar` → fixed height + centring, `--titlebar-height` variable).
+  - See the "the first #533 fix overshot" section of [`issue-533-window-drag-and-titlebar-align.md`](./issue-533-window-drag-and-titlebar-align.md)
+
 - **v0.8.5 (2026-11-04) — Fixed the v0.8.4 window not being draggable and the top bar not aligning with the traffic lights (#533)**
 
   - **Symptom (reported against v0.8.4)**: ① the **window could not be dragged at all** (not to any position on screen); ② the top bar's "TaskBoard + collapse button + New note" section was **not aligned with the macOS traffic lights**.
