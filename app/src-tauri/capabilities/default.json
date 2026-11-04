@@ -3,5 +3,8 @@
   "identifier": "default",
   "description": "TaskBoard 默认权限",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging"
+  ]
 }

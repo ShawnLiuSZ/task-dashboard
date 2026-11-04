@@ -58,6 +58,22 @@
   - **影响面**：`app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`。
   - 详见 [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.5（未发布）— 修 v0.8.4 窗口拖不动 + 顶栏与交通灯未对齐（#533）**
+
+  - **现象（用户报 v0.8.4）**：① **窗口完全拖不动**（拖不到屏幕任意位置）；② 顶栏「TaskBoard + 折叠按钮 + 新建备忘录」那段与 macOS **交通灯没对齐**。
+  - **① 拖不动 —— ACL 缺 `allow-start-dragging`**：`titleBarStyle: "Overlay"`（#520 引入，为了在标题栏里放按钮）让原生标题栏变透明覆盖层 ⇒ **不再提供拖拽区** ⇒ 拖动完全依赖前端 `data-tauri-drag-region` ⇒ Tauri 的 `drag.js` 在 mousedown 时调 `invoke('plugin:window|start_dragging')`；而 ⚠️ **`core:window:default` 不含该项**（实测该权限集 28 条：… / `internal-toggle-maximize` / `is-visible` / `theme` / `title` —— 有 maximize、**没有** start-dragging）⇒ ACL 拒绝 ⇒ **拖不动**。
+    ⚠️ 这是 **v0.8.2 起就存在的回归**（#520 加 Overlay 时漏了授权）—— 编译通过、单测全绿、CI 全绿，**只有用户真去拖窗口才会暴露**。
+    ⇒ 修：`capabilities/default.json` 加 `core:window:allow-start-dragging`。验证：编译产物的 `acl-manifests.json` 里 `core:window.permissions` **含** `allow-start-dragging` ✓。
+  - **⭐ 顺带加门禁（防回归）**：新 `scripts/check-capabilities.py`（零依赖）—— ① 凡有窗口用 `titleBarStyle: "Overlay"` ⇒ 必须有 capability 授予 `allow-start-dragging`（且 `windows` 覆盖到该窗口，支持 glob）；② capability 里的 `core:<插件>:allow-<名>` 必须**真的存在**于编译期 ACL manifest（防手写错 ⇒ 静默不生效）⇒ 已挂进 `quality-check.yml`。
+  - **② 顶栏与交通灯未对齐**：用户截图逐像素量测（retina 2x，⚠️ 需排除用户的**红色标注框**否则量错）⇒ 交通灯 y=7..20（**中心 13**）· 「TaskBoard」中心 16 · 「新建备忘录」中心 20 ⇒ 内容整体低 3~7px。
+    ⚠️ **交通灯动不了**：它是 **macOS 原生绘制**的，Tauri v2 **未暴露**交通灯位置 API（`grep traffic_light` 无 pub fn）⇒ CSS / 配置层面都动不了 ⇒ 只能反过来把**我们的内容上移**。
+    ⇒ 修：`.topbar` 的 `padding-top` **10px → 0**。
+    ⇒ 实测（复现页：真实 CSS + 真实 `.topbar` + **手绘模拟交通灯**中心 y=13）：10px → 中心 19.5（+6.5px）· 4px → 17.5（+4.5px）· **0px → 13.5（+0.5px）✓**。三个元素**组内本来就对齐**（`.topbar-left` 是 `align-items: center` 的 flex）⇒ 只需整体平移。
+  - **测试**：+8（`scripts/test_check_capabilities.py` 新建：仓库现状通过 / **反向验证**（删掉权限必须报错）/ glob 覆盖 / 权限给了别的窗口不算 / 非 Overlay 窗口不要求 / 权限集标识跳过 / 拼错标识必须报错）⇒ scripts 143 → **151** 例；vitest 36 文件 581 例 ✓（不变）。
+  - **门禁**：Rust fmt / clippy(--all-targets) / test ✓（268 + 27）· tsc / lint / prettier / build / i18n ✓（456 key）· vitest 36 文件 581 ✓ · scripts **151** ✓ · 四 check ✓ + **新增 capability 校验** ✓。零 DB schema / 零前端逻辑改动 / 零新依赖。
+  - **影响面**：`capabilities/default.json` · `styles.css`（`.topbar`）· `scripts/check-capabilities.py`（新）+ `scripts/test_check_capabilities.py`（新）· `.github/workflows/quality-check.yml`。
+  - 详见 [`issue-533-window-drag-and-titlebar-align.md`](./issue-533-window-drag-and-titlebar-align.md)
+
 - **v0.8.4（2026-11-03）— 「在新窗口打开」按钮直接放到任务卡片上（#531）**
 
   - **需求**：用户截图标注详情面板头部的「在新窗口打开」图标，要求**把这个功能直接放到任务卡片上** ⇒ 看板卡片上直接开独立详情窗，**不必先点开 modal**。

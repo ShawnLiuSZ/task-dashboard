@@ -54,6 +54,22 @@
   - **Touched**: `app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`.
   - See [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
+- **v0.8.5 (unreleased) — Fixed the v0.8.4 window not being draggable and the top bar not aligning with the traffic lights (#533)**
+
+  - **Symptom (reported against v0.8.4)**: ① the **window could not be dragged at all** (not to any position on screen); ② the top bar's "TaskBoard + collapse button + New note" section was **not aligned with the macOS traffic lights**.
+  - **① Not draggable — the ACL lacks `allow-start-dragging`**: `titleBarStyle: "Overlay"` (introduced in #520 so a button could sit in the title bar) turns the native title bar into a transparent overlay ⇒ it **no longer provides a drag area** ⇒ dragging depends entirely on the front end's `data-tauri-drag-region` ⇒ Tauri's `drag.js` calls `invoke('plugin:window|start_dragging')` on mousedown; and ⚠️ **`core:window:default` does not include it** (measured: that set has 28 entries — … / `internal-toggle-maximize` / `is-visible` / `theme` / `title` — it has maximize but **no** start-dragging) ⇒ the ACL rejects it ⇒ **the window cannot be dragged**.
+    ⚠️ This is a **regression that has been present since v0.8.2** (#520 added Overlay without the grant) — the build passes, all unit tests pass, CI is green; **only a user actually dragging the window can find it**.
+    ⇒ Fix: add `core:window:allow-start-dragging` to `capabilities/default.json`. Verified: the compiled `acl-manifests.json` now lists `allow-start-dragging` under `core:window.permissions` ✓.
+  - **⭐ Plus a guard rail (against regressions)**: new `scripts/check-capabilities.py` (zero dependencies) — ① any window using `titleBarStyle: "Overlay"` must have a capability granting `allow-start-dragging` (and that capability's `windows` must cover that window, globs supported); ② every `core:<plugin>:<allow-name>` identifier must **actually exist** in the compiled ACL manifest (catching typos that silently do nothing) ⇒ wired into `quality-check.yml`.
+  - **② Top bar not aligned with the traffic lights**: pixel-measured from the user's screenshot (retina 2x; ⚠️ the user's **red annotation box** must be excluded or the measurement is wrong) ⇒ traffic lights y=7..20 (**centre 13**) · "TaskBoard" centre 16 · "New note" centre 20 ⇒ the content sits 3~7px too low.
+    ⚠️ **The traffic lights cannot be moved**: they are drawn by **macOS itself**, and Tauri v2 **exposes no** traffic-light positioning API (`grep traffic_light` finds no `pub fn`) ⇒ neither CSS nor config can move them ⇒ the only option is to move **our content up** to meet them.
+    ⇒ Fix: `.topbar`'s `padding-top` **10px → 0**.
+    ⇒ Measured (replica page: real CSS + real `.topbar` + a **hand-drawn simulated traffic light** centred at y=13): 10px → centre 19.5 (+6.5px) · 4px → 17.5 (+4.5px) · **0px → 13.5 (+0.5px) ✓**. The three elements are **already aligned with each other** (`.topbar-left` is an `align-items: center` flex) ⇒ only a whole-group shift is needed.
+  - **Tests**: +8 (new `scripts/test_check_capabilities.py`: current repo state passes / **reverse verification** (removing the grant must fail) / glob coverage / a grant for a different window does not count / non-Overlay windows need nothing / permission-set identifiers are skipped / a typo must be caught) ⇒ scripts 143 → **151** cases; vitest 36 files / 581 cases ✓ (unchanged).
+  - **Gates**: Rust fmt / clippy(--all-targets) / test ✓ (268 + 27), tsc / lint / prettier / build / i18n ✓ (456 keys), vitest 36 files / 581 ✓, scripts **151** ✓, four check scripts ✓ + the **new capability check** ✓. Zero DB schema / zero front-end logic changes / zero new dependencies.
+  - **Touched**: `capabilities/default.json` · `styles.css` (`.topbar`) · `scripts/check-capabilities.py` (new) + `scripts/test_check_capabilities.py` (new) · `.github/workflows/quality-check.yml`.
+  - See [`issue-533-window-drag-and-titlebar-align.md`](./issue-533-window-drag-and-titlebar-align.md)
+
 - **v0.8.4 (2026-11-03) — The "open in new window" button now sits directly on the task card (#531)**
 
   - **Requirement**: the user marked the "open in new window" icon in the detail panel's header and asked for **that feature to move onto the task card** ⇒ a board card opens the standalone detail window directly, with **no need to open the modal first**.
