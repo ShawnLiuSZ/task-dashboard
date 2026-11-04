@@ -58,7 +58,7 @@
   - **影响面**：`app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`。
   - 详见 [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
-- **v0.8.5（未发布）— 修 v0.8.4 窗口拖不动 + 顶栏与交通灯未对齐（#533）**
+- **v0.8.5（2026-11-04）— 修 v0.8.4 窗口拖不动 + 顶栏与交通灯未对齐（#533）**
 
   - **现象（用户报 v0.8.4）**：① **窗口完全拖不动**（拖不到屏幕任意位置）；② 顶栏「TaskBoard + 折叠按钮 + 新建备忘录」那段与 macOS **交通灯没对齐**。
   - **① 拖不动 —— ACL 缺 `allow-start-dragging`**：`titleBarStyle: "Overlay"`（#520 引入，为了在标题栏里放按钮）让原生标题栏变透明覆盖层 ⇒ **不再提供拖拽区** ⇒ 拖动完全依赖前端 `data-tauri-drag-region` ⇒ Tauri 的 `drag.js` 在 mousedown 时调 `invoke('plugin:window|start_dragging')`；而 ⚠️ **`core:window:default` 不含该项**（实测该权限集 28 条：… / `internal-toggle-maximize` / `is-visible` / `theme` / `title` —— 有 maximize、**没有** start-dragging）⇒ ACL 拒绝 ⇒ **拖不动**。

@@ -54,7 +54,7 @@
   - **Touched**: `app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`.
   - See [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
-- **v0.8.5 (unreleased) — Fixed the v0.8.4 window not being draggable and the top bar not aligning with the traffic lights (#533)**
+- **v0.8.5 (2026-11-04) — Fixed the v0.8.4 window not being draggable and the top bar not aligning with the traffic lights (#533)**
 
   - **Symptom (reported against v0.8.4)**: ① the **window could not be dragged at all** (not to any position on screen); ② the top bar's "TaskBoard + collapse button + New note" section was **not aligned with the macOS traffic lights**.
   - **① Not draggable — the ACL lacks `allow-start-dragging`**: `titleBarStyle: "Overlay"` (introduced in #520 so a button could sit in the title bar) turns the native title bar into a transparent overlay ⇒ it **no longer provides a drag area** ⇒ dragging depends entirely on the front end's `data-tauri-drag-region` ⇒ Tauri's `drag.js` calls `invoke('plugin:window|start_dragging')` on mousedown; and ⚠️ **`core:window:default` does not include it** (measured: that set has 28 entries — … / `internal-toggle-maximize` / `is-visible` / `theme` / `title` — it has maximize but **no** start-dragging) ⇒ the ACL rejects it ⇒ **the window cannot be dragged**.
