@@ -58,7 +58,7 @@
   - **影响面**：`app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`。
   - 详见 [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
-- **v0.8.6（未发布）— 顶栏改用固定高度的标题栏区：修「立即同步」按钮被窗口上沿裁切 + 与交通灯齐平（#536）**
+- **v0.8.6（2026-11-05）— 顶栏改用固定高度的标题栏区：修「立即同步」按钮被窗口上沿裁切 + 与交通灯齐平（#536）**
 
   - **现象（v0.8.5 用户实测反馈）**：「立即同步」蓝色按钮的**上半截被窗口上沿裁掉了**，且右侧那组（上次同步 / 账号选择 / 立即同步）「太靠上」。
   - **根因（比 #533 深一层）**：⚠️ **Overlay 模式下 macOS 把 webview 顶部**上推**了约 5.4px**（实测）⇒ webview 的 y=0 其实在**窗口上沿之外**。

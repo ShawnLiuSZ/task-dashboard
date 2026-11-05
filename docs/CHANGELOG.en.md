@@ -54,7 +54,7 @@
   - **Touched**: `app/src/utils/markdown.ts` + `markdown.test.ts` + `app/src/styles.css`.
   - See [`issue-513-markdown-tasklist-nested-table.md`](./issue-513-markdown-tasklist-nested-table.md)
 
-- **v0.8.6 (unreleased) — The top bar now uses a fixed-height title bar area: fixes the "Sync now" button being clipped by the window edge and aligns it with the traffic lights (#536)**
+- **v0.8.6 (2026-11-05) — The top bar now uses a fixed-height title bar area: fixes the "Sync now" button being clipped by the window edge and aligns it with the traffic lights (#536)**
 
   - **Symptom (reported by a v0.8.5 user)**: the top half of the blue **"Sync now"** button was **clipped by the window's top edge**, and the right-hand group (last sync / account picker / Sync now) sat **too high**.
   - **Root cause (one level deeper than #533)**: ⚠️ in Overlay mode **macOS pushes the webview's top up by about 5.4px** (measured) ⇒ the webview's y=0 is actually **outside the window's top edge**.
