@@ -40,9 +40,11 @@ jobs:
           (github.event.pull_request.base.ref == 'develop' ||
            github.event.pull_request.base.ref == 'main') }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
@@ -51,8 +53,10 @@ jobs:
 
       # PR 正文可能含单引号 / 反引号 / 多行代码块，走 shell 变量转义风险大；
       # 因此标题与正文直接指向 GITHUB_EVENT_PATH 的 JSON 负载文件，由脚本读取。
+      # 源仓库（--head-repo）：fork 分支跳过删除的判据，取自事件负载 head.repo.full_name。
       - name: 删除源分支并关闭关联 Issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-        run: python3 scripts/merge-cleanup.py --repo "$REPO"
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: python3 scripts/merge-cleanup.py --repo "$REPO" --head-repo "$HEAD_REPO"
