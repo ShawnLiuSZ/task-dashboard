@@ -232,3 +232,52 @@ describe('SessionsPanel 复制高亮键（#452）', () => {
     );
   });
 });
+
+/**
+ * #541 一键清除「已关闭 issue」的会话回归。
+ *
+ * 痛点：删除某会话前无法知道对应 issue 是否已关闭，只能逐个点开链接去 GitHub 确认。
+ * 方案：用**本地** `tasks.issue_state === 'closed'`（同步路径已权威归一化小写）过滤，
+ * 复用现有 `api.clearSessions(keys)` 一键清空 —— **零后端改动**。
+ *
+ * 静态锁定：过滤判据、按钮禁用态、确认弹窗、handleClearClosed 的接线。
+ */
+describe('SessionsPanel 一键清除已关闭会话（#541）', () => {
+  it('closedSessions 用本地 issueState === closed 过滤', () => {
+    const expr =
+      sessionsRaw.match(
+        /const closedSessions = useMemo\([\s\S]*?sessions\.filter\(\(s\) => s\.issueState === 'closed'\)[\s\S]*?\[sessions\][\s\S]*?\);/,
+      )?.[0] ?? '';
+    expect(expr, '应能取到 closedSessions 定义').not.toBe('');
+    expect(expr).toMatch(/s\.issueState === 'closed'/);
+  });
+
+  it('无已关闭会话时按钮置灰禁用，带 clearClosedDisabled 提示', () => {
+    expect(sessionsRaw).toMatch(/disabled=\{closedCount === 0\}/);
+    expect(sessionsRaw).toMatch(
+      /title=\{closedCount === 0 \? t\('sessions\.clearClosedDisabled'\) : undefined\}/,
+    );
+    // 按钮仅在非选择模式工具栏（与「选择」并列），不侵入选择模式。
+    expect(sessionsRaw).toMatch(/t\('sessions\.select'\)/);
+    expect(sessionsRaw).toMatch(/t\('sessions\.clearClosed'\)/);
+    expect(sessionsRaw).toMatch(/onClick=\{\(\) => setConfirmClosed\(true\)\}/);
+  });
+
+  it('handleClearClosed：确认后调 api.clearSessions 并传去重的已关闭 issueKey', () => {
+    const fn =
+      sessionsRaw.match(
+        /const handleClearClosed = useCallback\(async \(\) => \{[\s\S]*?\n {2}\}, \[[^\]]*\]\);/,
+      )?.[0] ?? '';
+    expect(fn, '应能取到 handleClearClosed 函数体').not.toBe('');
+    // 聚合视图下同一 issueKey 可来自两个账号 ⇒ 去重后传 issue_key（后端按 issue_key 定位）。
+    expect(fn).toMatch(/closedSessions\.map\(\(s\) => s\.issueKey\)/);
+    expect(fn).toMatch(/await api\.clearSessions\(keys\)/);
+  });
+
+  it('确认弹窗使用 clearClosedConfirm 并接 handleClearClosed', () => {
+    expect(sessionsRaw).toMatch(
+      /t\('sessions\.clearClosedConfirm',\s*\{\s*n:\s*closedCount\s*\}\)/,
+    );
+    expect(sessionsRaw).toMatch(/onConfirm=\{\(\) => void handleClearClosed\(\)\}/);
+  });
+});

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, onSynced, onTasksChanged, openExternal } from '../api';
 import ConfirmDialog from './ConfirmDialog';
 import { useT } from '../i18n';
@@ -71,6 +71,8 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
   const [selectMode, setSelectMode] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [confirmMulti, setConfirmMulti] = useState(false);
+  // #541：一键清除「已关闭 issue」的会话——确认弹窗。
+  const [confirmClosed, setConfirmClosed] = useState(false);
   const [columns, setColumns] = useState(3);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -250,6 +252,27 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
     }
   }, [selectedKeys, sessions, exitSelectMode, loadSessions]);
 
+  // #541：已关闭 issue 的会话（本地 issue_state === 'closed'，同步路径已权威归一化小写）。
+  // 一键清空它们的 session 字段（保留任务行，与 clear_sessions 语义一致）。
+  const closedSessions = useMemo(
+    () => sessions.filter((s) => s.issueState === 'closed'),
+    [sessions],
+  );
+  const closedCount = closedSessions.length;
+
+  // #541：一键清除（确认后调用）。聚合视图下同一 issueKey 可来自两个账号 ⇒ 去重。
+  const handleClearClosed = useCallback(async () => {
+    const keys = [...new Set(closedSessions.map((s) => s.issueKey))];
+    try {
+      await api.clearSessions(keys);
+      setConfirmClosed(false);
+      void loadSessions();
+    } catch (e) {
+      console.error('清除已关闭会话失败:', e);
+      setConfirmClosed(false);
+    }
+  }, [closedSessions, loadSessions]);
+
   const allSelected = selectedKeys.size === sessions.length && sessions.length > 0;
 
   return (
@@ -288,9 +311,21 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
                   </button>
                 </>
               ) : (
-                <button type="button" className="btn small" onClick={() => setSelectMode(true)}>
-                  {t('sessions.select')}
-                </button>
+                <>
+                  <button type="button" className="btn small" onClick={() => setSelectMode(true)}>
+                    {t('sessions.select')}
+                  </button>
+                  {/* #541：一键清除已关闭 issue 的会话。无已关闭会话时置灰禁用。 */}
+                  <button
+                    type="button"
+                    className="btn small"
+                    disabled={closedCount === 0}
+                    title={closedCount === 0 ? t('sessions.clearClosedDisabled') : undefined}
+                    onClick={() => setConfirmClosed(true)}
+                  >
+                    {t('sessions.clearClosed')}
+                  </button>
+                </>
               )}
             </div>
 
@@ -463,6 +498,14 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
             message={t('sessions.clearMultiConfirm', { n: selectedKeys.size })}
             onConfirm={() => void handleClearMulti()}
             onCancel={() => setConfirmMulti(false)}
+          />
+        )}
+        {/* #541：一键清除已关闭会话确认框。 */}
+        {confirmClosed && (
+          <ConfirmDialog
+            message={t('sessions.clearClosedConfirm', { n: closedCount })}
+            onConfirm={() => void handleClearClosed()}
+            onCancel={() => setConfirmClosed(false)}
           />
         )}
       </div>
