@@ -582,6 +582,15 @@ class SecurityGuardTest(unittest.TestCase):
         )
         self.assert_flagged(text, "内插了")
 
+    def test_run_list_item_block_with_context_interpolation_is_flagged(self):
+        # VULN-04：**列表项**块标量 `- run: |` 里内插 `${{ }}` 同样被标记
+        # （#451 那条 `- run: |` 解析路径 + 本守卫的块标量检测）。
+        text = VALID.replace(
+            "      - name: Run\n        run: python3 scripts/foo.py",
+            "      - run: |\n          echo ${{ github.ref_name }}",
+        )
+        self.assert_flagged(text, "内插了")
+
     def test_run_env_mediation_is_ok(self):
         # 正确的修法：`env:` 中转 + 双引号引用环境变量，零误报。
         text = VALID.replace(
