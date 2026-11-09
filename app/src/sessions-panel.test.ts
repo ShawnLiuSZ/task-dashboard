@@ -237,19 +237,20 @@ describe('SessionsPanel 复制高亮键（#452）', () => {
  * #541 一键清除「已关闭 issue」的会话回归。
  *
  * 痛点：删除某会话前无法知道对应 issue 是否已关闭，只能逐个点开链接去 GitHub 确认。
- * 方案：用**本地** `tasks.issue_state === 'closed'`（同步路径已权威归一化小写）过滤，
+ * 方案：用**本地** `tasks.issue_state`（同步路径已权威归一化小写）过滤，
  * 复用现有 `api.clearSessions(keys)` 一键清空 —— **零后端改动**。
+ * #543：判据改走 `isClosedIssueState`（大小写不敏感，对齐后端 `is_closed_state`）。
  *
  * 静态锁定：过滤判据、按钮禁用态、确认弹窗、handleClearClosed 的接线。
  */
 describe('SessionsPanel 一键清除已关闭会话（#541）', () => {
-  it('closedSessions 用本地 issueState === closed 过滤', () => {
+  it('closedSessions 用 isClosedIssueState（大小写不敏感）过滤', () => {
     const expr =
       sessionsRaw.match(
-        /const closedSessions = useMemo\([\s\S]*?sessions\.filter\(\(s\) => s\.issueState === 'closed'\)[\s\S]*?\[sessions\][\s\S]*?\);/,
+        /const closedSessions = useMemo\([\s\S]*?sessions\.filter\(\(s\) => isClosedIssueState\(s\.issueState\)\)[\s\S]*?\[sessions\][\s\S]*?\);/,
       )?.[0] ?? '';
     expect(expr, '应能取到 closedSessions 定义').not.toBe('');
-    expect(expr).toMatch(/s\.issueState === 'closed'/);
+    expect(expr).toMatch(/isClosedIssueState\(s\.issueState\)/);
   });
 
   it('无已关闭会话时按钮置灰禁用，带 clearClosedDisabled 提示', () => {

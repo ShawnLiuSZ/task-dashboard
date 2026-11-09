@@ -121,6 +121,8 @@ cd app && npm run i18n:check
 
 - [`docs/issue-541-sessions-clear-closed.md`](./docs/issue-541-sessions-clear-closed.md) — **一键删除已关闭 issue 的任务会话**：会话面板删除某会话前无法知道对应 issue 是否已关闭，只能逐个点链接确认。方案：用**本地** `tasks.issue_state == 'closed'`（同步路径已权威归一化）过滤 + 复用现有 `api.clearSessions(keys)` **零后端改动** —— 仅清空 session 三列、保留任务行。交互：非选择模式工具栏新增「清除已关闭会话」按钮，无已关闭会话时置灰禁用；确认弹窗带计数；聚合视图下去重 `issueKey` 再传后端（同 #438/#391 口径）
 
+- [`docs/issue-543-issue-state-case-insensitive.md`](./docs/issue-543-issue-state-case-insensitive.md) — **前端 issue_state 判 closed 统一为大小写不敏感**：前端 5 处裸写 `task.issueState === 'closed'`（`openCount` / `TaskCard` / `DetailPanel` / `SessionsPanel` / `Board`）大小写敏感，依赖「写路径恰好归一化 + 迁移洗数据」这层隐式保障（#335 类回归会静默误判）。新增 `utils/issueState.ts` 的 `isClosedIssueState`（`trim` + 大小写不敏感，与后端 `common::is_closed_state` 同口径）替换全部 5 处 —— **零后端 / 零 DB schema / 零新依赖**，对真实库恒为小写的 `'closed'` 行为严格等价，纯防御
+
 - [`docs/issue-490-live-task-detail.md`](./docs/issue-490-live-task-detail.md) — **打开任务详情时实时拉取 GitHub 详情与评论（不落库）**：新增纯只读、零落库的实时通道，覆盖评论区、展示实时指派 / 标签与关联 PR 提交历史，与 `on_demand::ensure_task_available` 的落库版单 issue 拉取明确区分
 
 - [`docs/issue-496-live-detail-blank.md`](./docs/issue-496-live-detail-blank.md) — **任务详情点击后整页全屏空白**：#490 的实时拉取结构体 `LiveTaskDetail` 漏写 `#[serde(rename_all = "camelCase")]` ⇒ 后端发回 `pr_commits`、前端读 `prCommits` 得到 `undefined` ⇒ 渲染期取 `.length` 抛 TypeError ⇒ React 卸载整棵树。修复补上属性 + 后端**直接断言序列化键名**的单测；前端新增 `utils/liveDetail.ts` 规范化层（`api.ts` 返回类型改 `unknown`，因为 `invoke<T>` 只是断言不校验形状），契约漂移降级为「少显示一段」而非整页崩；顺带把该命令从「同步 + 持 DB 锁联网」改为 `async` + `spawn_blocking`（#329 范式）

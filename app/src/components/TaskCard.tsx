@@ -4,6 +4,7 @@ import { api, openExternal, reportError } from '../api';
 import { useT } from '../i18n';
 import ConfirmDialog from './ConfirmDialog';
 import { taskIdentity } from '../utils/taskIdentity';
+import { isClosedIssueState } from '../utils/issueState';
 
 interface Props {
   task: Task;
@@ -104,7 +105,7 @@ function TaskCard({
           </span>
         )}
         {/* GitHub Issue 状态：仅 closed 显示 */}
-        {task.issueState === 'closed' && (
+        {isClosedIssueState(task.issueState) && (
           <span className="gh-state gh-state-closed" title={t('card.ghState.closed')}>
             {t('card.ghState.closed')}
           </span>
