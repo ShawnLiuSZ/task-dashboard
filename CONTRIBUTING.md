@@ -119,6 +119,8 @@ cd app && npm run i18n:check
 
 - [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.8.0）
 
+- [`docs/issue-539-security-review-fixes.md`](./docs/issue-539-security-review-fixes.md) — **2026-11-09 全仓安全审计修复（CI / 发布供应链 + merge-cleanup 5 项）**：核心攻击面（SQL 注入 / 前端 XSS / URL 白名单 / SSRF / 令牌路径 / MCP 输入）经审计**均已正确防护**，问题集中在供应链 —— ①全部第三方 action 未固定 SHA（`dtolnay/rust-toolchain@stable` 实测是**未保护分支**而非 tag）⇒ 7 个 workflow 全部固定到 40 位 commit SHA；②写权限 workflow 的 `actions/checkout` 未 `persist-credentials: false` ⇒ token 持久化进 `.git/config`；③merge-cleanup 的 fork 分支跳过是死代码（`head_repo` 从不读事件负载）；④`release.yml` 把 `tag_name` 直接内插进 `run:` shell；⑤merge-cleanup 关闭 issue 语义强于 GitHub 原生（裸 `#N` / `Refs #N` 也关）。防回归：`check-workflow-yaml.py` 新增 3 项守卫（SHA 固定 / `run:` 不内插 context / 写权限 checkout 必须 `persist-credentials: false`）
+
 - [`docs/issue-490-live-task-detail.md`](./docs/issue-490-live-task-detail.md) — **打开任务详情时实时拉取 GitHub 详情与评论（不落库）**：新增纯只读、零落库的实时通道，覆盖评论区、展示实时指派 / 标签与关联 PR 提交历史，与 `on_demand::ensure_task_available` 的落库版单 issue 拉取明确区分
 
 - [`docs/issue-496-live-detail-blank.md`](./docs/issue-496-live-detail-blank.md) — **任务详情点击后整页全屏空白**：#490 的实时拉取结构体 `LiveTaskDetail` 漏写 `#[serde(rename_all = "camelCase")]` ⇒ 后端发回 `pr_commits`、前端读 `prCommits` 得到 `undefined` ⇒ 渲染期取 `.length` 抛 TypeError ⇒ React 卸载整棵树。修复补上属性 + 后端**直接断言序列化键名**的单测；前端新增 `utils/liveDetail.ts` 规范化层（`api.ts` 返回类型改 `unknown`，因为 `invoke<T>` 只是断言不校验形状），契约漂移降级为「少显示一段」而非整页崩；顺带把该命令从「同步 + 持 DB 锁联网」改为 `async` + `spawn_blocking`（#329 范式）

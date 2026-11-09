@@ -50,6 +50,15 @@ class ExtractIssueRefsTest(unittest.TestCase):
         # 标题里通常只有 `(#N)` 这一处主旨引用。
         self.assertEqual(extract_issue_refs("fix: 详情关联 (#278)", "正文不写编号"), [278])
 
+    def test_title_bare_ref_not_closed(self):
+        # #539：标题里**非括号**的裸 `#N` 不触发关闭（VULN-05）。
+        # `Revert workaround for #123 (#456)` 只应关闭 #456，不误关 #123。
+        self.assertEqual(extract_issue_refs("Revert workaround for #123 (#456)", ""), [456])
+
+    def test_title_requires_parenthesis(self):
+        # 无括号的裸 `#N`（如 `fix: 处理 #123`）不是主旨引用，不关闭。
+        self.assertEqual(extract_issue_refs("fix: 处理 #123", ""), [])
+
     def test_body_keyword_ref(self):
         self.assertEqual(extract_issue_refs("t", "Closes #284"), [284])
 
@@ -57,7 +66,13 @@ class ExtractIssueRefsTest(unittest.TestCase):
         self.assertEqual(extract_issue_refs("t", "Fixes: #123"), [123])
 
     def test_case_insensitive_and_extra_whitespace(self):
-        self.assertEqual(extract_issue_refs("t", "REFS  #42"), [42])
+        self.assertEqual(extract_issue_refs("t", "CLOSES  #42"), [42])
+
+    def test_refs_is_not_a_closing_keyword(self):
+        # #539：`Refs #N` 只交叉引用，不关闭（与 GitHub 原生一致）。此前 `REFS #42`
+        # 会被当成关闭声明 —— 比平台更激进，是 VULN-05 的根因之一。
+        self.assertEqual(extract_issue_refs("t", "REFS  #42"), [])
+        self.assertEqual(extract_issue_refs("t", "References #42"), [])
 
     def test_chinese_keywords(self):
         self.assertEqual(extract_issue_refs("t", "关闭 #284\n解决 #285"), [284, 285])
@@ -100,7 +115,8 @@ class ExtractIssueRefsTest(unittest.TestCase):
 
     def test_realistic_pr_body_only_closes_declared_issue(self):
         # 复刻一次真实 PR 正文：含 PR 号、commit sha、文档路径、CHANGELOG 里的历史 issue
-        # 引用。只有头部的 `Refs #284` 应该被提取。
+        # 引用。标题的 `(#284)` 是主旨引用；正文的 `Refs #284`（#539 起**不**关闭）与
+        # 裸历史引用都不该被提取。
         body = """## 关联
 Refs #284 — PR 合并后自动收尾
 
@@ -241,6 +257,15 @@ class DryRunFlowTest(unittest.TestCase):
         self.assertNotIn("[dry-run] 将删除远端分支", out)
         # 关 issue 与删分支相互独立：fork PR 依然要关 issue
         self.assertIn("[dry-run] 将检查并关闭 #284", out)
+
+    def test_dry_run_fork_skips_delete_from_payload(self):
+        # #539：`--head-repo` 未传时，fork 判据取自事件负载 `head.repo.full_name`
+        # （此前恒回退 `--repo`，fork 跳过分支在 CI 中是死代码 —— VULN-03）。
+        pr = {**self.BASE_PR, "head": {**self.BASE_PR["head"], "repo": {"full_name": "forkuser/task-dashboard"}}}
+        code, out = self._run(pr=pr)
+        self.assertEqual(code, 0)
+        self.assertIn("源分支属于 fork", out)
+        self.assertNotIn("[dry-run] 将删除远端分支", out)
 
     def test_dry_run_test_marker_skips_delete(self):
         pr = {**self.BASE_PR, "title": "test: workflow 验证 (#284)"}

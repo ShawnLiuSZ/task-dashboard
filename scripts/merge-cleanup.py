@@ -5,10 +5,10 @@
 「合并完还得手动删分支、手动关 issue」的人工收尾。
 
 关联 issue 的提取规则（详见 `extract_issue_refs`）：
-  * PR 正文只认**带关闭关键词的引用**（Closes / Fixes / Resolves / Refs / 关闭 / 解决
-    / 修复…），避免把正文里引用的历史 issue 号（如 CHANGELOG 里的「沿用 #155/#175
-    教训」）误判成要关闭的 issue；
-  * PR 标题里任何 `#N` 都算（标题通常就是 `... (#284)` 这一处主旨引用）。
+  * PR 标题只认**括号主旨引用** `(#N)`（本仓库标题惯例 `... (#284)`）；标题里其它裸 `#N`
+    （如 `Revert workaround for #123 (#456)` 里的 #123）**不**触发关闭 —— 与 GitHub 原生一致；
+  * PR 正文只认**关闭关键词**（Closes / Fixes / Resolves / 关闭 / 解决 / 修复…）；
+    `Refs #N` 与裸 `#N` 一律**不**关闭（GitHub 原生 `Refs` 只交叉引用，不关闭 issue）。
 
 安全护栏：
   * 源分支属于 fork（`head.repo.full_name != repository.full_name`）时跳过删除；
@@ -33,12 +33,17 @@ import urllib.request
 
 GITHUB_API = "https://api.github.com"
 
-# 标题里的 `#N`：前后不得是字母数字或 `#`（避免 `123#456`、`##123` 之类的碎片）。
+# 标题里的**括号主旨引用** `(#N)`：本仓库标题惯例就是 `... (#284)` 这一处（#539 收紧）。
+# 只认括号形态：`Revert workaround for #123 (#456)` 这类标题里的裸 `#123` 不应触发关闭，
+# 与 GitHub 原生一致（GitHub 只按 Closes/Fixes/Resolves 关，不按裸 `#N` 关）。
 # 上限 6 位是 GitHub issue 编号的量级，不放大以免吃到 commit sha 的片段。
-TITLE_REF_RE = re.compile(r"(?<![\w#])#([1-9]\d{0,5})(?![\w])")
+TITLE_REF_RE = re.compile(r"\(#([1-9]\d{0,5})\)")
 
-# 正文里的**带关键词**引用：`Closes #284` / `Fixes: #123` / `refs #284 #285` / `关闭 #284`。
+# 正文里的**关闭关键词**引用：`Closes #284` / `Fixes: #123` / `关闭 #284`。
 # 关键词后允许冒号与空白，可连续跟多个编号；中文关键词同样支持（本仓库 CHANGELOG 中英并存）。
+#
+# #539：**去掉 `Refs` / `References`** —— GitHub 原生 `Refs` 只交叉引用、不关闭 issue，
+# 本脚本此前把它们也当关闭语义，比平台更激进（VULN-05）；现在只认真正的关闭关键词。
 #
 # 必须带 `#`：GitHub 的跨引用规范就是 `#N`，本仓库标题与 CHANGELOG 也全用这种写法。若允许
 # 裸数字，中文正文里的「修复 2026 年的崩溃」「修复 3 个 bug」都会被误判成 issue 编号 —— 那
@@ -47,7 +52,7 @@ CLOSE_RE = re.compile(
     # 词边界：`\b` 在 CJK 前后都是 `\w`，所以「已关闭 #284」这种写法永远匹配不上。
     # 改用「前面不是 `\w` **或** 前面是汉字」，两种情况都放行。
     r"(?i)(?:(?<!\w)|(?<=[\u4e00-\u9fff]))"
-    r"(?:closes?|closed|fixes?|fixed|resolves?|resolved|refs?|references?|关闭|解决|修复)"
+    r"(?:closes?|closed|fixes?|fixed|resolves?|resolved|关闭|解决|修复)"
     r"\s*[:：]?\s*"
     # #329：编号串整体捕获，**不再**用可重复捕获组。
     # 原写法 `...(#?(\d+)(?!\d))*` 里 `(?:...)*` 是「重复的**非**捕获组」，内层
@@ -242,7 +247,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--head-repo",
         default="",
-        help="源分支所属仓库全名；留空则用 --repo（即只删同仓库分支，fork PR 自动跳过）",
+        help=(
+            "源分支所属仓库全名；留空则从事件负载读取 "
+            "（head.repo.full_name），再回退 --repo（fork PR 自动跳过删分支）"
+        ),
     )
     p.add_argument("--dry-run", action="store_true", help="只打印计划，不执行任何写操作")
     args = p.parse_args(argv)
@@ -259,7 +267,15 @@ def main(argv: list[str] | None = None) -> int:
     base_ref = args.base_ref.strip() or payload["pull_request"]["base"]["ref"]
     head_ref = args.head_ref.strip() or payload["pull_request"]["head"]["ref"]
     head_sha = args.head_sha.strip() or payload["pull_request"]["head"]["sha"]
-    head_repo = args.head_repo.strip() or args.repo
+    # #539：fork 判据的**真实来源**。此前 `or args.repo` 恒为同仓库，`--head-repo` 又不被
+    # workflow 传入，`head_repo != args.repo` 的 fork 跳过分支在 CI 里**永不触发**（死代码）。
+    # 现在优先取事件负载 `head.repo.full_name`（PR 作者可控，但只用于「是否 fork」判定，
+    # 不参与路径拼接），再回退 `--repo`。
+    head_repo = (
+        args.head_repo.strip()
+        or ((payload.get("pull_request", {}).get("head", {}).get("repo") or {}).get("full_name") or "")
+        or args.repo
+    )
 
     pr_url = f"https://github.com/{args.repo}/pull/{pr_number}"
     close_comment = (

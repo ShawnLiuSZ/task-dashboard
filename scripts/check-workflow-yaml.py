@@ -20,11 +20,14 @@ workflow 的缩进、`on:` 触发条件、权限块写错了，只有在有人�
   8. 声明了 `permissions:` 却没有任何 scope（等于没配，退回仓库默认权限）
   9. workflow 直接执行仓库内脚本（`run:` 引用 `scripts/`）却没有 `actions/checkout` ——
      runner 的 workspace 默认是空的，不 checkout 会以「file not found」在静默状态失败
- 10. 官方 action 用 `@main` / `@master` 这类**浮动分支**引用（上游一次 push 就换掉你 CI 里
-     执行的全部代码；供应链风险）
+ 10. 第三方 action 用 `@main` / `@master` / `@v5` / `@stable` 这类**可移动引用**（上游一次
+      push 就换掉你 CI 里执行的全部代码；供应链风险）—— #539 起一律要求**完整 commit SHA**
  11. job 有 `runs-on:` 却没有 `steps:`（GitHub 直接解析失败，且只有推送后才暴露）
  12. 顶层 key 重复声明（后者静默覆盖前者）
  13. `needs:` 指向不存在的 job（该 job 永远停在 pending，workflow 卡死）
+ 14. `run:`（含块标量）里直接内插 `${{ }}` 表达式（shell 注入面，应走 `env:` 中转）
+ 15. 声明了 write scope 的 workflow，其 `actions/checkout` 未设 `persist-credentials: false`
+      （写权限 token 会持久化进 workspace `.git/config`，被依赖构建脚本读取）
 
 > #329 补丁：第 8、10~13 项与「`permissions: read-all` 简写」「`on: [a, b]` 内联数组」
 > 的**误报修复**同批落地。检查器的误报比漏报更致命（见下方「双向要求」段），
@@ -58,16 +61,11 @@ BAD_EXPR_QUOTE_RE = re.compile(r"\$\{\{\s*[\"']")
 BLOCK_INDICATORS = ("|", ">", "|-", ">-", "|+", ">+")
 # 第三方 action 需要固定版本；本地 action 与 Docker action 不适用。
 LOCAL_USE_PREFIXES = ("./", "../", "docker://")
-# #329：`@main` / `@master` 这类**浮动分支**引用属于供应链风险——上游一次 push 就换掉
-# 你 CI 里执行的全部代码，且不会在本仓库留下任何 diff 痕迹。
-#
-# 注意**不能**一刀切禁止「所有非版本号的引用」：`dtolnay/rust-toolchain@stable` 是该
-# action 的官方推荐写法（`@stable` / `@beta` / `@nightly` 是它受支持的「工具链通道」），
-# 本仓库多个 workflow 正用着它。因此这里用**明确的浮动分支名denylist**，
-# 而不是「不是 vN 就报错」的宽松规则。
-FLOATING_REF_RE = re.compile(
-    r"^(?:main|master|head|latest|develop|trunk|default)$", re.IGNORECASE
-)
+# #539：第三方 action 必须固定到**完整 commit SHA**。tag（`@v5`）与分支（`@stable`）
+# 都可被上游移动 / force-push —— 上游一次 push 就换掉你 CI 里执行的全部代码，且不会在
+# 本仓库留下任何 diff 痕迹。此前只 denylist 少数浮动分支名（`main`/`master`/…），
+# `@stable` 这类「看起来像通道」的引用照样漏网（实测是未保护的 branch，非 tag）。
+FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 # 顶层 `permissions:` 的官方简写（GitHub 文档：可用 `read-all` / `write-all` 一次设全部 scope）。
 PERMISSION_SHORTHANDS = ("read-all", "write-all")
 # 结构缩进：workflow 的层级是固定的（顶层 0 / job 名 2 / job 键 4 / step 项 6 / step 键 8）
@@ -78,15 +76,25 @@ STEP_ITEM_INDENT = 6
 
 @dataclass
 class Step:
-    """一个 step。只有同时缺 `uses:` 与 `run:` 才是问题。"""
+    """一个 step。只有同时缺 `uses:` 与 `run:` 才是问题。
+
+    #539：额外跟踪 `uses:` 取值与 `with: persist-credentials: false`，用于「写权限
+    workflow 的 checkout 不得把 token 持久化进 .git/config」判定（VULN-02）。
+    """
 
     line: int
     has_uses: bool = False
     has_run: bool = False
+    uses_value: str = ""
+    persist_credentials_false: bool = False
 
     @property
     def empty(self) -> bool:
         return not self.has_uses and not self.has_run
+
+    @property
+    def is_checkout(self) -> bool:
+        return "actions/checkout" in self.uses_value
 
 
 @dataclass
@@ -182,12 +190,22 @@ def scan(lines: list[str]) -> list[str]:
     block_indent = -1
     block_owner: str | None = None  # 块标量所属的 key（用于判定 `run: |` 里的 scripts 引用）
     runs_scripts = False
+    # #539：当前 step 是否处于 `with:` 块（用于检测 `persist-credentials: false`）。
+    step_in_with = False
+    # #539：workflow 是否声明了任一 write scope（决定 checkout 是否必须不持久化凭据）。
+    workflow_has_write = False
 
     def flush_step() -> None:
-        nonlocal step
-        if step is not None and step.empty:
-            errors.append(f"L{step.line}: step 既没有 `uses:` 也没有 `run:`（空步骤不会执行任何动作）")
+        nonlocal step, step_in_with
+        if step is not None:
+            if step.empty:
+                errors.append(f"L{step.line}: step 既没有 `uses:` 也没有 `run:`（空步骤不会执行任何动作）")
+            # #539：收集到 job.steps 供「写权限 workflow 的 checkout 必须 persist-credentials:false」
+            # 判定用。原解析器从不填充 steps（只用于 empty 检查），守卫读它必然为空。
+            if job is not None:
+                job.steps.append(step)
         step = None
+        step_in_with = False
 
     for ln, raw in enumerate(lines, 1):
         if "\t" in raw:
@@ -204,6 +222,12 @@ def scan(lines: list[str]) -> list[str]:
             if ind > block_indent:
                 if block_owner == "run" and "scripts/" in body:
                     runs_scripts = True
+                # #539：`run: |` 块内容里内插 `${{ }}` 同样是 shell 注入面。
+                if block_owner == "run" and "${{" in body:
+                    errors.append(
+                        f"L{ln}: `run:` 块里内插了 `${{ }}` 表达式（shell 注入面）；"
+                        f"应改用 `env:` 中转 + 双引号引用环境变量"
+                    )
                 continue
             in_block = False
             block_owner = None
@@ -220,19 +244,19 @@ def scan(lines: list[str]) -> list[str]:
                 f"job 可能在静默状态被跳过（用单引号包裹整个表达式或转义）"
             )
 
-        # 第三方 action 版本固定
+        # 第三方 action 版本固定（#539：必须完整 commit SHA）
         m = USE_RE.match(body)
         if m:
             val = m.group("val").strip()
             if not val.startswith(LOCAL_USE_PREFIXES) and "${{" not in val:
                 if "@" not in val:
-                    errors.append(f"L{ln}: 第三方 action `{val}` 未固定版本（应写 @v5 之类）")
+                    errors.append(f"L{ln}: 第三方 action `{val}` 未固定版本（应写 @<40位sha>）")
                 else:
                     ref = val.rsplit("@", 1)[1]
-                    if FLOATING_REF_RE.match(ref):
+                    if not FULL_SHA_RE.fullmatch(ref):
                         errors.append(
-                            f"L{ln}: 第三方 action `{val}` 用了浮动分支 `@{ref}`"
-                            f"（上游一次 push 就会替换你 CI 里执行的代码，应固定到 tag 或完整 commit sha）"
+                            f"L{ln}: 第三方 action `{val}` 未固定到完整 commit SHA"
+                            f"（`@{ref}` 是 tag / 分支，可被上游移动，应写 `@<40位sha>`）"
                         )
 
         # 列表项
@@ -241,6 +265,12 @@ def scan(lines: list[str]) -> list[str]:
             if not im:
                 errors.append(f"L{ln}: 列表项不是合法的 `- key: value` 形式")
                 continue
+            # #539：`- run: <标量>` 里直接内插 `${{ }}`（shell 注入面）。
+            if im.group("key") == "run" and "${{" in im.group("rest"):
+                errors.append(
+                    f"L{ln}: `run:` 里直接内插了 `${{ }}` 表达式（shell 注入面）；"
+                    f"应改用 `env:` 中转 + 双引号引用环境变量"
+                )
             # #451：列表项形式的**块标量**必须在 `continue` 之前开启块状态。
             # `- run: |` 同时满足 `startswith("- ")`，原先在下方 `continue` 处提前退出，
             # 永远到不了 `parse_kv` 之后的块标量判定 ⇒ 其后每一行脚本体都被
@@ -259,6 +289,7 @@ def scan(lines: list[str]) -> list[str]:
                 step = Step(line=ln)
                 if im.group("key") == "uses":
                     step.has_uses = True
+                    step.uses_value = im.group("rest").strip()
                 elif im.group("key") == "run":
                     step.has_run = True
             # 其它缩进的列表项（`strategy.matrix.include` 等）不做进一步结构校验
@@ -281,6 +312,12 @@ def scan(lines: list[str]) -> list[str]:
 
         if key == "run" and "scripts/" in rest:
             runs_scripts = True
+        # #539：`run: <标量>` 里直接内插 `${{ }}`（shell 注入面，VULN-04）。
+        if key == "run" and "${{" in rest:
+            errors.append(
+                f"L{ln}: `run:` 里直接内插了 `${{ }}` 表达式（shell 注入面）；"
+                f"应改用 `env:` 中转 + 双引号引用环境变量"
+            )
         if key == "if" and rest and (": " in rest or rest.endswith(":")):
             errors.append(f"L{ln}: `if:` 表达式含 `: ` 但未加引号，YAML 会把它当复合值解析失败")
 
@@ -296,9 +333,13 @@ def scan(lines: list[str]) -> list[str]:
                 if rest.lower().strip() in PERMISSION_SHORTHANDS:
                     # GitHub 官方简写：`permissions: read-all` / `write-all`
                     perm_scopes.append(ln)
+                    if rest.lower().strip() == "write-all":
+                        workflow_has_write = True
                 elif rest.startswith("{"):
                     # 内联映射：`permissions: {contents: read}`
                     perm_scopes.append(ln)
+                    if ": write" in rest:
+                        workflow_has_write = True
                 elif rest:
                     errors.append(
                         f"L{ln}: `permissions: {rest}` 不是合法写法"
@@ -320,6 +361,8 @@ def scan(lines: list[str]) -> list[str]:
                     errors.append(f"L{ln}: `permissions:` 下的 `{key}` 缺少 read/write/none")
                 elif SCOPE_RE.match(s):
                     perm_scopes.append(ln)
+                    if s.endswith(": write"):
+                        workflow_has_write = True
                 else:
                     errors.append(f"L{ln}: `permissions:` 下 `{s}` 不是合法的 scope 声明")
         elif section == "jobs":
@@ -355,9 +398,20 @@ def scan(lines: list[str]) -> list[str]:
                 # step 的子键（`uses:` / `run:` / `with:` / `env:` 等）
                 if key == "uses":
                     step.has_uses = True
+                    step.uses_value = rest
                 elif key == "run":
                     step.has_run = True
+                # #539：`with:` 块内跟踪 `persist-credentials: false`（VULN-02）。
+                step_in_with = key == "with"
                 continue
+            elif ind == 10 and step_in_with and step is not None:
+                # `with:` 的子键（ind=10）：目前只关心 persist-credentials。
+                if key == "persist-credentials" and rest == "false":
+                    step.persist_credentials_false = True
+                continue
+            elif ind < STEP_KEY_INDENT:
+                # 离开 step 子键上下文（如回到 job 键或新 job），复位 with 跟踪。
+                step_in_with = False
         elif section == "env" and ind == 2 and rest == "":
             errors.append(f"L{ln}: `env:` 下的 `{key}` 缺少值")
 
@@ -406,6 +460,18 @@ def scan(lines: list[str]) -> list[str]:
         errors.append(
             "有 step 直接执行仓库内脚本，但缺少 `actions/checkout@*`（runner workspace 默认是空的）"
         )
+
+    # #539：声明了任一 write scope 的 workflow，其 `actions/checkout` 必须
+    # `persist-credentials: false`（VULN-02）——否则写权限 token 会被持久化进
+    # workspace `.git/config`，供依赖构建脚本读取，攻击面放大到供应链。
+    if workflow_has_write:
+        for j in jobs:
+            for st in j.steps:
+                if st.is_checkout and not st.persist_credentials_false:
+                    errors.append(
+                        f"L{st.line}: 写权限 workflow 的 `actions/checkout` 必须设 "
+                        f"`persist-credentials: false`（否则写权限 token 会进 .git/config 被依赖构建脚本读取）"
+                    )
 
     return errors
 

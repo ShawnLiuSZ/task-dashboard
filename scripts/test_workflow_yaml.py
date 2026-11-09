@@ -47,6 +47,8 @@ def errs(text: str) -> list[str]:
 
 
 # 最小合法 workflow：后续用例在这个骨架上做单点改动，保证被标记的就是那一个改动。
+# #539 起：第三方 action 必须固定到完整 commit SHA，写权限 workflow 的 checkout 必须
+# `persist-credentials: false`（本夹具用 `contents: write`，故必须带）。
 VALID = """\
 name: demo
 
@@ -60,7 +62,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - name: Run
         run: python3 scripts/foo.py
 """
@@ -70,7 +74,7 @@ class ParseHelpersTest(unittest.TestCase):
     def test_parse_kv_splits_at_first_colon(self):
         self.assertEqual(parse_kv("if: >-"), ("if", ">-"))
         self.assertEqual(parse_kv("run: echo a:b"), ("run", "echo a:b"))
-        self.assertEqual(parse_kv("uses: actions/checkout@v5"), ("uses", "actions/checkout@v5"))
+        self.assertEqual(parse_kv("uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"), ("uses", "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"))
 
     def test_parse_kv_empty_value(self):
         self.assertEqual(parse_kv("steps:"), ("steps", ""))
@@ -180,11 +184,11 @@ class NegativeDetectionTest(unittest.TestCase):
 
     def test_unpinned_third_party_action(self):
         self.assert_flagged(
-            VALID.replace("actions/checkout@v5", "actions/checkout"), "未固定版本"
+            VALID.replace("actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09", "actions/checkout"), "未固定版本"
         )
 
     def test_local_action_not_flagged(self):
-        text = VALID.replace("actions/checkout@v5", "./.github/actions/install-linux-deps")
+        text = VALID.replace("actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09", "./.github/actions/install-linux-deps")
         self.assertFalse(
             any("未固定版本" in p for p in errs(text)),
             f"本地 action 不应被要求固定版本：{errs(text)}",
@@ -211,7 +215,11 @@ class NegativeDetectionTest(unittest.TestCase):
         self.assert_flagged(text, "重复")
 
     def test_missing_checkout_when_running_repo_script(self):
-        text = VALID.replace("      - uses: actions/checkout@v5\n", "")
+        # 整个 checkout 块（uses + with + persist-credentials）一并移除。
+        text = VALID.replace(
+            "      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5\n        with:\n          persist-credentials: false\n",
+            "",
+        )
         self.assert_flagged(text, "缺少 `actions/checkout@*`")
 
     def test_checkout_present_silences_script_check(self):
@@ -230,7 +238,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Import cert
         if: runner.os == 'macOS'
         env:
@@ -266,7 +274,7 @@ jobs:
       - run: |
           echo hello
           echo world
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 """
         self.assertEqual(
             errs(text),
@@ -295,7 +303,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Import cert
         run: |
           echo hi
@@ -322,7 +330,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - run: |
           echo "- not-a-step: x"
           echo ok
@@ -349,7 +357,7 @@ jobs:
           (github.event.pull_request.base.ref == 'develop' ||
            github.event.pull_request.base.ref == 'main') }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 """
         self.assertEqual(errs(text), [])
 
@@ -373,7 +381,7 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Build
         run: echo build
 """
@@ -423,14 +431,18 @@ class LegalShorthandNotFlaggedTest(unittest.TestCase):
         text = VALID.replace("on:\n  pull_request:\n", "on: push\n")
         self.assertEqual(errs(text), [])
 
-    def test_toolchain_channel_ref_is_legal(self):
-        # `dtolnay/rust-toolchain@stable` 是该 action 的官方推荐写法（通道而非分支），
-        # 本仓库多个 workflow 在用。一刀切禁止非版本引用会把它打红。
+    def test_toolchain_channel_ref_is_flagged(self):
+        # #539：`dtolnay/rust-toolchain@stable` 是**分支**引用（实测未保护的 branch，非 tag），
+        # 不再是合法写法 —— 必须固定到完整 commit SHA。
         text = VALID.replace(
-            "- uses: actions/checkout@v5",
-            "- uses: actions/checkout@v5\n      - uses: dtolnay/rust-toolchain@stable",
+            "      - name: Run",
+            "      - uses: dtolnay/rust-toolchain@stable\n      - name: Run",
         )
-        self.assertEqual(errs(text), [])
+        problems = errs(text)
+        self.assertTrue(
+            any("未固定到完整 commit SHA" in p for p in problems),
+            f"`@stable` 应被标记，实际：{problems}",
+        )
 
     def test_needs_existing_job_is_legal(self):
         text = """\
@@ -491,17 +503,26 @@ class ExtendedDetectionTest(unittest.TestCase):
         for ref in ("main", "master", "HEAD", "latest"):
             with self.subTest(ref=ref):
                 text = VALID.replace(
-                    "- uses: actions/checkout@v5", f"- uses: actions/checkout@{ref}"
+                    "- uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09", f"- uses: actions/checkout@{ref}"
                 )
-                self.assert_flagged(text, "浮动分支")
+                self.assert_flagged(text, "未固定到完整 commit SHA")
 
-    def test_pinned_ref_is_not_flagged_as_floating(self):
-        for ref in ("v5", "v4.2.2", "0", "5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66"):
+    def test_movable_tag_ref_is_flagged(self):
+        # #539：tag（`v5`/`v4.2.2`）与工具链通道（`stable`）都可被上游移动，必须固定 SHA。
+        for ref in ("v5", "v4.2.2", "stable", "0"):
             with self.subTest(ref=ref):
                 text = VALID.replace(
-                    "- uses: actions/checkout@v5", f"- uses: actions/checkout@{ref}"
+                    "- uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09", f"- uses: actions/checkout@{ref}"
                 )
-                self.assertEqual(errs(text), [], f"{ref} 不应被判为浮动分支")
+                self.assert_flagged(text, "未固定到完整 commit SHA")
+
+    def test_full_sha_ref_passes(self):
+        # 完整 commit SHA 是 #539 起唯一合法引用；换成一个合法 SHA 仍应零问题。
+        text = VALID.replace(
+            "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+            "actions/checkout@5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66",
+        )
+        self.assertEqual(errs(text), [])
 
     def test_runs_on_without_steps_is_flagged(self):
         text = VALID.replace("    steps:\n", "")
@@ -522,6 +543,52 @@ class ExtendedDetectionTest(unittest.TestCase):
             1,
         )
         self.assert_flagged(text, "指向不存在的 job")
+
+
+class SecurityGuardTest(unittest.TestCase):
+    """#539 新增判定：CI 供应链三条守卫（SHA 固定 / persist-credentials / run 不内插 context）。"""
+
+    def assert_flagged(self, text, needle):
+        problems = errs(text)
+        self.assertTrue(
+            any(needle in p for p in problems),
+            f"期望出现包含 {needle!r} 的问题，实际：{problems}",
+        )
+
+    def test_write_perm_checkout_without_persist_is_flagged(self):
+        # VULN-02：写权限 workflow 的 checkout 缺 `persist-credentials: false` 必须被标记。
+        text = VALID.replace("          persist-credentials: false\n", "")
+        self.assert_flagged(text, "persist-credentials")
+
+    def test_read_perm_checkout_without_persist_is_ok(self):
+        # 只读 workflow 不需要 persist-credentials: false（token 无写权限，泄漏价值低）。
+        text = VALID.replace("permissions:\n  contents: write\n", "permissions:\n  contents: read\n")
+        text = text.replace("          persist-credentials: false\n", "")
+        self.assertEqual(errs(text), [])
+
+    def test_run_with_context_interpolation_is_flagged(self):
+        # VULN-04：`run:` 标量里直接内插 `${{ }}` 必须被标记。
+        text = VALID.replace(
+            "        run: python3 scripts/foo.py",
+            '        run: python3 scripts/check-updater-manifest.py --tag "${{ github.ref_name }}"',
+        )
+        self.assert_flagged(text, "内插了")
+
+    def test_run_block_with_context_interpolation_is_flagged(self):
+        # VULN-04：`run: |` 块内容里内插 `${{ }}` 同样被标记。
+        text = VALID.replace(
+            "        run: python3 scripts/foo.py",
+            "        run: |\n          echo ${{ github.ref_name }}",
+        )
+        self.assert_flagged(text, "内插了")
+
+    def test_run_env_mediation_is_ok(self):
+        # 正确的修法：`env:` 中转 + 双引号引用环境变量，零误报。
+        text = VALID.replace(
+            "        run: python3 scripts/foo.py",
+            "        env:\n          RELEASE_TAG: ${{ github.ref_name }}\n        run: python3 scripts/check-updater-manifest.py --tag \"$RELEASE_TAG\"",
+        )
+        self.assertEqual(errs(text), [])
 
 
 if __name__ == "__main__":
