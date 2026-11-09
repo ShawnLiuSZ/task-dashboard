@@ -2,6 +2,23 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.8.7 (2026-11-09) — One-click removal of task sessions for closed issues (#541)**
+
+  - **Pain point**: before deleting a session in the sessions panel you could not tell whether its issue was already closed — you had to open each link and check GitHub, so tidying up closing sessions was all manual.
+  - **Approach**: filter by the **local** `tasks.issue_state == 'closed'` (normalised to lowercase by the sync path; from #543 the judgement goes through the case-insensitive `isClosedIssueState`), then reuse the existing `api.clearSessions(keys)` for a one-click clear — **zero backend change**, only the three session columns are cleared and the task row is kept (same semantics as multi-select delete #391).
+  - **Interaction**: a new "Clear closed" button in the non-select-mode toolbar, greyed out (disabled) with a tooltip when there are no closed-issue sessions; click → confirm dialog (with a count) → clear → refresh; in the aggregate view the same `issueKey` can come from two accounts, so it is mapped back to `issueKey` and de-duplicated before the call (same as #438/#391).
+  - **Tests**: +4 (`sessions-panel.test.ts` #541 describe: filter predicate, disabled state + button wiring, `handleClearClosed` de-dup call, confirm dialog wiring) ⇒ vitest 585.
+  - **Affected**: `app/src/components/SessionsPanel.tsx` · i18n ×2 (+3 keys) · `docs/issue-541-sessions-clear-closed.md`.
+  - See [`issue-541-sessions-clear-closed.md`](./issue-541-sessions-clear-closed.md)
+
+- **v0.8.7 (2026-11-09) — Frontend `issue_state` closed judgement unified to case-insensitive (#543)**
+
+  - **Background**: AGENTS.md §2.2 hard rule — "the read judgement for closed must not be hardcoded to lowercase"; the column has historically been written by two sources with two casings — REST (lowercase `closed`) / GraphQL (uppercase `CLOSED`) (#335, which once left 29 closed issues stuck on the board). The backend already has `common::is_closed_state` (case-insensitive), but the frontend had 5 places hardcoding `task.issueState === 'closed'` (case-sensitive), relying on the implicit guarantee that "write paths normalise + migration washes the data".
+  - **Approach**: add `utils/issueState.ts`'s `isClosedIssueState` (`trim` + case-insensitive, same semantics as backend `is_closed_state`) and replace all 5 sites (`openCount` / `TaskCard` / `DetailPanel` / `SessionsPanel` / `Board`). Behaviour is strictly equivalent for the always-lowercase `'closed'` in a real DB — pure defence.
+  - **Tests**: +5 (`utils/issueState.test.ts`: `closed`/`CLOSED`/`' Closed '` → true; `open`/`OPEN`/`draft`/`''` → false) ⇒ vitest 590; the `sessions-panel.test.ts` #541 static assertions were updated to assert `isClosedIssueState`.
+  - **Affected**: `app/src/utils/issueState.ts` (new) + `issueState.test.ts` (new) · `utils/openCount.ts` · `components/{TaskCard,DetailPanel,SessionsPanel,Board}.tsx` · `docs/issue-543-issue-state-case-insensitive.md`. **Zero backend / zero DB schema / zero new dependencies**.
+  - See [`issue-543-issue-state-case-insensitive.md`](./issue-543-issue-state-case-insensitive.md)
+
 - **v0.8.2 (2026-11-03) — Added a manual collapse / expand toggle for the sidebar, with the preference persisted (#519)**
 
   - **Status quo**: the sidebar **already had** a collapsed state (#265), but it was **purely responsive** — `sidebarCollapsed = window.innerWidth < 900`, **not persisted** and with **no manual switch** ⇒ the only way to reclaim the space was to drag the window narrower.

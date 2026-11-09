@@ -6,6 +6,23 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.8.7（2026-11-09）— 一键删除已关闭 issue 的任务会话（#541）**
+
+  - **痛点**：任务会话面板删除某会话前无法知道对应 issue 是否已关闭，只能逐个点开链接去 GitHub 确认，清理收尾会话全靠人工核对。
+  - **方案**：用**本地** `tasks.issue_state == 'closed'`（同步路径已权威归一化小写；#543 起判据统一走大小写不敏感的 `isClosedIssueState`）过滤 + 复用现有 `api.clearSessions(keys)` 一键清空 —— **零后端改动**，仅清空 session 三列、保留任务行（与多选删除 #391 语义一致）。
+  - **交互**：非选择模式工具栏新增「清除已关闭会话」按钮，无已关闭会话时置灰禁用（tooltip 说明原因）；点击 → 确认弹窗（带计数）→ 清空 → 刷新；聚合视图下同一 `issueKey` 可来自两个账号 ⇒ 删除前映射回 `issueKey` 并去重（同 #438/#391 口径）。
+  - **测试**：+4（`sessions-panel.test.ts` 的 #541 describe：过滤判据、禁用态 + 按钮接线、handleClearClosed 去重调用、确认弹窗接线）⇒ vitest 585。
+  - **影响面**：`app/src/components/SessionsPanel.tsx` · i18n ×2（+3 词条）· `docs/issue-541-sessions-clear-closed.md`。
+  - 详见 [`issue-541-sessions-clear-closed.md`](./issue-541-sessions-clear-closed.md)
+
+- **v0.8.7（2026-11-09）— 前端 issue_state 判 closed 统一为大小写不敏感（#543）**
+
+  - **背景**：AGENTS.md §2.2 硬约束「判 closed 的读判定不得写死小写」；该列历史上由 REST（小写）/ GraphQL（大写）两套来源写入（#335，曾致 29 行已关闭 issue 滞留看板）。后端已有 `common::is_closed_state`（大小写不敏感），但前端 5 处裸写 `task.issueState === 'closed'` 大小写敏感，依赖「写路径恰好归一化 + 迁移洗数据」这层隐式保障。
+  - **方案**：新增 `utils/issueState.ts` 的 `isClosedIssueState`（`trim` + 大小写不敏感，与后端 `is_closed_state` 同口径），替换全部 5 处（`openCount` / `TaskCard` / `DetailPanel` / `SessionsPanel` / `Board`）。对真实库恒为小写的 `'closed'` 行为严格等价，纯防御。
+  - **测试**：+5（`utils/issueState.test.ts`：`closed`/`CLOSED`/`' Closed '` → true；`open`/`OPEN`/`draft`/`''` → false）⇒ vitest 590；同步更新 `sessions-panel.test.ts` 的 #541 静态断言。
+  - **影响面**：`app/src/utils/issueState.ts`（新）+ `issueState.test.ts`（新）· `utils/openCount.ts` · `components/{TaskCard,DetailPanel,SessionsPanel,Board}.tsx` · `docs/issue-543-issue-state-case-insensitive.md`。**零后端 / 零 DB schema / 零新依赖**。
+  - 详见 [`issue-543-issue-state-case-insensitive.md`](./issue-543-issue-state-case-insensitive.md)
+
 - **v0.8.2（2026-11-03）— 增加侧边栏收起 / 展开功能（手动开关 + 偏好持久化）（#519）**
 
   - **现状**：侧边栏**已有**折叠态（#265），但它是**纯响应式**的 —— `sidebarCollapsed = window.innerWidth < 900`，**不持久化**、**没有手动开关** ⇒ 想把侧栏收起来给看板让路**只能把窗口拖窄**。
