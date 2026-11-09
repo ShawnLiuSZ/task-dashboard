@@ -15,6 +15,7 @@ import { registerEscLayer, type EscLayer } from '../utils/escLayer';
 import { normalizeLiveDetail } from '../utils/liveDetail';
 import { renderMarkdown, shouldCollapseBody } from '../utils/markdown';
 import { timelineEventTarget } from '../utils/timelineEvent';
+import { isClosedIssueState } from '../utils/issueState';
 
 /**
  * #506：已知的时间线事件类型（与 i18n 词条 `detail.ev.*` 一一对应）。
@@ -238,8 +239,9 @@ export default function DetailPanel({
   // #196：当前 GitHub 状态键（与 Board.groupByProjectStatus 同规则）：
   // closed→done，有原文取原文，空→unclassified。详情状态区永远以此为准，
   // 不跟随 custom 列展示方式。
-  const currentProjectStatus =
-    task.issueState === 'closed' ? 'done' : task.projectStatus?.trim() || 'unclassified';
+  const currentProjectStatus = isClosedIssueState(task.issueState)
+    ? 'done'
+    : task.projectStatus?.trim() || 'unclassified';
   /** #467：该 issue 关联的**全部** PR（含主 PR）。
    *
    * 后端已把「主 PR」也放进 `prs` 数组（含存量回退），故正常路径直接用 `task.prs`。

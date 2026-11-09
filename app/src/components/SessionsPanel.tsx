@@ -4,6 +4,7 @@ import ConfirmDialog from './ConfirmDialog';
 import { useT } from '../i18n';
 import type { Task } from '../types';
 import { taskIdentity } from '../utils/taskIdentity';
+import { isClosedIssueState } from '../utils/issueState';
 
 function Icon({ d, size = 13 }: { d: string; size?: number }) {
   return (
@@ -255,7 +256,7 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
   // #541：已关闭 issue 的会话（本地 issue_state === 'closed'，同步路径已权威归一化小写）。
   // 一键清空它们的 session 字段（保留任务行，与 clear_sessions 语义一致）。
   const closedSessions = useMemo(
-    () => sessions.filter((s) => s.issueState === 'closed'),
+    () => sessions.filter((s) => isClosedIssueState(s.issueState)),
     [sessions],
   );
   const closedCount = closedSessions.length;

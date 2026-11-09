@@ -1,10 +1,13 @@
 import type { Task } from '../types';
+import { isClosedIssueState } from './issueState';
 
 /**
  * #484：顶栏计数的口径 —— 「我的未完成 issue 数」。
  *
  * 排除两类任务（用户视角都属于「做完了」）：
- * 1. `issueState === 'closed'`：GitHub 权威关闭（同步路径也会把本地状态置 done）；
+ * 1. `isClosedIssueState(issueState)`：GitHub 权威关闭（同步路径也会把本地状态置 done）；
+ *    ⚠️ 判据必须大小写不敏感（AGENTS.md §2.2 / #543）——该列历史上由 REST（小写）与
+ *    GraphQL（大写）两套来源写入（#335），统一走 `utils/issueState` 的 helper；
  * 2. `status === 'done'`：看板手动标记「已完成」，issue 可能还没关。
  *
  * 为什么抽成纯函数：计数口径是产品语义，必须有独立单测守着 —— 内联在 JSX 里
@@ -17,7 +20,7 @@ import type { Task } from '../types';
 export function countOpenIssues(tasks: Task[]): number {
   let n = 0;
   for (const task of tasks) {
-    if (task.issueState === 'closed') continue;
+    if (isClosedIssueState(task.issueState)) continue;
     if (task.status === 'done') continue;
     n += 1;
   }

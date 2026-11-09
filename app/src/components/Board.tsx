@@ -10,6 +10,7 @@ import {
 import { useT } from '../i18n';
 import { parseMatchRules } from '../utils/matchRules';
 import { taskIdentity } from '../utils/taskIdentity';
+import { isClosedIssueState } from '../utils/issueState';
 import TaskCard from './TaskCard';
 
 interface Props {
@@ -38,7 +39,7 @@ function groupByProjectStatus(tasks: Task[]): Map<string, Task[]> {
   map.set('unclassified', []);
 
   for (const task of tasks) {
-    if (task.issueState === 'closed') {
+    if (isClosedIssueState(task.issueState)) {
       map.get('done')?.push(task);
       continue;
     }
