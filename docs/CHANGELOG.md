@@ -6,6 +6,15 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.8.8（2026-11-10）— `list_my_tasks` 增加仓库维度过滤（#546）**
+
+  - **痛点**：MCP 工具 `list_my_tasks` 只有 `status` / `ownership` 两个过滤维度，而任务库同步自 `org:FoodsUp-Inc` **全部仓库** ⇒ agent 在**某个仓库**的会话里调它，拿回的是**跨所有仓库**的任务 —— 一次真实会话里 agent 因此把 fad-backend 的在途事务误判成了 TaskBoard 本仓的核查目标。UI 侧（`App.tsx`）早有 `repo` 过滤，MCP 工具却没暴露这个维度。
+  - **方案**：新增可选 `repo` 入参按 `tasks.repo` **精确过滤**（采纳「显式入参」，否决「自动探测 cwd」—— stdio server 的 cwd 不一定等于 agent 工作目录，不可靠）。**不传=全部仓库（向后兼容）· 传具体名=只返回该 repo · 传空串=报错**（对齐 #357 教训：非法入参不得静默退化成全量）· 可与 `status` / `ownership` 用 `AND` 叠加。
+  - **跨文件一致性（§8.6）**：两侧（`mcp.rs` 的 `tool_list` / `call_tool` / `tools_list` schema + `server.py` 的 `tool_list_my_tasks` / TOOLS schema）实现与 `inputSchema` 全同步；`AGENT_INSTRUCTIONS.md`/`.en` · `README.md`/`.en` · `PRD.md` 工具签名补 `repo?`。
+  - **测试**：ac-test 全流程 —— 双隔离子代理按 AC 先测后写（Python `RepoFilterAC` +4 · Rust `list_repo_*_acN` +4）⇒ Python 72 / Rust 27 全绿；追溯审计无游离改动（`tool_list` 签名加参后 6 处既有调用只补 `None`、断言未动）。
+  - **影响面**：`app/src-tauri/src/mcp.rs` · `mcp_server/{server.py,test_server.py}` · 文档 ×6。**零 DB schema / 零新依赖 / 只读路径（不碰 GitHub）**。
+  - 详见 [`issue-546-mcp-list-repo-filter.md`](./issue-546-mcp-list-repo-filter.md)
+
 - **v0.8.7（2026-11-09）— 一键删除已关闭 issue 的任务会话（#541）**
 
   - **痛点**：任务会话面板删除某会话前无法知道对应 issue 是否已关闭，只能逐个点开链接去 GitHub 确认，清理收尾会话全靠人工核对。
