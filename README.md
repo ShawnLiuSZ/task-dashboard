@@ -106,7 +106,7 @@ PRD §6 规划了「MCP Server + Skill」让 AI Agent 在执行任务时自动�
 
 | 工具                   | 入参                              | 说明                                       |
 | -------------------- | ------------------------------- | ---------------------------------------- |
-| `list_my_tasks`      | `status?` / `ownership?`        | 列出看板任务，可按四态 / 归属过滤                       |
+| `list_my_tasks`      | `status?` / `ownership?` / `repo?` | 列出看板任务，可按四态 / 归属 / 仓库过滤（`repo` 不传=全部仓库） |
 | `get_task_status`    | `issue`                         | 查询某任务当前状态 + 已记录的 session / handoff       |
 | `update_task_status` | `issue`, `status`               | 改本地看板状态（todo/doing/processed/done 或中文四态） |
 | `record_session`     | `issue`, `session_id`, `agent?`, `branch?` | 记录中断会话 id + 工作分支（`branch` 非空写 `work_branch`，不碰 GitHub） |

@@ -9,7 +9,7 @@
 //! （与 `db.rs::db_path` 一致），可用 `TASKBOARD_DB` 环境变量覆盖。
 //!
 //! 工具（与 `mcp_server/server.py` 保持兼容）：
-//! - list_my_tasks(status?, ownership?)
+//! - list_my_tasks(status?, ownership?, repo?)
 //! - get_task_status(issue)
 //! - update_task_status(issue, status)
 //! - record_session(issue, session_id, agent?, branch?)
@@ -158,6 +158,7 @@ fn tool_list(
     conn: &Connection,
     status: Option<&str>,
     ownership: Option<&str>,
+    repo: Option<&str>,
 ) -> Result<Value, String> {
     let mut sql = format!("SELECT {SELECT_COLS} FROM tasks");
     let mut wheres: Vec<&str> = Vec::new();
@@ -170,6 +171,15 @@ fn tool_list(
     if let Some(o) = ownership {
         wheres.push("ownership = ?");
         owned.push(o.to_string());
+    }
+    // #546：仓库维度过滤 —— 不传=全仓库（向后兼容）；传具体名按 repo 精确匹配；
+    // 空串视为非法入参，不静默退化成「全量」（对齐 #357 教训）。
+    if let Some(rp) = repo {
+        if rp.is_empty() {
+            return Err("repo 不能为空串：不传=全部仓库，传则须为具体仓库名".into());
+        }
+        wheres.push("repo = ?");
+        owned.push(rp.to_string());
     }
     if !wheres.is_empty() {
         sql.push_str(" WHERE ");
@@ -575,6 +585,7 @@ fn call_tool(conn: &Connection, name: &str, args: &Map<String, Value>) -> Result
             conn,
             get_opt("status")?.as_deref(),
             get_opt("ownership")?.as_deref(),
+            get_opt("repo")?.as_deref(),
         ),
         "get_task_status" => {
             let issue = get_req("issue")?;
@@ -639,12 +650,13 @@ fn tools_list() -> Value {
     json!([
         {
             "name": "list_my_tasks",
-            "description": "列出看板任务；可按 status(todo/doing/processed/done 或中文四态) 与 ownership(assigned/notassignee/assigned-others) 过滤。返回任务数组。",
+            "description": "列出看板任务；可按 status(todo/doing/processed/done 或中文四态)、ownership(assigned/notassignee/assigned-others) 与 repo(仓库名) 过滤。返回任务数组。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "status": { "type": "string", "description": "可选，按看板状态过滤" },
-                    "ownership": { "type": "string", "description": "可选，按归属过滤" }
+                    "ownership": { "type": "string", "description": "可选，按归属过滤" },
+                    "repo": { "type": "string", "description": "可选，按仓库名过滤；不传=全部仓库" }
                 }
             }
         },
@@ -1134,7 +1146,7 @@ mod tests {
     fn list_my_tasks_returns_correct_column_values() {
         let c = test_conn();
         insert_sample(&c);
-        let out = tool_list(&c, None, None).unwrap();
+        let out = tool_list(&c, None, None, None).unwrap();
         let arr = out.as_array().expect("list_my_tasks 应返回数组");
         assert_eq!(arr.len(), 1);
         let obj = arr[0].as_object().expect("元素应为 object");
@@ -1267,7 +1279,7 @@ mod tests {
             &[(100, "u100", "open"), (101, "u101", "merged")],
         );
 
-        let out = tool_list(&c, None, None).unwrap();
+        let out = tool_list(&c, None, None, None).unwrap();
         let arr = out.as_array().unwrap();
         let prs = arr[0]["prs"].as_array().unwrap();
         assert_eq!(
@@ -1313,7 +1325,7 @@ mod tests {
             ],
         );
 
-        let out = tool_list(&c, None, None).unwrap();
+        let out = tool_list(&c, None, None, None).unwrap();
         let arr = out.as_array().unwrap();
         let prs = arr[0]["prs"].as_array().unwrap();
         assert_eq!(
@@ -1345,7 +1357,7 @@ mod tests {
                 ),
             ],
         );
-        let out = tool_list(&c, None, None).unwrap();
+        let out = tool_list(&c, None, None, None).unwrap();
         let arr = out.as_array().unwrap();
         let prs = arr[0]["prs"].as_array().expect("prs 应为数组");
         assert_eq!(prs.len(), 2, "两个关联 PR 都必须返回");
@@ -1392,7 +1404,7 @@ mod tests {
         let c = test_conn();
         insert_sample(&c);
         // 不写 task_prs ⇒ 模拟存量行（首次同步前）。
-        let out = tool_list(&c, None, None).unwrap();
+        let out = tool_list(&c, None, None, None).unwrap();
         let arr = out.as_array().unwrap();
         let prs = arr[0]["prs"].as_array().expect("prs 应为数组");
         assert_eq!(prs.len(), 1, "存量行应回退成主 PR 一条");
@@ -1427,7 +1439,7 @@ mod tests {
         .unwrap();
         insert_task_prs(&c, 1, "fad-backend#1247", &[(101, "u1", "merged")]);
         insert_task_prs(&c, 2, "fad-backend#1247", &[(201, "u2", "open")]);
-        let out = tool_list(&c, None, None).unwrap();
+        let out = tool_list(&c, None, None, None).unwrap();
         let arr = out.as_array().unwrap();
         assert_eq!(arr.len(), 2);
         let a1 = arr[0]["prs"].as_array().unwrap();
@@ -1734,5 +1746,128 @@ mod tests {
         // ASCII 下字节数 == 字符数，作为对照说明原实现「碰巧对」的场景。
         let v = tool_record_handoff(&c, "fad-backend#1247", "handoff").unwrap();
         assert_eq!(v["handoff_len"].as_u64(), Some(7));
+    }
+
+    // ========================================================================
+    // #546：`list_my_tasks` 的 repo 过滤契约
+    //
+    // 全部经 `call_tool` 这个 JSON 入口调（`args` 带 `repo` 键），不直接调
+    // `tool_list` —— 因为契约是「agent 传什么 JSON」，而非内部函数签名。
+    //
+    // repo 语义：缺失/None → 不过滤（全仓库）；具体名 → `WHERE repo = ?`；
+    // 空串 → 返回 Err（不得静默退化为全量）。可与 status / ownership 叠加。
+    // ========================================================================
+
+    /// 插入一行可指定 repo / status / ownership 的任务。
+    ///
+    /// ⚠️ 必须给**所有**被 SELECT 的列赋值：`row_to_value` 用 `r.get::<String>`
+    /// 逐列取值，任何一列为 NULL 都会让整条读路径报「Invalid column type Null」
+    /// （见 `prs_are_isolated_by_account` 同款注释）。
+    fn insert_task_in(
+        conn: &Connection,
+        issue_key: &str,
+        repo: &str,
+        status: &str,
+        ownership: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
+                                ownership, status, project_status, assignees, mentioned,
+                                latest_comment_url, pr_number, pr_url, branch, work_branch,
+                                work_dir, session_id, session_agent, session_at, handoff,
+                                candidate_done, account_id, updated_at, parent_issue,
+                                sub_issues, created_at, pr_state)
+             VALUES (?1, 'Owner', ?2, 1, 't', 'u', 'open',
+                     ?3, ?4, '', '', 0,
+                     '', 0, '', '', '', '',
+                     NULL, NULL, NULL, '',
+                     0, 1, 0, '',
+                     '', 0, '')",
+            rusqlite::params![issue_key, repo, ownership, status],
+        )
+        .unwrap();
+    }
+
+    /// AC-1：repo 过滤只命中目标仓库，非目标仓库的行必须被排除。
+    #[test]
+    fn list_repo_filter_ac1() {
+        let c = test_conn();
+        insert_task_in(&c, "a#1", "A", "todo", "assigned");
+        insert_task_in(&c, "b#1", "B", "todo", "assigned");
+
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), serde_json::json!("A"));
+        let out = call_tool(&c, "list_my_tasks", &args).expect("合法 repo 过滤不应报错");
+        let arr = out.as_array().expect("list_my_tasks 应返回数组");
+        assert_eq!(arr.len(), 1, "repo=A 应只返回 1 条，实际 {arr:?}");
+        assert_eq!(arr[0]["repo"].as_str(), Some("A"));
+        assert_eq!(arr[0]["issue_key"].as_str(), Some("a#1"));
+        let repos: Vec<&str> = arr.iter().map(|v| v["repo"].as_str().unwrap()).collect();
+        assert!(
+            !repos.contains(&"B"),
+            "repo=A 不得返回 repo B 的任务，实际 {repos:?}"
+        );
+    }
+
+    /// AC-2：不传 repo 时保持向后兼容，返回全部仓库的任务。
+    ///
+    /// 这条在实现加 repo 参数**之前**就应通过（现行为），作为防回归基线。
+    #[test]
+    fn list_repo_no_filter_returns_all_ac2() {
+        let c = test_conn();
+        insert_task_in(&c, "a#1", "A", "todo", "assigned");
+        insert_task_in(&c, "b#1", "B", "doing", "notassignee");
+        insert_task_in(&c, "c#1", "C", "done", "assigned");
+
+        let empty = serde_json::Map::new();
+        let out = call_tool(&c, "list_my_tasks", &empty).expect("缺省参数不应报错");
+        let arr = out.as_array().expect("list_my_tasks 应返回数组");
+        let mut repos: Vec<&str> = arr.iter().map(|v| v["repo"].as_str().unwrap()).collect();
+        repos.sort();
+        assert_eq!(
+            repos,
+            vec!["A", "B", "C"],
+            "不传 repo 必须返回全部仓库任务，实际 {repos:?}"
+        );
+    }
+
+    /// AC-3：repo 传空串必须报错，不得静默退化为「全量」。
+    #[test]
+    fn list_repo_empty_string_errors_ac3() {
+        let c = test_conn();
+        insert_task_in(&c, "a#1", "A", "todo", "assigned");
+
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), serde_json::json!(""));
+        let res = call_tool(&c, "list_my_tasks", &args);
+        assert!(res.is_err(), "repo 空串必须报错，实际返回 {res:?}");
+    }
+
+    /// AC-4：repo 与 status / ownership 三条件叠加，只返回同时满足的行。
+    #[test]
+    fn list_repo_stacks_with_status_ownership_ac4() {
+        let c = test_conn();
+        // 满足全部三条件：repo=A + status=todo + ownership=assigned。
+        insert_task_in(&c, "a#1", "A", "todo", "assigned");
+        // 反例数据：都差一条，证明过滤是 AND 叠加而非 OR。
+        insert_task_in(&c, "a#2", "A", "doing", "assigned"); // status 不符
+        insert_task_in(&c, "a#3", "A", "todo", "notassignee"); // ownership 不符
+        insert_task_in(&c, "b#1", "B", "todo", "assigned"); // repo 不符
+
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), serde_json::json!("A"));
+        args.insert("status".into(), serde_json::json!("todo"));
+        args.insert("ownership".into(), serde_json::json!("assigned"));
+        let out = call_tool(&c, "list_my_tasks", &args).expect("合法叠加过滤不应报错");
+        let arr = out.as_array().expect("list_my_tasks 应返回数组");
+        let keys: Vec<&str> = arr
+            .iter()
+            .map(|v| v["issue_key"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["a#1"],
+            "三条件叠加应只返回 a#1，实际 {keys:?}"
+        );
     }
 }

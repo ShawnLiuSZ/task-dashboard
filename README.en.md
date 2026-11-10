@@ -110,7 +110,7 @@ PRD §6 planned a "MCP Server + Skill" so AI agents automatically maintain the b
 
 | Tool | Inputs | Description |
 | -------------------- | ------------------------------- | ---------------------------------------- |
-| `list_my_tasks` | `status?` / `ownership?` | List board tasks, filterable by four-state / ownership |
+| `list_my_tasks` | `status?` / `ownership?` / `repo?` | List board tasks, filterable by four-state / ownership / repo (omit `repo` = all repos) |
 | `get_task_status` | `issue` | Query a task's current state + recorded session / handoff |
 | `update_task_status` | `issue`, `status` | Update local board state (todo/doing/processed/done or the Chinese four states) |
 | `record_session` | `issue`, `session_id`, `agent?` | Record an interrupted session id (does not touch GitHub) |

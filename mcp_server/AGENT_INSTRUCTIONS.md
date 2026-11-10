@@ -37,7 +37,7 @@ MCP Server 已在 WorkBuddy 的 `~/.workbuddy/mcp.json` 注册为 `taskboard`。
 
 | 工具                 | 入参                                                    | 作用                                                                                                                                                    |
 | -------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list_my_tasks`      | `status?` / `ownership?`                                | 列出看板任务（可按四态 / 归属过滤）                                                                                                                     |
+| `list_my_tasks`      | `status?` / `ownership?` / `repo?`                      | 列出看板任务（可按四态 / 归属 / 仓库过滤；`repo` 不传=全部仓库，传空串报错）                                                              |
 | `get_task_status`    | `issue`                                                 | 查某任务当前状态 + 已记录的 session / handoff                                                                                                           |
 | `update_task_status` | `issue`, `status`                                       | 改本地看板状态                                                                                                                                          |
 | `record_session`     | `issue`, `session_id`, `agent?`, `branch?`, `work_dir?` | 记录中断会话 id；`branch` 非空则一并记录当前工作分支（写 `work_branch`，与同步的 PR `branch` 分离）；`work_dir` 非空则一并记录工作目录（写 `work_dir`） |

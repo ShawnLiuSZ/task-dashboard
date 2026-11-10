@@ -15,7 +15,7 @@ equivalent of the PRD's `record_session` / `update_task_status` / `list_my_tasks
 
 Tools
 -----
-- list_my_tasks(status?, ownership?)      -> 任务列表（可按状态/归属过滤）
+- list_my_tasks(status?, ownership?, repo?)  -> 任务列表（可按状态/归属/仓库过滤）
 - get_task_status(issue)                 -> 单个任务当前状态 + 已记录的 session/handoff
 - update_task_status(issue, status)      -> 改本地看板状态（不碰 GitHub）
 - record_session(issue, session_id, agent?) -> 记录中断会话 id（不碰 GitHub）
@@ -840,7 +840,7 @@ def _ensure_before_write(key, issue):
 # --------------------------------------------------------------------------- #
 # 工具实现
 # --------------------------------------------------------------------------- #
-def tool_list_my_tasks(status=None, ownership=None):
+def tool_list_my_tasks(status=None, ownership=None, repo=None):
     sql = f"SELECT {SELECT_COLS} FROM tasks"
     wheres, params = [], []
     if status:
@@ -852,6 +852,13 @@ def tool_list_my_tasks(status=None, ownership=None):
     if ownership:
         wheres.append("ownership=?")
         params.append(ownership)
+    # #546：仓库维度过滤 —— 不传=全仓库（向后兼容）；传具体名按 repo 精确匹配；
+    # 空串视为非法入参，不静默退化成「全量」（对齐 #357 教训）。
+    if repo is not None:
+        if not repo:
+            raise ValueError("repo 不能为空串：不传=全部仓库，传则须为具体仓库名")
+        wheres.append("repo=?")
+        params.append(repo)
     if wheres:
         sql += " WHERE " + " AND ".join(wheres)
     sql += " ORDER BY candidate_done ASC, status ASC, updated_at DESC"
@@ -1113,13 +1120,14 @@ def tool_delete_note(note_id):
 TOOLS = [
     {
         "name": "list_my_tasks",
-        "description": "列出看板任务；可按 status(todo/doing/processed/done 或中文四态) 与 "
-        "ownership(assigned/notassignee/assigned-others) 过滤。返回任务数组。",
+        "description": "列出看板任务；可按 status(todo/doing/processed/done 或中文四态)、"
+        "ownership(assigned/notassignee/assigned-others) 与 repo(仓库名) 过滤。返回任务数组。",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "status": {"type": "string", "description": "可选，按看板状态过滤"},
                 "ownership": {"type": "string", "description": "可选，按归属过滤"},
+                "repo": {"type": "string", "description": "可选，按仓库名过滤；不传=全部仓库"},
             },
         },
         "handler": tool_list_my_tasks,

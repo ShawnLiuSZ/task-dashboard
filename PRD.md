@@ -248,7 +248,7 @@ v0.3 起改为本地 app 方案，彻底不依赖 GitHub 载体，上述约束�
 
 | 操作 | 入参 | 说明 |
 |---|---|---|
-| `list_my_tasks` | status?, ownership? | 列出任务；可按 `Status` 与 `Ownership` 过滤（例：`ownership=notassignee` 只看 13 条无人认领） |
+| `list_my_tasks` | status?, ownership?, repo? | 列出任务；可按 `Status` / `Ownership` / `Repo` 过滤（例：`ownership=notassignee` 只看 13 条无人认领；`repo` 不传=全部仓库，#546） |
 | `update_task_status` | issue（repo+number/URL）, status | 将任务状态更新为 待处理/处理中/已处理/已完成；同步维护 label 与 open/close |
 | `record_session` | issue, session_id, agent? | 将 session id 写入**看板该任务卡片**的 `Session` 字段（见 6.3）；**不触碰 Issue** |
 | `get_task_status` | issue | 查询任务当前状态与看板上已记录的 session id |
