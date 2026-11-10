@@ -1864,10 +1864,6 @@ mod tests {
             .iter()
             .map(|v| v["issue_key"].as_str().unwrap())
             .collect();
-        assert_eq!(
-            keys,
-            vec!["a#1"],
-            "三条件叠加应只返回 a#1，实际 {keys:?}"
-        );
+        assert_eq!(keys, vec!["a#1"], "三条件叠加应只返回 a#1，实际 {keys:?}");
     }
 }
