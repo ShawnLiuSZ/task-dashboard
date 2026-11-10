@@ -2,6 +2,15 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **v0.8.8 (2026-11-10) — `list_my_tasks` repository-dimension filter (#546)**
+
+  - **Pain point**: the MCP tool `list_my_tasks` only had `status` / `ownership` filters, while the task library syncs from **all repos** under `org:FoodsUp-Inc` ⇒ an agent calling it from a **single-repo** session got **cross-repo** tasks — in one real session the agent mistook an in-flight fad-backend task for a TaskBoard target. The UI (`App.tsx`) already filtered by `repo`; the MCP tool did not expose that dimension.
+  - **Approach**: added an optional `repo` argument filtering precisely on `tasks.repo` (explicit argument chosen; auto-detecting cwd rejected — a stdio server's cwd need not match the agent's working directory). **Omitted = all repos (backward compatible) · specific name = only that repo · empty string = error** (per the #357 lesson: invalid input must not silently degrade to "everything") · stacks with `status` / `ownership` via `AND`.
+  - **Cross-file consistency (§8.6)**: both sides kept in sync (`mcp.rs` `tool_list` / `call_tool` / `tools_list` schema + `server.py` `tool_list_my_tasks` / TOOLS schema); `AGENT_INSTRUCTIONS.md`/`.en` · `README.md`/`.en` · `PRD.md` signatures updated with `repo?`.
+  - **Tests**: full ac-test flow — two isolated sub-agents wrote tests first (Python `RepoFilterAC` +4 · Rust `list_repo_*_acN` +4) ⇒ Python 72 / Rust 27 all green; scope audit found no orphan changes (after `tool_list` gained a parameter, 6 existing call sites only added `None`, assertions untouched).
+  - **Impact**: `app/src-tauri/src/mcp.rs` · `mcp_server/{server.py,test_server.py}` · docs ×6. **Zero DB schema / zero new dependencies / read-only path (no GitHub writes).**
+  - See [`issue-546-mcp-list-repo-filter.md`](./issue-546-mcp-list-repo-filter.md)
+
 - **v0.8.7 (2026-11-09) — One-click removal of task sessions for closed issues (#541)**
 
   - **Pain point**: before deleting a session in the sessions panel you could not tell whether its issue was already closed — you had to open each link and check GitHub, so tidying up closing sessions was all manual.
