@@ -37,7 +37,7 @@ The MCP Server is registered as `taskboard` in WorkBuddy's `~/.workbuddy/mcp.jso
 
 | Tool | Inputs | Purpose |
 |---|---|---|
-| `list_my_tasks` | `status?` / `ownership?` | List board tasks (filterable by four-state / ownership) |
+| `list_my_tasks` | `status?` / `ownership?` / `repo?` | List board tasks (filterable by four-state / ownership / repo; omit `repo` = all repos, empty string errors) |
 | `get_task_status` | `issue` | Query a task's current state + recorded session / handoff |
 | `update_task_status` | `issue`, `status` | Update the local board state |
 | `record_session` | `issue`, `session_id`, `agent?`, `branch?`, `work_dir?` | Record an interrupted session id; if `branch` is non-empty, also record the current working branch (into `work_branch`, kept separate from the synced PR `branch`); if `work_dir` is non-empty, also record the working directory (into `work_dir`) |

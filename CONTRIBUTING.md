@@ -121,6 +121,8 @@ cd app && npm run i18n:check
 
 - [`docs/issue-541-sessions-clear-closed.md`](./docs/issue-541-sessions-clear-closed.md) — **一键删除已关闭 issue 的任务会话**：会话面板删除某会话前无法知道对应 issue 是否已关闭，只能逐个点链接确认。方案：用**本地** `tasks.issue_state == 'closed'`（同步路径已权威归一化）过滤 + 复用现有 `api.clearSessions(keys)` **零后端改动** —— 仅清空 session 三列、保留任务行。交互：非选择模式工具栏新增「清除已关闭会话」按钮，无已关闭会话时置灰禁用；确认弹窗带计数；聚合视图下去重 `issueKey` 再传后端（同 #438/#391 口径）
 
+- [`docs/issue-546-mcp-list-repo-filter.md`](./docs/issue-546-mcp-list-repo-filter.md) — **`list_my_tasks` 增加仓库维度过滤**：任务库同步自 `org:FoodsUp-Inc` 全部仓库，MCP 工具 `list_my_tasks` 却只有 `status`/`ownership` 两个过滤维度 ⇒ agent 在某个仓库会话里调它拿回的是**跨所有仓库**任务（一次真实会话里 agent 因此把 fad-backend 的在途事务误判成 TaskBoard 本仓目标）。修法：加可选 `repo` 入参按 `tasks.repo` 精确过滤 —— 不传=全部仓库（向后兼容）、传具体名=只返回该 repo、**传空串=报错**（对齐 #357 教训：非法入参不得静默退化成全量）、可与 `status`/`ownership` 叠加。否决「自动探测 cwd」方案（stdio server 的 cwd 不一定等于 agent 工作目录，不可靠）。**零 DB schema / 零新依赖 / 只读路径**；两侧（`mcp.rs` + `server.py`）实现 + schema + 中英文档签名全同步；两侧各 +4 AC 用例（先测后写、隔离子代理、锁测试文件）
+
 - [`docs/issue-543-issue-state-case-insensitive.md`](./docs/issue-543-issue-state-case-insensitive.md) — **前端 issue_state 判 closed 统一为大小写不敏感**：前端 5 处裸写 `task.issueState === 'closed'`（`openCount` / `TaskCard` / `DetailPanel` / `SessionsPanel` / `Board`）大小写敏感，依赖「写路径恰好归一化 + 迁移洗数据」这层隐式保障（#335 类回归会静默误判）。新增 `utils/issueState.ts` 的 `isClosedIssueState`（`trim` + 大小写不敏感，与后端 `common::is_closed_state` 同口径）替换全部 5 处 —— **零后端 / 零 DB schema / 零新依赖**，对真实库恒为小写的 `'closed'` 行为严格等价，纯防御
 
 - [`docs/issue-490-live-task-detail.md`](./docs/issue-490-live-task-detail.md) — **打开任务详情时实时拉取 GitHub 详情与评论（不落库）**：新增纯只读、零落库的实时通道，覆盖评论区、展示实时指派 / 标签与关联 PR 提交历史，与 `on_demand::ensure_task_available` 的落库版单 issue 拉取明确区分

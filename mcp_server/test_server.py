@@ -1187,5 +1187,111 @@ class AttachPrsTest(unittest.TestCase):
         )
 
 
+class RepoFilterAC(unittest.TestCase):
+    """#546：`tool_list_my_tasks` 的 `repo` 过滤参数（先测后写，AC 驱动）。
+
+    AC（来自 issue #546 测试条目，仅覆盖测试侧）：
+      - AC-1 `repo="A"` → 只返回 repo==A 的任务，不含 B
+      - AC-2 不传 repo  → 返回全部仓库任务（向后兼容）
+      - AC-3 `repo=""`  → 抛 ValueError，不静默返回全量
+      - AC-4 repo+status+ownership 三条件叠加，只返回同时满足的行
+
+    ⚠️ 先测后写：实现尚未含 `repo` 参数。AC-1/3/4 调用时会因
+    「`repo` 不是合法关键字参数」抛 TypeError（红，非断言落在预期异常上，
+    属实现未就绪的可接受红）；AC-2 不传 repo，现行为应已通过。
+    """
+
+    @staticmethod
+    def _reset_conn():
+        if S._conn is not None:
+            S._conn.close()
+        S._conn = None
+
+    def setUp(self):
+        # 每用例独立临时库：改写 `S.DB_PATH`（conn() 运行时才读模块全局）。
+        self._tmpdir = tempfile.mkdtemp(prefix="tb-mcp-repofilter-")
+        self._db = os.path.join(self._tmpdir, "taskboard.db")
+        self._orig_db_path = S.DB_PATH
+        S.DB_PATH = self._db
+        self._reset_conn()
+        c = sqlite3.connect(self._db)
+        c.executescript(SCHEMA)
+        S.ensure_schema(c)
+        c.commit()
+        c.close()
+
+    def tearDown(self):
+        self._reset_conn()
+        S.DB_PATH = self._orig_db_path
+        import shutil
+
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def _seed(self, issue_key, repo, status, ownership):
+        """插一行任务，显式指定 repo / status / ownership 以便过滤可判别。"""
+        c = sqlite3.connect(self._db)
+        c.execute(
+            "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,"
+            " ownership, status, synced_at, account_id)"
+            " VALUES (?, 'o', ?, ?, 't', 'u', 'open', ?, ?, 1, 1)",
+            (issue_key, repo, int(issue_key.split("#")[1]), ownership, status),
+        )
+        c.commit()
+        c.close()
+
+    @staticmethod
+    def _repos(rows):
+        return sorted({r["repo"] for r in rows})
+
+    def test_ac1_repo_filter(self):
+        """AC-1：repo=A 只返回 A 仓任务，不含 B。"""
+        self._seed("o/A#1", "A", "todo", "assigned")
+        self._seed("o/B#2", "B", "todo", "assigned")
+        rows = S.tool_list_my_tasks(repo="A")
+        self.assertEqual(self._repos(rows), ["A"], "只应返回 repo==A 的任务")
+        self.assertTrue(all(r["repo"] == "A" for r in rows))
+
+    def test_ac2_no_repo_returns_all(self):
+        """AC-2：不传 repo → 返回全部仓库任务（向后兼容）。"""
+        self._seed("o/A#1", "A", "todo", "assigned")
+        self._seed("o/B#2", "B", "doing", "notassignee")
+        self._seed("o/C#3", "C", "done", "assigned")
+        rows = S.tool_list_my_tasks()
+        self.assertEqual(self._repos(rows), ["A", "B", "C"], "不传 repo 应返回全部仓库")
+
+    def test_ac3_empty_repo_errors(self):
+        """AC-3：repo=""（空串）→ 抛 ValueError，不静默返回全量。
+
+        注：AC 语义要求「空串报错」。实现未加 repo 参数前，本调用会先抛
+        TypeError（repo 非法参数）；那是实现未就绪的红。实现就绪后必须落到
+        ValueError —— 故这里对「空串不得返回全量」做断言：要么抛异常，
+        要么（错误实现）返回了行 ⇒ 判失败。
+        """
+        self._seed("o/A#1", "A", "todo", "assigned")
+        self._seed("o/B#2", "B", "todo", "assigned")
+        try:
+            rows = S.tool_list_my_tasks(repo="")
+        except ValueError:
+            return  # 实现就绪且正确：空串报 ValueError
+        except TypeError:
+            self.fail("repo 参数尚未实现（TypeError）；实现就绪后空串必须抛 ValueError")
+        # 走到这里说明没抛异常 ⇒ 静默返回全量，违反 AC-3。
+        self.fail(f"repo='' 不应静默返回任务，实际返回 {len(rows)} 行")
+
+    def test_ac4_repo_stacks_with_status_ownership(self):
+        """AC-4：repo+status+ownership 三条件叠加，只返回同时满足的行。"""
+        # 目标行：A 仓 + todo + assigned
+        self._seed("o/A#1", "A", "todo", "assigned")
+        # 反例 1：B 仓（不属目标 repo）
+        self._seed("o/B#2", "B", "todo", "assigned")
+        # 反例 2：A 仓但 status=doing
+        self._seed("o/A#3", "A", "doing", "assigned")
+        # 反例 3：A 仓但 ownership=notassignee
+        self._seed("o/A#4", "A", "todo", "notassignee")
+        rows = S.tool_list_my_tasks(repo="A", status="todo", ownership="assigned")
+        keys = sorted(r["issue_key"] for r in rows)
+        self.assertEqual(keys, ["o/A#1"], "只应返回 A 仓 todo+assigned 的那一行")
+
+
 if __name__ == "__main__":
     unittest.main()
