@@ -80,25 +80,27 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
 
       - name: Install Linux dependencies
         uses: ./.github/actions/install-linux-deps
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: app/package-lock.json
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
           targets: ${{ matrix.target }}
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           workspaces: app/src-tauri -> target
 
@@ -139,7 +141,7 @@ jobs:
           echo "APPLE_SIGNING_IDENTITY=TaskBoard Local Signing" >> "$GITHUB_ENV"
 
       - name: Build with Tauri
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # #231：updater 产物的 minisign 签名私钥（与 Apple 证书无关）。
@@ -169,15 +171,20 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
 
       - name: 校验 updater 清单的平台完整性
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # #539 VULN-04：tag 名经 env 中转，不把 `${{ }}` 直接内插进 `run:` shell，
+          # 避免 context 内容被当成 shell 语法执行（脚本注入 / 供应链加固）。
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
         run: >-
           python3 scripts/check-updater-manifest.py
-          --tag "${{ github.event.release.tag_name || github.ref_name }}"
+          --tag "$RELEASE_TAG"
