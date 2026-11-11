@@ -40,9 +40,10 @@ jobs:
           (github.event.pull_request.base.ref == 'develop' ||
            github.event.pull_request.base.ref == 'main') }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        persist-credentials: false
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
 
@@ -55,4 +56,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-        run: python3 scripts/merge-cleanup.py --repo "$REPO"
+          # #539 VULN-03：显式传 fork 源仓库，避免 fork PR 误删本仓库分支。
+          # fork 时 head.repo.full_name ≠ github.repository，脚本据此跳过删分支。
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: python3 scripts/merge-cleanup.py --repo "$REPO" --head-repo "$HEAD_REPO"
