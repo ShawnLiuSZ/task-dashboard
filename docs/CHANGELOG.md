@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发版（Unreleased，已在 `main`）— 产品盘点 P1/P2 批次：AI 辅助价值闭环的「度量 + 恢复入口 + 口径」**
+
+  > 来源：[`PRODUCT-REVIEW-2026-11-11.md`](../PRODUCT-REVIEW-2026-11-11.md) 想法清单。核心主线：看板/阅读层已做得较满，PRD §1 第二支柱「AI 执行辅助」能力层就位但**价值闭环没合上、从未验证跑没跑通**——本批次让闭环**可被观测**。发版时归入 **v0.8.9**（见 [roadmap](./roadmap.md)）。
+
+  - **P1-1 最小度量 `status_events`**（[#550](https://github.com/ShawnLiuSZ/task-dashboard/pull/550)）：`tasks.status` 只是当前快照，「状态流转时长」「AI 自动维护通没通」从未被采集。新增 `status_events` 表记每一次 `old→new` 流转（`source` 区分 `mcp`/`sync`），与 `sync_logs`/`api_logs` 同机制靠 `CREATE TABLE IF NOT EXISTS` 老库自动补齐、**不 bump `SCHEMA_VERSION`/不写迁移**；在 MCP 写状态收口 `set_task_status` 插桩，`get_task_status` 响应新增 `statusEvents`。度量失败只 `eprintln!` 不反噬主流程。**刻意最小化**：同步侧（`source=sync`）与「MCP 工具调用次数」本版未做。详见 [`product-usage-minimal-metric.md`](./product-usage-minimal-metric.md)
+  - **P1-2 恢复会话收成一个整体 `resume`**（[#551](https://github.com/ShawnLiuSZ/task-dashboard/pull/551)）：PRD §6.4 假设「`get_task_status` → 恢复会话」一步到位，实际要拼 status/session/handoff/work_branch/work_dir **5 处散字段**。在 `row_to_value` 里用既有列**预计算**出 `resume` 对象（`resumable`/`reason`/`hint`），agent 无需自己拼即可判断「能否恢复、怎么恢复」。**不新增工具/表、不改 `SELECT_COLS`**（纯派生）。与 P1-1 的 `statusEvents` 共同构成「恢复会话一次到位」。详见 [`resume-session-consolidated.md`](./resume-session-consolidated.md)
+  - **P1-3 收敛 PRD/README 口径**（[#552](https://github.com/ShawnLiuSZ/task-dashboard/pull/552)）：PRD 停在 v0.3，与现行 AGENTS/README 有 **3 处硬约束冲突**（MCP 是否内置 / closed 是否自动归入 / 是否绝不写回 GitHub）——约束有两个版本时下个 agent 会挑一个执行。裁定以 AGENTS/README 为准，用「头部口径对齐横幅 + 3 处就地 ⚠️ 标注」代替整篇重写（保留 PRD 决策演进记录价值）；README 三处「绝不写回」各补显式写回例外（#214/#215）。**纯文档**，顺带把此前只在本地 untracked 的盘点文档纳入仓库（修一处 CI 断链）。详见 [`prd-readme-alignment.md`](./prd-readme-alignment.md)
+  - **P2-1 清理僵尸 issue #489**：与已关闭的 #490 标题完全相同、需求早已实现，挂在 open 列表让 backlog 失真。评论注明重复后关闭（NOT_PLANNED），**open backlog 归零**。
+  - **P2-2 活路线图**（[#553](https://github.com/ShawnLiuSZ/task-dashboard/pull/553)）：CHANGELOG 事后、PRD 停在两月前、backlog 为空 ⇒ 迭代全由临场反馈驱动，会系统性挤压「不紧急但重要」的事。补一张十行活文档填空档：记录下 3 版想往哪走的取舍依据（**不是排期/承诺**），主线是用 P1 度量数据验证第二支柱。详见 [`roadmap.md`](./roadmap.md)
+  - **影响面**：`app/src-tauri/src/{db,common,mcp}.rs`（P1-1/P1-2）· `PRD.md`/`README.md`（P1-3）· 新增 4 篇 KB + 盘点文档 · `CONTRIBUTING.md` 索引。**零新依赖**；P1-1/P1-2 仅本地 SQLite + MCP 只读暴露（不碰 GitHub）。
+  - **测试**：Rust `status_events` +2 / `build_resume` +4 ⇒ lib 278 全绿；`clippy -D warnings` / `fmt --check` / `check-mcp-columns.py` / `check-doc-links.py` 全绿。
+
 - **v0.8.8（2026-11-10）— `list_my_tasks` 增加仓库维度过滤（#546）**
 
   - **痛点**：MCP 工具 `list_my_tasks` 只有 `status` / `ownership` 两个过滤维度，而任务库同步自 `org:FoodsUp-Inc` **全部仓库** ⇒ agent 在**某个仓库**的会话里调它，拿回的是**跨所有仓库**的任务 —— 一次真实会话里 agent 因此把 fad-backend 的在途事务误判成了 TaskBoard 本仓的核查目标。UI 侧（`App.tsx`）早有 `repo` 过滤，MCP 工具却没暴露这个维度。
