@@ -293,6 +293,16 @@ fn fetch_task_row(conn: &Connection, key: &str) -> Result<Option<Value>, String>
     }
     // #467：补上该 issue 关联的全部 PR（`task_prs` 关系表）。
     attach_prs(conn, &mut found)?;
+    // 产品盘点 P1 最小度量：补上状态流转历史，让「恢复会话」一次看到该任务
+    // 经历了哪些状态、由谁驱动（mcp/sync）。查询失败不反噬主响应。
+    if let Ok(events) = crate::db::list_status_events(conn, key, 20) {
+        if let Some(obj) = found[0].as_object_mut() {
+            obj.insert(
+                "status_events".into(),
+                serde_json::to_value(&events).unwrap_or(Value::Array(Vec::new())),
+            );
+        }
+    }
     Ok(found.into_iter().next())
 }
 
