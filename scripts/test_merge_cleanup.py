@@ -57,7 +57,9 @@ class ExtractIssueRefsTest(unittest.TestCase):
         self.assertEqual(extract_issue_refs("t", "Fixes: #123"), [123])
 
     def test_case_insensitive_and_extra_whitespace(self):
-        self.assertEqual(extract_issue_refs("t", "REFS  #42"), [42])
+        # #539 VULN-05：`refs` / `references` 只是「引用」，不再触发关闭（对齐 GitHub 原生）。
+        # 大小写与多余空白仍被正常跳过 —— 但结果是不关闭，而非提取。
+        self.assertEqual(extract_issue_refs("t", "REFS  #42"), [])
 
     def test_chinese_keywords(self):
         self.assertEqual(extract_issue_refs("t", "关闭 #284\n解决 #285"), [284, 285])

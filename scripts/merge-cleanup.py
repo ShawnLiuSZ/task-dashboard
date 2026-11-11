@@ -37,8 +37,13 @@ GITHUB_API = "https://api.github.com"
 # 上限 6 位是 GitHub issue 编号的量级，不放大以免吃到 commit sha 的片段。
 TITLE_REF_RE = re.compile(r"(?<![\w#])#([1-9]\d{0,5})(?![\w])")
 
-# 正文里的**带关键词**引用：`Closes #284` / `Fixes: #123` / `refs #284 #285` / `关闭 #284`。
+# 正文里的**带关键词**引用：`Closes #284` / `Fixes: #123` / `关闭 #284`。
 # 关键词后允许冒号与空白，可连续跟多个编号；中文关键词同样支持（本仓库 CHANGELOG 中英并存）。
+#
+# #539 VULN-05：关闭语义对齐 GitHub 原生 —— 只有 `Closes / Fixes / Resolves`（及其变体、
+# 中文「关闭 / 解决 / 修复」）才**关闭** issue。`Refs / References` 只是「引用」，不触发关闭
+# （GitHub 原生也不因 `Refs #N` 关闭）。此前把 `refs/references` 算进关闭词，会让一条
+# 「Refs #284」的正文在合并后**误关** #284 —— 关闭比引用强得多，误关无法撤销。
 #
 # 必须带 `#`：GitHub 的跨引用规范就是 `#N`，本仓库标题与 CHANGELOG 也全用这种写法。若允许
 # 裸数字，中文正文里的「修复 2026 年的崩溃」「修复 3 个 bug」都会被误判成 issue 编号 —— 那
@@ -47,7 +52,7 @@ CLOSE_RE = re.compile(
     # 词边界：`\b` 在 CJK 前后都是 `\w`，所以「已关闭 #284」这种写法永远匹配不上。
     # 改用「前面不是 `\w` **或** 前面是汉字」，两种情况都放行。
     r"(?i)(?:(?<!\w)|(?<=[\u4e00-\u9fff]))"
-    r"(?:closes?|closed|fixes?|fixed|resolves?|resolved|refs?|references?|关闭|解决|修复)"
+    r"(?:closes?|closed|fixes?|fixed|resolves?|resolved|关闭|解决|修复)"
     r"\s*[:：]?\s*"
     # #329：编号串整体捕获，**不再**用可重复捕获组。
     # 原写法 `...(#?(\d+)(?!\d))*` 里 `(?:...)*` 是「重复的**非**捕获组」，内层
