@@ -90,6 +90,9 @@ PERMISSION_SHORTHANDS = ("read-all", "write-all")
 JOB_KEY_INDENT = 4
 STEP_KEY_INDENT = 8
 STEP_ITEM_INDENT = 6
+# #539：`with:` 块内**输入键**（如 `persist-credentials`）的缩进 = STEP_KEY_INDENT + 2。
+# 这些键不是 step 的直接子键，必须结合 `in_with` 状态才归到正确的 step。
+STEP_INPUT_INDENT = STEP_KEY_INDENT + 2
 
 
 @dataclass
@@ -101,6 +104,8 @@ class Step:
     has_run: bool = False
     # #539 VULN-02：`actions/checkout` step 必须显式设 `persist-credentials: false`，
     # 否则写权限 token 被持久化进 runner 的 `.git/config`，依赖构建脚本可读。
+    # ⚠️ `persist-credentials` 是 `actions/checkout` 的**输入**，必须放在 `with:` 块内；
+    # 写在 step 层级是无效字段（GitHub 会拒绝解析整个 workflow）。
     uses_val: str | None = None
     persist_credentials_false: bool = False
 
@@ -206,20 +211,23 @@ def scan(lines: list[str]) -> list[str]:
     block_indent = -1
     block_owner: str | None = None  # 块标量所属的 key（用于判定 `run: |` 里的 scripts 引用）
     runs_scripts = False
+    in_with = False  # 是否正处在某个 step 的 `with:` 块内（用于定位 persist-credentials）
 
     def flush_step() -> None:
-        nonlocal step
+        nonlocal step, in_with
         if step is not None:
             if step.empty:
                 errors.append(f"L{step.line}: step 既没有 `uses:` 也没有 `run:`（空步骤不会执行任何动作）")
-            # #539 VULN-02：checkout 未显式 `persist-credentials: false` ⇒ 写权限 token
-            # 持久化进 runner `.git/config`。`true` 与缺省等价（默认即 true），同样报错。
+            # #539 VULN-02：checkout 未在 `with:` 内显式 `persist-credentials: false` ⇒
+            # 写权限 token 持久化进 runner `.git/config`。`true` / 缺省 / 误写在 step 层级
+            # （GitHub 会拒绝解析整个 workflow）都等价于「未禁用」，同样报错。
             elif step.is_checkout and not step.persist_credentials_false:
                 errors.append(
-                    f"L{step.line}: `actions/checkout` step 缺少 `persist-credentials: false`"
+                    f"L{step.line}: `actions/checkout` step 缺少 `with: persist-credentials: false`"
                     f"（默认会持久化 GITHUB_TOKEN 到 .git/config，依赖构建脚本可读）"
                 )
         step = None
+        in_with = False
 
     for ln, raw in enumerate(lines, 1):
         if "\t" in raw:
@@ -397,10 +405,28 @@ def scan(lines: list[str]) -> list[str]:
                 if key == "uses":
                     step.has_uses = True
                     step.uses_val = rest
+                    # 新 step ⇒ 退出上一个 `with:` 块。
+                    in_with = False
                 elif key == "run":
                     step.has_run = True
+                    in_with = False
+                elif key == "with":
+                    # 进入 `with:` 块（`with:` 后面无内联值 ⇒ 其子键在 STEP_INPUT_INDENT）。
+                    # `persist-credentials` 是 `actions/checkout` 的输入，只在此处合法。
+                    in_with = (rest.strip() == "")
                 elif key == "persist-credentials":
-                    # #539 VULN-02：只认显式 `false`（`true` / 缺省都会持久化 token）。
+                    # #539 VULN-02：只认 `with:` 块内的显式 `false`。写在 step 层级是
+                    # 无效字段（GitHub 会拒绝解析整个 workflow），不计为「已禁用持久化」。
+                    if in_with:
+                        step.persist_credentials_false = rest.strip().lower() == "false"
+                    # step 层级的 persist-credentials：不报（避免与既有结构检查重复），
+                    # 但也不算数 —— flush_step 会因「缺少 with 内的 false」而报错。
+                continue
+            elif ind == STEP_INPUT_INDENT and in_with and step is not None:
+                # `with:` 块内的**输入键**（如 `persist-credentials` / `python-version`）。
+                # 只关心 checkout 的 `persist-credentials`；其它输入键（`python-version` 等）
+                # 不做校验（宁漏不误报）。
+                if key == "persist-credentials":
                     step.persist_credentials_false = rest.strip().lower() == "false"
                 continue
         elif section == "env" and ind == 2 and rest == "":

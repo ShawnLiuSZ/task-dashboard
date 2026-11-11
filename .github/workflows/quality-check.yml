@@ -20,7 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        persist-credentials: false
+        with:
+          persist-credentials: false
 
       # #252：Tauri 在 Linux 上编译需要 GTK / WebKit / glib 等系统库（build script 阶段
       # 就要 pkg-config 找得到），漏装则连 `cargo clippy --lib` 都编不过。
@@ -58,7 +59,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        persist-credentials: false
+        with:
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
@@ -84,7 +86,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        persist-credentials: false
+        with:
+          persist-credentials: false
 
       # #252：同 rust-clippy —— 缺系统库时 `cargo test --lib` 也会在编译阶段就失败。
       - name: Install Linux dependencies
@@ -111,7 +114,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        persist-credentials: false
+        with:
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
@@ -144,7 +148,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        persist-credentials: false
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:

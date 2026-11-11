@@ -64,7 +64,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66
-        persist-credentials: false
+        with:
+          persist-credentials: false
       - name: Run
         run: python3 scripts/foo.py
 """
@@ -219,16 +220,31 @@ class NegativeDetectionTest(unittest.TestCase):
         self.assert_flagged(text, "重复")
 
     def test_missing_checkout_when_running_repo_script(self):
-        # #539：骨架 checkout 现为两行（uses + persist-credentials），整段移除。
+        # #539：骨架 checkout 现为三行（uses + with: + persist-credentials），整段移除。
         text = VALID.replace(
             f"      - uses: actions/checkout@{SHA}\n"
-            "        persist-credentials: false\n",
+            "        with:\n"
+            "          persist-credentials: false\n",
             "",
         )
         self.assert_flagged(text, "缺少 `actions/checkout@*`")
 
     def test_checkout_present_silences_script_check(self):
         self.assertEqual(errs(VALID), [])
+
+    def test_persist_credentials_at_step_level_is_not_accepted(self):
+        # #539 回归：`persist-credentials` 是 `actions/checkout` 的**输入**，必须写在
+        # `with:` 块内。误写在 step 层级是无效字段 —— GitHub 会**拒绝解析整个 workflow**
+        # （run name 退化为文件路径、`on:` 失效、所有 event 都触发），本地 YAML 解析器却
+        # 不报错，只有真推送才暴露。此用例锁死「step 层级不算数」：缺 `with:` 包裹 ⇒ 必报。
+        text = VALID.replace(
+            f"      - uses: actions/checkout@{SHA}\n"
+            "        with:\n"
+            "          persist-credentials: false\n",
+            f"      - uses: actions/checkout@{SHA}\n"
+            "        persist-credentials: false\n",
+        )
+        self.assert_flagged(text, "缺少 `with: persist-credentials: false`")
 
     def test_block_scalar_run_is_not_empty_step(self):
         # `release.yml` 的形状：`- name:` 之后隔了 `if:` / `env:` 才写 `run: |`。
@@ -244,7 +260,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66
-        persist-credentials: false
+        with:
+          persist-credentials: false
       - name: Import cert
         if: runner.os == 'macOS'
         env:
@@ -281,7 +298,8 @@ jobs:
           echo hello
           echo world
       - uses: actions/checkout@5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66
-        persist-credentials: false
+        with:
+          persist-credentials: false
 """
         self.assertEqual(
             errs(text),
@@ -311,7 +329,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66
-        persist-credentials: false
+        with:
+          persist-credentials: false
       - name: Import cert
         run: |
           echo hi
@@ -339,7 +358,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66
-        persist-credentials: false
+        with:
+          persist-credentials: false
       - run: |
           echo "- not-a-step: x"
           echo ok
@@ -367,7 +387,8 @@ jobs:
            github.event.pull_request.base.ref == 'main') }}
     steps:
       - uses: actions/checkout@5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66
-        persist-credentials: false
+        with:
+          persist-credentials: false
 """
         self.assertEqual(errs(text), [])
 
@@ -392,7 +413,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66
-        persist-credentials: false
+        with:
+          persist-credentials: false
       - name: Build
         run: echo build
 """

@@ -27,9 +27,26 @@
 
 本地 action（`./.github/actions/install-linux-deps`）随本仓代码走，**豁免**。`dtolnay/rust-toolchain@stable` 虽是该 action 官方推荐的「通道」写法，但仍属可变引用 —— 一并固定（`@stable` 现会被 linter 打红，见下方门禁）。
 
-### 2. `actions/checkout` 显式 `persist-credentials: false`（VULN-02）
+### 2. `actions/checkout` 在 `with:` 内显式 `persist-credentials: false`（VULN-02）
 
 `actions/checkout` 默认把 `GITHUB_TOKEN` 持久化进 runner 的 `.git/config`，任何后续构建脚本都能读到。给全部 **11 处** checkout step 加 `persist-credentials: false`，写权限 token 不再落盘。
+
+> ⚠️ **关键坑（本次实测踩到）**：`persist-credentials` 是 `actions/checkout` 的**输入**，必须写在 step 的 `with:` 块内 ——
+>
+> ```yaml
+> - uses: actions/checkout@<sha>
+>   with:
+>     persist-credentials: false   # ✅ 正确：with: 块内的输入
+> ```
+>
+> 误写成 **step 层级**（与 `uses:` 同级、没有 `with:` 包裹）是**无效字段**：
+>
+> ```yaml
+> - uses: actions/checkout@<sha>
+>   persist-credentials: false      # ❌ 错误：GitHub 会拒绝解析整个 workflow
+> ```
+>
+> 这种写法**本地 YAML 解析器不报错**（Ruby / Node yaml 都当普通映射解析通过），但 GitHub Actions 会**解析失败**：run name 退化为文件路径（`.github/workflows/x.yml`）、`on:` 失效、所有 event 都触发、0 jobs 直接 failure。只有真推送才暴露。首版实现踩了此坑，已修正为 `with:` 形式，并在 linter + 单测双向锁死。
 
 ### 3. `tag_name` 经 `env:` 中转，不内插进 `run:`（VULN-04）
 
@@ -62,7 +79,7 @@ run: >-
 | 判定 | 规则 | 取代 / 新增 |
 |---|---|---|
 | **SHA 固定** | 第三方 `uses: owner/repo@ref` 的 `ref` 必须 `^[0-9a-fA-F]{40}$` | **取代**旧 `FLOATING_REF_RE` denylist（只拦 `main`/`master`，拦不住 `@v5`）—— 已删该死代码 |
-| **persist-credentials** | 每个 `actions/checkout@*` step 必须显式 `persist-credentials: false`（`true` 与缺省都报） | 新增 |
+| **persist-credentials** | 每个 `actions/checkout@*` step 必须在 `with:` 块内显式 `persist-credentials: false`（写在 step 层级是无效字段，不计；`true` 与缺省都报） | 新增 |
 | **run 内插** | `run:`（内联值 + 块标量体）里出现 `github.event.*` / `github.ref_name` / `github.head_ref` 即报，提示经 `env:` 中转 | 新增 |
 
 **反误报边界（#329「双向要求」惯例）**：`secrets.*` / `env.*` / `matrix.*` / `runner.*` / `github.token` / `github.sha` 等运营方或 GitHub 控制的 context **不**禁止；`with:` 里的内插不在 `run:` 范围内、不报；本地 action 豁免 SHA。每一类都同时有「正向不报」与「反向必报」两组用例。
@@ -84,7 +101,7 @@ run: >-
 | AC | 内容 | 结果 |
 |---|---|---|
 | AC1 | 第三方 action 全 SHA 固定；`@v5`/`@stable`/`@v2`/`@main` 被标记；本地 action 豁免 | ✅ 2026-11-11 |
-| AC2 | 每个 checkout 显式 `persist-credentials: false`（11/11）；`true`/缺省被标记 | ✅ 2026-11-11 |
+| AC2 | 每个 checkout 在 `with:` 内显式 `persist-credentials: false`（11/11）；`true`/缺省/**误写在 step 层级**都被标记 | ✅ 2026-11-11 |
 | AC3 | `run:` 内插 `github.event.*`/`ref_name`/`head_ref` 被标记；`secrets.*`/`env.*` 不误报 | ✅ 2026-11-11 |
 | AC4 | linter 对真实 7 个 workflow 退出 0（防误报） | ✅ 2026-11-11 |
 | AC5 | 3 类判定的正向不报（`env:`/`secrets:`/`with:`/本地 action） | ✅ 2026-11-11 |
