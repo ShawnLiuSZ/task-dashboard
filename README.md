@@ -12,7 +12,7 @@
 
 目前处于 ***开发者预览*** 阶段，正在快速迭代。未来将出现破坏兼容性的变更。
 
-> **最终形态（v0.3）**：已落地为**本地 Tauri 桌面应用**（`app/` 目录），数据存本地 SQLite，**不创建 GitHub Issue / Project，不写回 GitHub**。此前 PRD 讨论的「GitHub Projects v2 看板」方案因组织限制与个人偏好已放弃，演进记录见 [`PRD.md`](./PRD.md)。
+> **最终形态（v0.3）**：已落地为**本地 Tauri 桌面应用**（`app/` 目录），数据存本地 SQLite，**不创建 GitHub Issue / Project，不写回 GitHub**（⚠️ 例外：用户在 UI 确认框后显式触发的写回——#214 卡片认领 assignee、#215 详情 Project 状态，见 [`AGENTS.md`](./AGENTS.md) §2.1）。此前 PRD 讨论的「GitHub Projects v2 看板」方案因组织限制与个人偏好已放弃，演进记录见 [`PRD.md`](./PRD.md)。
 
 ## 应用：TaskBoard（Windows / macOS / Linux）
 
@@ -67,7 +67,7 @@ npm run tauri build    # 产出当前平台的 release 安装包
 
 ### 关键约束
 
-> **session id 与任务状态只存本地 SQLite，绝不写回 GitHub。** 不创建 Issue、不 创建 Project、不改 Issue 标题 / label / 评论。
+> **session id 与任务状态只存本地 SQLite，绝不写回 GitHub。** 不创建 Issue、不 创建 Project、不改 Issue 标题 / label / 评论。（⚠️ 例外：用户在 UI 确认框后显式触发的写回——#214 认领 assignee、#215 Project 状态，见 [`AGENTS.md`](./AGENTS.md) §2.1。）
 
 ### 本地数据路径
 
@@ -95,7 +95,7 @@ npm run tauri build    # 产出当前平台的 release 安装包
 
 PRD §6 规划了「MCP Server + Skill」让 AI Agent 在执行任务时自动维护看板。本版落地 **MCP Server** 部分（D5：先 MCP，后包 Skill）。
 
-> **与 PRD 的关键偏离**：PRD 原设想把 session / 状态写到 **GitHub Project v2 自定义字段**；但本 App 的最终形态是**纯本地 SQLite、绝不写回 GitHub**。因此 MCP Server 直接读写本地 `taskboard.db`，零 GitHub 调用——这是 PRD 设计在当前架构下的正确适配。
+> **与 PRD 的关键偏离**：PRD 原设想把 session / 状态写到 **GitHub Project v2 自定义字段**；但本 App 的最终形态是**纯本地 SQLite、绝不写回 GitHub**（⚠️ 例外：用户在 UI 确认框后显式触发的写回——#214 认领 assignee、#215 Project 状态，见 [`AGENTS.md`](./AGENTS.md) §2.1）。因此 MCP Server 直接读写本地 `taskboard.db`，零 GitHub 调用——这是 PRD 设计在当前架构下的正确适配。
 
 **两种运行形态（同一份工具契约）**：
 
