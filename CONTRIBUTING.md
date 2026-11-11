@@ -129,6 +129,8 @@ cd app && npm run i18n:check
 
 - [`docs/product-usage-minimal-metric.md`](./docs/product-usage-minimal-metric.md) — **产品使用最小度量 `status_events`**：`tasks.status` 只是当前快照，「状态流转时长」「AI 自动维护通没通」从未被采集。新增 `status_events` 表记每一次 `old→new` 流转（`source` 区分 `mcp`/`sync`），与 `sync_logs`/`api_logs` 同机制靠 `CREATE TABLE IF NOT EXISTS` 老库自动补齐、**不 bump `SCHEMA_VERSION`/不写迁移**；在 MCP 写状态收口 `set_task_status` 插桩，`get_task_status` 响应新增 `statusEvents`（纯新增字段，未动 `SELECT_COLS`）。度量失败只 `eprintln!` 不反噬主流程。来源：`PRODUCT-REVIEW-2026-11-11.md` P1-1
 
+- [`docs/resume-session-consolidated.md`](./docs/resume-session-consolidated.md) — **恢复会话收成一个整体 `resume` 派生对象**：PRD §6.4 假设「`get_task_status` → 恢复会话」一步到位，实际要拼 status / session / handoff / work_branch / work_dir 5 处散字段。修法：在 `row_to_value` 里用既有列**预计算**出一个 `resume` 对象（`resumable` / `reason` / `hint`），agent 无需自己拼即可判断「能否恢复、怎么恢复」。**不新增工具 / 不新增表 / 不改 `SELECT_COLS`**（纯派生，`check-mcp-columns.py` 不受影响）；与 P1-1 的 `statusEvents` 共同构成「恢复会话一次到位」。来源：`PRODUCT-REVIEW-2026-11-11.md` P1-2
+
 - [`docs/issue-490-live-task-detail.md`](./docs/issue-490-live-task-detail.md) — **打开任务详情时实时拉取 GitHub 详情与评论（不落库）**：新增纯只读、零落库的实时通道，覆盖评论区、展示实时指派 / 标签与关联 PR 提交历史，与 `on_demand::ensure_task_available` 的落库版单 issue 拉取明确区分
 
 - [`docs/issue-496-live-detail-blank.md`](./docs/issue-496-live-detail-blank.md) — **任务详情点击后整页全屏空白**：#490 的实时拉取结构体 `LiveTaskDetail` 漏写 `#[serde(rename_all = "camelCase")]` ⇒ 后端发回 `pr_commits`、前端读 `prCommits` 得到 `undefined` ⇒ 渲染期取 `.length` 抛 TypeError ⇒ React 卸载整棵树。修复补上属性 + 后端**直接断言序列化键名**的单测；前端新增 `utils/liveDetail.ts` 规范化层（`api.ts` 返回类型改 `unknown`，因为 `invoke<T>` 只是断言不校验形状），契约漂移降级为「少显示一段」而非整页崩；顺带把该命令从「同步 + 持 DB 锁联网」改为 `async` + `spawn_blocking`（#329 范式）
