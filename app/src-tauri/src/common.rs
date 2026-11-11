@@ -325,14 +325,33 @@ pub fn require_affected(n: usize, key: &str) -> Result<usize, String> {
 }
 
 /// 校验并写入任务状态。返回实际更新行数（0 表示 key 不存在，调用方自定报错策略）。
+///
+/// 产品盘点 P1 最小度量：每次经此收口的写入都记一条 `status_events`（source=`mcp`），
+/// 用于回答「AI 自动维护状态通没通」。度量失败只 `eprintln!`，不反噬主流程。
 pub fn set_task_status(conn: &Connection, key: &str, status: &str) -> Result<usize, String> {
     validate_task_status(conn, key, status)?;
+    let old_status: String = conn
+        .query_row(
+            "SELECT status FROM tasks WHERE issue_key = ?1",
+            rusqlite::params![key],
+            |r| r.get(0),
+        )
+        .unwrap_or_default();
     let n = conn
         .execute(
             "UPDATE tasks SET status = ?1 WHERE issue_key = ?2",
             rusqlite::params![status, key],
         )
         .map_err(|e| e.to_string())?;
+    if n > 0 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if let Err(e) = crate::db::record_status_event(conn, key, &old_status, status, "mcp", now) {
+            eprintln!("[status-events] 记录流转失败（不影响状态写入）: {e}");
+        }
+    }
     Ok(n)
 }
 

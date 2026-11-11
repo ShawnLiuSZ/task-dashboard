@@ -365,6 +365,22 @@ CREATE TABLE IF NOT EXISTS api_logs (
 CREATE INDEX IF NOT EXISTS idx_api_logs_created ON api_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_api_logs_kind ON api_logs(kind);
 
+-- 产品盘点 P1「有没有在用」的最小度量：记录 tasks.status 的每一次流转。
+-- `tasks.status` 只是当前快照，无法回答「状态流转时长」「AI 自动维护通没通」。
+-- 本表把每次 old→new 落一行，source 区分驱动方（mcp=agent 驱动 / sync=远程权威覆盖）。
+-- 与 sync_logs / api_logs 同机制：CREATE TABLE IF NOT EXISTS 进 SCHEMA ⇒ 老库
+-- 在下次 open_db 时由 execute_batch(SCHEMA) 自动补齐，无需 bump SCHEMA_VERSION。
+CREATE TABLE IF NOT EXISTS status_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  issue_key  TEXT NOT NULL,
+  old_status TEXT NOT NULL DEFAULT '',
+  new_status TEXT NOT NULL,
+  source     TEXT NOT NULL DEFAULT 'mcp',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_status_events_key ON status_events(issue_key);
+CREATE INDEX IF NOT EXISTS idx_status_events_created ON status_events(created_at);
+
 CREATE TABLE IF NOT EXISTS notes (
 	  id         INTEGER PRIMARY KEY AUTOINCREMENT,
 	  content    TEXT NOT NULL,
@@ -2827,6 +2843,79 @@ pub fn clear_api_logs(conn: &Connection) -> Result<usize, String> {
     Ok(n)
 }
 
+// ── 状态流转事件（产品盘点 P1「有没有在用」最小度量）────────────────────────
+
+/// 一次状态流转。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusEvent {
+    pub issue_key: String,
+    pub old_status: String,
+    pub new_status: String,
+    pub source: String,
+    pub created_at: i64,
+}
+
+/// 记录一次状态流转。`source` 区分驱动方：`mcp`（agent 经 MCP 工具驱动）/
+/// `sync`（远程权威覆盖）。老库缺表时静默跳过（`IF NOT EXISTS` 已在 SCHEMA，
+/// 正常情况不会缺；此处容错以免度量反噬主流程）。
+pub fn record_status_event(
+    conn: &Connection,
+    issue_key: &str,
+    old_status: &str,
+    new_status: &str,
+    source: &str,
+    now: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO status_events (issue_key, old_status, new_status, source, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![issue_key, old_status, new_status, source, now],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("记录状态流转失败: {e}"))
+}
+
+/// 某任务最近的状态流转（新→旧）。用于「恢复会话」时回放该任务经历了哪些状态。
+pub fn list_status_events(
+    conn: &Connection,
+    issue_key: &str,
+    limit: i64,
+) -> Result<Vec<StatusEvent>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT issue_key, old_status, new_status, source, created_at
+             FROM status_events WHERE issue_key = ?1 ORDER BY id DESC LIMIT ?2",
+        )
+        .map_err(|e| format!("查询状态流转失败: {e}"))?;
+    let rows = stmt
+        .query_map(rusqlite::params![issue_key, limit], |r| {
+            Ok(StatusEvent {
+                issue_key: r.get(0)?,
+                old_status: r.get(1)?,
+                new_status: r.get(2)?,
+                source: r.get(3)?,
+                created_at: r.get(4)?,
+            })
+        })
+        .map_err(|e| format!("查询状态流转失败: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("读取状态流转失败: {e}"))
+}
+
+/// 按驱动方（source）统计状态流转次数，回答「AI 自动维护通没通」：
+/// `mcp` 占比高 ⇒ agent 驱动为主；`sync` 占比高 ⇒ 远程权威覆盖为主。
+pub fn count_status_events_by_source(conn: &Connection) -> Result<Vec<(String, i64)>, String> {
+    let mut stmt = conn
+        .prepare("SELECT source, COUNT(*) FROM status_events GROUP BY source ORDER BY 2 DESC")
+        .map_err(|e| format!("统计状态流转失败: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(|e| format!("统计状态流转失败: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("读取状态流转统计失败: {e}"))
+}
+
 // ── Notes ──────────────────────────────────────────────────────────────────
 
 /// 记事本记录。
@@ -3689,6 +3778,7 @@ mod tests {
         );
     }
     use super::*;
+    use crate::common::set_task_status;
 
     /// 临时库路径（每次调用唯一，避免并行测试互删 —— #266）。
     ///
@@ -4143,6 +4233,67 @@ mod tests {
         assert_eq!(clear_api_logs(&conn).unwrap(), 0);
         drop(conn);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    // ========================================================================
+    // 产品盘点 P1「有没有在用」最小度量：status_events
+    // ========================================================================
+
+    /// 记录 → 倒序查询 → 按 source 统计。反证：去掉 record 的 INSERT，list 返回空、
+    /// count 全 0，两个断言同时失败。
+    #[test]
+    fn status_events_record_list_and_count_by_source() {
+        let conn = open_db(std::path::Path::new(":memory:")).expect("open_db");
+        record_status_event(&conn, "o/r#1", "todo", "doing", "mcp", 1000).unwrap();
+        record_status_event(&conn, "o/r#1", "doing", "done", "mcp", 2000).unwrap();
+        record_status_event(&conn, "o/r#2", "todo", "done", "sync", 3000).unwrap();
+
+        // 倒序（新→旧），只含该 key。
+        let ev = list_status_events(&conn, "o/r#1", 20).unwrap();
+        assert_eq!(ev.len(), 2, "只应返回 o/r#1 的两条");
+        assert_eq!(ev[0].new_status, "done", "最新在前");
+        assert_eq!(ev[0].old_status, "doing");
+        assert_eq!(ev[1].new_status, "doing");
+
+        // 按 source 统计：mcp 2 条、sync 1 条。
+        let mut counts = count_status_events_by_source(&conn).unwrap();
+        counts.sort();
+        assert_eq!(
+            counts,
+            vec![("mcp".to_string(), 2), ("sync".to_string(), 1)],
+            "应按驱动方聚合"
+        );
+    }
+
+    /// set_task_status（MCP 写状态收口）应自动记一条 source=mcp 的流转；
+    /// key 不存在（n==0）时不记。反证：去掉 set_task_status 里的 record 调用，
+    /// 第一条断言因 events 为空而失败。
+    #[test]
+    fn set_task_status_records_transition_event() {
+        let conn = open_db(std::path::Path::new(":memory:")).expect("open_db");
+        conn.execute(
+            "INSERT INTO tasks (issue_key, owner, repo, number, title, url, issue_state,
+                                ownership, status, synced_at, account_id)
+             VALUES ('o/r#1','o','r',1,'t','u','open','assigned','todo', 1, 1)",
+            [],
+        )
+        .unwrap();
+
+        let n = set_task_status(&conn, "o/r#1", "doing").unwrap();
+        assert_eq!(n, 1);
+        let ev = list_status_events(&conn, "o/r#1", 20).unwrap();
+        assert_eq!(ev.len(), 1, "一次状态写入应记一条流转");
+        assert_eq!(ev[0].old_status, "todo");
+        assert_eq!(ev[0].new_status, "doing");
+        assert_eq!(ev[0].source, "mcp");
+
+        // key 不存在 ⇒ 不记。
+        let _ = set_task_status(&conn, "o/r#missing", "done");
+        assert_eq!(
+            list_status_events(&conn, "o/r#missing", 20).unwrap().len(),
+            0,
+            "不存在的任务不应产生流转事件"
+        );
     }
 
     /// #235：条数上限裁剪只保留最新行；超期按保留期淘汰。
