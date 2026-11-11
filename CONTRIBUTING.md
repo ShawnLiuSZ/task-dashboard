@@ -133,6 +133,8 @@ cd app && npm run i18n:check
 
 - [`docs/prd-readme-alignment.md`](./docs/prd-readme-alignment.md) — **收敛 PRD / README 口径（3 处硬约束矛盾）**：PRD 停在 v0.3，与现行 AGENTS/README 有 3 处硬约束冲突（MCP 是否内置 / closed 是否自动归入 / 是否绝不写回 GitHub），**约束有两个版本时下个 agent 会挑一个执行**。裁定以 AGENTS/README 为准，用「头部口径对齐横幅 + 3 处就地 ⚠️ 标注」代替整篇重写（保留 PRD 作为决策演进记录的价值）：§4.2.1 closed 现行自动归入已完成、§9 D1/D3~D6 从「待确认」收敛为已落地并修正 D3/D5、§10「暂不做 MCP」改为已落地；README 三处「绝不写回」各补显式写回例外（#214/#215）。纯文档，**零代码 / 接口 / DB 变更**。来源：`PRODUCT-REVIEW-2026-11-11.md` P1-3
 
+- [`docs/roadmap.md`](./docs/roadmap.md) — **活路线图：下 3 版意图**：CHANGELOG 是事后记录、PRD 停在两个月前、backlog 为空 ⇒ 迭代完全由临场反馈驱动，会系统性挤压「不紧急但重要」的事。补一张十行的活文档填这个空档：记录下 3 版「想往哪走」的取舍依据（每条标注依据，**不是排期/承诺**），核心主线是用 P1 批次的度量数据**验证 PRD §1 第二支柱「AI 执行辅助」到底通没通**。维护约定：每发版推进状态 + 依据变了就改意图。来源：`PRODUCT-REVIEW-2026-11-11.md` P2
+
 - [`docs/issue-490-live-task-detail.md`](./docs/issue-490-live-task-detail.md) — **打开任务详情时实时拉取 GitHub 详情与评论（不落库）**：新增纯只读、零落库的实时通道，覆盖评论区、展示实时指派 / 标签与关联 PR 提交历史，与 `on_demand::ensure_task_available` 的落库版单 issue 拉取明确区分
 
 - [`docs/issue-496-live-detail-blank.md`](./docs/issue-496-live-detail-blank.md) — **任务详情点击后整页全屏空白**：#490 的实时拉取结构体 `LiveTaskDetail` 漏写 `#[serde(rename_all = "camelCase")]` ⇒ 后端发回 `pr_commits`、前端读 `prCommits` 得到 `undefined` ⇒ 渲染期取 `.length` 抛 TypeError ⇒ React 卸载整棵树。修复补上属性 + 后端**直接断言序列化键名**的单测；前端新增 `utils/liveDetail.ts` 规范化层（`api.ts` 返回类型改 `unknown`，因为 `invoke<T>` 只是断言不校验形状），契约漂移降级为「少显示一段」而非整页崩；顺带把该命令从「同步 + 持 DB 锁联网」改为 `async` + `spawn_blocking`（#329 范式）
