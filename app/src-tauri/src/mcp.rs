@@ -151,7 +151,81 @@ fn row_to_value(r: &rusqlite::Row) -> rusqlite::Result<Value> {
     // #435：追加末尾列（索引 28）—— 注意 `SELECT_COLS` 的列序与
     // `TASK_SELECT_COLUMNS` **完全不同**，这里必须按本文件自己的顺序数。
     m.insert("pr_state".into(), Value::String(r.get::<_, String>(28)?)); // 28
+                                                                         // 产品盘点 P1-2「恢复会话收成一个整体」：把散在 session_id / handoff /
+                                                                         // work_branch / work_dir / status 的恢复线索**预计算**成一个 `resume` 对象，
+                                                                         // agent 无需自己拼 5 处字段即可判断「能否恢复、怎么恢复」。纯派生、零 schema 改动。
+    let resume = build_resume(
+        r.get::<_, Option<String>>(18)?.as_deref().unwrap_or(""), // session_id
+        r.get::<_, Option<String>>(19)?.as_deref().unwrap_or(""), // session_agent
+        r.get::<_, String>(21)?.as_str(),                         // handoff
+        r.get::<_, String>(16)?.as_str(),                         // work_branch
+        r.get::<_, String>(17)?.as_str(),                         // work_dir
+        r.get::<_, String>(8)?.as_str(),                          // status
+    );
+    m.insert("resume".into(), resume);
     Ok(Value::Object(m))
+}
+
+/// 由散字段预计算「恢复会话」入口。
+/// - `resumable`：有 `session_id` 或 `handoff` 即可恢复（前者续跑同一会话，后者接手上下文）。
+/// - `reason`：为什么可/不可恢复（给人 & agent 读）。
+/// - `hint`：把 work_branch / work_dir / session 串成一句话，直接指导下一步。
+fn build_resume(
+    session_id: &str,
+    session_agent: &str,
+    handoff: &str,
+    work_branch: &str,
+    work_dir: &str,
+    status: &str,
+) -> Value {
+    let has_session = !session_id.is_empty();
+    let has_handoff = !handoff.is_empty();
+    let resumable = has_session || has_handoff;
+
+    let mut parts: Vec<String> = Vec::new();
+    if has_session {
+        parts.push(format!(
+            "续跑会话 {session_id}{}",
+            if session_agent.is_empty() {
+                String::new()
+            } else {
+                format!("（原 agent: {session_agent}）")
+            }
+        ));
+    }
+    if has_handoff {
+        parts.push("读 handoff 交接详情接手".into());
+    }
+    if !work_branch.is_empty() {
+        parts.push(format!("分支 {work_branch}"));
+    }
+    if !work_dir.is_empty() {
+        parts.push(format!("目录 {work_dir}"));
+    }
+    let hint = if resumable {
+        format!(
+            "{}；当前状态 {status}，恢复后 update_task_status(处理中)",
+            parts.join("，")
+        )
+    } else {
+        format!("无 session_id 也无 handoff，无可恢复上下文；当前状态 {status}")
+    };
+
+    let reason = if has_session && has_handoff {
+        "有记录的 session id + handoff 交接详情"
+    } else if has_session {
+        "有记录的 session id（可续跑同一会话）"
+    } else if has_handoff {
+        "有 handoff 交接详情（可接手上下文）"
+    } else {
+        "未记录 session id 或 handoff"
+    };
+
+    serde_json::json!({
+        "resumable": resumable,
+        "reason": reason,
+        "hint": hint,
+    })
 }
 
 fn tool_list(
@@ -1209,6 +1283,53 @@ mod tests {
                 "[{\"number\":1300,\"title\":\"支付回调子任务\",\"url\":\"https://github.com/FoodsUp-Inc/fad-backend/issues/1300\"}]"
             ),
             "sub_issues 应为 JSON 数组串"
+        );
+    }
+
+    // ===== 产品盘点 P1-2：resume 派生对象（恢复会话收成一个整体）=====
+
+    #[test]
+    fn build_resume_with_session_is_resumable() {
+        let r = build_resume("sess-abc", "claude-code", "", "feat/x", "/w", "doing");
+        assert_eq!(r["resumable"], serde_json::json!(true));
+        assert!(
+            r["reason"].as_str().unwrap().contains("session id"),
+            "reason 应点明有 session id"
+        );
+        let hint = r["hint"].as_str().unwrap();
+        assert!(hint.contains("sess-abc"), "hint 应含 session id");
+        assert!(hint.contains("feat/x"), "hint 应含 work_branch");
+        assert!(hint.contains("/w"), "hint 应含 work_dir");
+        assert!(hint.contains("doing"), "hint 应含当前状态");
+    }
+
+    #[test]
+    fn build_resume_with_handoff_only_is_resumable() {
+        let r = build_resume("", "", "交接详情", "", "", "todo");
+        assert_eq!(r["resumable"], serde_json::json!(true));
+        assert!(
+            r["reason"].as_str().unwrap().contains("handoff"),
+            "仅 handoff 也应可恢复"
+        );
+    }
+
+    #[test]
+    fn build_resume_with_neither_is_not_resumable() {
+        let r = build_resume("", "", "", "", "", "todo");
+        assert_eq!(r["resumable"], serde_json::json!(false));
+        assert!(
+            r["hint"].as_str().unwrap().contains("无可恢复上下文"),
+            "都无时 hint 应明说不可恢复"
+        );
+    }
+
+    #[test]
+    fn build_resume_session_and_handoff_reason_combines() {
+        let r = build_resume("s1", "", "h", "", "", "processed");
+        assert_eq!(r["resumable"], serde_json::json!(true));
+        assert!(
+            r["reason"].as_str().unwrap().contains("handoff"),
+            "两者都有时 reason 应同时点明 session + handoff"
         );
     }
 
