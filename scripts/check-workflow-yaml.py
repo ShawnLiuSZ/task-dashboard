@@ -58,16 +58,32 @@ BAD_EXPR_QUOTE_RE = re.compile(r"\$\{\{\s*[\"']")
 BLOCK_INDICATORS = ("|", ">", "|-", ">-", "|+", ">+")
 # 第三方 action 需要固定版本；本地 action 与 Docker action 不适用。
 LOCAL_USE_PREFIXES = ("./", "../", "docker://")
-# #329：`@main` / `@master` 这类**浮动分支**引用属于供应链风险——上游一次 push 就换掉
-# 你 CI 里执行的全部代码，且不会在本仓库留下任何 diff 痕迹。
-#
-# 注意**不能**一刀切禁止「所有非版本号的引用」：`dtolnay/rust-toolchain@stable` 是该
-# action 的官方推荐写法（`@stable` / `@beta` / `@nightly` 是它受支持的「工具链通道」），
-# 本仓库多个 workflow 正用着它。因此这里用**明确的浮动分支名denylist**，
-# 而不是「不是 vN 就报错」的宽松规则。
-FLOATING_REF_RE = re.compile(
-    r"^(?:main|master|head|latest|develop|trunk|default)$", re.IGNORECASE
-)
+# #539 VULN-01：第三方 action 必须固定到**完整 40 位 commit SHA**，而非可变 tag / 分支。
+# `@v5` / `@stable` 这类 tag / 通道仍属可变引用 —— 上游一次 push / 移动 tag 就换掉你 CI 里
+# 执行的全部代码，且不会在本仓库留下任何 diff 痕迹。release.yml 持签名私钥 + contents:write，
+# 上游投毒可致恶意签名安装包通过 updater 验签，故一律强制 SHA 固定。
+SHA_PIN_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+# #539 VULN-04：`run:`（含块标量）里禁止出现攻击者可影响的 context，必须经 `env:` 中转。
+# 只禁**可能被攻击者控制**的 context；`secrets.*` / `env.*` / `matrix.*` / `runner.*` /
+# `github.token` / `github.sha` 等运营方或 GitHub 控制的 context 不在禁止之列（避免误报）。
+RUN_INTERPOLATION_RE = re.compile(r"\$\{\{[^}]*github\.(?:event\.|ref_name|head_ref)")
+
+
+def run_interpolation_ln(ln: int, text: str, errors: list[str]) -> None:
+    """#539 VULN-04：`run:` 里出现攻击者可影响的 context ⇒ 报错（应经 `env:` 中转）。
+
+    只禁 `github.event.*` / `github.ref_name` / `github.head_ref`（PR 标题 / 分支名 / tag 名
+    等可能被攻击者控制）；`secrets.*` / `env.*` / `matrix.*` / `runner.*` / `github.token` /
+    `github.sha` 等运营方或 GitHub 控制的 context 不在禁止之列，避免误报。
+    """
+    if RUN_INTERPOLATION_RE.search(text):
+        errors.append(
+            f"L{ln}: `run:` 里直接内插了攻击者可影响的 context（github.event.* / ref_name / head_ref），"
+            f"应先经 `env:` 中转再用 `$VAR` 引用（防脚本注入）"
+        )
+# #329 遗留：原先只 denylist 浮动分支名（main/master/...），拦不住 `@v5` 这类可变 tag。
+# #539 VULN-01 起改为「第三方 action 必须固定到完整 40 位 commit SHA」（见 SHA_PIN_RE），
+# 该 denylist 已被更强的 SHA 固定规则取代，故移除。
 # 顶层 `permissions:` 的官方简写（GitHub 文档：可用 `read-all` / `write-all` 一次设全部 scope）。
 PERMISSION_SHORTHANDS = ("read-all", "write-all")
 # 结构缩进：workflow 的层级是固定的（顶层 0 / job 名 2 / job 键 4 / step 项 6 / step 键 8）
@@ -83,10 +99,18 @@ class Step:
     line: int
     has_uses: bool = False
     has_run: bool = False
+    # #539 VULN-02：`actions/checkout` step 必须显式设 `persist-credentials: false`，
+    # 否则写权限 token 被持久化进 runner 的 `.git/config`，依赖构建脚本可读。
+    uses_val: str | None = None
+    persist_credentials_false: bool = False
 
     @property
     def empty(self) -> bool:
         return not self.has_uses and not self.has_run
+
+    @property
+    def is_checkout(self) -> bool:
+        return bool(self.uses_val) and self.uses_val.split("@")[0] == "actions/checkout"
 
 
 @dataclass
@@ -185,8 +209,16 @@ def scan(lines: list[str]) -> list[str]:
 
     def flush_step() -> None:
         nonlocal step
-        if step is not None and step.empty:
-            errors.append(f"L{step.line}: step 既没有 `uses:` 也没有 `run:`（空步骤不会执行任何动作）")
+        if step is not None:
+            if step.empty:
+                errors.append(f"L{step.line}: step 既没有 `uses:` 也没有 `run:`（空步骤不会执行任何动作）")
+            # #539 VULN-02：checkout 未显式 `persist-credentials: false` ⇒ 写权限 token
+            # 持久化进 runner `.git/config`。`true` 与缺省等价（默认即 true），同样报错。
+            elif step.is_checkout and not step.persist_credentials_false:
+                errors.append(
+                    f"L{step.line}: `actions/checkout` step 缺少 `persist-credentials: false`"
+                    f"（默认会持久化 GITHUB_TOKEN 到 .git/config，依赖构建脚本可读）"
+                )
         step = None
 
     for ln, raw in enumerate(lines, 1):
@@ -204,6 +236,8 @@ def scan(lines: list[str]) -> list[str]:
             if ind > block_indent:
                 if block_owner == "run" and "scripts/" in body:
                     runs_scripts = True
+                if block_owner == "run":
+                    run_interpolation_ln(ln, body, errors)
                 continue
             in_block = False
             block_owner = None
@@ -220,19 +254,22 @@ def scan(lines: list[str]) -> list[str]:
                 f"job 可能在静默状态被跳过（用单引号包裹整个表达式或转义）"
             )
 
-        # 第三方 action 版本固定
+        # 第三方 action 固定到完整 commit SHA（#539 VULN-01）
         m = USE_RE.match(body)
         if m:
             val = m.group("val").strip()
             if not val.startswith(LOCAL_USE_PREFIXES) and "${{" not in val:
                 if "@" not in val:
-                    errors.append(f"L{ln}: 第三方 action `{val}` 未固定版本（应写 @v5 之类）")
+                    errors.append(
+                        f"L{ln}: 第三方 action `{val}` 未固定版本"
+                        f"（应固定到完整 40 位 commit SHA，如 @<sha>）"
+                    )
                 else:
                     ref = val.rsplit("@", 1)[1]
-                    if FLOATING_REF_RE.match(ref):
+                    if not SHA_PIN_RE.match(ref):
                         errors.append(
-                            f"L{ln}: 第三方 action `{val}` 用了浮动分支 `@{ref}`"
-                            f"（上游一次 push 就会替换你 CI 里执行的代码，应固定到 tag 或完整 commit sha）"
+                            f"L{ln}: 第三方 action `{val}` 固定到 `{ref}` 不是完整 commit SHA"
+                            f"（tag / 分支 / 通道都可被上游移动，应固定到 40 位 commit SHA）"
                         )
 
         # 列表项
@@ -259,6 +296,7 @@ def scan(lines: list[str]) -> list[str]:
                 step = Step(line=ln)
                 if im.group("key") == "uses":
                     step.has_uses = True
+                    step.uses_val = im.group("rest").strip()
                 elif im.group("key") == "run":
                     step.has_run = True
             # 其它缩进的列表项（`strategy.matrix.include` 等）不做进一步结构校验
@@ -281,6 +319,9 @@ def scan(lines: list[str]) -> list[str]:
 
         if key == "run" and "scripts/" in rest:
             runs_scripts = True
+        # #539 VULN-04：内联 `run: ... ${{ github.event.* }} ...` 同样要拦（块标量体在上面分支查）。
+        if key == "run" and rest and rest not in BLOCK_INDICATORS:
+            run_interpolation_ln(ln, rest, errors)
         if key == "if" and rest and (": " in rest or rest.endswith(":")):
             errors.append(f"L{ln}: `if:` 表达式含 `: ` 但未加引号，YAML 会把它当复合值解析失败")
 
@@ -355,8 +396,12 @@ def scan(lines: list[str]) -> list[str]:
                 # step 的子键（`uses:` / `run:` / `with:` / `env:` 等）
                 if key == "uses":
                     step.has_uses = True
+                    step.uses_val = rest
                 elif key == "run":
                     step.has_run = True
+                elif key == "persist-credentials":
+                    # #539 VULN-02：只认显式 `false`（`true` / 缺省都会持久化 token）。
+                    step.persist_credentials_false = rest.strip().lower() == "false"
                 continue
         elif section == "env" and ind == 2 and rest == "":
             errors.append(f"L{ln}: `env:` 下的 `{key}` 缺少值")

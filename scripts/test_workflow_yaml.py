@@ -47,6 +47,9 @@ def errs(text: str) -> list[str]:
 
 
 # 最小合法 workflow：后续用例在这个骨架上做单点改动，保证被标记的就是那一个改动。
+# #539：checkout 固定到完整 40 位 commit SHA 且显式 `persist-credentials: false`，
+# 使骨架满足新增的 SHA 固定 / persist 两类判定 —— 单点改动某个 step 时，不会因骨架本身
+# 不合规而淹没真正的信号。
 VALID = """\
 name: demo
 
@@ -60,10 +63,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66
+        persist-credentials: false
       - name: Run
         run: python3 scripts/foo.py
 """
+
+# #539：骨架里 checkout 固定到的 commit SHA（测试里做单点替换时复用）。
+SHA = "5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66"
 
 
 class ParseHelpersTest(unittest.TestCase):
@@ -179,12 +186,13 @@ class NegativeDetectionTest(unittest.TestCase):
         self.assert_flagged(text, "既没有 `uses:` 也没有 `run:`")
 
     def test_unpinned_third_party_action(self):
+        # #539 VULN-01：第三方 action 没写 `@ref` ⇒ 未固定，必报。
         self.assert_flagged(
-            VALID.replace("actions/checkout@v5", "actions/checkout"), "未固定版本"
+            VALID.replace(f"actions/checkout@{SHA}", "actions/checkout"), "未固定版本"
         )
 
     def test_local_action_not_flagged(self):
-        text = VALID.replace("actions/checkout@v5", "./.github/actions/install-linux-deps")
+        text = VALID.replace(f"actions/checkout@{SHA}", "./.github/actions/install-linux-deps")
         self.assertFalse(
             any("未固定版本" in p for p in errs(text)),
             f"本地 action 不应被要求固定版本：{errs(text)}",
@@ -211,7 +219,12 @@ class NegativeDetectionTest(unittest.TestCase):
         self.assert_flagged(text, "重复")
 
     def test_missing_checkout_when_running_repo_script(self):
-        text = VALID.replace("      - uses: actions/checkout@v5\n", "")
+        # #539：骨架 checkout 现为两行（uses + persist-credentials），整段移除。
+        text = VALID.replace(
+            f"      - uses: actions/checkout@{SHA}\n"
+            "        persist-credentials: false\n",
+            "",
+        )
         self.assert_flagged(text, "缺少 `actions/checkout@*`")
 
     def test_checkout_present_silences_script_check(self):
@@ -230,7 +243,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66
+        persist-credentials: false
       - name: Import cert
         if: runner.os == 'macOS'
         env:
@@ -266,7 +280,8 @@ jobs:
       - run: |
           echo hello
           echo world
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66
+        persist-credentials: false
 """
         self.assertEqual(
             errs(text),
@@ -295,7 +310,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66
+        persist-credentials: false
       - name: Import cert
         run: |
           echo hi
@@ -322,7 +338,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66
+        persist-credentials: false
       - run: |
           echo "- not-a-step: x"
           echo ok
@@ -349,7 +366,8 @@ jobs:
           (github.event.pull_request.base.ref == 'develop' ||
            github.event.pull_request.base.ref == 'main') }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66
+        persist-credentials: false
 """
         self.assertEqual(errs(text), [])
 
@@ -373,7 +391,8 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66
+        persist-credentials: false
       - name: Build
         run: echo build
 """
@@ -423,14 +442,18 @@ class LegalShorthandNotFlaggedTest(unittest.TestCase):
         text = VALID.replace("on:\n  pull_request:\n", "on: push\n")
         self.assertEqual(errs(text), [])
 
-    def test_toolchain_channel_ref_is_legal(self):
-        # `dtolnay/rust-toolchain@stable` 是该 action 的官方推荐写法（通道而非分支），
-        # 本仓库多个 workflow 在用。一刀切禁止非版本引用会把它打红。
+    def test_toolchain_channel_ref_is_flagged(self):
+        # #539 VULN-01：`dtolnay/rust-toolchain@stable` 虽是官方「通道」写法，但仍是可变引用 ——
+        # 上游移动 stable 即换掉 CI 执行的代码。新规一律要求 40 位 SHA，故 `@stable` 必报。
         text = VALID.replace(
-            "- uses: actions/checkout@v5",
-            "- uses: actions/checkout@v5\n      - uses: dtolnay/rust-toolchain@stable",
+            f"- uses: actions/checkout@{SHA}",
+            f"- uses: actions/checkout@{SHA}\n      - uses: dtolnay/rust-toolchain@stable",
         )
-        self.assertEqual(errs(text), [])
+        problems = errs(text)
+        self.assertTrue(
+            any("不是完整 commit SHA" in p for p in problems),
+            f"`@stable` 应被判为未固定到 commit SHA，实际：{problems}",
+        )
 
     def test_needs_existing_job_is_legal(self):
         text = """\
@@ -488,20 +511,28 @@ class ExtendedDetectionTest(unittest.TestCase):
         )
 
     def test_floating_branch_ref_is_flagged(self):
-        for ref in ("main", "master", "HEAD", "latest"):
+        # #539 VULN-01：浮动分支 / 版本 tag / 通道**都**不再是合法固定 —— 一律要求 40 位 SHA。
+        for ref in ("main", "master", "HEAD", "latest", "v5", "v4.2.2", "stable"):
             with self.subTest(ref=ref):
                 text = VALID.replace(
-                    "- uses: actions/checkout@v5", f"- uses: actions/checkout@{ref}"
+                    f"- uses: actions/checkout@{SHA}",
+                    f"- uses: actions/checkout@{ref}",
                 )
-                self.assert_flagged(text, "浮动分支")
+                self.assert_flagged(text, "不是完整 commit SHA")
 
-    def test_pinned_ref_is_not_flagged_as_floating(self):
-        for ref in ("v5", "v4.2.2", "0", "5c48d5b1b0aa30e9a9d3beba20aa9e3e4a2cbc66"):
+    def test_full_sha_ref_is_not_flagged(self):
+        # 只有完整 40 位 commit SHA 才算固定（大小写不限）。
+        for ref in (SHA, SHA.upper()):
             with self.subTest(ref=ref):
                 text = VALID.replace(
-                    "- uses: actions/checkout@v5", f"- uses: actions/checkout@{ref}"
+                    f"- uses: actions/checkout@{SHA}",
+                    f"- uses: actions/checkout@{ref}",
                 )
-                self.assertEqual(errs(text), [], f"{ref} 不应被判为浮动分支")
+                self.assertEqual(
+                    [p for p in errs(text) if "commit SHA" in p],
+                    [],
+                    f"{ref} 是完整 SHA，不应被判为未固定",
+                )
 
     def test_runs_on_without_steps_is_flagged(self):
         text = VALID.replace("    steps:\n", "")
