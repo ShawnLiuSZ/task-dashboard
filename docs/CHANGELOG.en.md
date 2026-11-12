@@ -2,7 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **Unreleased — UI visual refresh: design-token consolidation + WCAG 2.2 AA hardening**
+- **v0.8.9 (2026-11-12) — UI visual refresh: design-token consolidation + WCAG 2.2 AA hardening (#555)**
 
   > Ships as **v0.8.9**. Landed in batches after a three-phase review (visual direction / UX & accessibility / frontend implementation), with **zero new dependencies, zero DB changes, zero API changes**. See [`v0.8.9-ui-visual-refresh.md`](./v0.8.9-ui-visual-refresh.md).
 
@@ -15,7 +15,7 @@
   - **Closing batch (C14/C15)**: WCAG 2.5.8 target size — `.card-open-window` 18×18 / `.note-tool` 22×22 use a transparent `::before` negative inset (`-3px` / `-1px`) to expand the hit area to ≥24×24, and `.seg-btn` gained `min-height: 24px` + `inline-flex` vertical centering (hit height ~21–23px → ≥24), **visual size unchanged**; WCAG 1.4.1 — `aria-busy` gained a 2px `--accent` top bar with `scaleX` animation as a **shape/position** channel (previously only `opacity: 0.8`, a purely color cue), degrading to a static full-width bar under `prefers-reduced-motion`. Both were reverse-validated (inject defect → assertion goes red).
   - **Impact**: `app/src/styles.css` · `styles.test.ts` · `components/TaskCard.tsx` (removed dead `projectStatusColor`, dropped `repo repo-N` classes from the status badge) · `components/notes-layout.test.ts` · `docs/v0.8.9-ui-visual-refresh.md` (new) · both CHANGELOGs · `CONTRIBUTING.md` index.
 
-- **Unreleased (on `main`) — Product-review P1/P2 batch: "measurement + resume entry + alignment" for the AI-assist value loop**
+- **v0.8.9 (2026-11-12) — Product-review P1/P2 batch: "measurement + resume entry + alignment" for the AI-assist value loop**
 
   > Source: the [`PRODUCT-REVIEW-2026-11-11.md`](../PRODUCT-REVIEW-2026-11-11.md) idea list. Core thread: the kanban/reading layer is fairly complete, but PRD §1's second pillar "AI execution assistance" had its capability layer done while the **value loop was never closed nor verified** — this batch makes the loop **observable**. Will ship as **v0.8.9** (see [roadmap](./roadmap.md)).
 

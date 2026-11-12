@@ -175,4 +175,4 @@ This project is released under the **MIT License** — full text in [LICENSE](./
 
 The software is provided "AS IS", without warranty of any kind, and the authors and copyright holders accept no liability for any claims, damages or liability arising from its use. See the `LICENSE` file for the full disclaimer.
 
-> Version v0.8.8 · Local cross-platform app (Windows / macOS / Linux), 2026-11-10
+> Version v0.8.9 · Local cross-platform app (Windows / macOS / Linux), 2026-11-12
