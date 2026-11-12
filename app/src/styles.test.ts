@@ -941,4 +941,56 @@ describe('视觉系统能力约束（令牌层 / 双主题 / 焦点环）', () =
       );
     }
   });
+
+  it('C14 目标尺寸 ≥24×24：命中区用透明伪元素/最小高度扩大，视觉尺寸不变', () => {
+    // WCAG 2.5.8：最小目标尺寸 24×24 CSS px。视觉控件（图标/hover 底）刻意做小，
+    // 命中区通过负 inset 伪元素（.card-open-window 18+3+3、.note-tool 22+1+1）与
+    // min-height（.seg-btn）扩到 ≥24 —— 视觉尺寸不变，只扩命中区。
+    const open = decls('.card-open-window');
+    expect(open, '.card-open-window 需 position: relative 承载命中区伪元素').toMatch(
+      /position\s*:\s*relative/,
+    );
+    const openBefore = decls('.card-open-window::before');
+    expect(openBefore, '.card-open-window::before 需透明扩命中区').toMatch(
+      /position\s*:\s*absolute/,
+    );
+    expect(openBefore, '.card-open-window::before 需负 inset 扩到 24×24').toMatch(
+      /inset\s*:\s*-3px/,
+    );
+
+    const tool = decls('.note-tool');
+    expect(tool, '.note-tool 需 position: relative').toMatch(/position\s*:\s*relative/);
+    const toolBefore = decls('.note-tool::before');
+    expect(toolBefore, '.note-tool::before 需透明扩命中区').toMatch(/position\s*:\s*absolute/);
+    expect(toolBefore, '.note-tool::before 需负 inset 扩到 24×24').toMatch(/inset\s*:\s*-1px/);
+
+    const seg = decls('.seg-btn');
+    expect(seg, '.seg-btn 需 min-height: 24px 保证命中高 ≥24').toMatch(/min-height\s*:\s*24px/);
+    expect(seg, '.seg-btn 需 inline-flex + 垂直居中').toMatch(/display\s*:\s*inline-flex/);
+    expect(seg).toMatch(/align-items\s*:\s*center/);
+  });
+
+  it('C15 aria-busy 非色彩通道：顶部伸缩横条（形状/位置），不单靠 opacity', () => {
+    // WCAG 1.4.1：opacity 是纯色彩线索 ⇒ 补一条形状/位置通道（顶部 accent 横条）。
+    const ses = decls('.sessions-content[aria-busy]');
+    expect(ses, '.sessions-content[aria-busy] 需 position: relative 承载 ::after').toMatch(
+      /position\s*:\s*relative/,
+    );
+    const after = decls('.sessions-content[aria-busy]::after');
+    expect(after, '::after 需定位在容器顶部').toMatch(/position\s*:\s*absolute/);
+    expect(after).toMatch(/top\s*:\s*0/);
+    expect(after).toMatch(/height\s*:\s*2px/);
+    expect(after, '横条须用 accent 色，作为形状/位置线索').toMatch(
+      /background\s*:\s*var\(--accent\)/,
+    );
+    // 同一合并 ::after 规则须同时作用于 notes 列表，且各自容器承载 position。
+    expect(
+      decls('.notes-list[aria-busy]'),
+      '.notes-list[aria-busy] 需 position: relative 承载 ::after',
+    ).toMatch(/position\s*:\s*relative/);
+    expect(styles, '需存在 @keyframes busy-indicator（伸缩动画）').toMatch(
+      /@keyframes busy-indicator\s*\{/,
+    );
+    expect(styles, 'keyframes 须用 scaleX（尺寸/位置通道，非色彩）').toMatch(/scaleX\(0\)/);
+  });
 });

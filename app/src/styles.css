@@ -1859,6 +1859,10 @@ button.unassigned-tag:disabled {
      改为按内容宽度（不均分），配合父级 `flex-wrap: wrap` ⇒ 放不下就换行。 */
   flex: 0 0 auto;
   white-space: nowrap;
+  display: inline-flex; /* C14：让 min-height 命中区 ≥24×24 且文字垂直居中 */
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
   border: none;
   background: transparent;
   border-radius: var(--radius-sm);
@@ -2947,7 +2951,36 @@ button.unassigned-tag:disabled {
    *    记入 docs/v0.8.9-ui-visual-refresh.md 的「已知偏差」章节（属**临时态**，
    *    WCAG 1.4.3 对「正在加载」的中间态无豁免，但该态有 aria-busy 语义播报）。 */
   opacity: 0.8;
+  /* C15：opacity 是纯色彩线索（WCAG 1.4.1 不足），补一条**形状/位置**通道 ——
+   * 顶部 2px 伸缩横条，见下方 ::after 与 @keyframes busy-indicator。 */
+  position: relative;
 }
+
+/* C15：非色彩线索 —— 顶部 accent 横条做「正在刷新」指示（不靠颜色区分）。
+ * `scaleX` 伸缩是尺寸/位置变化（形状通道），不依赖颜色对比；
+ * prefers-reduced-motion 下 animation 被全局关闭 ⇒ 退化为静止全宽横条，仍是非色彩线索。 */
+.sessions-content[aria-busy]::after,
+.notes-list[aria-busy]::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  background: var(--accent);
+  transform-origin: left;
+  animation: busy-indicator 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes busy-indicator {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
 .sessions-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -3186,6 +3219,8 @@ button.unassigned-tag:disabled {
 .notes-list[aria-busy] {
   /* 同 `.sessions-content[aria-busy]`：0.80 才让次级文本接近 AA。 */
   opacity: 0.8;
+  /* C15：position 供上方合并的 ::after 定位（顶部伸缩横条）。 */
+  position: relative;
 }
 
 /* ---------- 新建区 ---------- */
@@ -3656,6 +3691,7 @@ button.unassigned-tag:disabled {
   justify-content: center;
   width: 22px;
   height: 22px;
+  position: relative; /* WCAG 2.5.8：命中区靠 ::before 扩到 24×24 */
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -3664,6 +3700,13 @@ button.unassigned-tag:disabled {
   transition:
     background 0.15s,
     color 0.15s;
+}
+
+/* C14：透明扩命中区到 24×24（22 + 1 + 1），视觉尺寸（22×22 hover 底）不变。 */
+.note-tool::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
 }
 
 .note-tool:hover {
@@ -3998,11 +4041,19 @@ button.unassigned-tag:disabled {
   height: 18px;
   padding: 0;
   margin-left: auto;
+  position: relative; /* WCAG 2.5.8：命中区靠 ::before 扩到 24×24 */
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-3);
   cursor: pointer;
+}
+
+/* C14：透明扩命中区到 24×24（18 + 3 + 3），视觉尺寸（18×18 图标/hover 底）不变。 */
+.card-open-window::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
 }
 
 .card-open-window:hover {
