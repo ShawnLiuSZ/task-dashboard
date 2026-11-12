@@ -29,13 +29,6 @@ interface Props {
   showGhStatus?: boolean;
 }
 
-// 稳定哈希 gh_status → 0-19，复用 repo-N 色系，同状态保持一致颜色。
-function projectStatusColor(s: string): number {
-  let h = 7;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 997;
-  return h % 20;
-}
-
 // 在浏览器中打开外链：阻止 webview 自身跳转，改用本机默认浏览器打开（失败经 reportError 可见）。
 function openLink(url: string, e: MouseEvent) {
   e.preventDefault();
@@ -110,12 +103,23 @@ function TaskCard({
             {t('card.ghState.closed')}
           </span>
         )}
-        {/* v0.3.43+：自定义列视图下显示 project.status 真实值徽章 */}
+        {/* v0.3.43+：自定义列视图下显示 project.status 真实值徽章。
+         *
+         * ⚠️ 本徽章**刻意保持中性灰**（不再按 status 哈希上色）。原先这里带
+         * `repo repo-N` 三类，想让「同一 status 恒同色」，但：
+         *   ① 该着色**从未生效过**（徽章一直是中性灰 10px）—— 一个没兑现的承诺。
+         *      ⚠️ 不要再用「把 `.repo-N` 挪到 `.gh-status` 后面就能着色」来解释它：
+         *      **徽章已在 markup 层解除 `repo` 类**（Phase 3 B2），与 CSS 书写顺序无关。
+         *      着色只作用于**仓库 chip**（`task.repo` 那一枚），状态徽章一直是中性灰。
+         *   ② 三套 20 槽色域会互相撞色：`.repo-N`（仓库身份，repoIndex%20）、
+         *      `.dot-status-N`（自定义列圆点，列序号%20）、status 哈希（gh_status%20）
+         *      是**三个互不相干的映射**。同屏撞色概率 80%+（生日悖论）⇒ 用户会把
+         *      徽章颜色误读成「这个状态属于那一列」。
+         *   ③ 自定义列视图下，状态**已经**由列头底色 + 圆点 + 列名三重冗余编码，
+         *      徽章再上色是纯冗余，且每卡 3 个彩色元素超出「彩色预算」。
+         * ⇒ 徽章改由文字承载状态语义（状态名本身），颜色留给仓库身份与列归属。 */}
         {showGhStatus && task.projectStatus && task.projectStatus.trim() !== '' && (
-          <span
-            className={`gh-status repo repo-${projectStatusColor(task.projectStatus)}`}
-            title={t('card.ghStatusTitle')}
-          >
+          <span className="gh-status" title={t('card.ghStatusTitle')}>
             {task.projectStatus}
           </span>
         )}

@@ -228,7 +228,9 @@ describe('记事本列表（网格布局，#456；原 #259 四列）', () => {
     const session = decls('.session-card');
     expect(card).toMatch(/display\s*:\s*flex/);
     expect(card).toMatch(/flex-direction\s*:\s*column/);
-    expect(card).toMatch(/border-radius\s*:\s*10px/);
+    // 圆角已收敛为 4 档令牌（原先是 10px 字面量）—— 断言跟着改令牌，
+    // 否则「圆角档位收敛」与「卡片与会话卡片同构」两条会互相打架。
+    expect(card).toMatch(/border-radius\s*:\s*var\(--radius-lg\)/);
     expect(card).toMatch(/padding\s*:\s*12px 14px/);
     // 逐项比对会话卡片，防止两者漂移
     expect(card).toMatch(session.match(/border-radius[^;]*;/)![0]);
@@ -247,7 +249,20 @@ describe('记事本列表（网格布局，#456；原 #259 四列）', () => {
     const dot = decls('.note-dot');
     expect(dot).toMatch(/background\s*:\s*var\(--note-accent/);
     expect(dot).toMatch(/width\s*:\s*7px/);
-    expect(dot).toMatch(/box-shadow\s*:[^;]*color-mix/);
+    // ⚠️ 原断言是 `expect(dot).toMatch(/box-shadow[^;]*color-mix/)` —— 它**强制要求**
+    // 一个在生产构建里整条失效的声明：build target 锁定 chrome105 / safari13，而
+    // color-mix() 需 Chrome 111 / Safari 16.2，Vite 的 postcss 不做降级 ⇒ 声明被
+    // 浏览器**整条丢弃**（不是降级成别的值）⇒ 半透明色环实际根本没渲染。
+    // 改为断言「伪元素 + opacity」实现（opacity 作用于整个伪元素，无需任何混色函数），
+    // 并补一条全表负向断言守住「样式表不出现运行时不可用的混色函数」。
+    const dotRing = decls('.note-dot::after');
+    expect(dotRing, '.note-dot 应有 ::after 伪元素承载半透明色环').toMatch(
+      /border\s*:\s*1\.5px solid var\(--note-accent/,
+    );
+    expect(dotRing).toMatch(/opacity\s*:\s*0\.22/);
+    expect(styles, '样式表不得出现运行时不可用的混色函数（color-mix / oklab / oklch）').not.toMatch(
+      /color-mix\(|oklab\(|oklch\(/,
+    );
   });
 
   it('卡片仍无左侧色条（#259 用户明确要求，不得借改版之机加回来）', () => {
@@ -368,8 +383,12 @@ describe('编辑搬进弹窗（#470）', () => {
     // 与查看弹窗同理：折叠只发生在卡片上，弹窗内必须完整可编辑。
     expect(decls('.note-editor-textarea')).not.toMatch(/-webkit-line-clamp/);
     expect(decls('.note-editor-textarea')).toMatch(/white-space\s*:\s*pre-wrap/);
-    // 遮罩与查看弹窗同级（30）⇒ 两弹窗的层级一致
-    expect(decls('.note-editor-mask')).toMatch(/z-index\s*:\s*30/);
+    // 遮罩与查看弹窗同级 ⇒ 两弹窗的层级一致。
+    // ⚠️ z-index 已收敛到 --z-* 令牌（层级是全局语义，散成字面量后改一处必漏另一处），
+    //    且 `.note-viewer-mask` 与 `.note-editor-mask` 必须是**同一个**令牌
+    //    —— 若两者用不同令牌，层级关系就不再由「同一个变量」保证。
+    expect(decls('.note-editor-mask')).toMatch(/z-index\s*:\s*var\(--z-note-viewer\)/);
+    expect(decls('.note-viewer-mask')).toMatch(/z-index\s*:\s*var\(--z-note-viewer\)/);
   });
 
   it('useAutoSize 是公共实现：两个弹窗都从 utils 引入，不得再有重复副本', () => {

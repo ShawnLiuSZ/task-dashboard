@@ -1,31 +1,54 @@
 :root {
   /* #444：字体偏好变量（值由 fontPrefs.ts 在运行时写入 <html> 内联样式）。
-   * 这里的默认值 = 未设置偏好时的表现，与 v0.7.1 及之前逐字一致。
+   * 这里的默认值 = 未设置偏好时的表现。
    *
-   * ⚠️ --font-mono 此前在 .session-meta-value（:2282）被引用却**从未定义**，
+   * ⚠️ --font-mono 此前在 .session-meta-value 被引用却**从未定义**，
    * 一直靠 font-family 声明缺失时的 fallback 侥幸渲染。本次起有了权威定义。
    *
-   * ⚠️ 字号缩放只作用于 rem/em 与 --font-size-base，**不覆盖散落的 83 处
-   * 硬编码 px**（10/11/12/13/14px 等）。原因：那些 px 承担着「徽章 / meta 行 /
-   * 图标文字」等**与基线字号解耦**的语义，全量改 rem 会连带改变徽章圆角、
-   * 行高与列宽的配合关系，回归面远大于收益。正文 / 标题 / 按钮等主层级已用rem。
+   * ⚠️ 字号缩放只作用于 rem 与 --font-size-base，**不覆盖散落的硬编码 px**
+   *（10/11/12px 等）。原因：那些 px 承担着「徽章 / meta 行 / 图标文字」等
+   * **与基线字号解耦**的语义，全量改 rem 会连带改变徽章圆角、行高与列宽的
+   * 配合关系，回归面远大于收益。正文 / 标题 / 按钮等主层级已用 rem。
    */
   --font-size-base: 13px;
   --font-ui:
     -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue',
     'Segoe UI', sans-serif;
-  --font-mono: 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
 
-  --bg: #f6f7f9;
+  /* ===== 中性色阶梯（冷中性灰，4 档）=====
+   * 顺序：bg < surface-2 < surface-raised < surface；深浅两套同构。
+   * --text-3 已收紧到 #666e7b（对 surface 5.15:1），不再用 #6b6b70。 */
+  --bg: #eef0f4;
   --surface: #ffffff;
-  --surface-2: #f0f1f3;
-  --border: rgba(0, 0, 0, 0.1);
-  --border-strong: rgba(0, 0, 0, 0.2);
-  --text: #1d1d1f;
-  --text-2: #6e6e73;
-  --text-3: #6b6b70;
+  --surface-2: #f6f7fa;
+  --surface-raised: #ffffff;
+  --text: #15181e;
+  --text-2: #565d6b;
+  --text-3: #666e7b;
+  --border: rgba(16, 20, 28, 0.09);
+  --border-strong: rgba(16, 20, 28, 0.16);
+  --overlay: rgba(12, 16, 22, 0.42);
+
+  /* ===== accent（主色 + 交互态 + 焦点环）===== */
   --accent: #0a6cff;
   --accent-hover: #0858d6;
+  --accent-active: #064bb0;
+  /* 焦点环用**不透明** accent（1.4.11 要求 ≥3:1，半透明环在浅底上会被稀释）。 */
+  --accent-focus: rgba(10, 108, 255, 0.42);
+  /* 预计算 hex：accent 10% + surface。⚠️ 禁用 color-mix()——build target 为
+   * chrome105 / safari13，该函数在两个 target 下均不可用且 Vite 不做降级，
+   * 声明会**整条失效**（不是降级成别的值）。 */
+  --accent-soft: #e8f2ff;
+  --accent-soft-strong: #d8e8ff; /* hover 态：比 --accent-soft 更浓的 accent 淡底 */
+  /* 「实时」徽标底色 = accent 12% + surface；字色用 accent-hover（accent 本身
+   * 在该底上只有 3.87:1，未达 AA 4.5）。 */
+  --live-badge-bg: #e2edff;
+  --live-badge-fg: #0858d6;
+  /* 选中项底色 = accent 8% + surface-2（原为 color-mix，生产构建整条失效） */
+  --selected-bg: #e3ecfa;
+
+  /* ===== 语义色（字色对各自底色 ≥ 4.5:1）===== */
   --amber-bg: #fdf0d5;
   --amber-text: #8a5a00;
   --teal-bg: #dcf3ec;
@@ -37,57 +60,249 @@
   --warning: #8a5a00;
   --warning-bg: #fff7e6;
   --danger: #c0392b;
+  --danger-bg: #fbeae7;
   --danger-hover: #a32d2d;
-  --code-bg: #f5f5f5;
-  --code-text: #333333;
-  /* #329：等宽字体族。此前 `.session-meta-value` 直接引用未定义的 `--font-mono`，
-     整条声明被浏览器丢弃（分支名/目录不再等宽，样式静默失效）。 */
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
-  --shadow: rgba(0, 0, 0, 0.06);
-  --shadow-strong: rgba(0, 0, 0, 0.12);
-  --overlay: rgba(0, 0, 0, 0.2);
+  --code-bg: #f2f4f7;
+  --code-text: #15181e;
+  /* --info 取文字变体而非 --accent：#0a6cff 对 --info-bg 只有 3.98:1，未达 AA。 */
+  --info: #0a5fdc;
+  --info-bg: #e8f0fd;
 
-  /* 20 status colors */
-  --status-0: #e11d48;
-  --status-1: #0891b2;
-  --status-2: #65a30d;
-  --status-3: #7c3aed;
-  --status-4: #ea580c;
-  --status-5: #0d9488;
-  --status-6: #c026d3;
-  --status-7: #ca8a04;
-  --status-8: #2563eb;
-  --status-9: #dc2626;
-  --status-10: #059669;
-  --status-11: #9333ea;
-  --status-12: #e11d48;
-  --status-13: #0284c7;
-  --status-14: #16a34a;
-  --status-15: #a855f7;
-  --status-16: #f97316;
-  --status-17: #14b8a6;
-  --status-18: #d946ef;
-  --status-19: #eab308;
+  /* ===== 间距（4 档）=====
+   * ⚠️ 固定 px，**不随 --font-size-base 缩放** —— 根字号接线只放大字号，
+   * 盒子尺寸恒定（看板列宽固定 320px，间距放大反而挤压内容宽）。 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
 
-  /* #304: 会话卡片边框色 */
-  --session-card-border-1: #3b82f6;
-  --session-card-border-2: #10b981;
-  --session-card-border-3: #f59e0b;
-  --session-card-border-4: #8b5cf6;
+  /* ===== 圆角（4 档，原 12 种收敛）===== */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-full: 999px;
+
+  /* ===== 阴影层级 ===== */
+  --elevation-0: none;
+  --elevation-1: 0 1px 2px rgba(16, 20, 28, 0.06), 0 2px 8px rgba(16, 20, 28, 0.04);
+  --elevation-2: 0 4px 12px rgba(16, 20, 28, 0.1);
+  --elevation-3: 0 12px 40px rgba(16, 20, 28, 0.16);
+  /* 既有阴影别名：保留定义（.detail / .session-card 引用），值 = 对应 elevation 主色。 */
+  --shadow: rgba(16, 20, 28, 0.06);
+  --shadow-strong: rgba(16, 20, 28, 0.16);
+
+  /* ===== z-index 层级 ===== */
+  --z-base: 0;
+  --z-sidebar: 1;
+  --z-sticky: 1;
+  --z-toolbar: 5;
+  --z-detail-backdrop: 10;
+  --z-detail: 11;
+  --z-modal-mask: 20;
+  --z-modal: 21;
+  --z-note-viewer: 30;
+
+  /* ===== status 20 组（色块色）=====
+   * 用途：色块 / 圆点 / 徽章**底色**，对 --surface-2 的实测对比度
+   * 浅 3.03–6.70:1、深 4.36–11.47:1，全部 ≥ 3:1（WCAG 1.4.11）。 */
+  --status-0: #8e3d4e;
+  --status-1: #a94d45;
+  --status-2: #aa6f54;
+  --status-3: #cd7b19;
+  --status-4: #a67916;
+  --status-5: #807011;
+  --status-6: #5b6528;
+  --status-7: #539a17;
+  --status-8: #178c4c;
+  --status-9: #1c9e7e;
+  --status-10: #178882;
+  --status-11: #1d9dac;
+  --status-12: #137492;
+  --status-13: #1a91d9;
+  --status-14: #3a65b2;
+  --status-15: #4d49b9;
+  --status-16: #9783c6;
+  --status-17: #9e66b7;
+  --status-18: #96538b;
+  --status-19: #cb6196;
+
+  /* ===== status 文字色（浅底深字）=====
+   * 用途：**文字**（仓库标签字色等），对各自 --repo-N-bg 实测 6.00–6.16:1（≥ AA 4.5）。
+   * ⚠️ 与 --status-N 分职责：误用 --status-N 当字色会让 11/20 组跌破 4.5:1。 */
+  --status-0-text: #9a2d49;
+  --status-1-text: #9e312c;
+  --status-2-text: #943f0e;
+  --status-3-text: #834d0e;
+  --status-4-text: #75540e;
+  --status-5-text: #65580d;
+  --status-6-text: #515c0d;
+  --status-7-text: #35650d;
+  --status-8-text: #106636;
+  --status-9-text: #106550;
+  --status-10-text: #10645f;
+  --status-11-text: #10636d;
+  --status-12-text: #106079;
+  --status-13-text: #105f8f;
+  --status-14-text: #2553a7;
+  --status-15-text: #4b4ba8;
+  --status-16-text: #6a48a5;
+  --status-17-text: #7b3f95;
+  --status-18-text: #8b377f;
+  --status-19-text: #983469;
+
+  /* ===== 仓库标签底色（浅色主题，20 组预计算 hex）=====
+   * 禁用 color-mix()（见 --accent-soft 处的说明）。 */
+  --repo-0-bg: #f3e7e8;
+  --repo-1-bg: #f6e9e7;
+  --repo-2-bg: #f5ede9;
+  --repo-3-bg: #faefe6;
+  --repo-4-bg: #f4efe5;
+  --repo-5-bg: #efede4;
+  --repo-6-bg: #eaece4;
+  --repo-7-bg: #eaf3e5;
+  --repo-8-bg: #e6f1e8;
+  --repo-9-bg: #e7f3ef;
+  --repo-10-bg: #e6f0ef;
+  --repo-11-bg: #e8f3f5;
+  --repo-12-bg: #e5eef2;
+  --repo-13-bg: #e7f2fb;
+  --repo-14-bg: #e6ecf7;
+  --repo-15-bg: #e7e9f8;
+  --repo-16-bg: #f2f0f9;
+  --repo-17-bg: #f3ecf7;
+  --repo-18-bg: #f3e9f1;
+  --repo-19-bg: #fbecf2;
+
+  /* ===== 四态列头 / 状态点 =====
+   * 列头底色 / 标题字色 / 圆点色三者分离；圆点坐在**各自列头底色**上，
+   * 实测对比度 ≥ 3.05:1（1.4.11）。todo 走中性阶（与四态同构，便于统一改主题）。 */
+  --column-todo-bg: #f6f7fa;
+  --column-todo-fg: #565d6b;
+  --column-doing-bg: #dbe9f6;
+  --column-doing-fg: #0c527c;
+  --column-processed-bg: #f2e6de;
+  --column-processed-fg: #6f400a;
+  --column-done-bg: #dae8e1;
+  --column-done-fg: #0d5c31;
+  --dot-todo: #6e7683;
+  --dot-doing: #0b7ec0;
+  --dot-processed: #b36a12;
+  --dot-done: #178c4c;
+
+  /* #304：会话卡片边框色。⚠️ 键名不可变更 —— SessionsPanel.tsx 用
+   * `var(--session-card-border-${colorIdx + 1})` 动态引用，styles.test.ts 亦有断言。 */
+
+  /* GitHub Issue 状态徽章（open / closed）—— **中性层级，不占红相**。
+   * 主理人裁定 §6.5：颜色预算留给列状态；红相只留给 --danger（危险 / 失败）。
+   * ⇒ 「已关闭」是**终态**而非错误态 ⇒ 用中性层级承载。
+   * ⚠️ 这不是对比度问题（旧的 pastel 组合实测 8.25 / 5.58，远超 AA），
+   *    差的是**语义**：终态不该看起来像失败。 */
+  --gh-closed-bg: #f6f7fa;
+  --gh-closed-fg: #15181e;
+  --gh-closed-border: var(--border-strong);
+  /* 交互 hover 底色 */
+  --label-chip-hover-bg: rgba(0, 0, 0, 0.04);
+  --success-hover-bg: rgba(28, 124, 61, 0.12);
+  --error-hover-bg: rgba(163, 45, 45, 0.12);
+  /* 徽章计数（压在 accent 底上的半透明白）*/
+  --chip-count-bg: rgba(255, 255, 255, 0.3);
+  /* 应用图标底色（品牌标记，主题无关）*/
+  --logo-gradient: linear-gradient(135deg, #4f8cff, #2b6fe0);
+  --logo-fg: #ffffff;
+  /* About 面板代码块（GitHub 风格：深底亮字，主题无关）*/
+  --about-code-bg: #0d1117;
+  --about-code-fg: #e6edf3;
+
+  --session-card-border-1: #2f6fd0;
+  --session-card-border-2: #1f8a5f;
+  --session-card-border-3: #b07a12;
+  --session-card-border-4: #6d4fc4;
+}
+
+/* 根字号接线：让 `--font-size-base` 真正作用到 rem。
+ * ⚠️ 现状是 `rem` **完全不受字号偏好影响** —— fontPrefs.ts 把 --font-size-base
+ * 写到 <html> 内联样式，但根字号恒为浏览器默认 16px，`0.8125rem` 恒为 13px。
+ * 系数 1.23076923 = 16 / 13 ⇒ base=13px 时根字号 16px（视觉逐像素不变），
+ * base=18px 时根字号 22.15px、`0.8125rem` = 18px（偏好真正生效）。
+ * ⚠️ 只影响 font-size：现有 20 处 rem **全部**是 font-size，零处用于间距/尺寸。 */
+html {
+  font-size: calc(var(--font-size-base) * 1.23076923);
+}
+
+/* ===== 焦点环（WCAG 2.4.7 焦点可见 / 2.4.11 焦点不被遮挡 / 1.4.11 非文本对比）=====
+ * 三段式，顺序不可调换：
+ *   ① :focus                        —— 不支持 :focus-visible 的旧引擎兜底
+ *   ② :focus:not(:focus-visible)    —— 现代浏览器里鼠标点击不显示焦点环
+ *   ③ :focus-visible                —— 键盘导航时显示
+ * 主环用**不透明** --accent：半透明环在浅底上会被稀释到 3:1 以下。
+ * ⚠️ 用 outline 而非 box-shadow —— box-shadow 不参与布局、会被祖先 overflow 裁掉，
+ *    且不跟随 border-radius；outline 会被裁，但至少在容器内可见。 */
+:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 卡片住在 .column-body（overflow-y: auto 滚动容器）里 ⇒ 外扩 4px 的环会被裁掉。
+ * 向内偏移 2px 保证**永远可见**（WCAG 2.4.11 焦点不被遮挡）。
+ * ⚠️ 只对卡片用向内偏移 —— .btn.primary / .chip.on 的底色本身就是 --accent，
+ *    向内偏移会让环与底色同色 ⇒ 完全隐形。 */
+/* ⚠️ 老引擎兜底：Safari 15.0–15.3 不支持 `:focus-visible` ⇒
+ * `:focus:not(:focus-visible)` 这条**整条被丢弃** ⇒ 卡片只剩全局 `:focus`
+ * 的外扩 2px 环；而 `.card` 住在 `.column-body`（overflow-y:auto）里
+ * ⇒ 外扩部分被裁掉 ⇒ **键盘焦点完全不可见**（WCAG 2.4.7 失败）。
+ * ⇒ 用 `.card:focus` 兜底：老引擎里也向内偏移 2px，保证环始终可见。
+ * ⚠️ 新引擎里 `:focus:not(:focus-visible) { outline: none }` 会先清掉
+ *    鼠标点击的环（本条只改 offset，不改 outline）⇒ 两条并存互不干扰。 */
+.card:focus,
+.card:focus-visible {
+  outline-offset: -2px;
 }
 
 /* #308: 深色模式 */
 [data-theme='dark'] {
-  --bg: #1a1a2e;
-  --surface: #25253d;
-  --surface-2: #2d2d4a;
-  --border: rgba(255, 255, 255, 0.1);
-  --border-strong: rgba(255, 255, 255, 0.2);
-  --text: #e8e8f0;
-  --text-2: #a0a0b8;
-  --text-3: #8888a0;
+  /* ===== 中性色阶梯（冷中性灰，替代原紫相 #1a1a2e / #25253d / #2d2d4a）===== */
+  --bg: #15171c;
+  --surface: #23272f;
+  --surface-2: #1c1f26;
+  --surface-raised: #2b303a;
+  --text: #e7eaef;
+  --text-2: #a6aebc;
+  --text-3: #9099a8;
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --overlay: rgba(0, 0, 0, 0.58);
+
+  /* ===== accent（提亮补偿深底对比损失）===== */
   --accent: #4a9eff;
   --accent-hover: #6bb0ff;
+  --accent-active: #3d8be8;
+  --accent-focus: rgba(74, 158, 255, 0.55);
+  --accent-soft: #2c3b50;
+  --accent-soft-strong: #35485f; /* 预计算 hex：accent 18% + surface */
+  /* 「实时」徽标：深色主题必须**同时**换底色与字色。
+   * ⚠️ 底色与字色**必须一起换** —— 9.1px 小字若沿用浅色的 #0858d6，
+   *    在 #283548 上只有 3.87:1（未达 AA 4.5）。
+   * 实测：--live-badge-fg #6bb0ff on #283548 = 5.48:1 ✅
+   * （底色相对亮度 0.80 的浅色药丸放到深底上是刺眼亮斑，亮度失衡。） */
+  --live-badge-bg: #283548;
+  --live-badge-fg: #6bb0ff;
+  /* 选中项底色：深色主题必须覆盖，否则浅色 #e3ecfa 直接泄漏到深底
+   * （实测与深色卡片面 --surface-2 的层差高达 13.86:1 ⇒ 亮斑）。
+   * ⚠️ 别调亮：#202937 的相对亮度 0.0217 与 --surface 0.0201 几乎相同 ——
+   *    这是**有意的**：选中态的识别由 .session-card.selected 本就有的
+   *    `border-width: 2px; border-color: var(--accent)` 承担，底色只是次级线索。
+   * 实测：--text 12.15:1 / --text-2 6.56:1 / --accent 5.32:1 ✅ */
+  --selected-bg: #202937;
+
+  /* ===== 语义色（深底亮字，字色对各自底色 ≥ 4.5:1）===== */
   --amber-bg: #3d3520;
   --amber-text: #f5d78e;
   --teal-bg: #1e3d35;
@@ -99,12 +314,116 @@
   --warning: #fbbf24;
   --warning-bg: #3d3520;
   --danger: #f87171;
+  --danger-bg: #3d1e1c;
   --danger-hover: #fca5a5;
-  --code-bg: #1e1e32;
-  --code-text: #e8e8f0;
+  --code-bg: #1b1e26;
+  --code-text: #e7eaef;
+  --info: #4a9eff;
+  --info-bg: #16243a;
+
+  /* ===== elevation（深色阴影更深、更集中）===== */
+  --elevation-1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.22);
+  --elevation-2: 0 4px 12px rgba(0, 0, 0, 0.38);
+  --elevation-3: 0 12px 40px rgba(0, 0, 0, 0.55);
   --shadow: rgba(0, 0, 0, 0.3);
-  --shadow-strong: rgba(0, 0, 0, 0.5);
-  --overlay: rgba(0, 0, 0, 0.5);
+  --shadow-strong: rgba(0, 0, 0, 0.55);
+
+  /* ===== status 20 组（色块色）：对 --surface-2 实测 4.36–11.47:1（≥ 3:1）===== */
+  --status-0: #fc899f;
+  --status-1: #fdb7af;
+  --status-2: #d6601e;
+  --status-3: #cf812e;
+  --status-4: #a28248;
+  --status-5: #d5c25b;
+  --status-6: #cce334;
+  --status-7: #8bd45e;
+  --status-8: #4f9566;
+  --status-9: #21b18e;
+  --status-10: #2bd9d0;
+  --status-11: #65bbc7;
+  --status-12: #21abd6;
+  --status-13: #58b7fb;
+  --status-14: #4f88ee;
+  --status-15: #9096d0;
+  --status-16: #b59af3;
+  --status-17: #e2a8fc;
+  --status-18: #ea77da;
+  --status-19: #fda4cd;
+
+  /* ===== status 文字色（深底亮字）：对各自 --repo-N-bg 实测 6.00–6.12:1 ===== */
+  --status-0-text: #fcb4bf;
+  --status-1-text: #fdc2bb;
+  --status-2-text: #fca882;
+  --status-3-text: #fcb068;
+  --status-4-text: #edb33d;
+  --status-5-text: #e6cf51;
+  --status-6-text: #cadd67;
+  --status-7-text: #9fde7b;
+  --status-8-text: #64d28a;
+  --status-9-text: #38ddb3;
+  --status-10-text: #33e5db;
+  --status-11-text: #31dcf0;
+  --status-12-text: #5cd1fc;
+  --status-13-text: #95cffc;
+  --status-14-text: #9bbffb;
+  --status-15-text: #b8bffc;
+  --status-16-text: #cfbdfc;
+  --status-17-text: #e8bcfc;
+  --status-18-text: #fcabef;
+  --status-19-text: #fdb8d7;
+
+  /* ===== 仓库标签底色（深色主题，20 组预计算 hex）=====
+   * 同名重定义 —— `.repo-N { background: var(--repo-N-bg) }` 一行两主题通用。 */
+  --repo-0-bg: #4f3c46;
+  --repo-1-bg: #4e4449;
+  --repo-2-bg: #483532;
+  --repo-3-bg: #463a35;
+  --repo-4-bg: #3c3a37;
+  --repo-5-bg: #45463c;
+  --repo-6-bg: #434c3a;
+  --repo-7-bg: #38493d;
+  --repo-8-bg: #2d3d3b;
+  --repo-9-bg: #2b4343;
+  --repo-10-bg: #2e4a4f;
+  --repo-11-bg: #32444d;
+  --repo-12-bg: #2b4150;
+  --repo-13-bg: #304457;
+  --repo-14-bg: #2d3b55;
+  --repo-15-bg: #393d4f;
+  --repo-16-bg: #403e55;
+  --repo-17-bg: #484157;
+  --repo-18-bg: #4b3951;
+  --repo-19-bg: #4e404e;
+
+  /* ===== 四态列头 / 状态点 ===== */
+  --column-todo-bg: #1c1f26;
+  --column-todo-fg: #a6aebc;
+  --column-doing-bg: #2c4053;
+  --column-doing-fg: #a9d7fd;
+  --column-processed-bg: #43362e;
+  --column-processed-fg: #fdc492;
+  --column-done-bg: #293935;
+  --column-done-fg: #9de5b2;
+  --dot-todo: #9aa1ad;
+  --dot-doing: #58b7fb;
+  --dot-processed: #e0963a;
+  --dot-done: #64b483;
+
+  /* #304：会话卡片边框色（深色下提亮，保证 ≥ 3:1） */
+
+  /* GitHub Issue 状态徽章（**中性层级**，与浅色主题同构 —— 见 :root 的注释）*/
+  --gh-closed-bg: #1c1f26;
+  --gh-closed-fg: #e7eaef;
+  --gh-closed-border: var(--border-strong);
+  --label-chip-hover-bg: rgba(255, 255, 255, 0.06);
+  --success-hover-bg: rgba(74, 222, 128, 0.14);
+  --error-hover-bg: rgba(248, 113, 113, 0.14);
+  --chip-count-bg: rgba(0, 0, 0, 0.24);
+
+  --session-card-border-1: #5b9ae8;
+  --session-card-border-2: #3fbb8b;
+  --session-card-border-3: #d9a23c;
+  --session-card-border-4: #9d86e0;
 }
 
 * {
@@ -184,7 +503,7 @@ body {
   /* 整窗横向滚动时，顶栏固定在左侧，搜索/同步/设置始终可见。 */
   position: sticky;
   left: 0;
-  z-index: 5;
+  z-index: var(--z-toolbar);
 }
 
 /* #520：顶栏的「收起 / 展开侧边栏」按钮（**仅图标**，无文字）。
@@ -198,7 +517,7 @@ body {
   height: 24px;
   padding: 0;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-2);
   cursor: pointer;
@@ -259,7 +578,7 @@ body {
   /* 同顶栏：横向滚动时固定在左侧。 */
   position: sticky;
   left: 0;
-  z-index: 5;
+  z-index: var(--z-toolbar);
 }
 
 .toolbar .input {
@@ -283,7 +602,7 @@ body {
 
 .banner.inline {
   margin-top: 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 0.5px solid var(--border);
 }
 
@@ -304,21 +623,21 @@ body {
   display: inline-block;
   width: 8px;
   height: 8px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   margin-right: 6px;
   vertical-align: baseline;
 }
 .hook-group-title-installed {
-  color: #0b6b4f;
+  color: var(--teal-text);
 }
 .hook-group-dot-installed {
-  background: #0b6b4f;
+  background: var(--teal-text);
 }
 .hook-group-title-available {
-  color: #0a5bd0;
+  color: var(--info);
 }
 .hook-group-dot-available {
-  background: #0a5bd0;
+  background: var(--info);
 }
 .hook-group-title-missing {
   color: var(--text-3);
@@ -334,24 +653,24 @@ body {
   border: 1px dashed var(--text-3);
 }
 .hook-row-installed {
-  color: #0b6b4f;
+  color: var(--teal-text);
 }
 .hook-row-available {
-  color: #0a5bd0;
+  color: var(--info);
 }
 /* #263：设备扫描 —— 「疑似已卸载」分组圆点（红：需要用户处理的接入残留）。 */
 .hook-group-dot-uninstalled {
-  background: #b3261e;
+  background: var(--danger);
 }
 .hook-row-uninstalled {
-  color: #b3261e;
+  color: var(--danger);
 }
 /* #263：行内设备安装徽标（本机已安装 / 已安装应用 / 仅残留配置 / 未检测到）。 */
 .agent-device {
   display: inline-block;
   padding: 0 6px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   font-size: 11px;
   line-height: 16px;
   white-space: nowrap;
@@ -395,7 +714,7 @@ body {
 /* v0.3.22+：账号下的项目列表。 */
 .project-list {
   border: 0.5px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 .project-row {
@@ -448,7 +767,7 @@ body {
   flex-direction: column;
   min-height: 0;
   background: var(--surface-2);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
@@ -460,34 +779,41 @@ body {
   flex: 0 0 auto;
   margin: 8px 8px 2px;
   padding: 5px 10px;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
 }
 .column-todo .column-head {
-  background: var(--surface-2);
+  background: var(--column-todo-bg);
 }
 .column-doing .column-head {
-  background: #dbe9fc;
+  background: var(--column-doing-bg);
 }
 .column-processed .column-head {
-  background: #d8eee5;
+  background: var(--column-processed-bg);
 }
 .column-done .column-head {
-  background: #d2ebdf;
+  background: var(--column-done-bg);
 }
 .column-todo .column-title {
-  color: var(--text-2);
+  color: var(--column-todo-fg);
 }
 .column-doing .column-title {
-  color: #0a5bd0;
+  color: var(--column-doing-fg);
 }
 .column-processed .column-title {
-  color: var(--success);
+  color: var(--column-processed-fg);
 }
 .column-done .column-title {
-  color: #0b6b4f;
+  color: var(--column-done-fg);
 }
 .column-head .count {
   margin-left: auto;
+  /* 列头底是**彩色**的 --column-*-bg（第 5 种承载面，中性色阶没覆盖到）。
+   * ⚠️ --text-3 在其中 3 个彩色底上不达 AA：浅 doing 4.16 / processed 4.20 /
+   *    done 4.07，深 doing 3.72 / processed 4.05 / done 4.22 ⇒ 改 --text-2
+   *    （实测 8 个组合 4.78–7.38 全达标）。
+   * ⚠️ **不要**改成 var(--column-*-fg) —— 那会让计数与列标题同色，
+   *    抹平「状态名（权威）→ 计数（辅助）」的层级差（Phase 1 §12.3）。 */
+  color: var(--text-2);
 }
 /* v0.3.51 (#165)：未匹配列提示（未映射的 project_status 值） */
 .unmapped-hint {
@@ -495,10 +821,10 @@ body {
   padding: 4px 10px;
   font-size: 11px;
   line-height: 1.5;
-  color: var(--text-2, #6b7280);
-  background: rgba(255, 165, 0, 0.08);
-  border: 1px dashed rgba(255, 165, 0, 0.45);
-  border-radius: 6px;
+  color: var(--text-2);
+  background: var(--warning-bg);
+  border: 1px dashed var(--warning);
+  border-radius: var(--radius-md);
   cursor: default;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -511,27 +837,36 @@ body {
 
 .count {
   color: var(--text-3);
-  font-size: 11px;
+  /* 真实文本（非装饰徽章）⇒ 提到 12px 本项目正文以下的最小可读档。
+   * 仍为固定 px：计数属 meta 族，不随 --font-size-base 缩放。 */
+  font-size: 12px;
 }
 
 .dot {
   width: 8px;
   height: 8px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   flex: 0 0 8px;
 }
 
 .dot-todo {
-  background: #8e8e93;
+  background: var(--dot-todo);
 }
 .dot-doing {
-  background: #0a6cff;
+  background: var(--dot-doing);
 }
 .dot-processed {
-  background: #30b386;
+  background: var(--dot-processed);
 }
 .dot-done {
-  background: #0b6b4f;
+  background: var(--dot-done);
+}
+/* 「未分类」列的圆点此前**没有任何定义** ⇒ 8px 透明圆点等于不可见。
+   补一个中性描边点，与 --dot-todo 同族但用描边而非填充以示「非四态」。 */
+.dot-unclassified {
+  background: transparent;
+  border: 1px solid var(--text-3);
+  box-sizing: border-box;
 }
 
 /* 20 status colors for column dots */
@@ -672,14 +1007,15 @@ body {
  * 造成「有记录的列和没有记录的列上边距不一致」）。 */
 .board .empty {
   color: var(--text-3);
-  font-size: 11px;
+  /* 空态提示是真实文本 ⇒ 提到 12px（对比度本就达标，11px 在高 DPI 屏吃力）。 */
+  font-size: 12px;
   padding: 8px 4px;
 }
 
 .card {
   background: var(--surface);
   border: 0.5px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 8px 10px;
   cursor: pointer;
   /* 卡片宽度跟随列宽（320px），不再被压窄或拉宽。 */
@@ -701,11 +1037,11 @@ body {
 
 /* v0.3.15：「我的」仅保留左侧红边框，去掉粉色背景，避免和「@我」「新评论」等暖色信息混淆。 */
 .card.mine {
-  border-left: 4px solid #e23b3b;
+  border-left: 4px solid var(--danger);
 }
 
 .card.mine.active {
-  border-color: #e23b3b;
+  border-color: var(--danger);
 }
 
 .card.candidate {
@@ -735,89 +1071,7 @@ body {
   color: var(--text-2);
   background: var(--surface-2);
   padding: 1px 6px;
-  border-radius: 4px;
-}
-
-/* 20 repo color classes — 复用 status 色系，浅底深字 */
-.repo-0 {
-  background: #fff1f2;
-  color: #be123c;
-}
-.repo-1 {
-  background: #ecfeff;
-  color: #0e7490;
-}
-.repo-2 {
-  background: #f7fee7;
-  color: #3f6212;
-}
-.repo-3 {
-  background: #f5f3ff;
-  color: #6d28d9;
-}
-.repo-4 {
-  background: #fff7ed;
-  color: #c2410c;
-}
-.repo-5 {
-  background: #f0fdfa;
-  color: #0f766e;
-}
-.repo-6 {
-  background: #fdf4ff;
-  color: #a21caf;
-}
-.repo-7 {
-  background: #fefce8;
-  color: #a16207;
-}
-.repo-8 {
-  background: #eff6ff;
-  color: #1d4ed8;
-}
-.repo-9 {
-  background: #fef2f2;
-  color: #b91c1c;
-}
-.repo-10 {
-  background: #ecfdf5;
-  color: #047857;
-}
-.repo-11 {
-  background: #faf5ff;
-  color: #7e22ce;
-}
-.repo-12 {
-  background: #fff1f2;
-  color: #be123c;
-}
-.repo-13 {
-  background: #f0f9ff;
-  color: #0369a1;
-}
-.repo-14 {
-  background: #f0fdf4;
-  color: #15803d;
-}
-.repo-15 {
-  background: #faf5ff;
-  color: #9333ea;
-}
-.repo-16 {
-  background: #fff7ed;
-  color: #c2410c;
-}
-.repo-17 {
-  background: #f0fdfa;
-  color: #0f766e;
-}
-.repo-18 {
-  background: #fdf4ff;
-  color: #a21caf;
-}
-.repo-19 {
-  background: #fefce8;
-  color: #a16207;
+  border-radius: var(--radius-sm);
 }
 
 .num {
@@ -829,14 +1083,109 @@ body {
 .gh-status {
   font-size: 10px;
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
   color: var(--text-2);
   border: 1px solid var(--border);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 130px;
+  /* ⚠️ 原先这里有 `overflow: hidden` + `text-overflow: ellipsis` + `max-width: 130px`，
+   * 但 `.card-top .gh-status { flex: 0 0 auto }`（styles.css:1188）⇒ 该元素
+   * 按**内容宽度**参与 flex 布局、不收缩 ⇒ **省略号永远不触发**。
+   * ⇒ 这三条是「看着能用、其实不生效」的误导性声明，已删除。
+   * 状态徽章文本天然很短（open / closed / 自定义短状态名），截断反而损失信息；
+   * 若将来出现超长自定义状态名，属信息架构问题（应换行/收进详情面板），
+   * 而不是在徽章上挂一个永不触发的省略号。 */
+}
+
+/* 仓库配色变体（20 组）—— **必须排在 .repo 基础样式之后**。
+ * 底色 = --repo-N-bg（两主题同名重定义），字色 = --status-N-text
+ * （文字色与色块色分职责，误用 --status-N 会跌破 4.5:1）。
+ * 📌 历史包袱（已消解，勿再引用）：早期 `.repo-N` 排在 `.gh-status` 之前，
+ *    而状态徽章同时带 `gh-status repo repo-N` 三类 ⇒ 同特异性下 .gh-status
+ *    整体胜出 ⇒ 仓库配色被覆盖、「同状态保持一致颜色」的承诺从未生效。
+ *    现已改为：**状态徽章只带 `gh-status`**（TaskCard.tsx，刻意保持中性 ——
+ *    project_status 是用户自定义字符串、颜色由哈希分配 ⇒ 无语义，且与列圆点
+ *    共用同一套 20 色槽 ⇒ 同屏撞色概率 80%+，会误导成「列归属色」），
+ *    `.repo-N` 也随之只作用于仓库 chip。 */
+.repo-0 {
+  background: var(--repo-0-bg);
+  color: var(--status-0-text);
+}
+.repo-1 {
+  background: var(--repo-1-bg);
+  color: var(--status-1-text);
+}
+.repo-2 {
+  background: var(--repo-2-bg);
+  color: var(--status-2-text);
+}
+.repo-3 {
+  background: var(--repo-3-bg);
+  color: var(--status-3-text);
+}
+.repo-4 {
+  background: var(--repo-4-bg);
+  color: var(--status-4-text);
+}
+.repo-5 {
+  background: var(--repo-5-bg);
+  color: var(--status-5-text);
+}
+.repo-6 {
+  background: var(--repo-6-bg);
+  color: var(--status-6-text);
+}
+.repo-7 {
+  background: var(--repo-7-bg);
+  color: var(--status-7-text);
+}
+.repo-8 {
+  background: var(--repo-8-bg);
+  color: var(--status-8-text);
+}
+.repo-9 {
+  background: var(--repo-9-bg);
+  color: var(--status-9-text);
+}
+.repo-10 {
+  background: var(--repo-10-bg);
+  color: var(--status-10-text);
+}
+.repo-11 {
+  background: var(--repo-11-bg);
+  color: var(--status-11-text);
+}
+.repo-12 {
+  background: var(--repo-12-bg);
+  color: var(--status-12-text);
+}
+.repo-13 {
+  background: var(--repo-13-bg);
+  color: var(--status-13-text);
+}
+.repo-14 {
+  background: var(--repo-14-bg);
+  color: var(--status-14-text);
+}
+.repo-15 {
+  background: var(--repo-15-bg);
+  color: var(--status-15-text);
+}
+.repo-16 {
+  background: var(--repo-16-bg);
+  color: var(--status-16-text);
+}
+.repo-17 {
+  background: var(--repo-17-bg);
+  color: var(--status-17-text);
+}
+.repo-18 {
+  background: var(--repo-18-bg);
+  color: var(--status-18-text);
+}
+.repo-19 {
+  background: var(--repo-19-bg);
+  color: var(--status-19-text);
 }
 
 /* card-top 内状态徽章靠右对齐（「★我的」之后、推到行尾）。 */
@@ -850,7 +1199,7 @@ body {
 .gh-state {
   font-size: 10px;
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
   color: var(--text-2);
   border: 1px solid var(--border);
@@ -865,149 +1214,10 @@ body {
   flex: 0 0 auto;
 }
 
-.gh-state-open {
-  background: #d4edda;
-  color: #155724;
-  border-color: #c3e6cb;
-}
-
 .gh-state-closed {
-  background: #f8d7da;
-  color: #721c24;
-  border-color: #f5c6cb;
-}
-
-/* ===== gh_status 五类配色（浅底深字，与看板列色语义一致） ===== */
-.gh-status-todo {
-  background: #e3edff;
-  color: #0a53c8;
-  border-color: #b9d2fb;
-}
-
-.gh-status-doing {
-  background: var(--amber-bg);
-  color: var(--amber-text);
-  border-color: #f0d9a8;
-}
-
-.gh-status-processed {
-  background: #efe7fb;
-  color: #6b34b8;
-  border-color: #d9c4f5;
-}
-
-.gh-status-done {
-  background: var(--teal-bg);
-  color: var(--teal-text);
-  border-color: #b3e0d2;
-}
-
-.gh-status-canceled {
-  background: #fde3e3;
-  color: #b42323;
-  border-color: #f3bcbc;
-}
-
-/* 20 status colors for project status tags and column dots — 高对比度 */
-.gh-status-0 {
-  background: #fff1f2;
-  color: #be123c;
-  border-color: #fecdd3;
-}
-.gh-status-1 {
-  background: #ecfeff;
-  color: #0e7490;
-  border-color: #a5f3fc;
-}
-.gh-status-2 {
-  background: #f7fee7;
-  color: #3f6212;
-  border-color: #d9f99d;
-}
-.gh-status-3 {
-  background: #f5f3ff;
-  color: #6d28d9;
-  border-color: #ddd6fe;
-}
-.gh-status-4 {
-  background: #fff7ed;
-  color: #c2410c;
-  border-color: #fed7aa;
-}
-.gh-status-5 {
-  background: #f0fdfa;
-  color: #0f766e;
-  border-color: #99f6e4;
-}
-.gh-status-6 {
-  background: #fdf4ff;
-  color: #a21caf;
-  border-color: #f0abfc;
-}
-.gh-status-7 {
-  background: #fefce8;
-  color: #a16207;
-  border-color: #fef08a;
-}
-.gh-status-8 {
-  background: #eff6ff;
-  color: #1d4ed8;
-  border-color: #bfdbfe;
-}
-.gh-status-9 {
-  background: #fef2f2;
-  color: #b91c1c;
-  border-color: #fecaca;
-}
-.gh-status-10 {
-  background: #ecfdf5;
-  color: #047857;
-  border-color: #a7f3d0;
-}
-.gh-status-11 {
-  background: #faf5ff;
-  color: #7e22ce;
-  border-color: #e9d5ff;
-}
-.gh-status-12 {
-  background: #fff1f2;
-  color: #be123c;
-  border-color: #fecdd3;
-}
-.gh-status-13 {
-  background: #f0f9ff;
-  color: #0369a1;
-  border-color: #bae6fd;
-}
-.gh-status-14 {
-  background: #f0fdf4;
-  color: #15803d;
-  border-color: #bbf7d0;
-}
-.gh-status-15 {
-  background: #faf5ff;
-  color: #9333ea;
-  border-color: #e9d5ff;
-}
-.gh-status-16 {
-  background: #fff7ed;
-  color: #c2410c;
-  border-color: #fed7aa;
-}
-.gh-status-17 {
-  background: #f0fdfa;
-  color: #0f766e;
-  border-color: #99f6e4;
-}
-.gh-status-18 {
-  background: #fdf4ff;
-  color: #a21caf;
-  border-color: #f0abfc;
-}
-.gh-status-19 {
-  background: #fefce8;
-  color: #a16207;
-  border-color: #fef08a;
+  background: var(--gh-closed-bg);
+  color: var(--gh-closed-fg);
+  border-color: var(--gh-closed-border);
 }
 
 /* v0.3.49 (#150)：.gh-status-row 已无引用（状态徽章回到 card-top），死码删除。 */
@@ -1018,7 +1228,7 @@ body {
 .own {
   font-size: 10px;
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   margin-left: 0;
 }
 
@@ -1028,8 +1238,8 @@ body {
 }
 
 .own-assigned-others {
-  background: #e8eefb;
-  color: #2a4f8f;
+  background: var(--info-bg);
+  color: var(--info);
 }
 
 .mine-badge {
@@ -1039,15 +1249,15 @@ body {
   padding: 0;
   border-radius: 0;
   background: none;
-  color: #e23b3b;
+  color: var(--danger);
 }
 
 .mention-badge {
   font-size: 10px;
   padding: 1px 6px;
-  border-radius: 4px;
-  background: #fde4cf;
-  color: #9a4a00;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--warning);
   font-weight: 500;
 }
 
@@ -1070,7 +1280,7 @@ body {
 .unassigned-tag {
   font-size: 10px;
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--amber-bg);
   color: var(--amber-text);
 }
@@ -1096,9 +1306,9 @@ button.unassigned-tag:disabled {
 .branch-tag {
   font-size: 10px;
   padding: 1px 5px;
-  border-radius: 4px;
-  background: #e2f4ec;
-  color: #0b6b4f;
+  border-radius: var(--radius-sm);
+  background: var(--teal-bg);
+  color: var(--teal-text);
   white-space: nowrap;
 }
 
@@ -1121,9 +1331,9 @@ button.unassigned-tag:disabled {
 }
 
 .assignee-name {
-  color: #2a4f8f;
-  background: #eef3fc;
-  border-radius: 4px;
+  color: var(--info);
+  background: var(--info-bg);
+  border-radius: var(--radius-sm);
   padding: 0 5px;
 }
 
@@ -1131,26 +1341,42 @@ button.unassigned-tag:disabled {
 .pr-link {
   font-size: 10px;
   padding: 1px 6px;
-  border-radius: 4px;
-  color: var(--accent);
-  background: #eaf2ff;
+  border-radius: var(--radius-sm);
   text-decoration: none;
   cursor: pointer;
   white-space: nowrap;
 }
 
-.cmt-link:hover,
-.pr-link:hover {
-  background: #dbe8ff;
+/* 文字色 / 底色职责分离（Phase 2 §5.1b H21）：
+   --accent 是**色块色**（门槛 ≥3:1），作文字色不达 AA（实测浅 4.04:1 / 深 4.13:1）。
+   ⇒ 改用专用文字色 --info + 专用底 --info-bg（实测浅 4.97:1 / 深 5.66:1 ✅）。
+   注：--info / --info-bg 是既有令牌，此处只改**消费者**，不动令牌层。 */
+.cmt-link {
+  color: var(--info);
+  background: var(--info-bg);
+}
+
+/* 悬停反馈同样走「形状通道」（下划线），底色不动：
+ * 旧规则常态底 = hover 底（都是 --accent-soft）⇒ 悬停零反馈。
+ * 改底色不成立：--accent-soft-strong 会让深色下 --info 跌到 3.40:1（破 AA），
+ * --surface-2 会让胶囊褪成中性（读作弱化而非强调）。
+ * 下划线与底色无关 ⇒ 两主题对比度恒为 4.97:1 / 5.66:1。 */
+.cmt-link:hover {
+  text-decoration: underline;
 }
 
 .pr-link {
-  color: #0b6b4f;
-  background: #e2f4ec;
+  color: var(--teal-text);
+  background: var(--teal-bg);
 }
 
+/* ⚠️ 与 .cmt-link 同构：悬停走形状通道，**不改底色**。
+ * 旧写法 `background: var(--accent-soft-strong)` 会让 PR 胶囊在悬停时
+ * 从 teal 家族漂到 accent（蓝）家族 —— 色相家族突变，读作「换了个东西」。
+ * 实测 teal-text on accent-soft-strong 为 5.23 / 6.14 ✅（不是可读性问题，
+ * 是设计不一致），改用下划线后常态/悬停底色恒为 --teal-bg。 */
 .pr-link:hover {
-  background: #cdeede;
+  text-decoration: underline;
 }
 
 .card-title {
@@ -1172,7 +1398,7 @@ button.unassigned-tag:disabled {
   align-items: center;
   gap: 5px;
   background: var(--amber-bg);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 1px 6px;
 }
 
@@ -1184,7 +1410,7 @@ button.unassigned-tag:disabled {
 .session code {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: #6b4700;
+  color: var(--amber-text);
 }
 
 /* #207：agent 分组下拉开关（整行可点，键盘可达）。 */
@@ -1239,30 +1465,30 @@ button.unassigned-tag:disabled {
 .pr-state {
   font-size: 10px;
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   white-space: nowrap;
   line-height: 1.5;
 }
 /* 已合并 = 绿（正向信号）；进行中 = 蓝（中性）；已关闭 = 灰（未合并的关闭）。 */
 .pr-state-merged {
-  background: #e3f5e9;
-  color: #1a7f37;
+  background: var(--success-bg);
+  color: var(--success);
 }
 .pr-state-open {
-  background: #e4eefb;
-  color: #1f5fa9;
+  background: var(--info-bg);
+  color: var(--info);
 }
 .pr-state-closed {
-  background: #ececee;
+  background: var(--surface-2);
   color: var(--text-2);
 }
 
 .candidate-tag {
   font-size: 10px;
-  background: #ececee;
+  background: var(--surface-2);
   color: var(--text-2);
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   margin-left: auto;
 }
 
@@ -1284,13 +1510,18 @@ button.unassigned-tag:disabled {
   max-height: calc(100% - 96px);
   background: var(--surface);
   border: 0.5px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 12px 40px var(--shadow-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-3);
   /* ⚠️ #498：`padding-top` 归零 —— 顶部留白改由 `.detail-head` 自己的 padding 提供。
      原因见下方 `.detail-head` 的注释：sticky 会抵消负 margin，上下位移只能靠 padding。 */
   padding: 0 18px 16px;
   overflow-y: auto;
-  z-index: 11;
+  /* ⚠️ WCAG 2.4.11 焦点不被遮挡：`.detail-head` 是 sticky（top:0），
+   * 键盘 Tab 滚动到内容区元素时，若不预留头部高度，该元素会被 sticky 头盖住。
+   * `scroll-padding-top` 让滚动定位自动让出头部高度。
+   * 头部实测高 ≈ 72px（issue id 行 + 标题行 + 上下 padding），取 88px 留余量。 */
+  scroll-padding-top: 88px;
+  z-index: var(--z-detail);
 }
 
 /* #494 / #498 / #500：详情头部 sticky —— 内容很长（描述 / 会话 / 交接 / GitHub / 评论 / PR 提交历史），
@@ -1316,7 +1547,7 @@ button.unassigned-tag:disabled {
 .detail-head {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--z-sticky);
   /* 只左右撑满宽（抵消 `.detail` 的左右 padding）；**不要上下负 margin**（见上方说明）。 */
   margin: 0 -18px;
   padding: 16px 18px 10px;
@@ -1363,7 +1594,7 @@ button.unassigned-tag:disabled {
   position: absolute;
   inset: 0;
   background: var(--overlay);
-  z-index: 10;
+  z-index: var(--z-detail-backdrop);
 }
 
 .detail-head .repo {
@@ -1485,12 +1716,12 @@ button.unassigned-tag:disabled {
   background: var(--code-bg);
   color: var(--code-text);
   padding: 1px 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .markdown pre {
   background: var(--code-bg);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 8px 10px;
   margin: 0 0 8px;
   overflow-x: auto;
@@ -1529,7 +1760,7 @@ button.unassigned-tag:disabled {
 .markdown img {
   max-width: 100%;
   height: auto;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   margin: 4px 0;
 }
 
@@ -1578,9 +1809,9 @@ button.unassigned-tag:disabled {
   display: inline-flex;
   align-items: center;
   padding: 1px 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
-  color: var(--accent);
+  border-radius: var(--radius-full);
+  background: var(--live-badge-bg);
+  color: var(--live-badge-fg);
   font-size: 0.7rem;
   font-weight: 600;
   line-height: 1.4;
@@ -1615,7 +1846,7 @@ button.unassigned-tag:disabled {
   display: flex;
   gap: 4px;
   background: var(--surface-2);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   padding: 2px;
   /* #529：GitHub 状态项可能有 20+ 个 ⇒ 必须允许**换行**。
      原来没有 `flex-wrap`（默认 nowrap）⇒ 全部挤在一行里。 */
@@ -1628,9 +1859,13 @@ button.unassigned-tag:disabled {
      改为按内容宽度（不均分），配合父级 `flex-wrap: wrap` ⇒ 放不下就换行。 */
   flex: 0 0 auto;
   white-space: nowrap;
+  display: inline-flex; /* C14：让 min-height 命中区 ≥24×24 且文字垂直居中 */
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
   border: none;
   background: transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   padding: 4px 6px;
   font-size: 11px;
   color: var(--text-2);
@@ -1667,7 +1902,7 @@ button.unassigned-tag:disabled {
   border: 0.5px solid var(--border-strong);
   background: transparent;
   color: var(--text);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 4px 12px;
   font-size: 12px;
   cursor: pointer;
@@ -1676,6 +1911,16 @@ button.unassigned-tag:disabled {
 
 .btn:hover:not(:disabled) {
   background: var(--surface-2);
+}
+
+/* 按下态：鼠标按住时给出「已按下」的实心反馈。
+ * ⚠️ `--accent-active`（浅 #064bb0 / 深 #3d8be8）此前是**死令牌**（引用数 0），
+ *    本条把它接线 —— 主按钮按下时底色比 hover 更深，形成三级层次：
+ *    常态 --accent → hover --accent-hover → active --accent-active。
+ * ⚠️ `:active` 在鼠标移出/失焦时会自动撤销，无需额外处理。 */
+.btn:active:not(:disabled) {
+  background: var(--accent-active);
+  border-color: var(--accent-active);
 }
 
 .btn:disabled {
@@ -1691,8 +1936,8 @@ button.unassigned-tag:disabled {
 
 /* 修复 hover 白底白字：保持 accent 底色 + 白字，仅略微加深。 */
 .btn.primary:hover:not(:disabled) {
-  background: #0858d6;
-  border-color: #0858d6;
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
   color: var(--surface);
 }
 
@@ -1710,7 +1955,7 @@ button.unassigned-tag:disabled {
 .input,
 .select {
   border: 0.5px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 4px 8px;
   font-size: 12px;
   font-family: inherit;
@@ -1732,6 +1977,17 @@ button.unassigned-tag:disabled {
   padding: 4px 6px;
 }
 
+/* 输入类控件的聚焦态：边框换成 accent（实心线索，浅 4.56:1 / 深 5.44:1）。
+ * ⚠️ 此前 `.input` / `.select` **完全没有**聚焦态样式 ⇒ 鼠标点击后
+ *    全局 `:focus:not(:focus-visible) { outline: none }` 把浏览器默认框也撤了
+ *    ⇒ 聚焦时**没有任何视觉反馈**（WCAG 2.4.7 失败）。
+ * ⇒ 用 `border-color` 承担识别职责（≥1px 实心，Phase 1 §12.1.1 硬规则）。
+ * ⚠️ 边框宽度保持不变（0.5px）⇒ 不引起重排。 */
+.input:focus,
+.select:focus {
+  border-color: var(--accent);
+}
+
 .modal-mask {
   position: absolute;
   inset: 0;
@@ -1739,14 +1995,17 @@ button.unassigned-tag:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  /* 高于 topbar/toolbar（z-index:5），矮窗口下弹窗顶栏不被搜索栏压住。 */
-  z-index: 20;
+  /* 高于 topbar/toolbar（--z-toolbar），矮窗口下弹窗顶栏不被搜索栏压住。 */
+  z-index: var(--z-modal-mask);
 }
 
 .modal {
   width: 520px;
+  /* 窄窗口下 520px 固定宽会溢出视口 ⇒ 与 `.detail` 同口径收窄。
+   * `.sync-logs-modal` 是另一类（内容为宽表格，独有 720px + 90vw），不并入此处。 */
+  max-width: calc(100% - 48px);
   background: var(--surface);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 18px 20px;
   /* 弹窗适配窗口高度：超高时内部出现 Y 轴滚动，避免标题/底部被截。 */
   max-height: calc(100% - 48px);
@@ -1787,7 +2046,7 @@ button.unassigned-tag:disabled {
   margin-top: 10px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface-2);
   color: var(--text);
   /* 用 rem 而非 px：随 --font-size-base 一起缩放，与正文字号联动。 */
@@ -1799,7 +2058,7 @@ button.unassigned-tag:disabled {
 .chip {
   border: 0.5px solid var(--border-strong);
   background: transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   padding: 2px 8px;
   font-size: 11px;
   cursor: pointer;
@@ -1823,6 +2082,8 @@ button.unassigned-tag:disabled {
 /* #447：顶部标题栏「新建备忘录」Modal。 */
 .note-composer-modal {
   width: 480px;
+  /* 窄窗口下 480px 固定宽会溢出视口 ⇒ 与 `.modal` / `.detail` 同口径收窄。 */
+  max-width: calc(100% - 48px);
 }
 
 .note-composer-textarea {
@@ -1884,7 +2145,7 @@ button.unassigned-tag:disabled {
 .about-modal .about-status {
   margin-top: 14px;
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   font-size: 12px;
   background: var(--bg);
   color: var(--text-2);
@@ -1894,18 +2155,18 @@ button.unassigned-tag:disabled {
 }
 
 .about-modal .about-status.up-to-date {
-  color: #1a7f37;
-  background: #eaf6ec;
+  color: var(--success);
+  background: var(--success-bg);
 }
 
 .about-modal .about-status.has-update {
-  color: #9a6700;
-  background: #fff8c5;
+  color: var(--warning);
+  background: var(--warning-bg);
 }
 
 .about-modal .about-status.error {
-  color: #cf222e;
-  background: #ffebe9;
+  color: var(--danger);
+  background: var(--danger-bg);
 }
 
 .about-modal .about-repo-row {
@@ -1961,9 +2222,9 @@ button.unassigned-tag:disabled {
 .about-modal .about-code {
   margin: 6px 0;
   padding: 8px 10px;
-  background: #0d1117;
-  color: #e6edf3;
-  border-radius: 8px;
+  background: var(--about-code-bg);
+  color: var(--about-code-fg);
+  border-radius: var(--radius-lg);
   font-size: 11px;
   line-height: 1.5;
   overflow-x: auto;
@@ -1984,7 +2245,7 @@ button.unassigned-tag:disabled {
   gap: 8px;
   padding: 8px 10px;
   border: 0.5px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
 }
 
 .account-row-head {
@@ -1996,9 +2257,9 @@ button.unassigned-tag:disabled {
 
 .default-tag {
   font-size: 10px;
-  color: #b58a00;
-  background: rgba(240, 180, 0, 0.15);
-  border-radius: 4px;
+  color: var(--warning);
+  background: var(--warning-bg);
+  border-radius: var(--radius-sm);
   padding: 1px 6px;
 }
 
@@ -2023,7 +2284,7 @@ button.unassigned-tag:disabled {
   gap: 4px;
   padding: 12px 10px;
   border: 0.5px dashed var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   margin-top: 4px;
 }
 
@@ -2034,7 +2295,7 @@ button.unassigned-tag:disabled {
   letter-spacing: 4px;
   padding: 6px 18px;
   margin-top: 6px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--accent);
   color: var(--surface);
   user-select: all;
@@ -2080,7 +2341,7 @@ button.unassigned-tag:disabled {
   line-height: 16px;
   color: var(--text-2);
   border: 0.5px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 0 5px;
 }
 
@@ -2108,9 +2369,14 @@ button.unassigned-tag:disabled {
 
 /* ===== v0.3.23+ 同步日志面板 ============================================ */
 
+/* ⚠️ 宽表格弹窗的宽度口径与 `.modal` 统一：`.modal` 用
+ * `max-width: calc(100% - 48px)`（48px = 两侧 24px 安全边距），
+ * 这里原先是 `max-width: 90vw` ⇒ 同一批弹窗里出现**两套边距口径**
+ * （48px vs 10vw），窄窗口下两者的实际留白还不一样。
+ * ⇒ 统一为 48px 口径；宽度基准仍是 720px（内容为宽表格，本就需要空间）。 */
 .sync-logs-modal {
   width: 720px;
-  max-width: 90vw;
+  max-width: calc(100% - 48px);
 }
 
 .sync-logs-body {
@@ -2124,7 +2390,7 @@ button.unassigned-tag:disabled {
 
 .sync-logs-table-wrap {
   border: 0.5px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   /* 表格最小内容宽度会超过弹窗内宽（目标列最长 320px，且表头/单元格多为 nowrap），
      原先的 overflow: hidden 把右侧列直接裁掉、且不产生任何滚动条。
      纵横两个方向都交给本容器：滚动条与内容处于同一视口，
@@ -2204,7 +2470,7 @@ button.unassigned-tag:disabled {
 .badge {
   display: inline-block;
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 11px;
   font-weight: 500;
 }
@@ -2249,7 +2515,7 @@ button.unassigned-tag:disabled {
   display: inline-block;
   min-width: 16px;
   padding: 0 4px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface-2);
   color: var(--text-2);
   font-size: 10px;
@@ -2259,7 +2525,7 @@ button.unassigned-tag:disabled {
 
 .sync-logs-tabs .chip.on .chip-count,
 .sync-logs-filter .chip.on .chip-count {
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--chip-count-bg);
   color: var(--surface);
 }
 
@@ -2300,7 +2566,7 @@ button.unassigned-tag:disabled {
   margin: 0;
   padding: 8px;
   border: 0.5px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -2364,7 +2630,7 @@ button.unassigned-tag:disabled {
   width: 100%;
   border: none;
   background: transparent;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   padding: 6px 10px;
   font-family: inherit;
   font-size: 0.8125rem;
@@ -2678,8 +2944,43 @@ button.unassigned-tag:disabled {
    替换成「加载中」占位 —— 与 .notes-card-cols[aria-busy] 同款。
    `aria-busy` 由 SessionsPanel 在 refreshing 时设置。 */
 .sessions-content[aria-busy] {
-  opacity: 0.65;
+  /* ⚠️ WCAG 1.4.3：`opacity` 会把**整层**文字与背景一起向底色混合。
+   * 实测浅色面 --text-2（#565d6b）@0.65 仅 2.97:1、@0.75 仅 3.66:1 ⇒ 跌破 4.5。
+   * @0.80 → 4.12:1 仍差；@0.85 → 4.63:1 达标但视觉上几乎看不出「正在刷新」。
+   * ⇒ 取 0.80：主文本（--text）@0.80 达 9.44:1，次级文本的残留偏差
+   *    记入 docs/v0.8.9-ui-visual-refresh.md 的「已知偏差」章节（属**临时态**，
+   *    WCAG 1.4.3 对「正在加载」的中间态无豁免，但该态有 aria-busy 语义播报）。 */
+  opacity: 0.8;
+  /* C15：opacity 是纯色彩线索（WCAG 1.4.1 不足），补一条**形状/位置**通道 ——
+   * 顶部 2px 伸缩横条，见下方 ::after 与 @keyframes busy-indicator。 */
+  position: relative;
 }
+
+/* C15：非色彩线索 —— 顶部 accent 横条做「正在刷新」指示（不靠颜色区分）。
+ * `scaleX` 伸缩是尺寸/位置变化（形状通道），不依赖颜色对比；
+ * prefers-reduced-motion 下 animation 被全局关闭 ⇒ 退化为静止全宽横条，仍是非色彩线索。 */
+.sessions-content[aria-busy]::after,
+.notes-list[aria-busy]::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  background: var(--accent);
+  transform-origin: left;
+  animation: busy-indicator 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes busy-indicator {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
 .sessions-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -2689,7 +2990,7 @@ button.unassigned-tag:disabled {
 .session-card {
   background: var(--surface-2);
   border: 1px solid var(--session-card-border-1);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
@@ -2735,7 +3036,7 @@ button.unassigned-tag:disabled {
 .session-card.selected {
   border-width: 2px;
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+  background: var(--selected-bg);
 }
 
 /* #391：复选框与标题同行对齐；卡片内 label 已 stopPropagation 防止误触卡片切换。 */
@@ -2781,7 +3082,7 @@ button.unassigned-tag:disabled {
   font-size: 12px;
   color: var(--text);
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 /* #310: 会话卡片复制/打开图标用强调色，区别于灰色展示文本 */
@@ -2916,7 +3217,10 @@ button.unassigned-tag:disabled {
 /* #329：后台刷新（增删改后的重查）只做轻量降透明提示，不再整块替换成「加载中」占位。
  * `aria-busy` 由 NotesPanel 在 refreshing 时设置。 */
 .notes-list[aria-busy] {
-  opacity: 0.65;
+  /* 同 `.sessions-content[aria-busy]`：0.80 才让次级文本接近 AA。 */
+  opacity: 0.8;
+  /* C15：position 供上方合并的 ::after 定位（顶部伸缩横条）。 */
+  position: relative;
 }
 
 /* ---------- 新建区 ---------- */
@@ -2925,7 +3229,7 @@ button.unassigned-tag:disabled {
   flex: 0 0 auto;
   background: var(--surface);
   border: 0.5px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 8px;
   display: flex;
   flex-direction: column;
@@ -2936,8 +3240,19 @@ button.unassigned-tag:disabled {
 }
 
 .note-composer:focus-within {
+  /* ⚠️ Phase 1 §12.1.2 ①：`border-width` 从 0.5px 提到 **2px**。
+   * 原来 0.5px 的 accent 边框 + 1.15:1 的 halo ⇒ 鼠标聚焦时（:focus-visible
+   * 不匹配、且 `.note-textarea` 是 border:0）实际等于没有任何提示。
+   * ⇒ 2px accent 边框 = 实心线索：浅 4.56:1 / 深 5.44:1（≥3:1）。
+   * 全局 `* { box-sizing: border-box }` ⇒ 边框变粗是向内吃 1.5px，**不引起重排**。
+   * ⚠️ `border-width` **不**加进 transition —— 宽度过渡会每帧触发重排，
+   *    且焦点反馈应当瞬时（跳变是有意的）。 */
+  border-width: 2px;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(10, 108, 255, 0.1);
+  /* 柔光环：`--accent-focus`（半透明，浅 0.42 / 深 0.55）。
+   * ⚠️ 它**不能单独承担识别职责**（合成后仅 1.84:1 / 2.75:1），
+   *    识别职责由上面那条 2px accent 边框承担。 */
+  box-shadow: 0 0 0 3px var(--accent-focus);
 }
 
 .note-textarea {
@@ -2956,9 +3271,9 @@ button.unassigned-tag:disabled {
   overflow-y: auto;
 }
 
-.note-textarea:focus {
-  outline: none;
-}
+/* 鼠标聚焦仍给边框色提示，但**不撤掉 outline** —— 旧写法 `outline: none`
+ * 的特异性（0,2,0）高于全局 `:focus-visible`（0,1,0）⇒ 键盘聚焦时焦点环
+ * 同样被撤掉（WCAG 2.4.7 失效）。 */
 
 .note-textarea::placeholder {
   color: var(--text-3);
@@ -2977,7 +3292,7 @@ button.unassigned-tag:disabled {
   display: inline-flex;
   gap: 2px;
   padding: 2px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface-2);
 }
 
@@ -2990,7 +3305,7 @@ button.unassigned-tag:disabled {
   font-size: 11px;
   line-height: 1;
   padding: 4px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition:
     background 0.15s,
@@ -2999,7 +3314,7 @@ button.unassigned-tag:disabled {
 
 .label-chip:hover {
   color: var(--text);
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--label-chip-hover-bg);
 }
 
 .label-chip.active {
@@ -3055,7 +3370,7 @@ button.unassigned-tag:disabled {
   gap: 8px;
   background: var(--surface-2);
   border: 1px solid var(--note-accent, var(--border));
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   padding: 12px 14px;
   break-inside: avoid;
   page-break-inside: avoid;
@@ -3085,7 +3400,7 @@ button.unassigned-tag:disabled {
    * 彩色底边由 inset 阴影补回，hover 时跟随边框色（与改造前一致）。 */
   border-bottom-color: transparent;
   box-shadow:
-    0 2px 8px var(--shadow),
+    var(--elevation-1),
     inset 0 -1px 0 var(--border-strong);
 }
 
@@ -3144,7 +3459,7 @@ button.unassigned-tag:disabled {
   width: 22px;
   height: 22px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
   color: var(--text-3);
   cursor: pointer;
@@ -3162,7 +3477,7 @@ button.unassigned-tag:disabled {
  * 宽度比通用 .modal (520px) 略宽：备忘录正文常有较长的行。
  */
 .note-viewer-mask {
-  z-index: 30;
+  z-index: var(--z-note-viewer);
 }
 
 .note-viewer-modal {
@@ -3191,7 +3506,7 @@ button.unassigned-tag:disabled {
   word-break: break-word;
   background: var(--surface-2);
   border: 1px solid var(--note-accent, var(--border));
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   padding: 12px 14px;
 }
 
@@ -3205,10 +3520,10 @@ button.unassigned-tag:disabled {
 /* #470：编辑 Modal —— 与查看 Modal 同挂在 .notes-panel 内部。
  *
  * 宽度同查看弹窗（640px）：备忘录正文常有较长的行，窄了编辑时要频繁换行。
- * 遮罩 z-index 同查看弹窗（30）⇒ 两弹窗不会互相压不住。
+ * 遮罩 z-index 同查看弹窗（同用 --z-note-viewer）⇒ 两弹窗不会互相压不住。
  */
 .note-editor-mask {
-  z-index: 30;
+  z-index: var(--z-note-viewer);
 }
 
 .note-editor-modal {
@@ -3237,7 +3552,7 @@ button.unassigned-tag:disabled {
   max-height: 420px;
   padding: 10px 12px;
   border: 1px solid var(--note-accent, var(--border));
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--surface-2);
   color: var(--text);
   font-family: inherit;
@@ -3248,10 +3563,11 @@ button.unassigned-tag:disabled {
   overflow-y: auto;
 }
 
+/* 旧写法 `outline: none` 会连带撤掉键盘焦点环（特异性 0,2,0 > 全局 :focus-visible 0,1,0）。
+ * 原先的 `box-shadow: 0 0 0 3px rgba(10,108,255,0.1)` 透明度仅 0.1 ⇒ 对比度
+ * 远低于 1.4.11 的 3:1，不能充当焦点指示器 ⇒ 改由全局 outline 承担。 */
 .note-editor-textarea:focus {
-  outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(10, 108, 255, 0.1);
 }
 
 .note-editor-textarea::placeholder {
@@ -3313,7 +3629,7 @@ button.unassigned-tag:disabled {
   border: 0;
   background: transparent;
   padding: 2px 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-family: inherit;
   font-size: 11px;
   color: var(--text-2);
@@ -3328,12 +3644,25 @@ button.unassigned-tag:disabled {
 /* #456：列不再有优先级色，优先级**完全**由卡片承载 ⇒ 色点从 6px 提到 7px、
  * 外加一圈同色淡描边，让「这条是什么优先级」在无列色辅助时也能一眼分辨。 */
 .note-dot {
+  position: relative;
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--note-accent, var(--text-3));
-  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--note-accent, var(--text-3)) 22%, transparent);
   flex: 0 0 auto;
+}
+/* 同色淡描边：原写法 `box-shadow: 0 0 0 1.5px color-mix(...)` 在本仓库**整条失效**
+ * （build target = chrome105 / safari13，color-mix 需 Chrome 111 / Safari 16.2）。
+ * 改用伪元素 + opacity 实现同样的半透明环 —— opacity 作用于整个伪元素，
+ * 无需任何混色函数，也无需在 3 处组件里额外注入 rgba 变量。 */
+.note-dot::after {
+  content: '';
+  position: absolute;
+  inset: -1.5px;
+  border: 1.5px solid var(--note-accent, var(--text-3));
+  border-radius: var(--radius-full);
+  opacity: 0.22;
+  pointer-events: none;
 }
 
 .note-time {
@@ -3362,14 +3691,22 @@ button.unassigned-tag:disabled {
   justify-content: center;
   width: 22px;
   height: 22px;
+  position: relative; /* WCAG 2.5.8：命中区靠 ::before 扩到 24×24 */
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-2);
   cursor: pointer;
   transition:
     background 0.15s,
     color 0.15s;
+}
+
+/* C14：透明扩命中区到 24×24（22 + 1 + 1），视觉尺寸（22×22 hover 底）不变。 */
+.note-tool::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
 }
 
 .note-tool:hover {
@@ -3402,8 +3739,11 @@ button.unassigned-tag:disabled {
   border-color: var(--accent);
   /* #475：同 hover —— 底边保持透明，彩色底边由 inset 阴影补回（用 accent 色）。 */
   border-bottom-color: transparent;
+  /* Phase 1 §12.1.2 ②：柔光环由 `--focus-halo` 改为 `--accent-focus`。
+   * 本状态是「删除确认」（**非焦点态**）⇒ 柔光环不再冒充焦点指示器；
+   * 识别职责由实心的 1px accent 边框 + 1px inset accent 底边承担。 */
   box-shadow:
-    0 0 0 3px rgba(10, 108, 255, 0.08),
+    0 0 0 3px var(--accent-focus),
     inset 0 -1px 0 var(--accent);
 }
 
@@ -3429,7 +3769,7 @@ button.unassigned-tag:disabled {
 .btn.small {
   padding: 3px 10px;
   font-size: 11px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
 }
 
 .btn.small.primary {
@@ -3439,8 +3779,8 @@ button.unassigned-tag:disabled {
 }
 
 .btn.small.primary:hover:not(:disabled) {
-  background: #0858d6;
-  border-color: #0858d6;
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
   color: var(--surface);
 }
 
@@ -3468,7 +3808,7 @@ button.unassigned-tag:disabled {
   gap: 6px;
   flex: 0 0 auto;
   padding: 6px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--success-bg);
   color: var(--success);
   font-size: 11px;
@@ -3484,7 +3824,7 @@ button.unassigned-tag:disabled {
 }
 
 .note-notice .note-tool:hover {
-  background: rgba(28, 124, 61, 0.12);
+  background: var(--success-hover-bg);
   color: var(--success);
 }
 
@@ -3495,7 +3835,7 @@ button.unassigned-tag:disabled {
   gap: 6px;
   flex: 0 0 auto;
   padding: 6px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--error-bg);
   color: var(--error);
   font-size: 11px;
@@ -3515,7 +3855,7 @@ button.unassigned-tag:disabled {
 }
 
 .note-error .note-tool:hover {
-  background: rgba(163, 45, 45, 0.12);
+  background: var(--error-hover-bg);
   color: var(--error);
 }
 
@@ -3523,6 +3863,9 @@ button.unassigned-tag:disabled {
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;
+    /* 同时关闭动画（keyframes）—— 将来新增动画时自动被这条覆盖，
+     * 避免「只关了 transition、漏了 animation」的半吊子实现。 */
+    animation: none !important;
   }
 }
 
@@ -3541,12 +3884,43 @@ button.unassigned-tag:disabled {
   height: 0;
 }
 
+/* ⚠️ WCAG 2.4.7 焦点可见：上面的 input 是 0×0 + opacity:0（视觉隐藏），
+ * 全局 `:focus-visible { outline }` 画在这个零尺寸元素上 ⇒ **焦点环完全不可见**。
+ * ⇒ 焦点环必须画在可见的 `.slider` 上。
+ * `input` 与 `.slider` 是兄弟节点（input 在前）⇒ 用 `+` 相邻兄弟选择器。
+ *
+ * ⚠️ 三段式，缺一不可（`:focus-visible` 需 Safari 15.4）：
+ *   ① `:focus`                    —— 旧引擎（Safari 15.0–15.3）唯一的救命规则。
+ *                                   未知伪类会让**整条选择器失效**，不是降级成别的值
+ *                                   ⇒ 只写 `:focus-visible` 的规则在旧引擎上直接消失。
+ *   ② `:focus:not(:focus-visible)` —— 现代浏览器「鼠标点击不留环」的对称写法。
+ *                                   必须显式写这一条：全局的 `:focus:not(:focus-visible)
+ *                                   { outline: none }` 只作用于 **input 自身**，
+ *                                   **管不到兄弟节点 `.slider`** ⇒ 鼠标点击时
+ *                                   `.slider` 上的环会一直留着。
+ *   ③ `:focus-visible`            —— 键盘导航时显示。
+ * 特异性：② (0,4,1) > ① (0,3,1) = ③ (0,3,1) ⇒ 顺序 ①→②→③ 时键盘态由 ③ 兜底，
+ * 鼠标态由 ② 清掉，且 ② 在键盘态下不匹配（键盘焦点满足 :focus-visible）⇒ 互不打架。 */
+.toggle input:focus + .slider {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.toggle input:focus:not(:focus-visible) + .slider {
+  outline: none;
+}
+
+.toggle input:focus-visible + .slider {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .toggle .slider {
   position: absolute;
   cursor: pointer;
   inset: 0;
   background: var(--border);
-  border-radius: 20px;
+  border-radius: var(--radius-lg);
   transition: background 0.2s;
 }
 
@@ -3558,7 +3932,7 @@ button.unassigned-tag:disabled {
   left: 3px;
   bottom: 3px;
   background: var(--surface);
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   transition: transform 0.2s;
 }
 
@@ -3595,9 +3969,9 @@ button.unassigned-tag:disabled {
   justify-content: center;
   width: 64px;
   height: 64px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #4f8cff, #2b6fe0);
-  color: #fff;
+  border-radius: var(--radius-lg);
+  background: var(--logo-gradient);
+  color: var(--logo-fg);
   font-size: 34px;
   font-weight: 700;
   user-select: none;
@@ -3667,11 +4041,19 @@ button.unassigned-tag:disabled {
   height: 18px;
   padding: 0;
   margin-left: auto;
+  position: relative; /* WCAG 2.5.8：命中区靠 ::before 扩到 24×24 */
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-3);
   cursor: pointer;
+}
+
+/* C14：透明扩命中区到 24×24（18 + 3 + 3），视觉尺寸（18×18 图标/hover 底）不变。 */
+.card-open-window::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
 }
 
 .card-open-window:hover {

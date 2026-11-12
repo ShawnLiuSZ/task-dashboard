@@ -117,6 +117,8 @@ cd app && npm run i18n:check
 
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — 设计要点（多源拉取、归属三分、四态维护、PR 关联）与 GitHub Actions 在线打包说明
 
+- [`docs/v0.8.9-ui-visual-refresh.md`](./docs/v0.8.9-ui-visual-refresh.md) — **界面视觉风格优化（v0.8.9）**：三阶段评审（视觉方向 / 体验与可达性 / 前端落地）后按批次收敛设计令牌 —— 非令牌硬编码色值 **235 → 0**、圆角 **12 种 → 4 档**、深色块覆盖 **27 → 125**、`z-index` 字面量 **8 → 0**、`color-mix()` **3 → 0**（老引擎会整条丢弃声明 ⇒ 改用预计算成对 hex）。补三段式焦点环（9 处）与 2.4.7 / 2.4.11 / 1.4.3 达标修复：`.cmt-link` 由 `--accent` 字压 `--accent-soft` 底（4.04 / 4.13 ❌）改 `--info` + `--info-bg`（4.97 / 5.66 ✅）、`.column-head .count` 改 `--text-2`、悬停反馈走**形状通道（下划线）**（改底色会让深色破 AA）。⚠️ 根字号接线用 `calc(var(--font-size-base) * 1.23076923)` ⇒ 13px 档视觉零变化、18px 档字号偏好真正生效。附「同色换底不成立」「背景令牌契约 4 列字色矩阵」「填充色 ≠ 文字色」三条全局不变量 + 反向验证纪律。**零新依赖 / 零 DB / 零 API 变更**
+
 - [`docs/CHANGELOG.md`](./docs/CHANGELOG.md) — 各版本的更新说明与修复记录（v0.3.1 → 最新 v0.8.0）
 
 - [`docs/issue-541-sessions-clear-closed.md`](./docs/issue-541-sessions-clear-closed.md) — **一键删除已关闭 issue 的任务会话**：会话面板删除某会话前无法知道对应 issue 是否已关闭，只能逐个点链接确认。方案：用**本地** `tasks.issue_state == 'closed'`（同步路径已权威归一化）过滤 + 复用现有 `api.clearSessions(keys)` **零后端改动** —— 仅清空 session 三列、保留任务行。交互：非选择模式工具栏新增「清除已关闭会话」按钮，无已关闭会话时置灰禁用；确认弹窗带计数；聚合视图下去重 `issueKey` 再传后端（同 #438/#391 口径）
