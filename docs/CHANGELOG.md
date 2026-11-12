@@ -6,7 +6,7 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **未发版（Unreleased）— 界面视觉风格优化：设计令牌收敛 + WCAG 2.2 AA 可达性补强**
+- **v0.8.9（2026-11-12）— 界面视觉风格优化：设计令牌收敛 + WCAG 2.2 AA 可达性补强（#555）**
 
   > 发版时归入 **v0.8.9**。三阶段评审（视觉方向 / 体验与可达性 / 前端落地）后按批次落地，**零新依赖、零 DB 变更、零 API 变更**。详见 [`v0.8.9-ui-visual-refresh.md`](./v0.8.9-ui-visual-refresh.md)。
 
@@ -19,7 +19,7 @@
   - **收尾批次（C14/C15）**：WCAG 2.5.8 目标尺寸 —— `.card-open-window` 18×18 / `.note-tool` 22×22 用透明 `::before` 负 inset（`-3px` / `-1px`）扩命中区至 ≥24×24、`.seg-btn` 加 `min-height: 24px` + `inline-flex` 垂直居中（命中高 ~21–23px → ≥24），**视觉尺寸不变**；WCAG 1.4.1 —— `aria-busy` 补顶部 2px `--accent` 伸缩横条作**形状/位置**通道（原仅 `opacity: 0.8` 纯色彩），`prefers-reduced-motion` 下退化为静止全宽横条。两条均做反向验证（注入缺陷 → 断言变红）。
   - **影响面**：`app/src/styles.css` · `styles.test.ts` · `components/TaskCard.tsx`（删除死函数 `projectStatusColor`、状态徽章去掉 `repo repo-N` 类）· `components/notes-layout.test.ts` · `docs/v0.8.9-ui-visual-refresh.md`（新）· 中英 CHANGELOG · `CONTRIBUTING.md` 索引。
 
-- **未发版（Unreleased，已在 `main`）— 产品盘点 P1/P2 批次：AI 辅助价值闭环的「度量 + 恢复入口 + 口径」**
+- **v0.8.9（2026-11-12）— 产品盘点 P1/P2 批次：AI 辅助价值闭环的「度量 + 恢复入口 + 口径」**
 
   > 来源：[`PRODUCT-REVIEW-2026-11-11.md`](../PRODUCT-REVIEW-2026-11-11.md) 想法清单。核心主线：看板/阅读层已做得较满，PRD §1 第二支柱「AI 执行辅助」能力层就位但**价值闭环没合上、从未验证跑没跑通**——本批次让闭环**可被观测**。发版时归入 **v0.8.9**（见 [roadmap](./roadmap.md)）。
 
