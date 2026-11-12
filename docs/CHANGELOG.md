@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发版（Unreleased）— 界面视觉风格优化：设计令牌收敛 + WCAG 2.2 AA 可达性补强**
+
+  > 发版时归入 **v0.8.9**。三阶段评审（视觉方向 / 体验与可达性 / 前端落地）后按批次落地，**零新依赖、零 DB 变更、零 API 变更**。详见 [`v0.8.9-ui-visual-refresh.md`](./v0.8.9-ui-visual-refresh.md)。
+
+  - **痛点**：`styles.css` 里 **235 处**非令牌硬编码色值、**12 种**圆角取值、**3 处 `color-mix()` 在生产构建中整条失效**（`build.target` = chrome105 / safari13，Vite 不降级该函数）、深色主题仅覆盖 27 个令牌、全表**零** `:focus-visible` 焦点环 ⇒ 双主题对比度与焦点可达性均无保障。
+  - **令牌层**：硬编码色值 **235 → 0**（225 个 hex 全部收进 `:root` / `[data-theme='dark']`）；圆角 **12 种 → 4 档**；深色块覆盖 **27 → 125**；`z-index` 字面量 **8 → 0**（全走 `--z-*`）；删除 26 条僵尸规则；**零死令牌**。`color-mix()` **3 → 0**，改用**预计算成对 hex**（老引擎不会降级，声明会整条丢弃）。
+  - **可达性**：新增三段式焦点环（`:focus` 老引擎兜底 / `:focus:not(:focus-visible)` 鼠标不留环 / `:focus-visible` 键盘显示），共 9 处；`.toggle` 焦点环转画到可见的 `.slider` 并补齐三段式（`input` 是 0×0 零尺寸元素，Safari 15.0–15.3 缺 `:focus-visible` 会让环彻底消失）；`.input` / `.select` / `.btn:active` 补交互态；`.detail` 补 `scroll-padding-top`（2.4.11）；`aria-busy` 降透明 0.65 → 0.80（`--text-2` @0.65 仅 2.97:1）；`prefers-reduced-motion` 补关 `animation`。
+  - **对比度缺陷修复**：`.cmt-link` 的 `--accent` 字色压 `--accent-soft` 底仅 **4.04 / 4.13:1** ❌ ⇒ 改用既有 `--info` + `--info-bg`（**4.97 / 5.66** ✅）；`.column-head .count` 由 `--text-3` 改 `--text-2`（彩色列头底 8 组 **4.78–7.38** 全达标）；`.gh-state-closed` 中性化（**16.59 / 13.68**）。⚠️ 两个 chip 的悬停反馈改走**形状通道（下划线）**：旧规则常态底 = hover 底 ⇒ 零反馈，而改底色会让深色下 `--info` 跌到 3.40:1 破 AA。
+  - **根字号接线**：`html { font-size: calc(var(--font-size-base) * 1.23076923) }` ⇒ 13px 基准下根字号仍 16px（**视觉零变化**），18px 档下 `0.8125rem` 从 13px → 18px（**字号偏好真正生效**）。配套把断言从「锁写法」改成「锁行为」（把公式当函数验证 13/18 两档输出）。
+  - **测试**：`styles.test.ts` +30 条能力约束（令牌层 / 双主题 40 槽全量覆盖 / 焦点环三段式 / 根字号行为 / 悬停形状通道），**每条纯 CSS 缺陷断言都做了反向验证**（注入缺陷 → 断言变红 → 还原 → 全绿）。`npm test` **620 passed**（37 files）· `tsc --noEmit` · `npm run build` · `prettier --check` · 四个 `check-*.py` 全绿。
+  - **影响面**：`app/src/styles.css` · `styles.test.ts` · `components/TaskCard.tsx`（删除死函数 `projectStatusColor`、状态徽章去掉 `repo repo-N` 类）· `components/notes-layout.test.ts` · `docs/v0.8.9-ui-visual-refresh.md`（新）· 中英 CHANGELOG · `CONTRIBUTING.md` 索引。
+
 - **未发版（Unreleased，已在 `main`）— 产品盘点 P1/P2 批次：AI 辅助价值闭环的「度量 + 恢复入口 + 口径」**
 
   > 来源：[`PRODUCT-REVIEW-2026-11-11.md`](../PRODUCT-REVIEW-2026-11-11.md) 想法清单。核心主线：看板/阅读层已做得较满，PRD §1 第二支柱「AI 执行辅助」能力层就位但**价值闭环没合上、从未验证跑没跑通**——本批次让闭环**可被观测**。发版时归入 **v0.8.9**（见 [roadmap](./roadmap.md)）。
