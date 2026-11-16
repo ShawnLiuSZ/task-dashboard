@@ -50,6 +50,25 @@ class ExtractIssueRefsTest(unittest.TestCase):
         # 标题里通常只有 `(#N)` 这一处主旨引用。
         self.assertEqual(extract_issue_refs("fix: 详情关联 (#278)", "正文不写编号"), [278])
 
+    def test_title_bare_hash_ref_not_closed(self):
+        # #559：标题里的**裸** `#N` 不触发关闭 —— GitHub 原生只认 body 的
+        # Closes/Fixes/Resolves，不会因标题里的裸 `#N` 关 issue。
+        # 此前任意 `#N` 都算，`Fix crash #123` 合并会误关 #123。
+        self.assertEqual(extract_issue_refs("Fix crash #123", ""), [])
+        self.assertEqual(extract_issue_refs("fix: 参考 #456 的写法", ""), [])
+
+    def test_title_revert_keeps_only_parenthetical_ref(self):
+        # #559 核心回归：Revert 类标题同时含「被回退的 issue」与「主旨 issue」，
+        # 只关后者。旧正则会把 #123 和 #456 一起关掉。
+        self.assertEqual(
+            extract_issue_refs("Revert workaround for #123 (#456)", ""),
+            [456],
+        )
+
+    def test_title_multiple_bare_refs_not_closed(self):
+        # 裸 `#N` 出现多处也一律不关；只有的 `(#N)` 算。
+        self.assertEqual(extract_issue_refs("update #1 and #2 (#3)", ""), [3])
+
     def test_body_keyword_ref(self):
         self.assertEqual(extract_issue_refs("t", "Closes #284"), [284])
 

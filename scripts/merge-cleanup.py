@@ -5,10 +5,12 @@
 「合并完还得手动删分支、手动关 issue」的人工收尾。
 
 关联 issue 的提取规则（详见 `extract_issue_refs`）：
-  * PR 正文只认**带关闭关键词的引用**（Closes / Fixes / Resolves / Refs / 关闭 / 解决
-    / 修复…），避免把正文里引用的历史 issue 号（如 CHANGELOG 里的「沿用 #155/#175
-    教训」）误判成要关闭的 issue；
-  * PR 标题里任何 `#N` 都算（标题通常就是 `... (#284)` 这一处主旨引用）。
+  * PR 正文只认**带关闭关键词的引用**（Closes / Fixes / Resolves / 关闭 / 解决 / 修复…），
+    避免把正文里引用的历史 issue 号（如 CHANGELOG 里的「沿用 #155/#175 教训」）误判成要
+    关闭的 issue；`Refs / References` 只是「引用」，**不**关闭（对齐 GitHub 原生）；
+  * PR 标题只认**括号主旨引用** `(#N)`（本仓库标题惯例 `... (#284)` 这一处）。标题里的
+    裸 `#N`（如 `Revert workaround for #123 (#456)` 中的 #123）**不**触发关闭 —— GitHub
+    原生也不会因标题里的裸 `#N` 关 issue，误关无法撤销（#559）。
 
 安全护栏：
   * 源分支属于 fork（`head.repo.full_name != repository.full_name`）时跳过删除；
@@ -33,9 +35,11 @@ import urllib.request
 
 GITHUB_API = "https://api.github.com"
 
-# 标题里的 `#N`：前后不得是字母数字或 `#`（避免 `123#456`、`##123` 之类的碎片）。
+# 标题里的**括号主旨引用** `(#N)`：本仓库标题惯例就是 `... (#284)` 这一处（#559 收紧）。
+# 只认括号形态：`Revert workaround for #123 (#456)` 这类标题里的裸 `#123` 不应触发关闭 ——
+# GitHub 原生只按 body 的 Closes/Fixes/Resolves 关 issue，不会因标题里的裸 `#N` 关闭。
 # 上限 6 位是 GitHub issue 编号的量级，不放大以免吃到 commit sha 的片段。
-TITLE_REF_RE = re.compile(r"(?<![\w#])#([1-9]\d{0,5})(?![\w])")
+TITLE_REF_RE = re.compile(r"\(#([1-9]\d{0,5})\)")
 
 # 正文里的**带关键词**引用：`Closes #284` / `Fixes: #123` / `关闭 #284`。
 # 关键词后允许冒号与空白，可连续跟多个编号；中文关键词同样支持（本仓库 CHANGELOG 中英并存）。
