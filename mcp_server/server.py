@@ -1029,6 +1029,12 @@ def tool_record_session(issue, session_id, agent=None, branch=None, work_dir=Non
     wd = (work_dir or "").strip()
     now = int(time.time())
     ag = (agent or "").strip()
+    # 已知设计（#591，2026-11-17 全量核查低危-9）：tasks 写路径**只按 issue_key 过滤，
+    # 不带 account_id** —— 多账号下同一 issue_key 可跨账号重复，此 UPDATE 可能跨账号命中。
+    # 两侧共有设计（Rust `common.rs::touch_session` 同理），非 Python 独有；#546 已给
+    # 关系表加 account_id，tasks 写路径未加。记录为已知设计：后续加 account_id 条件时
+    # 必须**两侧同步**（mcp.rs + server.py）并跑 `scripts/check-mcp-columns.py`。
+    # 当前按 issue_key 过滤是刻意权衡 —— 单账号场景下 issue_key 全局唯一，行为正确。
     # #427：tasks 三列（活跃会话缓存 + work_branch/work_dir）的 UPDATE 与 Rust 侧
     # `common.rs::touch_session` 逐字一致 —— branch/dir 是「任务属性」，留在 tasks。
     if br and wd:
