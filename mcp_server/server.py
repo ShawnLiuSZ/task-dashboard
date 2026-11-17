@@ -1455,18 +1455,33 @@ def _read_byte(stream):
     return chunk
 
 
-def _read_line(stream):
-    """从二进制流读「剩余的一行」（不含已消费的首字节），EOF 且无数据时返回 ``b""``。
+def _read_header_line(stream, first=b""):
+    """从二进制流按**字节**读一行头部（含已消费的首字节 ``first``）。
 
-    供Content-Length 头部解析使用 —— 那里按行处理是安全的（整行有
-    `MAX_FRAME_HEADER` 上限，且 body 按 Content-Length 精确读取）。
+    #571（中危-6）：Content-Length 头部原来走 ``readline()``，会把整行先读进内存、
+    **之后**才判 ``MAX_FRAME_HEADER`` —— 对无终止符的超长头部行（如 ``X-Pad: <1GB>``）
+    等于「先 OOM 再判超限」，上限形同虚设（与 #451 修 NDJSON 分支时同病）。
+    改为逐字节累积、边累积边判限。
+
+    返回 ``(line, is_eof, fatal_reason)``：
+    - ``line``：不含换行符（``\\r`` 保留，调用方 ``rstrip``）；EOF 时可能为部分数据。
+    - ``is_eof``：本行在遇到换行前已到流末尾。
+    - ``fatal_reason``：非空表示累计超过 ``MAX_FRAME_HEADER`` 仍未见换行（帧边界未知）。
     """
-    chunk = stream.readline()
-    if not chunk:
-        return b""
-    if isinstance(chunk, str):
-        chunk = chunk.encode("latin-1", "replace")
-    return chunk
+    buf = bytearray(first)
+    while True:
+        if len(buf) > MAX_FRAME_HEADER:
+            return (
+                bytes(buf),
+                False,
+                "头部超过 %d 字节仍未终止，无法定位帧边界" % MAX_FRAME_HEADER,
+            )
+        b = _read_byte(stream)
+        if b is None:
+            return bytes(buf), True, None
+        if b == b"\n":
+            return bytes(buf), False, None
+        buf += b
 
 
 def read_message(stream):
@@ -1513,12 +1528,12 @@ def read_message(stream):
 
     # Content-Length 分支：首字节已消费，需回填进首行缓冲。
     #
-    # ⚠️ 头部行仍按**行**读取（readline），不逐字节 —— 头部有MAX_FRAME_HEADER
-    # (8KB) 的整行上限保护，且 body 按 Content-Length 精确读取，不存在无界增长。
-    # 若这里也逐字节，`Content-Length: 123` 会被拆成单字节，`split(":", 1)`
-    # 永远匹配不到 ⇒ 头部解析恒为空。（#451 的一处实现教训：增量只该用在
-    # 「没有长度信息可依」的那条路径上。）
-    first_line = first + _read_line(stream)
+    # ⚠️ 头部行现按**字节**读取（`_read_header_line`，逐字节边累积边判
+    # MAX_FRAME_HEADER），不再 `readline()` —— 后者会把整行先读进内存、之后才判限，
+    # 对无终止符的超长头部行等于「先 OOM 再判超限」（#571 中危-6）。
+    first_line, _eof, _fatal = _read_header_line(stream, first)
+    if _fatal:
+        return ReadOutcome.fatal(_fatal)
     headers = {}
     header_bytes = 0
     line = first_line
@@ -1534,8 +1549,10 @@ def read_message(stream):
         if ":" in stripped:
             k, v = stripped.split(":", 1)
             headers[k.strip().lower()] = v.strip()
-        nxt = _read_line(stream)
-        if not nxt:
+        nxt, eof, fatal = _read_header_line(stream)
+        if fatal:
+            return ReadOutcome.fatal(fatal)
+        if eof and not nxt:
             return ReadOutcome.eof()
         line = nxt
 
