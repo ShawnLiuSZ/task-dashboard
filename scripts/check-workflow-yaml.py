@@ -307,6 +307,15 @@ def scan(lines: list[str]) -> list[str]:
                     step.uses_val = im.group("rest").strip()
                 elif im.group("key") == "run":
                     step.has_run = True
+            # 中危-2（#563）：列表项内联 `- run: <cmd>` 必须与独立行 `run:` 同口径检查
+            # VULN-03（`scripts/` 未 checkout）与 VULN-04（`${{ github.event.* }}` 插值）。
+            # 块标量形态（`- run: |`）已在上面 continue，此处 rest 必然非块指示符。
+            if im.group("key") == "run":
+                _rest = im.group("rest").strip()
+                if "scripts/" in _rest:
+                    runs_scripts = True
+                if _rest:
+                    run_interpolation_ln(ln, _rest, errors)
             # 其它缩进的列表项（`strategy.matrix.include` 等）不做进一步结构校验
             continue
 

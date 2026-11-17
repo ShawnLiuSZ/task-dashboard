@@ -115,6 +115,8 @@ cd app && npm run i18n:check
 
 - [`docs/issue-561-status-events-python-mcp.md`](./docs/issue-561-status-events-python-mcp.md) — **Python MCP 补齐 `status_events`（双实现一致性）**：2026-11-17 全量核查中危-1 —— `server.py` 的 `tool_update_task_status` / `tool_get_task_status` 缺 `status_events` 支持，与 Rust 权威实现（`common.rs::set_task_status` / `mcp.rs::tool_get`）不一致 ⇒ 用 Python 兜底 MCP 时 P1 度量「AI 自动维护通没通」漏记、agent 拿到的 `get_task_status` 契约分歧。修法：`ensure_schema` 自建 `status_events` 表（与 `db.rs::SCHEMA` 逐列对齐）、写路径插桩 `source='mcp'`、读路径附 `status_events` 字段、修正 CHANGELOG 键名 `statusEvents`→`status_events`。**零 SELECT_COLS / 零新工具 / 零新依赖**；+1 单测 + `setUp` 清库清单补 `status_events`
 
+- [`docs/issue-563-workflow-linter-inline-run.md`](./docs/issue-563-workflow-linter-inline-run.md) — **workflow linter 列表项内联 `run:` 绕过脚本/插值检查**：2026-11-17 全量核查中危-2 —— `check-workflow-yaml.py` 列表项分支在 `continue` 前只设 `step.has_run`，**不做** `runs_scripts`（VULN-03）与 `run_interpolation_ln`（VULN-04）判定（对照非列表 kv 分支两行都有）⇒ 黑盒实跑 `- run: echo "${{ github.event.issue.title }}"` 返回 `[]` 不报；且 VULN-04 在 `test_workflow_yaml.py` 零覆盖。修法：列表项分支 `continue` 前补齐两行检查；补 VULN-04 三形态（独立行 / 块标量 / 列表项内联）正反用例 + 边界用例（secrets/github.sha/token/env/matrix/runner 不误报）。**纯脚本层 / 零 DB / 零依赖**；按 §5.6 做注入确认（移除调用 ⇒ 用例变红）
+
 - [`docs/API-Architecture.md`](./docs/API-Architecture.md) — **GitHub API 与本地看板状态的架构说明**：数据流向、同步机制、三种获取方式、与 Projects v2 的关系、常见误区
 
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — 设计要点（多源拉取、归属三分、四态维护、PR 关联）与 GitHub Actions 在线打包说明

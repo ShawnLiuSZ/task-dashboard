@@ -576,6 +576,68 @@ class ExtendedDetectionTest(unittest.TestCase):
         )
         self.assert_flagged(text, "指向不存在的 job")
 
+    # ── #539 VULN-04：`run` 内 `${{ github.event.* }}` 脚本注入 ──────────────────
+    def test_run_interpolation_is_flagged(self):
+        """#563：VULN-04 三种形态都必须被拦（独立行 / 块标量 / 列表项内联）。
+
+        反向验证：把 check-workflow-yaml.py 列表项分支的 `run_interpolation_ln`
+        调用移除 ⇒ 本用例的「列表项内联」分支变红。
+        """
+        needle = "攻击者可影响"
+        # ① 独立行 `run:`（非列表项）—— 既有分支，防回归。
+        indep = VALID.replace(
+            "        run: python3 scripts/foo.py",
+            '        run: echo "${{ github.event.issue.title }}"',
+        )
+        self.assert_flagged(indep, needle)
+        # ② 块标量 `run: |` —— 既有分支，防回归。
+        block = """\
+name: demo
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "${{ github.event.issue.title }}"
+"""
+        self.assert_flagged(block, needle)
+        # ③ 列表项内联 `- run: <cmd>` —— #563 修的那条（此前绕过检查）。
+        inline = VALID.replace(
+            "      - name: Run\n        run: python3 scripts/foo.py",
+            '      - run: echo "${{ github.event.issue.title }}"',
+        )
+        self.assert_flagged(inline, needle)
+
+    def test_run_interpolation_allowed_contexts_not_flagged(self):
+        """#539 VULN-04 边界：运营方 / GitHub 控制的 context 不在禁止之列，不得误报。"""
+        allowed = [
+            "${{ secrets.KEY }}",
+            "${{ github.sha }}",
+            "${{ github.token }}",
+            "${{ env.VAR }}",
+            "${{ matrix.os }}",
+            "${{ runner.os }}",
+        ]
+        for ctx in allowed:
+            with self.subTest(ctx=ctx):
+                text = VALID.replace(
+                    "        run: python3 scripts/foo.py",
+                    f"        run: echo \"{ctx}\"",
+                )
+                problems = errs(text)
+                self.assertNotIn(
+                    "攻击者可影响",
+                    [p for p in problems if "内插" in p or "注入" in p],
+                    f"{ctx} 不应被 VULN-04 拦下，实际：{problems}",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
