@@ -127,6 +127,8 @@ cd app && npm run i18n:check
 
 - [`docs/issue-587-merge-cleanup-local-validation.md`](./docs/issue-587-merge-cleanup-local-validation.md) — **merge-cleanup load_payload 本地验证模式不强制 GITHUB_EVENT_PATH**：2026-11-17 全量核查低危-7 —— `load_payload()` 无条件要求 `GITHUB_EVENT_PATH`，缺 env 直接 `SystemExit`，与 `--body-file` / `--dry-run` 的「本地验证用」帮助文本矛盾（本地验 body 跑不动）。修法：`load_payload(allow_empty=False)`，`--body-file` / `--dry-run` 任一存在时缺 env 返回 `{}`，否则仍 `SystemExit`（workflow 路径不回归）；字段访问容错（`_pull = payload.get("pull_request") or {}` + `.get()` 兜底），本地验证漏传 `--base-ref` 等不再 `KeyError`。**零依赖**；+3 单测 + 反向验证（还原无条件 SystemExit ⇒ 本地模式用例红）
 
+- [`docs/issue-589-repofilterac-docstring.md`](./docs/issue-589-repofilterac-docstring.md) — **test_server RepoFilterAC docstring 移除过时「先测后写」声明**：2026-11-17 全量核查低危-8 —— `RepoFilterAC` docstring 仍写「实现尚未含 `repo` 参数，AC-1/3/4 是可接受红」，但实现已完成（`server.py::tool_list_my_tasks` :894 含 `repo`，#575 补三入参类型校验）且本类 5 例全绿、退出码 0 ⇒ 误导后来者。修法：docstring 改为「#546 实现已含 `repo`，四条 AC 全部由 `tool_list_my_tasks` 支持；#575 补类型校验；本类属实现后的 AC 验收」。**纯文档修正 / 零行为变更 / 零依赖**
+
 - [`docs/API-Architecture.md`](./docs/API-Architecture.md) — **GitHub API 与本地看板状态的架构说明**：数据流向、同步机制、三种获取方式、与 Projects v2 的关系、常见误区
 
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — 设计要点（多源拉取、归属三分、四态维护、PR 关联）与 GitHub Actions 在线打包说明
