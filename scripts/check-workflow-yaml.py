@@ -370,7 +370,11 @@ def scan(lines: list[str]) -> list[str]:
             continue
 
         if section == "on":
-            if ind == 2 and rest == "":
+            # 中危-4（#567）：`on:` 块下的**任何** ind==2 子键都是一个触发事件，
+            # 不论 rest 是否为空。`push: {branches: [main]}`（内联映射）与
+            # `pull_request: [opened]`（内联数组）的 rest 非空，原实现 `rest == ""`
+            # 判不进 ⇒ `on_triggers` 空 ⇒ 合法 workflow 被误报「没有任何触发事件」。
+            if ind == 2:
                 on_triggers.append(ln)
         elif section == "permissions":
             if ind == 2:

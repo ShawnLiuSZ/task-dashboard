@@ -576,6 +576,37 @@ class ExtendedDetectionTest(unittest.TestCase):
         )
         self.assert_flagged(text, "指向不存在的 job")
 
+    def test_on_inline_subkey_not_flagged_as_no_trigger(self):
+        """#567：`on:` 下内联映射 / 内联数组子键是合法触发事件，不得误报「没有任何触发事件」。
+
+        反向验证：把 `section == "on"` 块的 `if ind == 2:` 改回 `if ind == 2 and rest == "":`
+        ⇒ 本用例的①分支变红。
+        """
+        needle = "没有任何触发事件"
+        # ① 内联映射 `push: {branches: [main]}`
+        map_text = VALID.replace(
+            "on:\n  pull_request:\n",
+            "on:\n  push: {branches: [main]}\n",
+        )
+        self.assertFalse(
+            any(needle in p for p in errs(map_text)),
+            f"内联映射触发不应被误报，实际：{errs(map_text)}",
+        )
+        # ② 内联数组 `pull_request: [opened]`
+        arr_text = VALID.replace(
+            "on:\n  pull_request:\n",
+            "on:\n  pull_request: [opened]\n",
+        )
+        self.assertFalse(
+            any(needle in p for p in errs(arr_text)),
+            f"内联数组触发不应被误报，实际：{errs(arr_text)}",
+        )
+
+    def test_on_block_still_flagged_if_genuinely_empty(self):
+        """#567 回归：`on:` 块真的空时仍必须报「没有任何触发事件」。"""
+        text = VALID.replace("on:\n  pull_request:\n", "on:\n")
+        self.assert_flagged(text, "没有任何触发事件")
+
     # ── #539 VULN-04：`run` 内 `${{ github.event.* }}` 脚本注入 ──────────────────
     def test_run_interpolation_is_flagged(self):
         """#563：VULN-04 三种形态都必须被拦（独立行 / 块标量 / 列表项内联）。
