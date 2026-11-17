@@ -14,17 +14,31 @@ workflow 的缩进、`on:` 触发条件、权限块写错了，只有在有人�
   2. 缺 `name:` / `on:` / `jobs:`，或 `on:` 下没有任何触发事件
   3. job 既没有 `runs-on:` 也没有 `uses:`（不会执行 / 配置不完整）
   4. step 既没有 `uses:` 也没有 `run:`（空步骤）
-  5. 引用的第三方 action 没有固定版本（`actions/checkout` 没有 `@v5` → 随时被上游改坏）
+  5. 引用的第三方 action 没有固定到**完整 40 位 commit SHA**（#539 VULN-01 ——
+     `@v5` / `@stable` / `@main` 这类 tag / 分支 / 通道**仍属可变引用**：上游一次
+     push / 移动 tag 就换掉你 CI 里执行的全部代码，且不会在本仓库留下任何 diff 痕迹。
+     供应链投毒可致恶意签名安装包通过 updater 验签，故一律强制 SHA 固定）
   6. `${{ " ... "` / `${{ ' ... '` —— 表达式里的引号与 YAML 标量引号撞车，job 静默不执行
   7. `if:` 写成含 `: ` 的裸标量（YAML 会把 `github.event.x.y: v` 当复合值解析失败）
   8. 声明了 `permissions:` 却没有任何 scope（等于没配，退回仓库默认权限）
   9. workflow 直接执行仓库内脚本（`run:` 引用 `scripts/`）却没有 `actions/checkout` ——
      runner 的 workspace 默认是空的，不 checkout 会以「file not found」在静默状态失败
+     （#539 VULN-03）
  10. 官方 action 用 `@main` / `@master` 这类**浮动分支**引用（上游一次 push 就换掉你 CI 里
      执行的全部代码；供应链风险）
  11. job 有 `runs-on:` 却没有 `steps:`（GitHub 直接解析失败，且只有推送后才暴露）
  12. 顶层 key 重复声明（后者静默覆盖前者）
  13. `needs:` 指向不存在的 job（该 job 永远停在 pending，workflow 卡死）
+
+> #539 补丁：以下 VULN 项与 #329 项不同批落地（安全类），同样有正反用例：
+> - **VULN-01**：第三方 action 必须固定完整 40 位 commit SHA（见第 5 条；`@v5` 必报）。
+> - **VULN-02**：`actions/checkout` step 必须显式 `with: persist-credentials: false` ——
+>   否则写权限 token 被持久化进 runner `.git/config`，依赖构建脚本可读。
+> - **VULN-03**：`run:` 引用 `scripts/` 必须有 `actions/checkout`（per-job 判定，见第 9 条）。
+> - **VULN-04**：`run:`（含块标量）里禁止直接内插攻击者可影响的 context
+>   （`github.event.*` / `github.ref_name` / `github.head_ref`），必须经 `env:` 中转；
+>   `secrets.*` / `env.*` / `matrix.*` / `runner.*` / `github.token` / `github.sha`
+>   等运营方或 GitHub 控制的 context 不在禁止之列（避免误报）。
 
 > #329 补丁：第 8、10~13 项与「`permissions: read-all` 简写」「`on: [a, b]` 内联数组」
 > 的**误报修复**同批落地。检查器的误报比漏报更致命（见下方「双向要求」段），

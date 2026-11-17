@@ -123,6 +123,8 @@ cd app && npm run i18n:check
 
 - [`docs/issue-583-workflow-linter-crossline-interpolation.md`](./docs/issue-583-workflow-linter-crossline-interpolation.md) — **workflow linter 拦截 run 插值跨行拆分绕过**：2026-11-17 全量核查低危-5 —— `RUN_INTERPOLATION_RE` 逐行匹配，`run: |` 块标量里 `${{` 与 `github.event` 跨行拆分 ⇒ 两行各自不含完整模式 ⇒ 绕过（黑盒实跑确认）。修法：`scan()` 累积 `run:` 块标量完整文本（`block_run_lines` + `block_run_start`），块结束（dedent/EOF）时对 `"\n".join(...)` 一次性匹配（`[^}]*` 跨 `\n` 命中）；内联/独立行 `run:` 不受影响。**零依赖**；+1 单测 + 反向验证（还原逐行 ⇒ 用例红，scan 返回 `[]`）
 
+- [`docs/issue-585-workflow-linter-docstring.md`](./docs/issue-585-workflow-linter-docstring.md) — **workflow linter docstring 修正 @v5 矛盾 + 补 VULN-01~04 清单**：2026-11-17 全量核查低危-6 —— 文件头 docstring 第 5 条写「没有 `@v5` → 被上游改坏」，与实现矛盾（`SHA_PIN_RE` 要求**完整 40 位 commit SHA**，`@v5` / `@stable` / `@main` 必报），误导后来者以为 `@v5` 合规；且 VULN-02（checkout 必须 `with: persist-credentials: false`）/ VULN-04（`run:` 禁直接内插攻击者可影响 context）未列入缺陷清单。修法：第 5 条改为「必须固定 40 位 SHA，`@v5` 属可变引用必报」+ 清单后补「#539 补丁」段逐条列 VULN-01~04 及不误报边界（`secrets.*` / `env.*` 等不在禁列）。**纯文档修正 / 零行为变更 / 零依赖**
+
 - [`docs/API-Architecture.md`](./docs/API-Architecture.md) — **GitHub API 与本地看板状态的架构说明**：数据流向、同步机制、三种获取方式、与 Projects v2 的关系、常见误区
 
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — 设计要点（多源拉取、归属三分、四态维护、PR 关联）与 GitHub Actions 在线打包说明
