@@ -1516,10 +1516,11 @@ def read_message(stream):
     # ⚠️ 必须按字节读（`read(1)`）而非 `readline()`：首行同样可能是无终止符的
     #超长行，用 readline 读它就等于先把整行吃进内存 —— 那正是本函数要修的缺陷。
     first = _read_byte(stream)
-    while first in (b"\n", b"\r", b" "):
+    # 低危-3（#579）：帧间空白跳过对齐 Rust `mcp.rs::read_message` 的
+    # `is_ascii_whitespace()`（含 `\t`）。原实现只认 `\n\r空格`，消息间以 tab
+    # 分隔时会误入 Content-Length 分支。
+    while first is not None and first in (b"\n", b"\r", b" ", b"\t"):
         # 空白行跳过（消息之间的分隔）；EOF 由 _read_byte 返回 None 表示。
-        if first is None:
-            return ReadOutcome.eof()
         first = _read_byte(stream)
     if first is None:
         return ReadOutcome.eof()
