@@ -1119,6 +1119,42 @@ class FramingTests(unittest.TestCase):
         return [json.loads(c.decode()) for c in chunks]
 
 
+class HandleParamsTest(unittest.TestCase):
+    """#573（中危-7）：`tools/call` 的 `params` 非对象时返回 -32602，不抛异常、不断流。"""
+
+    def test_non_dict_params_returns_invalid_params(self):
+        """JSON-RPC 允许 params 为任意类型；不校验的客户端会发非对象。
+
+        原实现 `msg.get("params", {}).get("name")` 在非 dict 上抛 AttributeError
+        （try 之外），main 循环兜底丢弃该帧、无任何响应 ⇒ agent 等待超时挂起。
+        规范应返回 -32602 Invalid params。
+        """
+        for bad in ("oops", ["a", "b"], None, 123, 4.5, True):
+            with self.subTest(params=bad):
+                resp = S.handle(
+                    {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": bad}
+                )
+                self.assertEqual(resp["id"], 1)
+                self.assertEqual(resp["error"]["code"], -32602)
+                self.assertIn("必须是对象", resp["error"]["message"])
+
+    def test_dict_params_still_works(self):
+        """dict params 行为不变（未知工具返回 isError，不误报 Invalid params）。"""
+        resp = S.handle(
+            {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "nope"}}
+        )
+        self.assertEqual(resp["id"], 7)
+        self.assertEqual(resp["result"]["isError"], True)
+        self.assertIn("未知工具", resp["result"]["content"][0]["text"])
+
+    def test_missing_params_defaults_to_empty(self):
+        """无 params 键（或 params 为 null）也应安全处理，不抛异常。"""
+        # 无 params 键 → 默认 {} → name=None → 未知工具（isError），不崩溃。
+        resp = S.handle({"jsonrpc": "2.0", "id": 9, "method": "tools/call"})
+        self.assertEqual(resp["id"], 9)
+        self.assertEqual(resp["result"]["isError"], True)
+
+
 class AttachPrsTest(unittest.TestCase):
     """#467 后续修复：`_attach_prs` 的「主 PR 置首」语义（与 Rust 侧同一口径）。
 

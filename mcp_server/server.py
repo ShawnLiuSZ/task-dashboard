@@ -1648,8 +1648,22 @@ def handle(msg):
         }
 
     if method == "tools/call":
-        name = msg.get("params", {}).get("name")
-        arguments = msg.get("params", {}).get("arguments", {})
+        # 中危-7（#573）：JSON-RPC `params` 可为任意类型，规范要求 tools/call 是对象，
+        # 但不校验的客户端会发字符串 / 数组 / null / 数字 ⇒ `params.get()` 抛
+        # AttributeError，且发生在下方 try **之外**，该帧被 main 循环兜底丢弃、无任何
+        # 响应 ⇒ agent 侧等待超时挂起。按 JSON-RPC 2.0 返回 -32602 Invalid params。
+        params = msg.get("params", {})
+        if not isinstance(params, dict):
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "error": {
+                    "code": -32602,
+                    "message": f"tools/call 的 params 必须是对象，实际是 {type(params).__name__}",
+                },
+            }
+        name = params.get("name")
+        arguments = params.get("arguments", {})
         try:
             result = call_tool(name, arguments)
             text = json.dumps(result, ensure_ascii=False)
