@@ -230,7 +230,11 @@ def scan(lines: list[str]) -> list[str]:
         in_with = False
 
     for ln, raw in enumerate(lines, 1):
-        if "\t" in raw:
+        # 中危-5（#569）：tab 只禁在**缩进**（前导空白）里，注释 / 普通标量 / 块标量内的
+        # tab 是合法 YAML。原实现 `"\t" in raw` 查整行 ⇒ 注释或字符串值里的 tab 被误报
+        # 「使用 tab 缩进」。收窄到前导空白部分。
+        leading = raw[: len(raw) - len(raw.lstrip(" \t"))]
+        if "\t" in leading:
             errors.append(f"L{ln}: 使用 tab 缩进（YAML 只接受空格）")
             continue
         body = strip_comment(raw.rstrip("\n"))
@@ -426,7 +430,21 @@ def scan(lines: list[str]) -> list[str]:
                 elif key == "with":
                     # 进入 `with:` 块（`with:` 后面无内联值 ⇒ 其子键在 STEP_INPUT_INDENT）。
                     # `persist-credentials` 是 `actions/checkout` 的输入，只在此处合法。
-                    in_with = (rest.strip() == "")
+                    # 中危-5（#569）：`with: {persist-credentials: false}` 是**内联映射**，
+                    # rest 非空 ⇒ 原实现 `in_with = (rest.strip() == "")` 判 False ⇒ VULN-02
+                    # 误报。内联映射里的 `persist-credentials: false` 同样算已禁用。
+                    if rest.strip() == "":
+                        in_with = True
+                    else:
+                        _inline = rest.strip()
+                        if _inline.startswith("{") and _inline.endswith("}"):
+                            # `\S+` 会把闭括号 `}` 也吞进去（`false}`）⇒ 必须排除 `}`。
+                            _pc = re.search(r"persist-credentials\s*:\s*([^}\s]+)", _inline)
+                            if _pc:
+                                step.persist_credentials_false = (
+                                    _pc.group(1).strip().strip("'\"").lower() == "false"
+                                )
+                        in_with = False
                 elif key == "persist-credentials":
                     # #539 VULN-02：只认 `with:` 块内的显式 `false`。写在 step 层级是
                     # 无效字段（GitHub 会拒绝解析整个 workflow），不计为「已禁用持久化」。
