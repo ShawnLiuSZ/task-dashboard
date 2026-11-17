@@ -202,24 +202,40 @@ def close_issue(
 # --------------------------------------------------------------------------- #
 # 事件负载：workflow 直接指向 GITHUB_EVENT_PATH，避免多行正文走 shell 变量
 # --------------------------------------------------------------------------- #
-def load_payload() -> dict:
+def load_payload(allow_empty: bool = False) -> dict:
+    """读取 GITHUB_EVENT_PATH 事件负载。
+
+    ``allow_empty``（本地验证 --body-file / --dry-run）：GITHUB_EVENT_PATH 未设置时
+    返回 ``{}`` 而非 SystemExit —— 本地验证没有 workflow 事件负载，字段由
+    ``--pr-number`` / ``--base-ref`` / ``--head-ref`` / ``--head-sha`` 等显式参数提供。
+
+    低危-7（#587）：原实现无条件要求 GITHUB_EVENT_PATH，与 ``--body-file`` /
+    ``--dry-run`` 的「本地验证用」帮助文本矛盾 —— 缺 env 直接 SystemExit，
+    本地想验 body 内容跑不动。
+    """
     path = os.environ.get("GITHUB_EVENT_PATH", "").strip()
     if path:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
+    if allow_empty:
+        return {}
     raise SystemExit("GITHUB_EVENT_PATH 未设置（本脚本由 workflow 调用；本地验证请传 --body-file/--body-text）")
 
 
 def event_pr_number(payload: dict, pr_number: str) -> int:
     if pr_number.strip():
         return int(pr_number)
-    return int(payload["pull_request"]["number"])
+    # 低危-7（#587）：空负载容错（本地验证），避免 KeyError。
+    _pull = payload.get("pull_request") or {}
+    return int(_pull["number"])
 
 
 def event_pr_title(payload: dict, pr_title: str) -> str:
     if pr_title.strip():
         return pr_title
-    return payload["pull_request"]["title"]
+    # 低危-7（#587）：空负载容错（本地验证），避免 KeyError。
+    _pull = payload.get("pull_request") or {}
+    return _pull["title"]
 
 
 def event_pr_body(payload: dict, body_text: str, body_file: str) -> str:
@@ -228,7 +244,9 @@ def event_pr_body(payload: dict, body_text: str, body_file: str) -> str:
             return f.read()
     if body_text.strip():
         return body_text
-    return payload["pull_request"]["body"] or ""
+    # 低危-7（#587）：空负载容错（本地验证），避免 KeyError。
+    _pull = payload.get("pull_request") or {}
+    return _pull["body"] or ""
 
 
 def warn(msg: str) -> None:
@@ -261,13 +279,18 @@ def main(argv: list[str] | None = None) -> int:
         print("::error::GH_TOKEN / GITHUB_TOKEN 未设置，无法执行清理操作", file=sys.stderr)
         return 2
 
-    payload = load_payload()
+    # 低危-7（#587）：本地验证（--body-file / --dry-run）没有 GITHUB_EVENT_PATH，
+    # 允许空负载，字段由显式参数提供；workflow 调用仍强制事件负载。
+    payload = load_payload(allow_empty=bool(args.body_file or args.dry_run))
+    # 低危-7（#587）：空负载下字段访问要容错（.get 兜底），避免本地验证漏传
+    # --base-ref / --head-ref 时以 KeyError 崩溃而非给出清晰结果。
+    _pull = payload.get("pull_request") or {}
     pr_number = event_pr_number(payload, args.pr_number)
     pr_title = event_pr_title(payload, args.pr_title)
     pr_body = event_pr_body(payload, args.body_text, args.body_file)
-    base_ref = args.base_ref.strip() or payload["pull_request"]["base"]["ref"]
-    head_ref = args.head_ref.strip() or payload["pull_request"]["head"]["ref"]
-    head_sha = args.head_sha.strip() or payload["pull_request"]["head"]["sha"]
+    base_ref = args.base_ref.strip() or _pull.get("base", {}).get("ref", "")
+    head_ref = args.head_ref.strip() or _pull.get("head", {}).get("ref", "")
+    head_sha = args.head_sha.strip() or _pull.get("head", {}).get("sha", "")
     head_repo = args.head_repo.strip() or args.repo
 
     pr_url = f"https://github.com/{args.repo}/pull/{pr_number}"
