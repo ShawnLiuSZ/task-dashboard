@@ -360,6 +360,33 @@ def ensure_schema(c):
         "CREATE INDEX IF NOT EXISTS idx_status_events_created "
         "ON status_events(created_at)"
     )
+    # #565：notes 表（备忘录）。与 sessions/task_prs/task_comments 同款理由 ——
+    # Python MCP 是**独立进程**、不走 Rust 的 `db::open_db`，故必须自建表，
+    # 与 Rust `db.rs::SCHEMA`（:384-390）逐列对齐。
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notes (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          content    TEXT NOT NULL,
+          label      TEXT NOT NULL DEFAULT 'low',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+        """
+    )
+    # v0.3.24：早期无标签版本的库缺 label 列（Rust `MIGRATION_DDL` 有对应 ALTER）。
+    try:
+        c.execute("ALTER TABLE notes ADD COLUMN label TEXT NOT NULL DEFAULT 'low'")
+    except sqlite3.OperationalError:
+        pass
+    # db.rs:408：content 唯一索引。老库若有重复 content，Rust 侧先去重再建；
+    # Python 侧容错跳过，不硬失败 ensure_schema（否则整个 MCP 起不来）。
+    try:
+        c.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_notes_content ON notes(content)"
+        )
+    except sqlite3.OperationalError:
+        pass
     # #427：把 tasks 三列里的活跃会话搬进 sessions（与 Rust MIGRATE_DATA_FIXES
     # 第 3 条同语义）。INSERT OR IGNORE 保证幂等。
     c.execute(
