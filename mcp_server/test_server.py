@@ -93,6 +93,8 @@ class OnDemandTest(unittest.TestCase):
             # #467：多 PR 关系表也要一起清 —— 否则残留行会被后续用例的
             # `tool_list_my_tasks` 读到，表现为「凭空多出 PR 关联」。
             "DELETE FROM task_prs;"
+            # 中危-1：status_events 是 per-test 度量表，同样要清，否则跨用例累积。
+            "DELETE FROM status_events;"
         )
         c.commit()
         c.close()
@@ -448,6 +450,28 @@ class OnDemandTest(unittest.TestCase):
         self._stub_issue()
         result = S.tool_update_task_status("ShawnLiuSZ/task-dashboard#248", "col_1")
         self.assertEqual(result["status"], "col_1")
+
+    def test_status_events_recorded_and_returned(self):
+        # 中危-1：update 记录 status_events(source=mcp)，get 返回 status_events 字段。
+        self._add_account()
+        self._stub_issue()
+        S.tool_update_task_status("ShawnLiuSZ/task-dashboard#248", "已完成")
+        rows = S.conn().execute(
+            "SELECT old_status, new_status, source FROM status_events "
+            "WHERE issue_key='task-dashboard#248'"
+        ).fetchall()
+        self.assertEqual(len(rows), 1)
+        # 单 issue 按需拉取无 label 映射 ⇒ 落库初始为 todo；已完成→done。
+        self.assertEqual(rows[0][0], "todo")
+        self.assertEqual(rows[0][1], "done")
+        self.assertEqual(rows[0][2], "mcp")
+        result = S.tool_get_task_status("ShawnLiuSZ/task-dashboard#248")
+        self.assertTrue(result["found"])
+        evs = result["status_events"]
+        self.assertIsInstance(evs, list)
+        self.assertEqual(len(evs), 1)
+        self.assertEqual(evs[0]["new_status"], "done")
+        self.assertEqual(evs[0]["source"], "mcp")
 
     def test_insert_if_absent_does_not_overwrite(self):
         self._add_account()

@@ -113,6 +113,8 @@ cd app && npm run i18n:check
 
 - [`PRD.md`](./PRD.md) — 需求文档与决策演进（含已放弃的 Projects v2 方案、归属维度设计、API 避坑点）
 
+- [`docs/issue-561-status-events-python-mcp.md`](./docs/issue-561-status-events-python-mcp.md) — **Python MCP 补齐 `status_events`（双实现一致性）**：2026-11-17 全量核查中危-1 —— `server.py` 的 `tool_update_task_status` / `tool_get_task_status` 缺 `status_events` 支持，与 Rust 权威实现（`common.rs::set_task_status` / `mcp.rs::tool_get`）不一致 ⇒ 用 Python 兜底 MCP 时 P1 度量「AI 自动维护通没通」漏记、agent 拿到的 `get_task_status` 契约分歧。修法：`ensure_schema` 自建 `status_events` 表（与 `db.rs::SCHEMA` 逐列对齐）、写路径插桩 `source='mcp'`、读路径附 `status_events` 字段、修正 CHANGELOG 键名 `statusEvents`→`status_events`。**零 SELECT_COLS / 零新工具 / 零新依赖**；+1 单测 + `setUp` 清库清单补 `status_events`
+
 - [`docs/API-Architecture.md`](./docs/API-Architecture.md) — **GitHub API 与本地看板状态的架构说明**：数据流向、同步机制、三种获取方式、与 Projects v2 的关系、常见误区
 
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — 设计要点（多源拉取、归属三分、四态维护、PR 关联）与 GitHub Actions 在线打包说明

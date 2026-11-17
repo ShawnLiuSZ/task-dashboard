@@ -336,6 +336,30 @@ def ensure_schema(c):
         "CREATE INDEX IF NOT EXISTS idx_task_comments_issue "
         "ON task_comments(account_id, issue_key, created_at DESC)"
     )
+    # 产品盘点 P1 最小度量：status_events 表（每次状态流转 old→new 一行，
+    # source 区分驱动方 mcp=agent 驱动 / sync=远程权威覆盖）。
+    # Python MCP 是**独立进程**、不走 Rust 的 `db::open_db`，故必须自建表 ——
+    # 与 Rust `db.rs::SCHEMA`（:373-382）逐列对齐 + 两个索引。
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS status_events (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          issue_key  TEXT NOT NULL,
+          old_status TEXT NOT NULL DEFAULT '',
+          new_status TEXT NOT NULL,
+          source     TEXT NOT NULL DEFAULT 'mcp',
+          created_at INTEGER NOT NULL
+        )
+        """
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_status_events_key "
+        "ON status_events(issue_key)"
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_status_events_created "
+        "ON status_events(created_at)"
+    )
     # #427：把 tasks 三列里的活跃会话搬进 sessions（与 Rust MIGRATE_DATA_FIXES
     # 第 3 条同语义）。INSERT OR IGNORE 保证幂等。
     c.execute(
@@ -866,6 +890,22 @@ def tool_list_my_tasks(status=None, ownership=None, repo=None):
     return _attach_prs(rows_to_dicts(conn().execute(sql, params).fetchall()))
 
 
+def _status_events_for(key, limit=20):
+    """某任务最近的状态流转（新→旧），对齐 Rust `db.rs::list_status_events`。
+
+    查询失败（如旧库缺表）降级为空数组，不反噬主响应。
+    """
+    try:
+        rows = conn().execute(
+            "SELECT issue_key, old_status, new_status, source, created_at "
+            "FROM status_events WHERE issue_key=? ORDER BY id DESC LIMIT ?",
+            (key, limit),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    return [dict(r) for r in rows]
+
+
 def tool_get_task_status(issue):
     key = parse_issue_ref(issue)
     row = conn().execute(
@@ -877,6 +917,7 @@ def tool_get_task_status(issue):
             "found": True,
             "issue_key": key,
             **_attach_prs([dict(row)])[0],
+            "status_events": _status_events_for(key),
         }
     # v0.4.1 (#250)：本地未命中 → 按需拉取后再查一次。
     # 读路径保持「永远能回答」的旧契约：账号缺失 / 网络失败 / DB 异常都降级为
@@ -896,6 +937,7 @@ def tool_get_task_status(issue):
                 "pulled": outcome == "pulled",
                 # #467：补上该 issue 关联的全部 PR（`task_prs` 关系表）。
                 **_attach_prs([dict(row)])[0],
+                "status_events": _status_events_for(key),
             }
     if outcome == "remote_missing":
         reason_text = f"本地无此任务，且{reason}"
@@ -923,9 +965,21 @@ def tool_update_task_status(issue, status):
                 f"非法状态: {status}（应为 todo/doing/processed/done、中文四态"
                 f"或该任务账号的自定义列）"
             )
+    # 产品盘点 P1 最小度量：记录 old→new 流转（source=mcp），对齐 Rust
+    # `common.rs::set_task_status`。度量失败只打日志，不反噬主流程。
+    old_row = conn().execute("SELECT status FROM tasks WHERE issue_key=?", (key,)).fetchone()
+    old_status = old_row[0] if old_row else ""
     cur = conn().execute("UPDATE tasks SET status=? WHERE issue_key=?", (sk, key))
     if cur.rowcount == 0:
         raise ValueError(f"任务不存在: {key}")
+    try:
+        conn().execute(
+            "INSERT INTO status_events (issue_key, old_status, new_status, source, created_at) "
+            "VALUES (?, ?, ?, 'mcp', ?)",
+            (key, old_status, sk, int(time.time())),
+        )
+    except sqlite3.Error as e:
+        sys.stderr.write(f"[status-events] 记录流转失败（不影响状态写入）: {e}\n")
     return {"ok": True, "issue_key": key, "status": sk, "pulled": pulled}
 
 
