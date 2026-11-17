@@ -473,6 +473,23 @@ class OnDemandTest(unittest.TestCase):
         self.assertEqual(evs[0]["new_status"], "done")
         self.assertEqual(evs[0]["source"], "mcp")
 
+    def test_notes_crud_smoke(self):
+        # 中危-3：ensure_schema 必须自建 notes 表，6 个 note 工具才能工作。
+        # 注意 setUP 的 DELETE 清单没清 notes（本用例自建自清），依赖唯一 content 不撞。
+        added = S.tool_add_note("中危-3 冒烟", "low")
+        self.assertEqual(added["content"], "中危-3 冒烟")
+        nid = added["id"]
+        notes = S.tool_list_notes()
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]["content"], "中危-3 冒烟")
+        upd = S.tool_update_note(nid, "新内容")
+        self.assertEqual(upd["content"], "新内容")
+        lbl = S.tool_update_note_label(nid, "high")
+        self.assertEqual(lbl["label"], "high")
+        dele = S.tool_delete_note(nid)
+        self.assertTrue(dele["ok"])
+        self.assertEqual(S.tool_list_notes(), [])
+
     def test_insert_if_absent_does_not_overwrite(self):
         self._add_account()
         self._stub_issue()
