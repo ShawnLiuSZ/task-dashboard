@@ -896,6 +896,21 @@ class FramingTests(unittest.TestCase):
         self.assertEqual(outs[0].msg["id"], 2)
         self.assertEqual(outs[0].framing, S.CONTENT_LENGTH)
 
+    def test_interframe_tab_is_skipped(self):
+        """#579（低危-3）：消息间 `\\t` 分隔不得误入 Content-Length 分支。
+
+        原实现 `while first in (b"\\n", b"\\r", b" ")` 不认 `\\t` ⇒ `\\t` 被当作
+        Content-Length 分支首字节，后续 `{"jsonrpc"...` 被当头部解析失败。Rust
+        `is_ascii_whitespace()` 含 `\\t`。
+
+        反向验证：把 `b"\\n", b"\\r", b" ", b"\\t"` 改回 `b"\\n", b"\\r", b" "` ⇒ 本用例变红。
+        """
+        payload = b'{"jsonrpc":"2.0","id":4,"method":"tools/list"}\n'
+        outs = self._read_all(b"\t" + payload)
+        self.assertEqual(outs[0].kind, S.ReadOutcome.MSG, outs[0].why if outs else "")
+        self.assertEqual(outs[0].msg["id"], 4)
+        self.assertEqual(outs[0].framing, S.NDJSON)
+
     def test_malformed_ndjson_then_valid_is_continued(self):
         """核心回归：`{` 开头但 JSON 畸形的行，丢弃后仍必须能读到下一条合法消息。
 
