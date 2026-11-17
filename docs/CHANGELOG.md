@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **v0.8.10（2026-11-17）— 2026-11-17 全量核查 19 条发现闭环 + 界面易用性设计提案（#557）**
+
+  > **主线**：对 MCP 双实现（Rust `mcp.rs` / Python `server.py`）、workflow linter（`check-workflow-yaml.py`）、merge-cleanup（`merge-cleanup.py`）做了一次全量核查，**19 条发现全部闭环**（8 中危 + 10 低危共 18 个 PR 合并修复，低危-2「#589 docstring 过时」经核实为文档修正类、另 1 条记录为已知设计/可接受）——详见各 [`docs/issue-5xx-*.md`](../CONTRIBUTING.md) 知识库文档。**零新依赖 / 零 DB schema 变更**。
+
+  - **Python MCP 补齐双实现一致性（6 条，#562/#566/#572/#574/#576/#578）**：`server.py` 与 Rust 权威实现逐项对齐——`tool_update_task_status`/`tool_get_task_status` 补 `status_events` 支持（#561，用 Python 兜底 MCP 时 P1 度量不再漏记）；`ensure_schema` 自建 `notes` 表（#565，旧库上 note 工具不再 `no such table: notes`）；Content-Length 头部改**逐字节读取**（#571，堵 OOM）；`tools/call` 的 params 非对象返回 `-32602 Invalid params`（#573，不再无响应挂起）；`list_my_tasks` 三入参统一类型校验（#575，非字符串入参不再 `InterfaceError`）；`add_note`/`update_note_label` 空白标签回退 `low`（#577，对齐 Rust `normalize_note_label`）。
+  - **Python MCP 分帧/空白对齐（#580）**：帧间空白跳过补 `\t`（Rust `is_ascii_whitespace()` 含 `\t`，帧间 tab 分隔的合法 NDJSON 不再误判畸形）。
+  - **workflow linter 补漏/误报（7 条，#564/#568/#570/#582/#584/#586）**：列表项内联 `run:` 补齐 VULN-03/04 检查（#563，黑盒实跑不再漏报）；`on:` 内联子键不再误报「没有任何触发事件」（#567）；tab 检查收窄到前导缩进 + 识别 `with:` 内联映射的 `persist-credentials: false`（#569）；checkout 判定改 per-job（#581，修文件级布尔掩盖漏报/误报）；拦截 `run:` 插值跨行拆分绕过（#583）；docstring 修正 `@v5` 矛盾并补 VULN-01~04 清单（#585）。
+  - **merge-cleanup（#560/#588）**：关闭语义收窄——标题只认括号主旨引用 `\(#N\)`（#559，`Revert workaround for #123 (#456)` 不再同时误关 #123）；`load_payload` 本地验证模式（`--body-file`/`--dry-run`）不强制 `GITHUB_EVENT_PATH`（#587，本地验 body 不再 `SystemExit`）。
+  - **文档/注释修正（#590/#592/#594/#596）**：`RepoFilterAC` docstring 移除过时「先测后写」声明（#589）；`tasks` 写路径只按 `issue_key` 不带 `account_id` 记录为**已知设计**（#591）；`map_project_status_en` 陈旧注释改整值全等口径（#593）；`set_task_status` 的 `unwrap_or(0)` 时间戳兜底记录为**可接受**（#595）。
+  - **界面易用性设计提案（#557）**：复刻真实 DOM + 真实 `styles.css` 用 Chrome 无头渲染截图 + 字号/留白/列宽量化实测 ⇒ 结论「视觉系统健康、信息架构与交互习惯欠账」（零 `draggable` / `NavKey` 含 `'board'` 但侧栏不渲染看板入口 / 零全局快捷键 / 点卡片只开精简 modal）；产出设计提案 + 开发交接单（B1 导航归位 + B2 卡片重构 + B5 栅格对齐，R1–R10 十条红线）。**本期仅文档，未落地**（落地另建 issue，涉及 #526/#527 需主理人拍板）。
+  - **影响面**：`mcp_server/{server.py,test_server.py}` · `scripts/{check-workflow-yaml.py,merge-cleanup.py}` · `app/src-tauri/src/{mcp,common,sync}.rs` · 新增 KB 文档 21 篇（issue-559~595 + ui-design-proposal + ui-design-handoff）· 中英 CHANGELOG · `CONTRIBUTING.md` 索引。
+
 - **v0.8.9（2026-11-12）— 界面视觉风格优化：设计令牌收敛 + WCAG 2.2 AA 可达性补强（#555）**
 
   > 发版时归入 **v0.8.9**。三阶段评审（视觉方向 / 体验与可达性 / 前端落地）后按批次落地，**零新依赖、零 DB 变更、零 API 变更**。详见 [`v0.8.9-ui-visual-refresh.md`](./v0.8.9-ui-visual-refresh.md)。
