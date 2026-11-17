@@ -121,6 +121,8 @@ cd app && npm run i18n:check
 
 - [`docs/issue-581-workflow-linter-checkout-per-job.md`](./docs/issue-581-workflow-linter-checkout-per-job.md) — **workflow linter 缺 checkout 判定改 per-job**：2026-11-17 全量核查低危-4 —— `scan()` 用文件级 `runs_scripts` + 全文件字符串搜 `actions/checkout@`：①A job 跑脚本缺 checkout、B job 有 ⇒ B 的 checkout 掩盖 A 的缺失（漏报）；②注释掉的 checkout 命中字符串掩盖缺失（漏报）；③`./` 本地 action 隐含已 checkout 却误报缺（误报）。修法：`Job` 加 `runs_scripts`/`has_checkout`、`Step` 加 `is_local_action`（`./` 本地 action），三处 `runs_scripts=True` 改 per-job、`flush_step` 标记本 job checkout、移除文件级字符串搜改 per-job 最终检查（只报「本 job 有脚本且本 job 无 checkout」）。**零依赖**；+3 单测 + 反向验证（3 mutation 各自变红）
 
+- [`docs/issue-583-workflow-linter-crossline-interpolation.md`](./docs/issue-583-workflow-linter-crossline-interpolation.md) — **workflow linter 拦截 run 插值跨行拆分绕过**：2026-11-17 全量核查低危-5 —— `RUN_INTERPOLATION_RE` 逐行匹配，`run: |` 块标量里 `${{` 与 `github.event` 跨行拆分 ⇒ 两行各自不含完整模式 ⇒ 绕过（黑盒实跑确认）。修法：`scan()` 累积 `run:` 块标量完整文本（`block_run_lines` + `block_run_start`），块结束（dedent/EOF）时对 `"\n".join(...)` 一次性匹配（`[^}]*` 跨 `\n` 命中）；内联/独立行 `run:` 不受影响。**零依赖**；+1 单测 + 反向验证（还原逐行 ⇒ 用例红，scan 返回 `[]`）
+
 - [`docs/API-Architecture.md`](./docs/API-Architecture.md) — **GitHub API 与本地看板状态的架构说明**：数据流向、同步机制、三种获取方式、与 Projects v2 的关系、常见误区
 
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — 设计要点（多源拉取、归属三分、四态维护、PR 关联）与 GitHub Actions 在线打包说明

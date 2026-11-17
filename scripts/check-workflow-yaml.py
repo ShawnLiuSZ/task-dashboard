@@ -225,6 +225,11 @@ def scan(lines: list[str]) -> list[str]:
     in_block = False
     block_indent = -1
     block_owner: str | None = None  # 块标量所属的 key（用于判定 `run: |` 里的 scripts 引用）
+    # 低危-5（#581）：累积 `run:` 块标量的**完整**文本，块结束时一次性做插值检查。
+    # 原实现逐行匹配 `RUN_INTERPOLATION_RE`，`${{` 与 `github.event` 跨行拆分即绕过
+    # （黑盒复现：`echo ${{` + `github.event.x }}` 两行拼接不报）。改对完整文本匹配。
+    block_run_lines: list[str] = []
+    block_run_start: int = 0
     in_with = False  # 是否正处在某个 step 的 `with:` 块内（用于定位 persist-credentials）
 
     def flush_step() -> None:
@@ -266,14 +271,22 @@ def scan(lines: list[str]) -> list[str]:
         # 只做结构解析、不做缩进与 key/value 校验。
         if in_block:
             if ind > block_indent:
-                if block_owner == "run" and "scripts/" in body:
-                    if job is not None:
-                        job.runs_scripts = True
                 if block_owner == "run":
-                    run_interpolation_ln(ln, body, errors)
+                    # 低危-5（#581）：累积 run 块完整文本（不再逐行调插值检查）。
+                    if not block_run_lines:
+                        block_run_start = ln
+                    block_run_lines.append(body)
+                    if "scripts/" in body and job is not None:
+                        job.runs_scripts = True
                 continue
+            # 块标量结束（dedent 或下一个 key）：对累积的完整 run 文本做一次插值检查。
+            # 低危-5（#581）：跨行拆分的 `${{` / `github.event` 由 `[^}]*` 跨 `\n` 命中。
+            if block_owner == "run" and block_run_lines:
+                run_interpolation_ln(block_run_start, "\n".join(block_run_lines), errors)
             in_block = False
             block_owner = None
+            block_run_lines = []
+            block_run_start = 0
 
         if ind % 2:
             errors.append(f"L{ln}: 缩进 {ind} 不是偶数（workflow 约定统一 2 空格缩进）")
@@ -485,6 +498,10 @@ def scan(lines: list[str]) -> list[str]:
                 continue
         elif section == "env" and ind == 2 and rest == "":
             errors.append(f"L{ln}: `env:` 下的 `{key}` 缺少值")
+
+    # 低危-5（#581）：文件在 run 块标量中结束（无 dedent）时也要 flush 累积文本。
+    if in_block and block_owner == "run" and block_run_lines:
+        run_interpolation_ln(block_run_start, "\n".join(block_run_lines), errors)
 
     flush_step()
 

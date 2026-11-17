@@ -727,6 +727,42 @@ jobs:
         )
         self.assert_flagged(inline, needle)
 
+    def test_run_interpolation_cross_line_split_is_flagged(self):
+        """#581（低危-5）：`${{` 与 `github.event` 跨行拆分不得绕过。
+
+        原实现 `RUN_INTERPOLATION_RE` 逐行匹配，`run: |` 块标量里 `${{` 在某行、
+        `github.event` 在下一行 ⇒ 两行各自都不含完整模式 ⇒ 绕过（黑盒实跑确认）。
+        修法：累积 run 块**完整**文本，块结束时一次性匹配（`[^}]*` 跨 `\\n` 命中）。
+
+        反向验证：把 in_block 分支改回逐行 `run_interpolation_ln` ⇒ 本用例变红
+        （跨行拆分恢复绕过，scan 返回 []）。
+        """
+        needle = "攻击者可影响"
+        text = """\
+name: demo
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "${{ 
+            github.event.issue.title }}"
+"""
+        self.assert_flagged(text, needle)
+        # 跨行拆分 `github.ref_name` 同样要拦。
+        text2 = text.replace(
+            "echo \"${{ \n            github.event.issue.title }}\"",
+            "echo \"${{ \n            github.ref_name }}\"",
+        )
+        self.assert_flagged(text2, needle)
+
     def test_run_interpolation_allowed_contexts_not_flagged(self):
         """#539 VULN-04 边界：运营方 / GitHub 控制的 context 不在禁止之列，不得误报。"""
         allowed = [
