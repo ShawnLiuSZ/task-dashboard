@@ -95,6 +95,9 @@ class OnDemandTest(unittest.TestCase):
             "DELETE FROM task_prs;"
             # 中危-1：status_events 是 per-test 度量表，同样要清，否则跨用例累积。
             "DELETE FROM status_events;"
+            # 低危-1：notes 是 per-test 表（中危-3 起自建），不清会残留污染
+            # test_notes_crud_smoke 的计数断言（依赖唯一 content 不撞不再成立）。
+            "DELETE FROM notes;"
         )
         c.commit()
         c.close()
@@ -475,7 +478,7 @@ class OnDemandTest(unittest.TestCase):
 
     def test_notes_crud_smoke(self):
         # 中危-3：ensure_schema 必须自建 notes 表，6 个 note 工具才能工作。
-        # 注意 setUP 的 DELETE 清单没清 notes（本用例自建自清），依赖唯一 content 不撞。
+        # setUp 的 DELETE 清单现已含 notes（低危-1），本用例自建自清。
         added = S.tool_add_note("中危-3 冒烟", "low")
         self.assertEqual(added["content"], "中危-3 冒烟")
         nid = added["id"]
@@ -489,6 +492,29 @@ class OnDemandTest(unittest.TestCase):
         dele = S.tool_delete_note(nid)
         self.assertTrue(dele["ok"])
         self.assertEqual(S.tool_list_notes(), [])
+
+    def test_blank_note_label_falls_back_to_low(self):
+        """#577（低危-1）：空白标签与 Rust `normalize_note_label` 对齐 —— 回退 low。
+
+        Rust `l.is_empty() => Ok("low")`；Python 原实现 `""` 不在合法集 ⇒ 抛
+        「无效标签」，两实现注释互相声称对齐却分歧。补 `if not label: label="low"`。
+
+        反向验证：移除 `if not label: label = "low"` ⇒ 本用例空白分支变红。
+        """
+        # add_note：空串 / 纯空白 → low
+        added = S.tool_add_note("低危-1 空白 add", "")
+        self.assertEqual(added["label"], "low")
+        added2 = S.tool_add_note("低危-1 空白 add2", "   ")
+        self.assertEqual(added2["label"], "low")
+        # update_note_label：空串 / 纯空白 → low（且不报错）
+        upd = S.tool_update_note_label(added["id"], "")
+        self.assertEqual(upd["label"], "low")
+        upd2 = S.tool_update_note_label(added2["id"], "  ")
+        self.assertEqual(upd2["label"], "low")
+        # 非法值仍必报
+        with self.assertRaises(ValueError) as ctx:
+            S.tool_add_note("低危-1 非法", "bogus")
+        self.assertIn("无效标签", str(ctx.exception))
 
     def test_insert_if_absent_does_not_overwrite(self):
         self._add_account()

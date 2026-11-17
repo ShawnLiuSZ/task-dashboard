@@ -1143,6 +1143,11 @@ def tool_add_note(content, label="low"):
     if not content:
         raise ValueError("记事内容不能为空")
     label = (label or "low").strip().lower()
+    # 低危-1（#577）：纯空白标签与 Rust `normalize_note_label` 分歧 ——
+    # Rust `l.is_empty() => Ok("low")`，Python 原实现 `""` 不在合法集 ⇒ 抛「无效标签」。
+    # 补空白回退 low，两侧行为对齐（add_note / update_note_label 共用）。
+    if not label:
+        label = "low"
     if label not in VALID_NOTE_LABELS:
         raise ValueError(f"无效标签: {label}（可选: low/medium/high/urgent）")
     now = int(time.time())
@@ -1180,6 +1185,11 @@ def tool_update_note_label(note_id, label):
     """更新记事标签，返回更新后的记录。"""
     # 与 Rust 端 normalize_note_label 对齐：空标签回落 low，而非报错。
     label = (label or "low").strip().lower()
+    # 低危-1（#577）：纯空白标签与 Rust `normalize_note_label` 分歧 ——
+    # Rust `l.is_empty() => Ok("low")`，Python 原实现 `""` 不在合法集 ⇒ 抛「无效标签」。
+    # 补空白回退 low，两侧行为对齐（add_note / update_note_label 共用）。
+    if not label:
+        label = "low"
     if label not in VALID_NOTE_LABELS:
         raise ValueError(f"无效标签: {label}（可选: low/medium/high/urgent）")
     cur = conn().execute(
