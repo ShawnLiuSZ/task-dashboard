@@ -125,6 +125,8 @@ cd app && npm run i18n:check
 
 - [`docs/issue-585-workflow-linter-docstring.md`](./docs/issue-585-workflow-linter-docstring.md) — **workflow linter docstring 修正 @v5 矛盾 + 补 VULN-01~04 清单**：2026-11-17 全量核查低危-6 —— 文件头 docstring 第 5 条写「没有 `@v5` → 被上游改坏」，与实现矛盾（`SHA_PIN_RE` 要求**完整 40 位 commit SHA**，`@v5` / `@stable` / `@main` 必报），误导后来者以为 `@v5` 合规；且 VULN-02（checkout 必须 `with: persist-credentials: false`）/ VULN-04（`run:` 禁直接内插攻击者可影响 context）未列入缺陷清单。修法：第 5 条改为「必须固定 40 位 SHA，`@v5` 属可变引用必报」+ 清单后补「#539 补丁」段逐条列 VULN-01~04 及不误报边界（`secrets.*` / `env.*` 等不在禁列）。**纯文档修正 / 零行为变更 / 零依赖**
 
+- [`docs/issue-587-merge-cleanup-local-validation.md`](./docs/issue-587-merge-cleanup-local-validation.md) — **merge-cleanup load_payload 本地验证模式不强制 GITHUB_EVENT_PATH**：2026-11-17 全量核查低危-7 —— `load_payload()` 无条件要求 `GITHUB_EVENT_PATH`，缺 env 直接 `SystemExit`，与 `--body-file` / `--dry-run` 的「本地验证用」帮助文本矛盾（本地验 body 跑不动）。修法：`load_payload(allow_empty=False)`，`--body-file` / `--dry-run` 任一存在时缺 env 返回 `{}`，否则仍 `SystemExit`（workflow 路径不回归）；字段访问容错（`_pull = payload.get("pull_request") or {}` + `.get()` 兜底），本地验证漏传 `--base-ref` 等不再 `KeyError`。**零依赖**；+3 单测 + 反向验证（还原无条件 SystemExit ⇒ 本地模式用例红）
+
 - [`docs/API-Architecture.md`](./docs/API-Architecture.md) — **GitHub API 与本地看板状态的架构说明**：数据流向、同步机制、三种获取方式、与 Projects v2 的关系、常见误区
 
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — 设计要点（多源拉取、归属三分、四态维护、PR 关联）与 GitHub Actions 在线打包说明

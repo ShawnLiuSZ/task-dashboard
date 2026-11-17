@@ -290,6 +290,81 @@ class DryRunFlowTest(unittest.TestCase):
         self.assertIn("feature/issue-284-x", out)
 
 
+class LocalValidationNoEventTest(unittest.TestCase):
+    """#587（低危-7）：本地验证（--body-file / --dry-run）无 GITHUB_EVENT_PATH 不 SystemExit。
+
+    原实现 `load_payload()` 无条件要求 GITHUB_EVENT_PATH，与 `--body-file` /
+    `--dry-run` 的「本地验证用」帮助文本矛盾 —— 缺 env 直接 SystemExit，
+    本地想验 body 内容跑不动。修复：本地模式允许空负载，字段由显式参数提供。
+    """
+
+    def _run_no_env(self, argv):
+        old = os.environ.get("GITHUB_EVENT_PATH")
+        os.environ.pop("GITHUB_EVENT_PATH", None)
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                code = merge_cleanup.main(argv)
+        finally:
+            if old is None:
+                os.environ.pop("GITHUB_EVENT_PATH", None)
+            else:
+                os.environ["GITHUB_EVENT_PATH"] = old
+        return code, buf.getvalue()
+
+    def test_dry_run_without_event_path_still_runs(self):
+        """--dry-run + 全显式参数 + 无 GITHUB_EVENT_PATH ⇒ 正常跑（修复前 SystemExit）。"""
+        code, out = self._run_no_env([
+            "--repo", "ShawnLiuSZ/task-dashboard", "--dry-run",
+            "--pr-number", "285",
+            "--pr-title", "feat(ci): 合并后自动收尾 (#284)",
+            "--body-text", "Closes #284",
+            "--base-ref", "main",
+            "--head-ref", "feature/issue-284-x",
+            "--head-sha", "abcdef1234567890",
+        ])
+        self.assertEqual(code, 0)
+        self.assertIn("[dry-run] 将检查并关闭 #284", out)
+        self.assertIn("[dry-run] 将删除远端分支", out)
+
+    def test_body_file_without_event_path_still_runs(self):
+        """--body-file + 无 GITHUB_EVENT_PATH ⇒ 正常读文件（修复前 SystemExit）。"""
+        fd, path = tempfile.mkstemp(suffix=".md")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("Closes #284\n")
+        try:
+            code, out = self._run_no_env([
+                "--repo", "ShawnLiuSZ/task-dashboard", "--dry-run",
+                "--pr-number", "285",
+                "--pr-title", "feat(ci): 合并后自动收尾 (#284)",
+                "--body-file", path,
+                "--base-ref", "main",
+                "--head-ref", "feature/issue-284-x",
+                "--head-sha", "abcdef1234567890",
+            ])
+        finally:
+            os.unlink(path)
+        self.assertEqual(code, 0)
+        self.assertIn("[dry-run] 将检查并关闭 #284", out)
+
+    def test_without_event_path_non_local_still_exits(self):
+        """非本地模式（无 --body-file / --dry-run）且无 env ⇒ 仍报错（行为不回归）。
+
+        有 GH_TOKEN 时落到 load_payload 的 SystemExit —— 保持「workflow 调用必须
+        有事件负载」的原约束。
+        """
+        old_token = os.environ.get("GH_TOKEN")
+        os.environ["GH_TOKEN"] = "x"
+        try:
+            with self.assertRaises(SystemExit):
+                self._run_no_env(["--repo", "ShawnLiuSZ/task-dashboard"])
+        finally:
+            if old_token is None:
+                os.environ.pop("GH_TOKEN", None)
+            else:
+                os.environ["GH_TOKEN"] = old_token
+
+
 class RefPathTest(unittest.TestCase):
     """#289：删分支端点必须是复数 `/git/refs/`。
 
