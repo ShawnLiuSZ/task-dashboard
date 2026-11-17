@@ -153,6 +153,36 @@ class NegativeDetectionTest(unittest.TestCase):
     def test_tab_indent(self):
         self.assert_flagged("name: demo\n\tjobs:\n", "tab")
 
+    def test_tab_in_comment_not_flagged(self):
+        """#569：tab 只禁**缩进**；注释里的 tab 是合法 YAML，不得误报。
+
+        反向验证：把 `\t in leading` 改回 `\t in raw` ⇒ 本用例变红。
+        """
+        text = VALID.replace(
+            "        run: python3 scripts/foo.py",
+            "        run: python3 scripts/foo.py\n        # 注释\t含 tab",
+        )
+        self.assertEqual(errs(text), [])
+
+    def test_with_inline_persist_credentials_false_ok(self):
+        """#569：`with: {persist-credentials: false}` 内联映射是合法写法，不得误报 VULN-02。
+
+        反向验证：把内联映射分支的 `persist_credentials_false` 赋值移除 ⇒ 本用例变红。
+        """
+        text = VALID.replace(
+            "        with:\n          persist-credentials: false\n",
+            "        with: {persist-credentials: false}\n",
+        )
+        self.assertEqual(errs(text), [])
+
+    def test_with_inline_persist_credentials_true_flagged(self):
+        """#569 反向：内联映射里的 `true` 仍算未禁用，必报。"""
+        text = VALID.replace(
+            "        with:\n          persist-credentials: false\n",
+            "        with: {persist-credentials: true}\n",
+        )
+        self.assert_flagged(text, "缺少 `with: persist-credentials: false`")
+
     def test_odd_indent_on_structural_line(self):
         text = VALID.replace("  pull_request:", "   pull_request:")
         self.assert_flagged(text, "缩进 3 不是偶数")
