@@ -133,6 +133,8 @@ cd app && npm run i18n:check
 
 - [`docs/issue-593-sync-stale-comment.md`](./docs/issue-593-sync-stale-comment.md) — **map_project_status_en 陈旧注释「中文按 contains」改整值全等口径**：2026-11-17 全量核查低危-10 —— `sync.rs:117` 注释写「中文已在上面按 `contains` 处理」，但 #450 已把中文分支（`map_project_status_zh`）从子串匹配改为**归一化整值全等**，注释是旧口径、误导后来者。修法：注释改为「中文已由 `map_project_status_zh`（#450 起改整值全等）处理；未收录的自定义中文状态落到这里，`is_alphanumeric()` 保留汉字后不匹配英文选项 ⇒ 返回 None（保持本地手动态）」。**纯文档修正 / 零行为变更 / 零依赖**
 
+- [`docs/issue-595-status-event-ts-fallback.md`](./docs/issue-595-status-event-ts-fallback.md) — **set_task_status unwrap_or(0) 时间戳兜底 0 —— 记录为可接受**：2026-11-17 全量核查低危-11 —— `common.rs:347-350` 的 `now` 计算用 `.unwrap_or(0)`：`SystemTime::now().duration_since(UNIX_EPOCH)` 失败（系统时钟早于 1970 极端场景）会把 `status_events.created_at` 记成 0。处理：**记录为可接受**（文档/注释，非行为变更）—— 0 只影响 P1 最小度量的时间维度排序，不反噬状态写入主流程（度量失败本就只 `eprintln!`）；不改 `now` 计算，后续若度量对时间戳敏感再统一处理。补注释说明触发条件与影响范围。**零行为变更 / 零依赖**
+
 - [`docs/API-Architecture.md`](./docs/API-Architecture.md) — **GitHub API 与本地看板状态的架构说明**：数据流向、同步机制、三种获取方式、与 Projects v2 的关系、常见误区
 
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — 设计要点（多源拉取、归属三分、四态维护、PR 关联）与 GitHub Actions 在线打包说明
