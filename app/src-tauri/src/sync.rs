@@ -114,7 +114,9 @@ fn map_project_status_zh(raw: &str) -> Option<&'static str> {
 /// 与已知选项名全等比较；不认识的选项仍返回 `None`（保持本地手动态，绝不臆造）。
 fn map_project_status_en(raw: &str) -> Option<&'static str> {
     // 只保留字母数字与空白：`✅ Done` → `done`，`in-progress` → `in progress`。
-    // `is_alphanumeric()` 对汉字为真，但中文已在上面按 `contains` 处理，不会落到这里。
+    // 低危-10（#593）：中文已由 `map_project_status_zh`（#450 起改**整值全等**，非
+    // `contains`）处理；未收录的自定义中文状态会落到这里，`is_alphanumeric()` 保留
+    // 汉字后不匹配任何英文选项 ⇒ 返回 None（保持本地手动态，绝不臆造）。
     let cleaned: String = raw
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { ' ' })

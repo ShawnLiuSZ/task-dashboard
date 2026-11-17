@@ -131,6 +131,8 @@ cd app && npm run i18n:check
 
 - [`docs/issue-591-tasks-write-path-account-id.md`](./docs/issue-591-tasks-write-path-account-id.md) — **tasks 写路径只按 issue_key 过滤不带 account_id —— 记录已知设计**：2026-11-17 全量核查低危-9 —— `tasks` 写/查路径（`UPDATE tasks ... WHERE issue_key=?`）只按 `issue_key` 不带 `account_id`，多账号下同一 issue_key 跨账号可重复命中；**两侧共有设计**（`server.py` + `common.rs`），非 Python 独有；#546 已给关系表加 account_id 键，tasks 写路径未加。处理：**记录为已知设计**（文档/注释，非行为变更）—— `common.rs::touch_session` 与 `server.py::tool_record_session` 各补「已知设计」段注释，注明后续加 account_id 条件必须两侧同步并跑 `check-mcp-columns.py`；当前按 issue_key 过滤是刻意权衡（单账号下 issue_key 全局唯一）。**零 SQL 变更 / 零行为变更 / 零依赖**
 
+- [`docs/issue-593-sync-stale-comment.md`](./docs/issue-593-sync-stale-comment.md) — **map_project_status_en 陈旧注释「中文按 contains」改整值全等口径**：2026-11-17 全量核查低危-10 —— `sync.rs:117` 注释写「中文已在上面按 `contains` 处理」，但 #450 已把中文分支（`map_project_status_zh`）从子串匹配改为**归一化整值全等**，注释是旧口径、误导后来者。修法：注释改为「中文已由 `map_project_status_zh`（#450 起改整值全等）处理；未收录的自定义中文状态落到这里，`is_alphanumeric()` 保留汉字后不匹配英文选项 ⇒ 返回 None（保持本地手动态）」。**纯文档修正 / 零行为变更 / 零依赖**
+
 - [`docs/API-Architecture.md`](./docs/API-Architecture.md) — **GitHub API 与本地看板状态的架构说明**：数据流向、同步机制、三种获取方式、与 Projects v2 的关系、常见误区
 
 - [`docs/design-and-release.md`](./docs/design-and-release.md) — 设计要点（多源拉取、归属三分、四态维护、PR 关联）与 GitHub Actions 在线打包说明
