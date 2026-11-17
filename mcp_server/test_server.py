@@ -1419,6 +1419,28 @@ class RepoFilterAC(unittest.TestCase):
         keys = sorted(r["issue_key"] for r in rows)
         self.assertEqual(keys, ["o/A#1"], "只应返回 A 仓 todo+assigned 的那一行")
 
+    def test_param_types_must_be_string(self):
+        """#575（中危-8）：status / ownership / repo 非字符串必须干净 ValueError。
+
+        原实现在 ownership/repo 传 list/dict 时抛不透明的
+        `sqlite3.InterfaceError: Error binding parameter`；repo=int 静默错行为。
+        修后统一 `ValueError: X 必须是字符串`。
+        """
+        self._seed("o/A#1", "A", "todo", "assigned")
+        for kw in (
+            {"status": ["x"]},
+            {"status": 123},
+            {"ownership": ["a"]},
+            {"ownership": 5},
+            {"repo": ["r"]},
+            {"repo": {"a": 1}},
+            {"repo": 5},
+        ):
+            with self.subTest(kw=kw):
+                with self.assertRaises(ValueError) as ctx:
+                    S.tool_list_my_tasks(**kw)
+                self.assertIn("必须是字符串", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
