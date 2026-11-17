@@ -1364,9 +1364,10 @@ class RepoFilterAC(unittest.TestCase):
       - AC-3 `repo=""`  → 抛 ValueError，不静默返回全量
       - AC-4 repo+status+ownership 三条件叠加，只返回同时满足的行
 
-    ⚠️ 先测后写：实现尚未含 `repo` 参数。AC-1/3/4 调用时会因
-    「`repo` 不是合法关键字参数」抛 TypeError（红，非断言落在预期异常上，
-    属实现未就绪的可接受红）；AC-2 不传 repo，现行为应已通过。
+    #546 实现已含 `repo` 参数（`server.py::tool_list_my_tasks`），四条 AC 全部由
+    `tool_list_my_tasks(status, ownership, repo)` 直接支持；#575（中危-8）又补了
+    三入参统一类型校验（非字符串 ⇒ ValueError）。本类 5 例全绿，属实现后的
+    AC 验收，不再是「先测后写、可接受红」。
     """
 
     @staticmethod
