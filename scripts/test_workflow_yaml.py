@@ -262,6 +262,57 @@ class NegativeDetectionTest(unittest.TestCase):
     def test_checkout_present_silences_script_check(self):
         self.assertEqual(errs(VALID), [])
 
+    def test_other_job_checkout_does_not_mask_missing(self):
+        """#579（低危-4）：A job 跑脚本缺 checkout，B job 有 checkout —— 必须报 A。
+
+        原实现文件级 `runs_scripts` + 全文件字符串搜 `actions/checkout@`，B 的
+        checkout 会命中字符串 ⇒ 掩盖 A 的缺失。per-job 后只认本 job。
+        """
+        # 移除 build 的 checkout，追加一个带 checkout 的 other job。
+        no_checkout = VALID.replace(
+            f"      - uses: actions/checkout@{SHA}\n"
+            "        with:\n"
+            "          persist-credentials: false\n",
+            "",
+        )
+        # 在 jobs 末尾追加 other job（在 build 的 steps 后、文件末尾前追加）。
+        text = no_checkout.replace(
+            "        run: python3 scripts/foo.py",
+            "        run: python3 scripts/foo.py\n"
+            "  other:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            f"      - uses: actions/checkout@{SHA}\n"
+            "        with:\n"
+            "          persist-credentials: false",
+        )
+        self.assert_flagged(text, "缺少 `actions/checkout@*`")
+
+    def test_commented_checkout_does_not_mask_missing(self):
+        """#579（低危-4）：注释掉的 checkout 不得掩盖缺失 —— 原实现字符串搜原始行命中。"""
+        text = VALID.replace(
+            f"      - uses: actions/checkout@{SHA}\n",
+            f"      # - uses: actions/checkout@{SHA}\n",
+        )
+        self.assert_flagged(text, "缺少 `actions/checkout@*`")
+
+    def test_local_action_counts_as_checkout(self):
+        """#579（低危-4）：`./` 本地 action 隐含「仓库已 checkout」，不得误报缺 checkout。
+
+        原实现把 `./` 当作「没有 actions/checkout@」⇒ 用本地 action + run 脚本被误报。
+        """
+        text = VALID.replace(
+            f"      - uses: actions/checkout@{SHA}\n"
+            "        with:\n"
+            "          persist-credentials: false\n"
+            "      - name: Run\n"
+            "        run: python3 scripts/foo.py",
+            "      - uses: ./local-action\n"
+            "      - name: Run\n"
+            "        run: python3 scripts/foo.py",
+        )
+        self.assertEqual(errs(text), [])
+
     def test_persist_credentials_at_step_level_is_not_accepted(self):
         # #539 回归：`persist-credentials` 是 `actions/checkout` 的**输入**，必须写在
         # `with:` 块内。误写在 step 层级是无效字段 —— GitHub 会**拒绝解析整个 workflow**

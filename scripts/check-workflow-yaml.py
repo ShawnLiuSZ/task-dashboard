@@ -117,6 +117,15 @@ class Step:
     def is_checkout(self) -> bool:
         return bool(self.uses_val) and self.uses_val.split("@")[0] == "actions/checkout"
 
+    @property
+    def is_local_action(self) -> bool:
+        """`./` 本地 action：仓库必须已 checkout（否则本地 action 根本加载不到）。
+
+        低危-4（#579）：本地 action 隐含「仓库已 checkout」的语义，故视同满足
+        checkout 需求 —— 避免「用 `./` 本地 action + run 脚本」被误报缺 checkout。
+        """
+        return bool(self.uses_val) and self.uses_val.startswith("./")
+
 
 @dataclass
 class Job:
@@ -129,6 +138,12 @@ class Job:
     # #329：`needs:` 的 (job 名, 行号)。只收集内联写法（`needs: x` / `needs: [a, b]`），
     # 块列表写法（`needs:` 换行 + `- x`）在本逐行解析器里不易区分，故不参与校验（宁漏不误报）。
     needs: list[tuple[str, int]] = field(default_factory=list)
+    # 低危-4（#579）：per-job 记录「本 job 是否有 step 跑仓库内脚本」与
+    # 「本 job 是否已 checkout（actions/checkout@ 或 `./` 本地 action）」。
+    # 原实现文件级 runs_scripts + 全文件字符串搜 checkout，注释掉的 checkout /
+    # 其它 job 的 checkout 会掩盖本 job 的缺失；`./` 本地 action 又会被误判缺 checkout。
+    runs_scripts: bool = False
+    has_checkout: bool = False
 
 
 def parse_needs(rest: str) -> list[str]:
@@ -210,12 +225,17 @@ def scan(lines: list[str]) -> list[str]:
     in_block = False
     block_indent = -1
     block_owner: str | None = None  # 块标量所属的 key（用于判定 `run: |` 里的 scripts 引用）
-    runs_scripts = False
     in_with = False  # 是否正处在某个 step 的 `with:` 块内（用于定位 persist-credentials）
 
     def flush_step() -> None:
         nonlocal step, in_with
         if step is not None:
+            # 低危-4（#579）：per-job 记录本 job 是否已 checkout —— `actions/checkout@`
+            # 或 `./` 本地 action（后者隐含仓库已 checkout）。原实现用全文件字符串搜
+            # `actions/checkout@`，注释掉 / 其它 job 的 checkout 会掩盖本 job 的缺失。
+            if job is not None:
+                if step.is_checkout or step.is_local_action:
+                    job.has_checkout = True
             if step.empty:
                 errors.append(f"L{step.line}: step 既没有 `uses:` 也没有 `run:`（空步骤不会执行任何动作）")
             # #539 VULN-02：checkout 未在 `with:` 内显式 `persist-credentials: false` ⇒
@@ -247,7 +267,8 @@ def scan(lines: list[str]) -> list[str]:
         if in_block:
             if ind > block_indent:
                 if block_owner == "run" and "scripts/" in body:
-                    runs_scripts = True
+                    if job is not None:
+                        job.runs_scripts = True
                 if block_owner == "run":
                     run_interpolation_ln(ln, body, errors)
                 continue
@@ -317,7 +338,8 @@ def scan(lines: list[str]) -> list[str]:
             if im.group("key") == "run":
                 _rest = im.group("rest").strip()
                 if "scripts/" in _rest:
-                    runs_scripts = True
+                    if job is not None:
+                        job.runs_scripts = True
                 if _rest:
                     run_interpolation_ln(ln, _rest, errors)
             # 其它缩进的列表项（`strategy.matrix.include` 等）不做进一步结构校验
@@ -339,7 +361,8 @@ def scan(lines: list[str]) -> list[str]:
             continue
 
         if key == "run" and "scripts/" in rest:
-            runs_scripts = True
+            if job is not None:
+                job.runs_scripts = True
         # #539 VULN-04：内联 `run: ... ${{ github.event.* }} ...` 同样要拦（块标量体在上面分支查）。
         if key == "run" and rest and rest not in BLOCK_INDICATORS:
             run_interpolation_ln(ln, rest, errors)
@@ -504,10 +527,15 @@ def scan(lines: list[str]) -> list[str]:
 
     # workflow 直接跑仓库内脚本却没有 checkout：runner 的 workspace 默认是空的，
     # 不 checkout 会以「file not found」在静默状态失败。
-    if runs_scripts and "actions/checkout@" not in "\n".join(lines):
-        errors.append(
-            "有 step 直接执行仓库内脚本，但缺少 `actions/checkout@*`（runner workspace 默认是空的）"
-        )
+    # 低危-4（#579）：per-job 判定 —— 原实现文件级 `runs_scripts` + 全文件字符串搜
+    # `actions/checkout@`，注释掉的 checkout / 其它 job 的 checkout 会掩盖本 job 的缺失。
+    # 现只在「本 job 有脚本 step 且本 job 无 checkout（也非 `./` 本地 action）」时报。
+    for j in jobs:
+        if j.runs_scripts and not j.has_checkout:
+            errors.append(
+                f"L{j.line}: job `{j.name}` 有 step 直接执行仓库内脚本，"
+                f"但缺少 `actions/checkout@*`（runner workspace 默认是空的）"
+            )
 
     return errors
 
