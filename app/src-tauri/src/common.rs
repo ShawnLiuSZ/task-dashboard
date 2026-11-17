@@ -372,6 +372,15 @@ pub fn set_task_status(conn: &Connection, key: &str, status: &str) -> Result<usi
 /// ⚠️ 顺序至关重要：必须**先 UPDATE tasks 并确认 affected>0**，再 INSERT sessions。
 /// 若反序，任务不存在时会静默插入一条指向不存在 issue 的孤儿会话
 /// （#427 风险点 1）。
+///
+/// ⚠️ 已知设计（#591，2026-11-17 全量核查低危-9）：tasks 的写 / 查路径**只按
+/// `issue_key` 过滤，不带 `account_id`**。多账号下同一 `issue_key` 可跨账号重复
+/// （同一 repo 的 issue 会被不同账号各存一份），此 UPDATE 可能**跨账号命中**。
+/// 这是**两侧共有设计**（`mcp_server/server.py` 同路径同理），非 Python 独有；
+/// #546 已给关系表（task_prs 等）加 `account_id` 键，tasks 写路径**未加**。
+/// 记录为已知设计：后续若加 `account_id` 条件，必须**两侧同步**（mcp.rs + server.py），
+/// 并跑 `scripts/check-mcp-columns.py` 校验。当前按 `issue_key` 过滤是刻意权衡 ——
+/// 单账号场景（本工具实际用法）下 `issue_key` 全局唯一，行为正确。
 pub fn touch_session(
     conn: &Connection,
     key: &str,
