@@ -892,6 +892,14 @@ def _ensure_before_write(key, issue):
 # 工具实现
 # --------------------------------------------------------------------------- #
 def tool_list_my_tasks(status=None, ownership=None, repo=None):
+    # 中危-8（#575）：三个入参都必须是字符串（或 None）。
+    # 非字符串会在下方被 resolve_status / SQLite 参数绑定吞成不透明的
+    # InterfaceError，或（如 repo=int）静默错行为 —— 统一拦成干净 ValueError。
+    for _name, _val in (("status", status), ("ownership", ownership), ("repo", repo)):
+        if _val is not None and not isinstance(_val, str):
+            raise ValueError(
+                f"{_name} 必须是字符串，实际是 {type(_val).__name__}"
+            )
     sql = f"SELECT {SELECT_COLS} FROM tasks"
     wheres, params = [], []
     if status:
