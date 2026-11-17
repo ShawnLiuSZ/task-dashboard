@@ -344,6 +344,12 @@ pub fn set_task_status(conn: &Connection, key: &str, status: &str) -> Result<usi
         )
         .map_err(|e| e.to_string())?;
     if n > 0 {
+        // 低危-11（#595）：`unwrap_or(0)` 时间戳兜底为 0 —— `SystemTime::now()
+        // .duration_since(UNIX_EPOCH)` 失败仅发生在系统时钟早于 1970 的极端场景
+        // （时钟回拨到 epoch 前），会把 `status_events.created_at` 记成 0，只影响
+        // 度量排序（P1 最小度量的时间维度），不反噬状态写入主流程。**记录为可接受**：
+        // 不改 `now` 计算（避免为极端场景引入复杂错误处理），后续若度量对时间戳敏感
+        // 再统一处理。
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
