@@ -958,6 +958,56 @@ class FramingTests(unittest.TestCase):
         outs = self._read_all(b"X-Pad: " + b"a" * (S.MAX_FRAME_HEADER + 16) + b"\r\n")
         self.assertEqual(outs[0].kind, S.ReadOutcome.FATAL)
 
+    def test_header_limit_is_enforced_incrementally(self):
+        """#571（中危-6）：头部上限必须**边累积边判**，不能读完整行才判。
+
+        与 `test_ndjson_limit_is_enforced_incrementally` 同源 —— 原实现头部走
+        `readline()`，对无终止符的超长头部行等于「先把整行吃进内存再报错」，
+        上限只挡得住「已读完」的情况，挡不住资源耗尽。
+
+        用按需供给流：若实现退化成 `readline()`，会把整个流一次读走
+        （served ≈ 上限 + 余量），断言失败；逐字节实现则在超限时立即返回，
+        绝不该读走超过「上限 + 余量」的数据。
+        """
+
+        class _CountingStream:
+            def __init__(self, total):
+                self._buf = bytearray(b"X-Pad: " + b"a" * total)
+                self.served = 0
+                self.read_calls = 0
+
+            def read(self, n):
+                self.read_calls += 1
+                if n is None or n < 0:
+                    chunk = bytes(self._buf[self.served:])
+                    self.served = len(self._buf)
+                    return chunk
+                chunk = bytes(self._buf[self.served:self.served + n])
+                self.served += len(chunk)
+                return chunk
+
+            def readline(self, *a, **kw):
+                """模拟退化路径：一次性把剩余全部返回（即原实现的 readline）。"""
+                self.read_calls += 1
+                chunk = bytes(self._buf[self.served:])
+                self.served = len(self._buf)
+                return chunk
+
+        total = S.MAX_FRAME_HEADER + 4096
+        stream = _CountingStream(total)
+        oc = S.read_message(stream)
+
+        self.assertEqual(oc.kind, S.ReadOutcome.FATAL)
+        # 核心断言：判定超限时**不该**已读走超过上限的数据量。
+        # 退化实现会把整个 total 全部读走（≈ 上限 + 4096）；增量实现最多读到
+        # 「上限 + 1 字节」就停。
+        self.assertLessEqual(
+            stream.served,
+            S.MAX_FRAME_HEADER + 8,
+            "必须在累积过程中就判定超限，不能读完整个头部行再判"
+            f"（实际已读 {stream.served} 字节）",
+        )
+
     def test_oversized_ndjson_line_is_fatal(self):
         """无终止符的超长 NDJSON 行 ⇒ Fatal（与 Rust 侧同一 DoS 类别）。"""
         outs = self._read_all(b"{" + b"a" * (S.MAX_FRAME_BODY + 10))
