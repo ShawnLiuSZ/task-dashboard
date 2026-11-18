@@ -173,9 +173,12 @@ pub fn scan_agent_hosts(state: State<'_, AppState>) -> Result<hooks::AgentScanRe
   纯 IDE 插件或 Web 形态的 agent 没有可靠的路径信号，`HOST_SPECS` 中显式留空 —— 这是刻意的
   「不猜」，而不是漏配。要支持需按 IDE 的扩展目录（VS Code `globalStorage`）另做探测。
 - **`config-only` 存在误报可能**：配置目录存在、但可执行文件与应用包都不在探测范围内时
-  （例：本机 `~/.codebuddy` 存在而 `codebuddy` 不在 PATH、也无对应 `.app`），会被标为
-  「仅残留配置」并进入「疑似已卸载」组。这是**保守的提示而非断言** —— 行内给出实际命中路径，
+  会被标为「仅残留配置」并进入「疑似已卸载」组。这是**保守的提示而非断言** —— 行内给出实际命中路径，
   由用户判断是否清理；不自动删除任何文件。
+  > **#598 已修正其中最主要的一类成因**：版本管理器（fnm / nvm / mise / asdf / pnpm / yarn）
+  > 安装的 CLI 因 GUI 进程只有 launchd 最小 PATH 而探不到（真机实测 codebuddy、codex 同批漏判）。
+  > 现已把这些安装目录纳入探测，见 [`issue-598-fnm-bin-dirs.md`](./issue-598-fnm-bin-dirs.md)。
+  > 剩余的 `config-only` 仅剩「配置目录在、但 CLI 确实已不在任何已知探测位」这一真实残留语义。
 - **首次扫描不会显示差异**（设计如此，见「为什么快照是唯一写入」）。
 - 快照在每次扫描时覆盖，粒度是「上一次扫描」而非「历史上线」；若用户在两次扫描之间装卸同一
   agent，不会被报告。
