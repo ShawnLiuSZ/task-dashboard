@@ -648,7 +648,98 @@ pub struct AgentScanResult {
     pub newly_removed: Vec<String>,
 }
 
-/// PATH + 常见安装目录（去重后返回，含平台惯例目录）。
+/// `$HOME` 下的可执行文件目录模式（相对路径，正斜杠）。
+///
+/// 除通用惯例目录外，重点覆盖**版本管理器**（fnm / nvm / mise / asdf / pnpm / yarn）
+/// 的安装目录 —— GUI 应用（Finder/Dock 启动）只拿到 launchd 的最小 PATH，继承不到
+/// shell 里那串 PATH；而 fnm 这类工具把全局 CLI 装在自己 $HOME 下的目录里，硬编码的
+/// 通用目录一概不覆盖 → 本机装了也探不到，只剩配置目录时被误判「疑似已卸载」（#598）。
+///
+/// 只支持**单层** `*`（如 `node-versions/*/installation/bin`），由
+/// [`expand_home_bin_dirs`] 用 `std::fs::read_dir` 自行展开，不引新 crate。
+///
+/// ⚠️ 刻意**不含** `~/.local/state/fnm_multishells/*/bin`：那是 fnm 每个 shell 会话的
+/// symlink 目录（本机实测 6000+ 条，多为已退出会话的残留），逐条展开既慢又会把
+/// 「曾经开过 shell」当成安装证据；其内容与下述稳定目录等价。
+const HOME_BIN_PATTERNS: &[&str] = &[
+    // 通用惯例目录
+    ".local/bin",
+    "bin",
+    ".cargo/bin",
+    ".bun/bin",
+    ".npm-global/bin",
+    ".volta/bin",
+    // fnm：稳定 alias 目录 + 各 node 版本的安装目录（legacy 目录一并覆盖）
+    ".local/share/fnm/aliases/default/bin",
+    ".local/share/fnm/node-versions/*/installation/bin",
+    ".fnm/versions/node/*/bin",
+    // nvm
+    ".nvm/versions/node/*/bin",
+    // mise / asdf（shims 目录）
+    ".local/share/mise/shims",
+    ".asdf/shims",
+    // pnpm / yarn 全局 bin
+    "Library/pnpm",
+    ".local/share/pnpm",
+    ".yarn/bin",
+    ".config/yarn/global/node_modules/.bin",
+    // Windows 版本管理器（Unix 上这些路径不存在，展开为空，无副作用）
+    "AppData/Local/fnm/aliases/default/bin",
+    "AppData/Local/fnm/node-versions/*/installation/bin",
+    "AppData/Roaming/nvm",
+    "AppData/Local/pnpm",
+];
+
+/// 展开 [`HOME_BIN_PATTERNS`]：无 `*` 的原样 join，含单层 `*` 的用 `read_dir` 展开
+/// （`*` 段只保留目录项；目录不存在 → 该分支自然为空）。
+fn expand_home_bin_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for pattern in HOME_BIN_PATTERNS {
+        if !pattern.contains('*') {
+            dirs.push(home.join(pattern));
+            continue;
+        }
+        let mut cur = vec![home.to_path_buf()];
+        for seg in pattern.split('/') {
+            if seg == "*" {
+                let mut next = Vec::new();
+                for d in &cur {
+                    let Ok(rd) = std::fs::read_dir(d) else {
+                        continue;
+                    };
+                    for e in rd.flatten() {
+                        if e.path().is_dir() {
+                            next.push(e.path());
+                        }
+                    }
+                }
+                cur = next;
+            } else {
+                for d in &mut cur {
+                    d.push(seg);
+                }
+            }
+        }
+        dirs.extend(cur);
+    }
+    dirs
+}
+
+/// `$HOME` 下的安装目录（**只含 `$HOME` 下的路径，不含 PATH、也不含系统级目录**，
+/// 便于测试确定性注入 —— 见 `probe_finds_fnm_installed_cli_not_config_only`）。
+fn home_bin_dirs(home: &Path) -> Vec<PathBuf> {
+    expand_home_bin_dirs(home)
+}
+
+/// 保序去重（PATH 与惯例目录可能重叠；探测按顺序取首个命中）。
+fn dedup_dirs(dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = std::collections::HashSet::new();
+    dirs.into_iter()
+        .filter(|d| seen.insert(d.clone()))
+        .collect()
+}
+
+/// PATH + 常见安装目录（去重后返回，含平台惯例目录与版本管理器安装目录）。
 fn bin_search_dirs(home: &Path) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     if let Ok(path) = std::env::var("PATH") {
@@ -658,21 +749,13 @@ fn bin_search_dirs(home: &Path) -> Vec<PathBuf> {
             }
         }
     }
-    for extra in [
-        ".local/bin",
-        "bin",
-        ".cargo/bin",
-        ".bun/bin",
-        ".npm-global/bin",
-        ".volta/bin",
-    ] {
-        dirs.push(home.join(extra));
-    }
+    dirs.extend(home_bin_dirs(home));
+    // 系统级安装目录（不属 `$HOME`，故不进 `home_bin_dirs` —— 后者要能被测试确定性注入）。
     #[cfg(target_os = "macos")]
     for extra in ["/opt/homebrew/bin", "/usr/local/bin"] {
         dirs.push(PathBuf::from(extra));
     }
-    dirs
+    dedup_dirs(dirs)
 }
 
 /// 可执行文件名候选（Windows 需补后缀；Unix 原样）。
@@ -692,15 +775,14 @@ fn bin_file_names(name: &str) -> Vec<String> {
     }
 }
 
-/// 在 PATH / 常见目录中找可执行文件，返回首个命中。
-fn find_binary(home: &Path, names: &[&str]) -> Option<PathBuf> {
+/// 在给定目录列表中找可执行文件，返回首个命中。
+fn find_binary_in(dirs: &[PathBuf], names: &[&str]) -> Option<PathBuf> {
     if names.is_empty() {
         return None;
     }
-    let dirs = bin_search_dirs(home);
     for name in names {
         for file in bin_file_names(name) {
-            for dir in &dirs {
+            for dir in dirs {
                 let p = dir.join(&file);
                 if p.is_file() {
                     return Some(p);
@@ -709,6 +791,13 @@ fn find_binary(home: &Path, names: &[&str]) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// 在 PATH / 常见目录（含版本管理器安装目录）中找可执行文件。
+///
+/// 测试用 [`find_binary_in`] + [`home_bin_dirs`] 注入，避免断言依赖开发机真实 PATH。
+fn find_binary(home: &Path, names: &[&str]) -> Option<PathBuf> {
+    find_binary_in(&bin_search_dirs(home), names)
 }
 
 /// 本机应用包名字集合（macOS 读 `/Applications` 与 `~/Applications`；其他平台为空）。
@@ -744,6 +833,17 @@ fn find_app(app_names: &[String], want: &[&str]) -> Option<String> {
 
 /// 单 agent 探测（`app_names` 由调用方缓存，避免逐 agent 重复列目录）。
 fn probe_one_with(home: &Path, agent_id: &str, app_names: &[String]) -> AgentHostInfo {
+    probe_one_in(home, agent_id, app_names, &bin_search_dirs(home))
+}
+
+/// 同 [`probe_one_with`]，但可执行文件搜索目录由调用方注入 —— 测试传
+/// [`home_bin_dirs`]（不含开发机 PATH），使断言与本机装了什么 CLI 无关。
+fn probe_one_in(
+    home: &Path,
+    agent_id: &str,
+    app_names: &[String],
+    bin_dirs: &[PathBuf],
+) -> AgentHostInfo {
     let none = |agent: &str| AgentHostInfo {
         agent: agent.to_string(),
         present: false,
@@ -756,7 +856,7 @@ fn probe_one_with(home: &Path, agent_id: &str, app_names: &[String]) -> AgentHos
         return none(agent_id);
     };
 
-    let binary = find_binary(home, spec.bins).map(|p| display_path(home, None, &p));
+    let binary = find_binary_in(bin_dirs, spec.bins).map(|p| display_path(home, None, &p));
     let config_dir = spec
         .configs
         .iter()
@@ -3201,6 +3301,106 @@ mod tests {
         );
         assert!(find_binary(&home, &["tb-probe-definitely-absent-xyz"]).is_none());
         assert!(find_binary(&home, &[]).is_none());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// #598：版本管理器安装目录必须纳入探测。
+    ///
+    /// GUI 应用（Finder/Dock 启动）只拿到 launchd 最小 PATH（`/usr/bin:/bin:/usr/sbin:/sbin`），
+    /// 继承不到 shell 里 fnm/nvm 注入的目录；fnm 又把全局 CLI 装在 `$HOME` 自己的目录下 ——
+    /// 通用惯例目录不覆盖它 → 本机装了 codebuddy 却被判「仅残留配置 → 疑似已卸载」。
+    #[test]
+    fn find_binary_probes_version_manager_dirs() {
+        let home = fake_home("probe-vm-bin");
+        let mk = |rel: &str, name: &str| {
+            let dir = home.join(rel);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(name), "#!/bin/sh\n").unwrap();
+            dir.join(name)
+        };
+        // fnm 稳定 alias 目录（无通配）。
+        let fnm_alias = mk(".local/share/fnm/aliases/default/bin", "tb-fnm-alias-only");
+        // fnm 各 node 版本安装目录（单层 `*` 通配）。
+        let fnm_ver = mk(
+            ".local/share/fnm/node-versions/v99.0.0/installation/bin",
+            "tb-fnm-version-only",
+        );
+        // nvm（单层 `*` 通配）。
+        let nvm = mk(".nvm/versions/node/v99.0.0/bin", "tb-nvm-only");
+        // mise / asdf shims（无通配）。
+        let mise = mk(".local/share/mise/shims", "tb-mise-only");
+        let asdf = mk(".asdf/shims", "tb-asdf-only");
+
+        // 只注入 `$HOME` 下的目录（不含开发机 PATH）→ 断言与本机装了什么无关。
+        let dirs = home_bin_dirs(&home);
+        for (name, want) in [
+            ("tb-fnm-alias-only", fnm_alias),
+            ("tb-fnm-version-only", fnm_ver),
+            ("tb-nvm-only", nvm),
+            ("tb-mise-only", mise),
+            ("tb-asdf-only", asdf),
+        ] {
+            assert_eq!(
+                find_binary_in(&dirs, &[name]).as_deref(),
+                Some(want.as_path()),
+                "{name} 应在版本管理器目录中被探到"
+            );
+        }
+        assert!(find_binary_in(&dirs, &["tb-absent-anywhere-xyz"]).is_none());
+        assert!(find_binary_in(&dirs, &[]).is_none());
+        // 通配段不存在（如本机无 ~/.fnm）→ 该分支为空，不 panic、不误命中。
+        assert!(!dirs.contains(&home.join(".fnm/versions/node/v99.0.0/bin")));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// #598 核心回归：**只有** fnm 目录里有可执行文件 + 配置目录存在
+    /// （GUI 进程 PATH 探不到它的真实场景）→ 必须判 `cli`，不得判 `config-only`。
+    ///
+    /// `probe_one_in` + `home_bin_dirs` 注入，刻意排除开发机 PATH —— 否则开发机
+    /// 装了 codebuddy 会让本用例「不修也绿」（#263 文档记过的同类坑）。
+    #[test]
+    fn probe_finds_fnm_installed_cli_not_config_only() {
+        let home = fake_home("probe-fnm-codebuddy");
+        let bin = home.join(".local/share/fnm/aliases/default/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("codebuddy"), "#!/bin/sh\n").unwrap();
+        std::fs::create_dir_all(home.join(".codebuddy")).unwrap();
+
+        let dirs = home_bin_dirs(&home);
+        let info = probe_one_in(&home, "codebuddy", &[], &dirs);
+        assert_eq!(info.kind, "cli", "fnm 装的 codebuddy 应判为 cli");
+        assert!(info.present);
+        assert_eq!(
+            info.binary.as_deref(),
+            Some("~/.local/share/fnm/aliases/default/bin/codebuddy")
+        );
+        assert_eq!(info.config_dir.as_deref(), Some("~/.codebuddy"));
+
+        // 无任何信号（bin/ 目录不存在、无 PATH 注入）→ 才是 config-only / none。
+        let empty = fake_home("probe-fnm-none");
+        std::fs::create_dir_all(empty.join(".codebuddy")).unwrap();
+        let dirs2 = home_bin_dirs(&empty);
+        assert_eq!(
+            probe_one_in(&empty, "codebuddy", &[], &dirs2).kind,
+            "config-only"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&empty);
+    }
+
+    /// `home_bin_dirs` 不含 PATH（否则上述两条断言会随开发机环境漂移），
+    /// 且通配展开只做单层 `*`。
+    #[test]
+    fn home_bin_dirs_is_deterministic_without_path() {
+        let home = fake_home("home-dirs-det");
+        let dirs = home_bin_dirs(&home);
+        assert!(dirs.contains(&home.join(".local/bin")));
+        assert!(dirs.contains(&home.join(".local/share/fnm/aliases/default/bin")));
+        assert!(dirs.contains(&home.join(".asdf/shims")));
+        // 通配模式展开后的目录必须全部挂在 fake home 下（不含 PATH、不含系统目录）。
+        for d in &dirs {
+            assert!(d.starts_with(&home), "目录 {d:?} 泄漏出注入的 home");
+        }
         let _ = std::fs::remove_dir_all(&home);
     }
 
