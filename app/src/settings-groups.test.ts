@@ -112,3 +112,47 @@ describe('字体设置接线（#444）', () => {
     expect(fn).toMatch(/fontFamily/);
   });
 });
+
+/**
+ * 毛玻璃开关接线（#毛玻璃）。
+ *
+ * 与主题/字体同款「即时生效」契约：开关 onChange 必须**同时** setState 与
+ * 写 glassPrefs —— 只 setState 不写偏好 ⇒ 重启后毛玻璃开关丢失，而类型检查
+ * 抓不到这种漏接。故按既有接线断言范式补一条。
+ */
+describe('毛玻璃开关接线（#毛玻璃）', () => {
+  it('handleGlassChange 同时 setState + 写 glassPrefs（即时生效，不等保存）', () => {
+    const fn = fnBody('handleGlassChange');
+    expect(fn, '应能取到 handleGlassChange 函数体').not.toBe('');
+    expect(fn).toMatch(/setGlassEnabled\(on\)/);
+    expect(fn).toMatch(/glassPrefs\.setEnabled\(on\)/);
+  });
+
+  it('开关初值来自 glassPrefs 持久化（不是写死 false）', () => {
+    expect(raw).toMatch(/useState<boolean>\(glassPrefs\.getEnabled\(\)\)/);
+  });
+
+  it('渲染 .toggle + .slider 开关，label/hint 走 i18n，onChange 接 handleGlassChange', () => {
+    expect(raw).toMatch(/className="toggle"/);
+    expect(raw).toMatch(/<span className="slider" \/>/);
+    expect(raw).toMatch(/t\('settings\.glassEffect'\)/);
+    expect(raw).toMatch(/t\('settings\.glassEffectHint'\)/);
+    expect(raw).toMatch(/checked=\{glassEnabled\}/);
+    expect(raw).toMatch(/onChange=\{\(e\) => handleGlassChange\(e\.target\.checked\)\}/);
+  });
+
+  /**
+   * #600：`.toggle` 的可见文案是**兄弟节点** `<label>…</label>`（无 htmlFor），
+   * 里面的 `<label className="toggle">` 只包了 input + slider（无文本）⇒
+   * checkbox 的可访问名是空的，读屏只会念「复选框 未选中」。
+   * 修法是给 input 补 `aria-label={t(...)}`，这条测试防止以后新增开关再漏。
+   */
+  it('每个 .toggle 的 checkbox 都有可访问名（aria-label）', () => {
+    const inputs = [...raw.matchAll(/<input\b[\s\S]*?\/>/g)].map((m) => m[0]);
+    const checkboxes = inputs.filter((s) => s.includes('type="checkbox"'));
+    expect(checkboxes.length, '应能取到 3 个 checkbox（毛玻璃 / 自动检查更新 / 自动更新）').toBe(3);
+    for (const c of checkboxes) {
+      expect(c, `checkbox 缺 aria-label：${c.replace(/\s+/g, ' ')}`).toMatch(/aria-label=\{t\('/);
+    }
+  });
+});

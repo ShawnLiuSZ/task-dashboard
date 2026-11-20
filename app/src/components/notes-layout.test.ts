@@ -168,20 +168,25 @@ describe('记事本列表（网格布局，#456；原 #259 四列）', () => {
     expect(card).toMatch(/width\s*:\s*auto/);
   });
 
-  it('列表容器是受约束的纵向滚动区（flex + min-height 0 + overflow-y auto）', () => {
+  it('列表滚动区撑满面板剩余高度（flex + min-height 0 + overflow-y auto，不限高）', () => {
     // flex 子项的 auto 最小高度会阻止收缩 ⇒ 没有 min-height:0 时滚动条会落到可视区之外。
     //
     // #465：滚动宿主已从 `.notes-list` **拆到 `.notes-scroll`** ——
     // 多列容器若同时限高 + 滚动，列高会被锁死 ⇒ `break-inside: avoid` 失效
     // （同一条备忘录被劈成两列）且纵向根本不滚动（只横向铺开）。
+    //
+    // #600：**不得再给滚动宿主写死高度上限**。曾写死 `max-height: 520px`，
+    // 在 1080px 高的最大化窗口下面板 1008px、列表只到 665px ⇒ 下半屏死空白
+    // （用户截图：内容止于 65% 高度）。高度必须由 flex 从 `.notes-panel` 分配。
     const d = decls('.notes-scroll');
     expect(d).toMatch(/flex\s*:\s*1\s+1\s+auto/);
     expect(d).toMatch(/min-height\s*:\s*0/);
     expect(d).toMatch(/overflow-y\s*:\s*auto/);
     // 滚到头后不再向父级链式滚动
     expect(d).toMatch(/overscroll-behavior\s*:\s*contain/);
-    // 「看板固定最大高度」：滚动区有明确上限
-    expect(d).toMatch(/max-height\s*:\s*520px/);
+    // #600：任何 `max-height` / 固定 `height` 都会把全屏窗口切出半屏空白
+    expect(d, '滚动宿主不得限高（全屏下面板多高、列表就多高）').not.toMatch(/max-height/);
+    expect(d, '滚动宿主高度由 flex 分配，不得写死 height').not.toMatch(/(?:^|;|\s)height\s*:/);
   });
 
   it('多列容器（.notes-list）不得限高、不得自带滚动（#465 核心约束）', () => {

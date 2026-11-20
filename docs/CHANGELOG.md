@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布 — 毛玻璃效果（用户可开关）+ 修备忘录全屏列表只占半屏（#600）**
+
+  > **主线**：设置面板新增「毛玻璃效果」开关，开启后弹窗（`.modal`）与详情（`.detail`）呈 `backdrop-filter: blur()` 半透明磨砂质感，关闭恢复实心；同时修掉备忘录全屏时列表只占上半屏的布局缺陷。纯前端、**零新依赖 / 零 DB / 零 API 变更**。详见 [`glass-effect.md`](./glass-effect.md) 与 [`issue-600-notes-fullscreen-scroll.md`](./issue-600-notes-fullscreen-scroll.md)。
+
+  - **偏好**：新增 `app/src/glassPrefs.ts`（localStorage `taskboard.glassEffect`，默认关；开启 → `<html data-glass="on">`；模块加载即应用防 FOUC；无任意值面不构成 CSS 注入面）。
+  - **视觉**：`styles.css` 新增 `--glass-*` 令牌（预计算 rgba/hex，禁 `color-mix()`）+ `html[data-glass='on']` 门禁（`-webkit-backdrop-filter` + `backdrop-filter: blur(16px) saturate(1.4)` 双前缀）。仅对**覆盖遮罩之上**的 `.modal` / `.detail:not(.detail-window)`（含 `.detail-head` sticky 头）启用；遮罩 / 侧栏 / 页面面板背后无内容可模糊，不启用。
+  - **对比度**：磨砂底比实心面略暗 ⇒ 浅色 `--text-3` 原生 4.32:1 未达 AA，作用域补偿 `--glass-text-3 #5f6875`（4.73:1 ✅）；深色**必须单独定义**（防沿用浅色值），原生 5.55:1 ✅。
+  - **备忘录全屏半屏空白（#600）**：`.notes-scroll` 的 `max-height: 520px` 在最大化窗口（面板 1008px）下把列表截在 520px，下半屏成死区 ⇒ 去掉限高，改由 `flex: 1 1 auto` 撑满；`#465` 的「滚动宿主 / 多列容器分离」结构不变（实测 40 张卡仍可滚、0 张跨列切断）。
+  - **门禁边界修复（#600）**：独立任务详情窗 `.detail.detail-window` 排除出门禁（否则整窗变半透明 + 描边）；`.panel-page .modal`（设置 / 账号 / 同步日志）复位为实心面 + 去描边 + 禁模糊 + 还原 `--text-3`（`.confirm-modal` 保留毛玻璃）；三个 `.toggle` 的 checkbox 补 `aria-label`（可访问名为空）。
+  - **测试**：`glassPrefs.test.ts`（新 8 例）/ `settings-groups.test.ts`（接线 5 例）/ `styles.test.ts`（门禁 7 例）/ `notes-layout.test.ts`（反向断言：滚动宿主禁限高）；`npm test` **641 passed** · `tsc --noEmit` / `i18n:check` / `build` / `lint` / `prettier` / `check-doc-links.py` 全绿；Chrome 无头渲染冒烟验证「开启磨砂 / 关闭实心」两态 + 全屏 7/40 张卡布局 + 三类门禁边界（普通弹窗 / detail-window / panel-page）。
+  - **影响面**：`app/src/glassPrefs.ts`（新）· `app/src/styles.css` · `app/src/components/SettingsPanel.tsx` · `app/src/i18n/locales/{zh-CN,en-US}.json` · `app/src/{glassPrefs,settings-groups,styles}.test.*` · `app/src/components/notes-layout.test.ts` · `docs/glass-effect.md`（新）· `docs/issue-600-notes-fullscreen-scroll.md`（新）· 中英 CHANGELOG · `CONTRIBUTING.md` 索引。
+
 - **v0.8.10（2026-11-17）— 2026-11-17 全量核查 19 条发现闭环 + 界面易用性设计提案（#557）**
 
   > **主线**：对 MCP 双实现（Rust `mcp.rs` / Python `server.py`）、workflow linter（`check-workflow-yaml.py`）、merge-cleanup（`merge-cleanup.py`）做了一次全量核查，**19 条发现全部闭环**（8 中危 + 10 低危共 18 个 PR 合并修复，低危-2「#589 docstring 过时」经核实为文档修正类、另 1 条记录为已知设计/可接受）——详见各 [`docs/issue-5xx-*.md`](../CONTRIBUTING.md) 知识库文档。**零新依赖 / 零 DB schema 变更**。

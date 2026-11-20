@@ -994,3 +994,126 @@ describe('视觉系统能力约束（令牌层 / 双主题 / 焦点环）', () =
     expect(styles, 'keyframes 须用 scaleX（尺寸/位置通道，非色彩）').toMatch(/scaleX\(0\)/);
   });
 });
+
+describe('毛玻璃门禁（html[data-glass="on"]）', () => {
+  const GLASS = "html[data-glass='on']";
+
+  // 提取「选择器含 data-glass='on' 门禁」的全部声明体（仅用于「某声明在全部门禁里存在」类断言）。
+  function glassGate(): string {
+    const re = /([^{}]+)\{([^{}]*)\}/g;
+    const hits: string[] = [];
+    for (const m of styles.matchAll(re)) {
+      if (m[1].includes("data-glass='on'")) hits.push(m[2]);
+    }
+    expect(hits.length, 'styles.css 中找不到 data-glass 门禁规则').toBeGreaterThan(0);
+    return hits.join('\n');
+  }
+
+  /**
+   * 取「选择器中某一项**全等**于 `html[data-glass='on'] <selector>`」的规则体。
+   *
+   * ⚠️ #600：关键断言不能用 `glassGate()` 的合并文本 —— 合并范围里还有
+   * `.detail:not(.detail-window) .detail-head` 与 `.panel-page .modal` 复位规则，
+   * 把 `.modal / .detail` 自身的 `backdrop-filter` 删掉，合并文本仍会被
+   * `.detail-head` 的声明救活（变异测试实测通过的盲点）。
+   */
+  function glassRule(selector: string): string {
+    const re = /([^{}]+)\{([^{}]*)\}/g;
+    const want = `${GLASS} ${selector}`;
+    const hits: string[] = [];
+    for (const m of styles.matchAll(re)) {
+      if (m[1].split(',').some((part) => part.trim() === want)) hits.push(m[2]);
+    }
+    expect(hits.length, `styles.css 中找不到规则「${want}」`).toBeGreaterThan(0);
+    return hits.join('\n');
+  }
+
+  function hasBothPrefixes(body: string): boolean {
+    const lines = body
+      .split(';')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    return (
+      lines.some((l) => l.startsWith('-webkit-backdrop-filter')) &&
+      lines.some((l) => l.startsWith('backdrop-filter'))
+    );
+  }
+
+  it('浮动表面（.modal / .detail）受 data-glass 门禁启用 backdrop-filter', () => {
+    // 毛玻璃必须双前缀：-webkit-（Safari 15 需要）与标准（Chrome 105+）。
+    // 逐条规则断言：合并文本会让「一个表面漏了」被另一个表面掩盖。
+    for (const sel of ['.modal', '.detail:not(.detail-window)']) {
+      const body = glassRule(sel);
+      expect(hasBothPrefixes(body), `${sel} 缺 backdrop-filter（含 -webkit- 前缀）`).toBe(true);
+      // 用令牌而非硬编码：模糊半径与饱和度走 --glass-blur / --glass-saturate。
+      expect(body).toMatch(/blur\(var\(--glass-blur\)\)\s*saturate\(var\(--glass-saturate\)\)/);
+    }
+  });
+
+  it('独立任务详情窗 .detail-window 不被门禁命中（整窗页面，背后无可模糊内容）', () => {
+    // #600：`.detail.detail-window`（#526）自带 border:none + background:var(--bg)；
+    // 若门禁写裸 `.detail`，会把整窗变成半透明 + 0.5px 描边。
+    const re = /([^{}]+)\{([^{}]*)\}/g;
+    for (const m of styles.matchAll(re)) {
+      for (const part of m[1].split(',')) {
+        expect(part.trim(), '门禁必须排除 .detail-window（用 :not(.detail-window)）').not.toBe(
+          `${GLASS} .detail`,
+        );
+      }
+    }
+    // 排除写法本身要真的存在，否则上面的「不存在」恒真。
+    expect(glassRule('.detail:not(.detail-window)')).toBeTruthy();
+  });
+
+  it('.panel-page 内嵌面板复位实心面（设置 / 账号 / 同步日志是整页，不是浮层）', () => {
+    // #600：这些面板复用 .modal 结构，但整页替换布局背后无内容可模糊。
+    const d = glassRule('.panel-page .modal:not(.confirm-modal)');
+    expect(d, '须还原实心面').toMatch(/background\s*:\s*var\(--surface\)/);
+    expect(d, '须去掉毛玻璃描边').toMatch(/border\s*:\s*none/);
+    expect(d, '须禁用 -webkit-backdrop-filter').toMatch(
+      /(?:^|;|\s)-webkit-backdrop-filter\s*:\s*none/,
+    );
+    expect(d, '须禁用标准 backdrop-filter').toMatch(/(?:^|;|\s)backdrop-filter\s*:\s*none/);
+    // 门禁改写过 --text-3（磨砂底补偿色）；实心面须还原主题值。
+    expect(d, '须还原主题 --text-3（inherit）').toMatch(/--text-3\s*:\s*inherit/);
+  });
+
+  it('毛玻璃面板用半透明底 --glass-bg（保留不透明以保正文可读性）', () => {
+    for (const sel of ['.modal', '.detail:not(.detail-window)']) {
+      expect(glassRule(sel), `${sel} 门禁规则须引用 --glass-bg`).toMatch(
+        /background\s*:\s*var\(--glass-bg\)/,
+      );
+    }
+  });
+
+  it(':root 与 [data-theme=dark] 各定义一套 --glass-* 令牌（预计算，禁 color-mix）', () => {
+    // 浅色根令牌
+    expect(styles).toMatch(/--glass-bg\s*:\s*rgba\(/);
+    expect(styles).toMatch(/--glass-blur\s*:\s*16px/);
+    expect(styles).toMatch(/--glass-saturate\s*:\s*1\.4/);
+    expect(styles).toMatch(/--glass-border\s*:\s*rgba\(/);
+    // 深色覆盖块必须重定义 --glass-bg（否则深色沿用浅色值 ⇒ 亮斑）
+    const dark = styles.match(/\[data-theme='dark'\]\s*\{([^}]*)\}/);
+    expect(dark, '需存在 [data-theme=dark] 覆盖块').toBeTruthy();
+    expect(dark![1]).toMatch(/--glass-bg\s*:\s*rgba\(/);
+    // ⚠️ 不依赖 color-mix()：该函数在 build target（chrome105/safari13）下不可用
+    expect(styles).not.toMatch(/--glass-bg[^;]*color-mix/);
+  });
+
+  it('三级文字补偿令牌 --glass-text-3 在浅/深两主题都定义（深色不得沿用浅色值）', () => {
+    // 浅色：比原生 --text-3 更深（磨砂底更暗 ⇒ 需加深保 4.5:1）
+    expect(styles).toMatch(/--glass-text-3\s*:\s*#5f6875/);
+    // 深色：必须单独重定义，否则深底沿用浅色 #5f6875 会看不见
+    const dark = styles.match(/\[data-theme='dark'\]\s*\{([^}]*)\}/);
+    expect(dark, '需存在 [data-theme=dark] 覆盖块').toBeTruthy();
+    expect(dark![1]).toMatch(/--glass-text-3\s*:\s*#9099a8/);
+    // 门禁规则须把三级文字作用域覆盖到补偿令牌（否则补偿从未生效）
+    expect(glassGate()).toMatch(/--text-3\s*:\s*var\(--glass-text-3\)/);
+  });
+
+  it('sticky 头部 .detail-head 随面板半透明 + 模糊（避免滚动时实心横带）', () => {
+    const head = glassRule('.detail:not(.detail-window) .detail-head');
+    expect(hasBothPrefixes(head)).toBe(true);
+    expect(head).toMatch(/var\(--glass-bg-strong\)/);
+  });
+});

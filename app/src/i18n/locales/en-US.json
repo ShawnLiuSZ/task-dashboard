@@ -214,6 +214,8 @@
   "settings.themeAuto": "Follow system",
   "settings.themeLight": "Light",
   "settings.themeDark": "Dark",
+  "settings.glassEffect": "Frosted glass effect",
+  "settings.glassEffectHint": "When enabled, modals and the detail panel get a translucent frosted-glass (blurred) surface; disabled restores solid backgrounds",
   "settings.boardModeTitle": "Board Column Mode",
   "settings.boardModeLabel": "Board mode",
   "settings.boardModeDesc": "Per-account board column mode: the board follows each account's mode when switching accounts; the top-bar switch is removed.",

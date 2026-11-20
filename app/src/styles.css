@@ -30,6 +30,25 @@
   --border-strong: rgba(16, 20, 28, 0.16);
   --overlay: rgba(12, 16, 22, 0.42);
 
+  /* ===== 毛玻璃（frosted glass）令牌 =====
+   * 仅当 <html data-glass="on"> 时被 .modal / .detail 消费。
+   * ⚠️ 全部预计算 rgba/hex——禁 color-mix()（build target chrome105 / safari13
+   * 下该函数不可用且 Vite 不降级，声明会被整条丢弃）。
+   * --glass-bg：浮动表面半透明底。透明度经对比度实测校准：0.82 下浅色
+   *   最暗混合底 ≈ #ebebec，--text-2 5.55:1 / --text-3 4.32:1（后者未达 AA 4.5，
+   *   故另设 --glass-text-3 加深补偿，见下）；深色 0.78 下 --text-3 5.55:1 ✅。
+   * --glass-bg-strong：sticky 头部用（更不透明，减少滚动内容透出干扰标题）；
+   * --glass-blur / --glass-saturate：backdrop-filter 参数；
+   * --glass-border：毛玻璃面板描边（比实心面 --border 略强，提升边缘定义）；
+   * --glass-text-3：磨砂底上的三级文字色（比 --text-3 更深，保证 ≥4.5:1）。
+   *   实测 --glass-text-3 #5f6875 对 #ebebec = 4.73:1 ✅。 */
+  --glass-bg: rgba(255, 255, 255, 0.82);
+  --glass-bg-strong: rgba(255, 255, 255, 0.86);
+  --glass-blur: 16px;
+  --glass-saturate: 1.4;
+  --glass-border: rgba(16, 20, 28, 0.16);
+  --glass-text-3: #5f6875;
+
   /* ===== accent（主色 + 交互态 + 焦点环）===== */
   --accent: #0a6cff;
   --accent-hover: #0858d6;
@@ -279,6 +298,14 @@ html {
   --border: rgba(255, 255, 255, 0.09);
   --border-strong: rgba(255, 255, 255, 0.16);
   --overlay: rgba(0, 0, 0, 0.58);
+
+  /* ===== 毛玻璃令牌（深色：更暗、更不透；--glass-blur/-saturate 沿用 :root）===== */
+  --glass-bg: rgba(35, 39, 47, 0.78);
+  --glass-bg-strong: rgba(35, 39, 47, 0.84);
+  --glass-border: rgba(255, 255, 255, 0.16);
+  /* ⚠️ 必须重定义（否则深色沿用浅色的 #5f6875 ⇒ 深底上看不见）。
+   * 深色磨砂底上原生 --text-3 已 5.55:1，此处取其值即可。 */
+  --glass-text-3: #9099a8;
 
   /* ===== accent（提亮补偿深底对比损失）===== */
   --accent: #4a9eff;
@@ -3143,9 +3170,10 @@ button.unassigned-tag:disabled {
  * · 卡片间距用 `margin-bottom`（`column-gap` 只管列间距）。
  * · `break-inside: avoid` 保证卡片不被切成两半（实测切断数 = 0）。
  *
- * ⚠️ **多列流的滚动方向是横向的**，纵向滚动需要容器有确定高度。本项目
- * `.notes-list` 是 `flex: 1 1 auto` + `min-height: 0` + `overflow-y: auto`
- * ⇒ 高度由父级（`.notes-panel`，flex column）确定，满足前提。
+ * ⚠️ **多列流的滚动方向是横向的**，纵向滚动需要滚动宿主有确定高度。本项目
+ * `.notes-scroll` 是 `flex: 1 1 auto` + `min-height: 0` + `overflow-y: auto`
+ * ⇒ 高度由父级（`.notes-panel`，flex column）确定，满足前提；`.notes-list`
+ * 自身 `height: auto`，列高按内容平衡（`column-fill: balance`）。
  *
  * 已知取舍（用户已确认）：**列式填充** —— 浏览器先填满一列再换下一列，
  * 阅读顺序是「读完第一列再读第二列」，与时间倒序的直觉不同。
@@ -3162,7 +3190,10 @@ button.unassigned-tag:disabled {
  *
  * 解法（**实测得出**，Blink + WebKit 双引擎一致）：
  * · `.notes-scroll`（新，滚动宿主）：`flex: 1 1 auto` + `min-height: 0`
- *   + `max-height: 520px` + `overflow-y: auto` ⇒ 承担**限高 + 纵向滚动**。
+ *   + `overflow-y: auto` ⇒ 承担**撑满剩余高度 + 纵向滚动**。
+ *   ⚠️ #600：**不要给它加 `max-height`** —— 曾写死 `max-height: 520px`，
+ *   在 1080px 高的最大化窗口下面板有 1008px、列表却只到 665px，
+ *   下半屏 300+px 是死空白（用户截图）。限高应由 flex 分配（面板多高就多高）。
  * · `.notes-list`（列容器）：高度**自适应内容**（不设 height/max-height）⇒
  *   多列流按内容自然分配列高，`break-inside: avoid` **恒生效**
  *   （实测 1/2/3/4/7/20 张卡、含 32 行与 100 行超长卡，切断数恒为 0）。
@@ -3181,11 +3212,15 @@ button.unassigned-tag:disabled {
   padding: 8px;
 }
 
-/* #465：滚动宿主 —— 承担「看板固定最大高度 + 纵向滚动条」。
+/* #465：滚动宿主 —— 承担「撑满面板剩余高度 + 纵向滚动条」。
  *
- * 限高 520px 的来历：Tauri 窗口默认 1180×760、minHeight 560 ⇒ 主区最小约 516px，
- * 扣掉工具行 41px ⇒ 列表区最小约 475px < 520px ⇒ 极窄窗口下由 flex 分配
- * （min-height: 0）接管，滚动区进一步变小但**始终可滚**。
+ * #600：原先这里写死 `max-height: 520px`（来历：Tauri 默认窗口 1180×760 下
+ * 主区约 688px，520px 看着「刚好」）。但窗口最大化 / 全屏后主区涨到 1008px，
+ * 滚动宿主仍停在 520px ⇒ **列表只占上半屏，下半屏是空白画布，滚轮在空白处无效**
+ * （用户实测截图：内容止于 65% 高度）。
+ * ⇒ 去掉上限，完全交给 flex：`flex: 1 1 auto` + `min-height: 0` 让它吃掉
+ * `.notes-panel` 剩余高度，窗口多高列表就多高。极窄窗口下 flex 仍会把它压缩，
+ * 且 `min-height: 0` 保证压缩后仍可滚动（不会溢出到面板外）。
  *
  * `overflow-x: hidden`：多列容器宽度确定 ⇒ 列数固定 ⇒ 理论上不会横向溢出；
  * 这里兜底防止任何意外（`overflow-y: auto` 会让 overflow-x 计算成 auto）。
@@ -3194,7 +3229,6 @@ button.unassigned-tag:disabled {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  max-height: 520px;
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
@@ -4064,4 +4098,57 @@ button.unassigned-tag:disabled {
 .card-open-window-icon {
   width: 12px;
   height: 12px;
+}
+
+/* ===== 毛玻璃门禁（<html data-glass="on">，由 glassPrefs.ts 控制）=====
+ * 只对**覆盖在遮罩之上**的浮动表面启用：.modal（含全部 modal 变体——
+ * .about-modal/.confirm-modal/.note-*-modal/.sync-logs-modal，它们都以
+ * .modal 为基类）与 .detail（详情弹窗）。遮罩（.modal-mask / .detail-backdrop）
+ * **不做**模糊——模糊遮罩会把整层背景糊掉、失去空间层次感。
+ * 侧栏 / .panel-page / .notes-panel 是并列或替换布局，背后**无内容可模糊**，
+ * 启用也无视觉效果，故不列。
+ *
+ * ⚠️ #600 两处排除：
+ * · `.detail:not(.detail-window)` —— 独立任务详情窗（#526）是**整窗页面**，
+ *   不是浮层：它自带 `border: none; background: var(--bg)`。若不排除，
+ *   毛玻璃会把整窗变成半透明 + 0.5px 描边（背后是系统桌面，糊不出层次）。
+ * · `.panel-page .modal`（下方复位规则）—— 设置 / 账号 / 同步日志以 `.modal`
+ *   结构**内嵌为整页**，同样没有可模糊的背景；它们必须保持实心面。
+ *
+ * ⚠️ backdrop-filter 会创建新层/包含块：不影响 .detail-head 的 sticky（sticky
+ * 与包含块无关），但需确认焦点环（不透明 --accent outline）仍在模糊层之上——
+ * outline 画在元素自身边界，不受 backdrop-filter 影响。 */
+html[data-glass='on'] .modal,
+html[data-glass='on'] .detail:not(.detail-window) {
+  background: var(--glass-bg);
+  /* 毛玻璃面板补一道描边：.detail 原有 0.5px --border 换强一档；
+   * .modal 原本无描边，毛玻璃下补一条以定义边缘（默认关闭态不受影响）。 */
+  border: 0.5px solid var(--glass-border);
+  /* 磨砂底比实心面略暗 ⇒ 三级文字用更深一档，保证 ≥4.5:1（作用域覆盖，
+   * 只影响本面板及其后代，不动全局 --text-3）。 */
+  --text-3: var(--glass-text-3);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+/* #600：`.panel-page` 内嵌面板复位 —— 它们复用 `.modal` 结构但**不是浮层**
+ * （整页替换，背后无内容可模糊），门禁不得命中。
+ * 选择器多一层 `.panel-page` ⇒ 特异性高于门禁，无需 `!important`。
+ * · 保留 `.confirm-modal`：二次确认框是真浮层，毛玻璃照常生效。
+ * · `--text-3: inherit` 把门禁改写过的三级文字色还原为父级（主题）值 ——
+ *   实心面上应继续用全局 --text-3 / 暗色主题覆盖值。 */
+html[data-glass='on'] .panel-page .modal:not(.confirm-modal) {
+  background: var(--surface);
+  border: none;
+  --text-3: inherit;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* sticky 头部随面板一起半透明 + 模糊，避免滚动时正文从其下透出、
+ * 形成一条实心横带破坏玻璃质感（更不透明的 --glass-bg-strong）。 */
+html[data-glass='on'] .detail:not(.detail-window) .detail-head {
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
