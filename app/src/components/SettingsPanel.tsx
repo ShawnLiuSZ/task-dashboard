@@ -4,6 +4,7 @@ import { api, reportError } from '../api';
 import { useI18n, type LangMode } from '../i18n';
 import type { Account, AccountColumn, BoardMode, Project, Settings } from '../types';
 import { themeManager, type ThemeMode } from '../theme';
+import { glassPrefs } from '../glassPrefs';
 import {
   DEFAULT_FONT_FAMILY,
   DEFAULT_MONO_FAMILY,
@@ -70,6 +71,8 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
   const isEscTop = useEscLayer();
   const { t, mode: langMode, setMode: setLangMode } = useI18n();
   const [themeMode, setThemeMode] = useState<ThemeMode>(themeManager.getMode());
+  // 毛玻璃效果偏好（本地持久化 + 即时生效，与主题/字体同款，不走后端 Settings）。
+  const [glassEnabled, setGlassEnabled] = useState<boolean>(glassPrefs.getEnabled());
   // #444：字体偏好（与主题同款：本地持久化 + 即时生效，不走后端 Settings）。
   const [fontSize, setFontSize] = useState<FontSizePreset>(fontPrefs.getFontSize());
   const [fontFamily, setFontFamily] = useState<string>(fontPrefs.getFontFamily());
@@ -99,6 +102,12 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
   const handleThemeChange = (mode: ThemeMode) => {
     setThemeMode(mode);
     themeManager.setMode(mode);
+  };
+
+  // 毛玻璃开关：写偏好 + 立刻应用（`html[data-glass]` 门禁，见 glassPrefs.ts）。
+  const handleGlassChange = (on: boolean) => {
+    setGlassEnabled(on);
+    glassPrefs.setEnabled(on);
   };
 
   // #444：探测本机实际安装的候选字体（Web 平台无法枚举系统字体，只能试探）。
@@ -419,6 +428,22 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
             </select>
           </div>
 
+          {/* 毛玻璃效果：浮动表面（弹窗/详情）加 backdrop-filter 模糊，
+              开关即时生效（走 glassPrefs，见 glassPrefs.ts）。 */}
+          <div className="field">
+            <label>{t('settings.glassEffect')}</label>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                aria-label={t('settings.glassEffect')}
+                checked={glassEnabled}
+                onChange={(e) => handleGlassChange(e.target.checked)}
+              />
+              <span className="slider" />
+            </label>
+            <div className="muted small">{t('settings.glassEffectHint')}</div>
+          </div>
+
           <div className="field">
             <label>{t('settings.language')}</label>
             <select
@@ -526,6 +551,7 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
             <label className="toggle">
               <input
                 type="checkbox"
+                aria-label={t('settings.autoCheckUpdates')}
                 checked={autoCheckUpdates}
                 onChange={(e) => setAutoCheckUpdates(e.target.checked)}
               />
@@ -539,6 +565,7 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
             <label className="toggle">
               <input
                 type="checkbox"
+                aria-label={t('settings.autoUpdate')}
                 checked={autoUpdate}
                 disabled={!autoCheckUpdates}
                 onChange={(e) => setAutoUpdate(e.target.checked)}
