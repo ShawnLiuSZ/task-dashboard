@@ -6,7 +6,7 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-- **未发布 — 毛玻璃效果（用户可开关）+ 修备忘录全屏列表只占半屏（#600）**
+- **v0.8.11（2026-11-20）— 毛玻璃效果（用户可开关）+ 修备忘录全屏列表只占半屏（#600）**
 
   > **主线**：设置面板新增「毛玻璃效果」开关，开启后弹窗（`.modal`）与详情（`.detail`）呈 `backdrop-filter: blur()` 半透明磨砂质感，关闭恢复实心；同时修掉备忘录全屏时列表只占上半屏的布局缺陷。纯前端、**零新依赖 / 零 DB / 零 API 变更**。详见 [`glass-effect.md`](./glass-effect.md) 与 [`issue-600-notes-fullscreen-scroll.md`](./issue-600-notes-fullscreen-scroll.md)。
 
