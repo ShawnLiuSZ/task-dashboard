@@ -2,7 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **Unreleased — Frosted-glass effect (user-toggleable) + fix notes list occupying only the top half when full-screen (#600)**
+- **v0.8.11 (2026-11-20) — Frosted-glass effect (user-toggleable) + fix notes list occupying only the top half when full-screen (#600)**
 
   > **Main thread**: the settings panel gains a "Frosted glass effect" toggle; when enabled, modals (`.modal`) and the detail panel (`.detail`) get a translucent frosted `backdrop-filter: blur()` surface; disabled restores solid backgrounds. Also fixes the notes list stopping at half height when the window is maximized/full-screen. Pure frontend, **zero new dependencies / zero DB / zero API changes**. See [`glass-effect.md`](./glass-effect.md) and [`issue-600-notes-fullscreen-scroll.md`](./issue-600-notes-fullscreen-scroll.md).
 
