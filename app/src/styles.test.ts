@@ -634,11 +634,11 @@ describe('视觉系统能力约束（令牌层 / 双主题 / 焦点环）', () =
     expect(zDecls - zTokenRefs - zAuto, '存在未走 --z-* 令牌、也不是 auto 的 z-index 字面量').toBe(
       0,
     );
-    // 已知共有 9 处：8 处走令牌（topbar / toolbar / detail / detail-head /
-    //   detail-backdrop / modal-mask / note-viewer-mask / note-editor-mask）
-    //   + 1 处刻意为 `auto`。
-    expect(zDecls, 'z-index 声明数应与规范一致（新增层级时同步更新本条）').toBe(9);
-    expect(zTokenRefs, '走 --z-* 令牌的 z-index 应有 8 处').toBe(8);
+    // 已知共有 10 处：9 处走令牌（topbar / toolbar / detail / detail-head /
+    //   detail-backdrop / modal-mask / note-viewer-mask / note-editor-mask /
+    //   #603 光斑层 .app::before 用 --z-base）+ 1 处刻意为 `auto`。
+    expect(zDecls, 'z-index 声明数应与规范一致（新增层级时同步更新本条）').toBe(10);
+    expect(zTokenRefs, '走 --z-* 令牌的 z-index 应有 9 处').toBe(9);
     expect(zAuto, '刻意的 z-index: auto 应有 1 处').toBe(1);
   });
 
@@ -1050,6 +1050,56 @@ describe('毛玻璃门禁（html[data-glass="on"]）', () => {
     }
   });
 
+  it('#603 彩色光斑底层存在（backdrop-filter 的采样源，解决「无内容可糊」根因）', () => {
+    // 根因断言：`.app::before` 必须铺彩色 radial-gradient，否则模糊纯色 = 无效果。
+    const blob = glassRule('.app::before');
+    expect(blob, '光斑层须用 position:fixed，滚动时玻璃底不跟着跑').toMatch(/position\s*:\s*fixed/);
+    expect(blob, '光斑层须 pointer-events:none，不遮挡交互').toMatch(/pointer-events\s*:\s*none/);
+    // 至少 3 处径向渐变（紫 / 青 / 粉），构成可模糊的彩色内容。
+    const gradients = blob.match(/radial-gradient\(/g) ?? [];
+    expect(gradients.length, '光斑层至少需要 3 个 radial-gradient').toBeGreaterThanOrEqual(3);
+    // ⚠️ 逐处锁定：仅数「≥3」会被「删掉最关键的首处紫色光斑、仍是 3 处」蒙混
+    // （变异实测）。三色光斑缺一即失去对应角落的玻璃采样源。
+    expect(blob, '左上角紫色光斑须存在').toMatch(
+      /radial-gradient\([^;]*at 12% 8%,\s*rgba\(124,\s*92,\s*252,/,
+    );
+    expect(blob, '右上角青色光斑须存在').toMatch(
+      /radial-gradient\([^;]*at 88% 22%,\s*rgba\(80,\s*200,\s*220,/,
+    );
+    expect(blob, '右下角粉色光斑须存在').toMatch(
+      /radial-gradient\([^;]*at 78% 88%,\s*rgba\(255,\s*140,\s*150,/,
+    );
+    expect(blob, '光斑颜色须是预计算 rgba（禁 color-mix）').not.toMatch(/color-mix/);
+    // 深色主题必须单独定义光斑块（否则深色沿用浅色值 ⇒ 亮斑）。
+    expect(styles).toMatch(/\[data-theme='dark'\]\[data-glass='on'\]\s*\.app::before/);
+  });
+
+  it('#603 主界面（侧栏 / 顶栏 / 看板列）纳入玻璃范围，用 --glass-surface', () => {
+    // #600 曾判定这些表面「背后无内容」，#603 的彩色底推翻了该前提 ⇒ 必须纳入。
+    for (const sel of ['.sidebar', '.topbar', '.column']) {
+      const body = glassRule(sel);
+      expect(hasBothPrefixes(body), `${sel} 缺 backdrop-filter（含 -webkit- 前缀）`).toBe(true);
+      expect(body, `${sel} 须用 --glass-surface 半透明底`).toMatch(
+        /background\s*:\s*var\(--glass-surface\)/,
+      );
+    }
+  });
+
+  it('#603 浮层玻璃有 4 要素层次：1px 描边 + inset 高光 + 外投影 + 双文字补偿', () => {
+    const body = glassRule('.modal');
+    expect(body, '描边从 0.5px 加强到 1px').toMatch(
+      /border\s*:\s*1px\s+solid\s+var\(--glass-border\)/,
+    );
+    // 高光（inset）+ 投影（外）两条 legend 都必须引用令牌。
+    const shadow = body.match(/box-shadow\s*:\s*([^;]+);/);
+    expect(shadow, '须有 box-shadow').toBeTruthy();
+    expect(shadow![1], '须有 inset 高光').toMatch(/inset[^,]+var\(--glass-highlight\)/);
+    expect(shadow![1], '须有外投影').toMatch(/\d+px[^,]*var\(--glass-shadow\)/);
+    // 浮层混合底比主界面暗：原生 --text-3 仅 3.50:1 ⇒ 必须同时补偿 text-2/-3。
+    expect(body, '须补偿 --text-2').toMatch(/--text-2\s*:\s*var\(--glass-text-2\)/);
+    expect(body, '须补偿 --text-3').toMatch(/--text-3\s*:\s*var\(--glass-text-3\)/);
+  });
+
   it('独立任务详情窗 .detail-window 不被门禁命中（整窗页面，背后无可模糊内容）', () => {
     // #600：`.detail.detail-window`（#526）自带 border:none + background:var(--bg)；
     // 若门禁写裸 `.detail`，会把整窗变成半透明 + 0.5px 描边。
@@ -1063,6 +1113,11 @@ describe('毛玻璃门禁（html[data-glass="on"]）', () => {
     }
     // 排除写法本身要真的存在，否则上面的「不存在」恒真。
     expect(glassRule('.detail:not(.detail-window)')).toBeTruthy();
+    // #603：独立窗须显式复位为实心 + 无高光投影 + 无模糊（防止 token 泄漏）。
+    const win = glassRule('.detail.detail-window');
+    expect(win, '独立窗背景须实心 --bg').toMatch(/background\s*:\s*var\(--bg\)/);
+    expect(win, '独立窗须无模糊').toMatch(/(?:^|;|\s)backdrop-filter\s*:\s*none/);
+    expect(win, '独立窗须无 1px 玻璃描边').toMatch(/border\s*:\s*none/);
   });
 
   it('.panel-page 内嵌面板复位实心面（设置 / 账号 / 同步日志是整页，不是浮层）', () => {
@@ -1074,8 +1129,11 @@ describe('毛玻璃门禁（html[data-glass="on"]）', () => {
       /(?:^|;|\s)-webkit-backdrop-filter\s*:\s*none/,
     );
     expect(d, '须禁用标准 backdrop-filter').toMatch(/(?:^|;|\s)backdrop-filter\s*:\s*none/);
-    // 门禁改写过 --text-3（磨砂底补偿色）；实心面须还原主题值。
+    // #603：门禁改写过 --text-2/-3（磨砂底补偿色），实心面须还原主题值；
+    // 高光 + 投影也须复位为实心 elevation。
+    expect(d, '须还原主题 --text-2（inherit）').toMatch(/--text-2\s*:\s*inherit/);
     expect(d, '须还原主题 --text-3（inherit）').toMatch(/--text-3\s*:\s*inherit/);
+    expect(d, '须还原实心阴影').toMatch(/box-shadow\s*:\s*var\(--elevation-3\)/);
   });
 
   it('毛玻璃面板用半透明底 --glass-bg（保留不透明以保正文可读性）', () => {
@@ -1087,27 +1145,43 @@ describe('毛玻璃门禁（html[data-glass="on"]）', () => {
   });
 
   it(':root 与 [data-theme=dark] 各定义一套 --glass-* 令牌（预计算，禁 color-mix）', () => {
-    // 浅色根令牌
-    expect(styles).toMatch(/--glass-bg\s*:\s*rgba\(/);
-    expect(styles).toMatch(/--glass-blur\s*:\s*16px/);
+    // 浅色根令牌（#603：blur 16px → 20px，不透明度 0.82 → 0.68/0.72）
+    expect(styles).toMatch(/--glass-bg\s*:\s*rgba\(255,\s*255,\s*255,\s*0\.68\)/);
+    expect(styles).toMatch(/--glass-surface\s*:\s*rgba\(255,\s*255,\s*255,\s*0\.72\)/);
+    expect(styles).toMatch(/--glass-blur\s*:\s*20px/);
     expect(styles).toMatch(/--glass-saturate\s*:\s*1\.4/);
+    expect(styles).toMatch(/--glass-highlight\s*:\s*rgba\(/);
+    expect(styles).toMatch(/--glass-shadow\s*:\s*rgba\(/);
     expect(styles).toMatch(/--glass-border\s*:\s*rgba\(/);
-    // 深色覆盖块必须重定义 --glass-bg（否则深色沿用浅色值 ⇒ 亮斑）
+    // 深色覆盖块必须重定义全套颜色类令牌（否则深色沿用浅色值 ⇒ 亮斑 + 对比度崩）
     const dark = styles.match(/\[data-theme='dark'\]\s*\{([^}]*)\}/);
     expect(dark, '需存在 [data-theme=dark] 覆盖块').toBeTruthy();
-    expect(dark![1]).toMatch(/--glass-bg\s*:\s*rgba\(/);
+    for (const token of [
+      '--glass-bg',
+      '--glass-surface',
+      '--glass-border',
+      '--glass-highlight',
+      '--glass-shadow',
+      '--glass-text-2',
+      '--glass-text-3',
+    ]) {
+      expect(dark![1], `深色块须重定义 ${token}`).toMatch(new RegExp(`${token}\\s*:`));
+    }
     // ⚠️ 不依赖 color-mix()：该函数在 build target（chrome105/safari13）下不可用
     expect(styles).not.toMatch(/--glass-bg[^;]*color-mix/);
   });
 
-  it('三级文字补偿令牌 --glass-text-3 在浅/深两主题都定义（深色不得沿用浅色值）', () => {
-    // 浅色：比原生 --text-3 更深（磨砂底更暗 ⇒ 需加深保 4.5:1）
-    expect(styles).toMatch(/--glass-text-3\s*:\s*#5f6875/);
-    // 深色：必须单独重定义，否则深底沿用浅色 #5f6875 会看不见
+  it('文字补偿令牌 --glass-text-2/-3 在浅/深两主题都定义（深色不得沿用浅色值）', () => {
+    // #603 实测：浮层混合底 rgb(213,212,222) 下原生 --text-3 仅 3.50:1，
+    // 必须补偿到 #525a67 = 4.73:1；--text-2 补偿到 #4a505c = 5.51:1。
+    expect(styles).toMatch(/--glass-text-2\s*:\s*#4a505c/);
+    expect(styles).toMatch(/--glass-text-3\s*:\s*#525a67/);
     const dark = styles.match(/\[data-theme='dark'\]\s*\{([^}]*)\}/);
     expect(dark, '需存在 [data-theme=dark] 覆盖块').toBeTruthy();
+    expect(dark![1]).toMatch(/--glass-text-2\s*:\s*#a6aebc/);
     expect(dark![1]).toMatch(/--glass-text-3\s*:\s*#9099a8/);
-    // 门禁规则须把三级文字作用域覆盖到补偿令牌（否则补偿从未生效）
+    // 门禁规则须把两级文字作用域覆盖到补偿令牌（否则补偿从未生效）
+    expect(glassGate()).toMatch(/--text-2\s*:\s*var\(--glass-text-2\)/);
     expect(glassGate()).toMatch(/--text-3\s*:\s*var\(--glass-text-3\)/);
   });
 

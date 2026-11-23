@@ -1,5 +1,10 @@
 # 毛玻璃效果（用户可开关）· frosted glass
 
+> ⚠️ 本文描述 #600 的**初始实现**（仅浮层、不透明度 0.82、blur 16px）。#603 修复了
+> 「视觉上不可见」的根因（纯色背景无可模糊内容），并把毛玻璃扩展到主界面、补齐
+> 高光/投影层次，令牌与对比度表均已更新 ⇒ **以 [`issue-603-glass-visibility.md`](./issue-603-glass-visibility.md)
+> 为准**，本文保留作为设计沿革。
+
 > 用户请求：**「增加毛玻璃效果，可以通过开关控制」**。本期为 TaskBoard 界面视觉新增，
 > 纯前端（零新依赖 / 零 DB / 零 Tauri command / 零 API 变更）。
 > 后续并入 GitHub issue [#600](https://github.com/ShawnLiuSZ/task-dashboard/issues/600)

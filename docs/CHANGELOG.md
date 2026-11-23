@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布 — 毛玻璃可见性修复：全界面彩色光斑底 + 玻璃层次增强（#603）**
+
+  > **主线**：#600 的毛玻璃开关代码完整但视觉上约等于半透明色块——根因是 `backdrop-filter` 只模糊「背后已绘制的内容」，而 TaskBoard 全界面是纯色，无彩色内容可糊。本期从根因修复：在 `.app::before` 铺彩色光斑径向渐变作采样源，把侧栏/顶栏/看板列纳入玻璃范围，浮层补 1px 描边 + inset 高光 + 外投影，不透明度 0.82→0.68/0.72、blur 16→20px。**默认仍关闭**，延续既有视觉零回归。纯前端、**零新依赖 / 零 DB / 零 API 变更**。详见 [`issue-603-glass-visibility.md`](./issue-603-glass-visibility.md)。
+
+  - **根因与范围**：`.app::before` 用 4 处预计算 `radial-gradient`（紫/青/粉/橙）铺底，`position:fixed` + `pointer-events:none` + `z-index:var(--z-base)`；双主题各一套。主界面 `.sidebar` / `.topbar` / `.column` 与浮层 `.modal` / `.detail` 均启用双前缀 `backdrop-filter`。
+  - **对比度**：按「光斑 → 遮罩 → 表面」真实层叠最坏底实测——浅色浮层 `rgb(213,212,222)` 下原生 `--text-2` 4.50 / `--text-3` 3.50 未达 AA ⇒ 作用域补偿 `--glass-text-2 #4a505c` 5.51 / `--glass-text-3 #525a67` 4.73 ✅；主界面 `--text-3` 4.51 / `--accent` 4.00 ✅；深色全套显式重定义，四列字色全部达标。
+  - **层次**：浮层 1px 描边 + `inset 0 1px` 高光 + `0 12px 40px` 外投影（对应参考图 4 要素里的描边高光 / 内阴影 / 外投影）。
+  - **FOUC**：`main.tsx` 补 `import './glassPrefs'`，此前仅靠 `SettingsPanel` 间接 import，独立窗（about / task-detail）首屏不会应用已持久化的玻璃门禁。
+  - **保留 #600 边界**：独立详情窗 / `.panel-page` 内嵌面板仍复位实心（去模糊 + 去高光投影 + 还原双字色 + 实心阴影）。
+  - **测试**：`styles.test.ts` 新增 4 组 #603 断言（光斑底层逐处锁定三色 / 主界面三表面 / 浮层层次 / 深色全套令牌），变异验证「删紫色光斑 / 改 0.5px 描边」变红、还原全绿；Chrome 无头实测主界面彩色玻璃与浮层层次。
+  - **影响面**：`app/src/styles.css` · `app/src/main.tsx` · `app/src/styles.test.ts` · `docs/issue-603-glass-visibility.md`（新）· `docs/glass-effect.md`（指针）· 中英 CHANGELOG · `CONTRIBUTING.md` 索引。
+
 - **v0.8.11（2026-11-20）— 毛玻璃效果（用户可开关）+ 修备忘录全屏列表只占半屏（#600）**
 
   > **主线**：设置面板新增「毛玻璃效果」开关，开启后弹窗（`.modal`）与详情（`.detail`）呈 `backdrop-filter: blur()` 半透明磨砂质感，关闭恢复实心；同时修掉备忘录全屏时列表只占上半屏的布局缺陷。纯前端、**零新依赖 / 零 DB / 零 API 变更**。详见 [`glass-effect.md`](./glass-effect.md) 与 [`issue-600-notes-fullscreen-scroll.md`](./issue-600-notes-fullscreen-scroll.md)。
