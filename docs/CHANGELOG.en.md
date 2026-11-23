@@ -2,6 +2,18 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+- **Unreleased — Frosted-glass visibility fix: app-wide color blob layer + glass depth (#603)**
+
+  > **Main thread**: #600's frosted-glass toggle was fully wired but visually amounted to a translucent color block — the root cause is that `backdrop-filter` only blurs "already-painted content behind the element", and TaskBoard's entire UI uses solid-color tokens, leaving nothing colorful to blur. This release fixes the root cause: a color-blob layer on `.app::before` as the blur source, sidebar/topbar/board columns brought into the glass scope, floating surfaces given a 1px border + inset highlight + outer shadow, opacity 0.82→0.68/0.72 and blur 16→20px. **Still off by default**, preserving the existing zero-regression promise. Pure frontend, **zero new dependencies / zero DB / zero API changes**. See [`issue-603-glass-visibility.md`](./issue-603-glass-visibility.md).
+
+  - **Root cause & scope**: `.app::before` paints 4 precomputed `radial-gradient` blobs (purple/cyan/pink/orange), `position:fixed` + `pointer-events:none` + `z-index:var(--z-base)`; a separate set for each theme. Main surfaces (`.sidebar` / `.topbar` / `.column`) and floats (`.modal` / `.detail`) all get dual-prefix `backdrop-filter`.
+  - **Contrast**: measured against the worst layering (blob → overlay → surface) — light float `rgb(213,212,222)` made native `--text-2` 4.50 / `--text-3` 3.50 fail AA ⇒ scoped compensation `--glass-text-2 #4a505c` 5.51 / `--glass-text-3 #525a67` 4.73 ✅; main surface `--text-3` 4.51 / `--accent` 4.00 ✅; dark tokens all explicitly redefined, every text color passes.
+  - **Depth**: floats get a 1px border + `inset 0 1px` highlight + `0 12px 40px` outer shadow (the highlight/shadow elements of the reference's 4-part recipe).
+  - **FOUC**: `main.tsx` adds `import './glassPrefs'`; previously it was only imported indirectly by `SettingsPanel`, so standalone windows (about / task-detail) never applied the persisted glass gate on first paint.
+  - **#600 boundaries kept**: standalone detail window / `.panel-page` embedded panels remain solid (no blur, no highlight/shadow, both text colors restored, solid elevation).
+  - **Tests**: `styles.test.ts` gains 4 #603 assertion groups (blob layer with all three colors individually locked / three main surfaces / float depth / full dark token set); mutation checks confirmed going red on "delete purple blob / change border to 0.5px" and green again after restore; headless Chrome verified main-surface color glass and float depth.
+  - **Impact**: `app/src/styles.css` · `app/src/main.tsx` · `app/src/styles.test.ts` · `docs/issue-603-glass-visibility.md` (new) · `docs/glass-effect.md` (pointer) · both CHANGELOGs · `CONTRIBUTING.md` index.
+
 - **v0.8.11 (2026-11-20) — Frosted-glass effect (user-toggleable) + fix notes list occupying only the top half when full-screen (#600)**
 
   > **Main thread**: the settings panel gains a "Frosted glass effect" toggle; when enabled, modals (`.modal`) and the detail panel (`.detail`) get a translucent frosted `backdrop-filter: blur()` surface; disabled restores solid backgrounds. Also fixes the notes list stopping at half height when the window is maximized/full-screen. Pure frontend, **zero new dependencies / zero DB / zero API changes**. See [`glass-effect.md`](./glass-effect.md) and [`issue-600-notes-fullscreen-scroll.md`](./issue-600-notes-fullscreen-scroll.md).
