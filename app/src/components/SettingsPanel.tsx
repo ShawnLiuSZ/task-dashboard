@@ -4,7 +4,7 @@ import { api, reportError } from '../api';
 import { useI18n, type LangMode } from '../i18n';
 import type { Account, AccountColumn, BoardMode, Project, Settings } from '../types';
 import { themeManager, type ThemeMode } from '../theme';
-import { glassPrefs } from '../glassPrefs';
+import { DEFAULT_GLASS_LEVEL, GLASS_LEVELS, glassPrefs, type GlassLevel } from '../glassPrefs';
 import {
   DEFAULT_FONT_FAMILY,
   DEFAULT_MONO_FAMILY,
@@ -72,7 +72,8 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
   const { t, mode: langMode, setMode: setLangMode } = useI18n();
   const [themeMode, setThemeMode] = useState<ThemeMode>(themeManager.getMode());
   // 毛玻璃效果偏好（本地持久化 + 即时生效，与主题/字体同款，不走后端 Settings）。
-  const [glassEnabled, setGlassEnabled] = useState<boolean>(glassPrefs.getEnabled());
+  // #606：从布尔升级为 3 档透明度；null = 关闭，1|2|3 = 通透/均衡/清晰。
+  const [glassLevel, setGlassLevel] = useState<GlassLevel | null>(glassPrefs.getLevel());
   // #444：字体偏好（与主题同款：本地持久化 + 即时生效，不走后端 Settings）。
   const [fontSize, setFontSize] = useState<FontSizePreset>(fontPrefs.getFontSize());
   const [fontFamily, setFontFamily] = useState<string>(fontPrefs.getFontFamily());
@@ -104,10 +105,19 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
     themeManager.setMode(mode);
   };
 
-  // 毛玻璃开关：写偏好 + 立刻应用（`html[data-glass]` 门禁，见 glassPrefs.ts）。
+  // 毛玻璃开关：写偏好 + 立刻应用（`html[data-glass-level]` 门禁，见 glassPrefs.ts）。
+  // 开启时若当前无档位，落到默认档（2 均衡）；关闭置 null。
   const handleGlassChange = (on: boolean) => {
-    setGlassEnabled(on);
-    glassPrefs.setEnabled(on);
+    const level = on ? (glassLevel ?? DEFAULT_GLASS_LEVEL) : null;
+    setGlassLevel(level);
+    glassPrefs.setLevel(level);
+  };
+
+  // #606：档位切换（1 通透 / 2 均衡 / 3 清晰）。值来自 GLASS_LEVELS 白名单，
+  // 无任意值面；切换即时生效，无需点保存。
+  const handleGlassLevelChange = (level: GlassLevel) => {
+    setGlassLevel(level);
+    glassPrefs.setLevel(level);
   };
 
   // #444：探测本机实际安装的候选字体（Web 平台无法枚举系统字体，只能试探）。
@@ -428,20 +438,39 @@ export default function SettingsPanel({ settings, onSaved, onClose }: Props) {
             </select>
           </div>
 
-          {/* 毛玻璃效果：浮动表面（弹窗/详情）加 backdrop-filter 模糊，
-              开关即时生效（走 glassPrefs，见 glassPrefs.ts）。 */}
+          {/* 毛玻璃效果（#606）：开关 + 3 档透明度（照搬 macOS 27 设置-外观的
+              Liquid Glass 滑块）。档位仅在开启时显示，切换即时生效（走 glassPrefs）。 */}
           <div className="field">
             <label>{t('settings.glassEffect')}</label>
             <label className="toggle">
               <input
                 type="checkbox"
                 aria-label={t('settings.glassEffect')}
-                checked={glassEnabled}
+                checked={glassLevel !== null}
                 onChange={(e) => handleGlassChange(e.target.checked)}
               />
               <span className="slider" />
             </label>
             <div className="muted small">{t('settings.glassEffectHint')}</div>
+            {glassLevel !== null && (
+              <div
+                className="seg glass-level-seg"
+                role="group"
+                aria-label={t('settings.glassLevel')}
+              >
+                {GLASS_LEVELS.map((level) => (
+                  <button
+                    key={level}
+                    type="button"
+                    className={`seg-btn${glassLevel === level ? ' on' : ''}`}
+                    aria-pressed={glassLevel === level}
+                    onClick={() => handleGlassLevelChange(level)}
+                  >
+                    {t(`settings.glassLevel${level}`)}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="field">

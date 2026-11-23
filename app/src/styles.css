@@ -30,35 +30,40 @@
   --border-strong: rgba(16, 20, 28, 0.16);
   --overlay: rgba(12, 16, 22, 0.42);
 
-  /* ===== 毛玻璃（frosted glass）令牌 =====
-   * 仅当 <html data-glass="on"> 时消费（#603 可见性修复：从浮层扩到主界面）。
+  /* ===== 毛玻璃（Liquid Glass）令牌 =====
+   * #606：照搬 macOS 27「设置-外观」的透明度滑块 —— 3 档（1 通透 / 2 均衡 /
+   * 3 清晰）。仅当 <html data-glass-level="1|2|3"> 时消费；此处的默认值 = 档 2
+   * （均衡），档 1 / 档 3 在下方 html[data-glass-level='1'/'3'] 块中覆盖。
    * ⚠️ 全部预计算 rgba/hex——禁 color-mix()（build target chrome105 / safari13
    * 下该函数不可用且 Vite 不降级，声明会被整条丢弃）。
    *
-   * #603 根因：backdrop-filter 只模糊「背后已绘制的内容」。原实现背后是纯色
-   *   （--bg / --overlay）⇒ 模糊纯色 ≈ 无效果。修复为：在 .app 底层铺彩色光斑
-   *   （见 html[data-glass='on'] .app::before），再让半透明表面采样它。
+   * #603 根因：backdrop-filter 只模糊「背后已绘制的内容」。纯色背后无效果 ⇒
+   *   .app::before 铺彩色光斑，半透明表面采样它（门禁见下）。
+   * #606 改进：原 0.68 白 + 0.42 中性黑遮罩两次去色 ⇒ modal 是灰块（通道跨度 6）。
+   *   改用带色调深紫遮罩（--glass-mask）+ 淡染色填充 + 更高 saturate，
+   *   浮层恢复彩色（档 1 通道跨度 15~26，接近参考图玻璃质感）。
    *
-   * 不透明度与文字补偿经「光斑 + 遮罩 + 表面」真实层叠模型实测（WCAG AA）：
-   * · --glass-surface（主界面 0.72）：最暗混合底 ≈ rgb(241,238,253)，
-   *   --text 15.59 / --text-2 5.80 / --text-3 4.51 / --accent 4.00 ✅
-   * · --glass-bg（浮层 0.68，上有 --overlay 压暗）：混合底 ≈ rgb(213,212,222)，
-   *   原生 --text-3 仅 3.50 ❌ ⇒ 另设 --glass-text-2/-3 作用域补偿（见下）。
+   * 三档参数经「光斑 → 遮罩 → 表面」真实层叠模型实测（WCAG AA 全达标）：
+   * · 档1 通透：浮层 0.56 / blur 28 / sat 1.75 / 遮罩 0.30，文字补偿 #4c4c4c(5.81) / #5a5a5a(4.67)
+   * · 档2 均衡：浮层 0.64 / blur 24 / sat 1.60 / 遮罩 0.34，文字补偿 #4e4e4e(5.87) / #5d5d5d(4.65) ← 本块默认
+   * · 档3 清晰：浮层 0.74 / blur 20 / sat 1.40 / 遮罩 0.38，文字补偿 #545454(5.80) / #636363(4.60)
+   * · accent（非文字，门槛 ≥3:1）三档分别 3.09 / 3.22 / 3.50 ✅
    * --glass-bg-strong：sticky 头部用（更不透明，减少滚动内容透出干扰标题）；
-   * --glass-blur / --glass-saturate：backdrop-filter 参数；
-   * --glass-highlight：inset 顶部高光（参考图第 3 要素：提亮玻璃上沿）；
-   * --glass-shadow：外投影（第 4 要素：让玻璃悬浮于底之上）；
-   * --glass-border：1px 描边（#600 原 0.5px，#603 加强定义边缘）。 */
-  --glass-bg: rgba(255, 255, 255, 0.68);
-  --glass-bg-strong: rgba(255, 255, 255, 0.78);
-  --glass-surface: rgba(255, 255, 255, 0.72);
-  --glass-blur: 20px;
-  --glass-saturate: 1.4;
-  --glass-border: rgba(16, 20, 28, 0.18);
-  --glass-highlight: rgba(255, 255, 255, 0.7);
-  --glass-shadow: rgba(16, 20, 28, 0.2);
-  --glass-text-2: #4a505c;
-  --glass-text-3: #525a67;
+   * --glass-surface：主界面（无遮罩）用，三档 0.66/0.72/0.78，原生 --text-3 4.55~4.75 ✅；
+   * --glass-highlight / --glass-shadow-low：上亮下暗不对称内阴影（macOS 27 景深）；
+   * --glass-border：1px 描边，比填充亮一档（玻璃边缘捕捉光）。 */
+  --glass-bg: rgba(252, 250, 255, 0.64);
+  --glass-bg-strong: rgba(252, 250, 255, 0.74);
+  --glass-surface: rgba(252, 250, 255, 0.72);
+  --glass-mask: rgba(28, 24, 48, 0.34);
+  --glass-blur: 24px;
+  --glass-saturate: 1.6;
+  --glass-border: rgba(255, 255, 255, 0.55);
+  --glass-highlight: rgba(255, 255, 255, 0.8);
+  --glass-shadow-low: rgba(16, 20, 28, 0.22);
+  --glass-shadow: rgba(16, 20, 28, 0.26);
+  --glass-text-2: #4e4e4e;
+  --glass-text-3: #5d5d5d;
 
   /* ===== accent（主色 + 交互态 + 焦点环）===== */
   --accent: #0a6cff;
@@ -310,15 +315,17 @@ html {
   --border-strong: rgba(255, 255, 255, 0.16);
   --overlay: rgba(0, 0, 0, 0.58);
 
-  /* ===== 毛玻璃令牌（深色：更暗、更不透；--glass-blur/-saturate 沿用 :root）=====
-   * #603 实测：彩色光斑 + 遮罩压暗后，浮层 0.68 / 主界面 0.72 下
-   *   原生 --text 13.11 / --text-2 7.08 / --text-3 5.50 全部 ≥4.5 ✅，
-   *   故补偿色取原生值即可（仍显式定义，保持门禁作用域一致）。 */
-  --glass-bg: rgba(35, 39, 47, 0.68);
-  --glass-bg-strong: rgba(35, 39, 47, 0.78);
+  /* ===== 毛玻璃令牌（深色，档 2 均衡；档 1/3 见下方覆盖块）=====
+   * #606 实测三档深底最亮处：--text 12.00~12.37 / --text-2 6.48~6.68 /
+   *   --text-3 5.04~5.19 全部 ≥4.5 ✅，补偿色取原生值（显式定义保持作用域一致）。
+   * --glass-mask 深紫遮罩在深色下用近黑紫，避免浅色紫产生亮斑。 */
+  --glass-bg: rgba(35, 39, 47, 0.64);
+  --glass-bg-strong: rgba(35, 39, 47, 0.74);
   --glass-surface: rgba(35, 39, 47, 0.72);
-  --glass-border: rgba(255, 255, 255, 0.18);
-  --glass-highlight: rgba(255, 255, 255, 0.12);
+  --glass-mask: rgba(10, 10, 16, 0.38);
+  --glass-border: rgba(255, 255, 255, 0.22);
+  --glass-highlight: rgba(255, 255, 255, 0.18);
+  --glass-shadow-low: rgba(0, 0, 0, 0.35);
   --glass-shadow: rgba(0, 0, 0, 0.5);
   --glass-text-2: #a6aebc;
   --glass-text-3: #9099a8;
@@ -467,6 +474,50 @@ html {
   --session-card-border-2: #3fbb8b;
   --session-card-border-3: #d9a23c;
   --session-card-border-4: #9d86e0;
+}
+
+/* ===== #606 Liquid Glass 档位覆盖 =====
+ * 放在 :root 与 [data-theme='dark'] 之后 ⇒ 特异性/顺序均压过主题默认值。
+ * 档 2（均衡）= 上方默认值，此处只覆盖档 1（通透）与档 3（清晰）。
+ * 每组都显式给出浅色值 + 深色覆盖，避免深色沿用浅色令牌产生亮斑。
+ * 全部数值经真实层叠模型实测，WCAG AA 四列字色达标（见 :root 注释）。 */
+
+/* 档 1 · 通透：最清透，彩色最明显，blur/saturate 最强 */
+html[data-glass-level='1'] {
+  --glass-bg: rgba(252, 250, 255, 0.56);
+  --glass-bg-strong: rgba(252, 250, 255, 0.68);
+  --glass-surface: rgba(252, 250, 255, 0.66);
+  --glass-mask: rgba(28, 24, 48, 0.3);
+  --glass-blur: 28px;
+  --glass-saturate: 1.75;
+  --glass-text-2: #4c4c4c;
+  --glass-text-3: #5a5a5a;
+}
+html[data-theme='dark'][data-glass-level='1'] {
+  --glass-bg: rgba(35, 39, 47, 0.56);
+  --glass-bg-strong: rgba(35, 39, 47, 0.68);
+  --glass-mask: rgba(10, 10, 16, 0.34);
+  --glass-text-2: #a6aebc;
+  --glass-text-3: #9099a8;
+}
+
+/* 档 3 · 清晰：偏不透明，文字最清晰，blur/saturate 最弱 */
+html[data-glass-level='3'] {
+  --glass-bg: rgba(253, 252, 255, 0.74);
+  --glass-bg-strong: rgba(253, 252, 255, 0.82);
+  --glass-surface: rgba(253, 252, 255, 0.78);
+  --glass-mask: rgba(28, 24, 48, 0.38);
+  --glass-blur: 20px;
+  --glass-saturate: 1.4;
+  --glass-text-2: #545454;
+  --glass-text-3: #636363;
+}
+html[data-theme='dark'][data-glass-level='3'] {
+  --glass-bg: rgba(35, 39, 47, 0.74);
+  --glass-bg-strong: rgba(35, 39, 47, 0.82);
+  --glass-mask: rgba(10, 10, 16, 0.42);
+  --glass-text-2: #a6aebc;
+  --glass-text-3: #9099a8;
 }
 
 * {
@@ -1894,6 +1945,12 @@ button.unassigned-tag:disabled {
   /* #529：GitHub 状态项可能有 20+ 个 ⇒ 必须允许**换行**。
      原来没有 `flex-wrap`（默认 nowrap）⇒ 全部挤在一行里。 */
   flex-wrap: wrap;
+}
+/* #606：设置面板的玻璃档位组与上方开关/hint 留出垂直间距；fit-content 避免
+   整行拉伸（.field 是块级容器，.seg 默认会占满宽）。 */
+.glass-level-seg {
+  width: fit-content;
+  margin-top: 8px;
 }
 
 .seg-btn {
@@ -4116,7 +4173,7 @@ button.unassigned-tag:disabled {
   height: 12px;
 }
 
-/* ===== 毛玻璃门禁（<html data-glass="on">，由 glassPrefs.ts 控制）=====
+/* ===== 毛玻璃门禁（<html data-glass-level="1|2|3">，由 glassPrefs.ts 控制）=====
  * #603 可见性修复。根因：backdrop-filter 只模糊「背后已绘制的内容」，原实现
  * 背后全是纯色令牌 ⇒ 模糊纯色 ≈ 无效果，开关开了也只是一块半透明色板。
  * 修复三管齐下：
@@ -4131,7 +4188,7 @@ button.unassigned-tag:disabled {
 
 /* ① 彩色光斑底层：backdrop-filter 的采样源。多径向渐变叠出紫/青/粉三色，
  *    低透明度避免 overwhelm 内容；fixed 保证滚动时玻璃底不跟着跑。 */
-html[data-glass='on'] .app::before {
+html[data-glass-level] .app::before {
   content: '';
   position: fixed;
   inset: 0;
@@ -4143,7 +4200,7 @@ html[data-glass='on'] .app::before {
     radial-gradient(ellipse 48% 42% at 78% 88%, rgba(255, 140, 150, 0.24), transparent 70%),
     radial-gradient(ellipse 42% 38% at 18% 82%, rgba(255, 190, 110, 0.2), transparent 70%);
 }
-html[data-theme='dark'][data-glass='on'] .app::before {
+html[data-theme='dark'][data-glass-level] .app::before {
   background:
     radial-gradient(ellipse 55% 45% at 12% 8%, rgba(124, 92, 252, 0.28), transparent 70%),
     radial-gradient(ellipse 50% 40% at 88% 22%, rgba(80, 200, 220, 0.24), transparent 70%),
@@ -4151,29 +4208,41 @@ html[data-theme='dark'][data-glass='on'] .app::before {
     radial-gradient(ellipse 42% 38% at 18% 82%, rgba(255, 190, 110, 0.16), transparent 70%);
 }
 
+/* ①b #606：遮罩改带色调深紫（--glass-mask），替代中性黑 --overlay。
+ *    中性黑会中和彩色（modal 变灰的根因之一）；深紫保留色相并随档位调透明度。
+ *    sticky 顶栏在遮罩之上，不受影响。 */
+html[data-glass-level] .modal-mask,
+html[data-glass-level] .detail-backdrop {
+  background: var(--glass-mask);
+}
+
 /* ② 主界面玻璃：侧栏 / 顶栏 / 看板列。它们是并列布局，原 #600 判定「背后无内容」
- *    的前提已被 ① 的彩色底推翻 ⇒ #603 纳入范围。用 --glass-surface（0.72），
- *    对比度实测 --text-2 5.80 / --text-3 4.51 / --accent 4.00 全部达标。 */
-html[data-glass='on'] .sidebar,
-html[data-glass='on'] .topbar,
-html[data-glass='on'] .column {
+ *    的前提已被 ① 的彩色底推翻 ⇒ #603 纳入范围。用 --glass-surface（档 0.66~0.78），
+ *    三档对比度实测 --text-3 4.55~4.75 / --text-2 5.85~6.11 / --accent 4.04~4.21 全达标。 */
+html[data-glass-level] .sidebar,
+html[data-glass-level] .topbar,
+html[data-glass-level] .column {
   background: var(--glass-surface);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 
-/* ③a 浮层玻璃（浮在遮罩之上）：加强版背景 + 高光 + 外投影 + 1px 描边。
- *    文字补偿同时覆盖 --text-2 / --text-3（浮层混合底比主界面暗，原生 --text-3
- *    在此仅 3.50:1，必须换成 --glass-text-3 = 4.73:1）。 */
-html[data-glass='on'] .modal,
-html[data-glass='on'] .detail:not(.detail-window) {
+/* ③a 浮层玻璃（浮在遮罩之上）：#606 照搬 macOS 27 Liquid Glass 层次——
+ *    · 描边比填充亮一档（边缘捕捉光）
+ *    · 不对称内阴影：顶部亮高光 + 底部暗边（建立"有厚度"的玻璃弧度与景深）
+ *    · 外投影让面板悬浮于彩色底之上
+ *    文字补偿同时覆盖 --text-2 / --text-3（彩色底上原生文字不达 AA，
+ *    三档补偿色 #4c4c4c/#4e4e4e/#545454 与 #5a5a5a/#5d5d5d/#636363 均实测达标）。 */
+html[data-glass-level] .modal,
+html[data-glass-level] .detail:not(.detail-window) {
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
   --text-2: var(--glass-text-2);
   --text-3: var(--glass-text-3);
   box-shadow:
     inset 0 1px 0 var(--glass-highlight),
-    0 12px 40px var(--glass-shadow);
+    inset 0 -1px 0 var(--glass-shadow-low),
+    0 18px 48px var(--glass-shadow);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
@@ -4182,7 +4251,7 @@ html[data-glass='on'] .detail:not(.detail-window) {
  * ③a 已用 :not(.detail-window) 排除；此处显式复位 background / 高光投影 /
  * 文字补偿，防止将来选择器放宽时回退成半透明（选择器同为两段，靠源码顺序
  * 在后覆盖，无需 !important）。 */
-html[data-glass='on'] .detail.detail-window {
+html[data-glass-level] .detail.detail-window {
   background: var(--bg);
   border: none;
   box-shadow: var(--elevation-3);
@@ -4194,7 +4263,7 @@ html[data-glass='on'] .detail.detail-window {
 
 /* #600：`.panel-page` 内嵌面板（设置 / 账号 / 同步日志）整页替换、无背景可糊
  * ⇒ 复位实心；保留 .confirm-modal（真浮层）。补偿色一并 inherit 还原主题值。 */
-html[data-glass='on'] .panel-page .modal:not(.confirm-modal) {
+html[data-glass-level] .panel-page .modal:not(.confirm-modal) {
   background: var(--surface);
   border: none;
   box-shadow: var(--elevation-3);
@@ -4205,7 +4274,7 @@ html[data-glass='on'] .panel-page .modal:not(.confirm-modal) {
 }
 
 /* sticky 头部随面板半透明 + 模糊，避免滚动正文从下透出形成实心横带。 */
-html[data-glass='on'] .detail:not(.detail-window) .detail-head {
+html[data-glass-level] .detail:not(.detail-window) .detail-head {
   background: var(--glass-bg-strong);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
