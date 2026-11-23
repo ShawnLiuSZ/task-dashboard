@@ -995,22 +995,22 @@ describe('视觉系统能力约束（令牌层 / 双主题 / 焦点环）', () =
   });
 });
 
-describe('毛玻璃门禁（html[data-glass="on"]）', () => {
-  const GLASS = "html[data-glass='on']";
+describe('毛玻璃门禁（html[data-glass-level]）', () => {
+  const GLASS = 'html[data-glass-level]';
 
-  // 提取「选择器含 data-glass='on' 门禁」的全部声明体（仅用于「某声明在全部门禁里存在」类断言）。
+  // 提取「选择器含 data-glass-level 门禁」的全部声明体（仅用于「某声明在全部门禁里存在」类断言）。
   function glassGate(): string {
     const re = /([^{}]+)\{([^{}]*)\}/g;
     const hits: string[] = [];
     for (const m of styles.matchAll(re)) {
-      if (m[1].includes("data-glass='on'")) hits.push(m[2]);
+      if (m[1].includes('data-glass-level')) hits.push(m[2]);
     }
     expect(hits.length, 'styles.css 中找不到 data-glass 门禁规则').toBeGreaterThan(0);
     return hits.join('\n');
   }
 
   /**
-   * 取「选择器中某一项**全等**于 `html[data-glass='on'] <selector>`」的规则体。
+   * 取「选择器中某一项**全等**于 `html[data-glass-level] <selector>`」的规则体。
    *
    * ⚠️ #600：关键断言不能用 `glassGate()` 的合并文本 —— 合并范围里还有
    * `.detail:not(.detail-window) .detail-head` 与 `.panel-page .modal` 复位规则，
@@ -1071,7 +1071,7 @@ describe('毛玻璃门禁（html[data-glass="on"]）', () => {
     );
     expect(blob, '光斑颜色须是预计算 rgba（禁 color-mix）').not.toMatch(/color-mix/);
     // 深色主题必须单独定义光斑块（否则深色沿用浅色值 ⇒ 亮斑）。
-    expect(styles).toMatch(/\[data-theme='dark'\]\[data-glass='on'\]\s*\.app::before/);
+    expect(styles).toMatch(/\[data-theme='dark'\]\[data-glass-level\]\s*\.app::before/);
   });
 
   it('#603 主界面（侧栏 / 顶栏 / 看板列）纳入玻璃范围，用 --glass-surface', () => {
@@ -1145,11 +1145,11 @@ describe('毛玻璃门禁（html[data-glass="on"]）', () => {
   });
 
   it(':root 与 [data-theme=dark] 各定义一套 --glass-* 令牌（预计算，禁 color-mix）', () => {
-    // 浅色根令牌（#603：blur 16px → 20px，不透明度 0.82 → 0.68/0.72）
-    expect(styles).toMatch(/--glass-bg\s*:\s*rgba\(255,\s*255,\s*255,\s*0\.68\)/);
-    expect(styles).toMatch(/--glass-surface\s*:\s*rgba\(255,\s*255,\s*255,\s*0\.72\)/);
-    expect(styles).toMatch(/--glass-blur\s*:\s*20px/);
-    expect(styles).toMatch(/--glass-saturate\s*:\s*1\.4/);
+    // 浅色根令牌（#603：档 2 均衡：blur 24px / 浮层 0.64 / 主界面 0.72）
+    expect(styles).toMatch(/--glass-bg\s*:\s*rgba\(252,\s*250,\s*255,\s*0\.64\)/);
+    expect(styles).toMatch(/--glass-surface\s*:\s*rgba\(252,\s*250,\s*255,\s*0\.72\)/);
+    expect(styles).toMatch(/--glass-blur\s*:\s*24px/);
+    expect(styles).toMatch(/--glass-saturate\s*:\s*1\.6/);
     expect(styles).toMatch(/--glass-highlight\s*:\s*rgba\(/);
     expect(styles).toMatch(/--glass-shadow\s*:\s*rgba\(/);
     expect(styles).toMatch(/--glass-border\s*:\s*rgba\(/);
@@ -1172,10 +1172,10 @@ describe('毛玻璃门禁（html[data-glass="on"]）', () => {
   });
 
   it('文字补偿令牌 --glass-text-2/-3 在浅/深两主题都定义（深色不得沿用浅色值）', () => {
-    // #603 实测：浮层混合底 rgb(213,212,222) 下原生 --text-3 仅 3.50:1，
-    // 必须补偿到 #525a67 = 4.73:1；--text-2 补偿到 #4a505c = 5.51:1。
-    expect(styles).toMatch(/--glass-text-2\s*:\s*#4a505c/);
-    expect(styles).toMatch(/--glass-text-3\s*:\s*#525a67/);
+    // #606 实测：彩色玻璃底上原生 --text-3 不达 AA，
+    // 必须补偿到 #5d5d5d = 4.73:1；--text-2 补偿到 #4e4e4e = 5.51:1。
+    expect(styles).toMatch(/--glass-text-2\s*:\s*#4e4e4e/);
+    expect(styles).toMatch(/--glass-text-3\s*:\s*#5d5d5d/);
     const dark = styles.match(/\[data-theme='dark'\]\s*\{([^}]*)\}/);
     expect(dark, '需存在 [data-theme=dark] 覆盖块').toBeTruthy();
     expect(dark![1]).toMatch(/--glass-text-2\s*:\s*#a6aebc/);
@@ -1189,5 +1189,82 @@ describe('毛玻璃门禁（html[data-glass="on"]）', () => {
     const head = glassRule('.detail:not(.detail-window) .detail-head');
     expect(hasBothPrefixes(head)).toBe(true);
     expect(head).toMatch(/var\(--glass-bg-strong\)/);
+  });
+
+  // ===== #606：透明度 3 档（照搬 macOS 27）+ Liquid Glass 层次 =====
+
+  it('#606 档位覆盖块 1/3 存在，且深色各有独立定义（防沿用浅色亮斑）', () => {
+    for (const level of [1, 3]) {
+      const light = styles.match(
+        new RegExp(`html\\[data-glass-level='${level}'\\]\\s*\\{([^}]*)\\}`),
+      );
+      expect(light, `需存在档 ${level} 浅色覆盖块`).toBeTruthy();
+      // 每档须重定义全套视觉令牌（模糊/饱和/填充/文字补偿），否则档位切换无视觉差。
+      for (const token of [
+        '--glass-bg',
+        '--glass-blur',
+        '--glass-saturate',
+        '--glass-text-2',
+        '--glass-text-3',
+      ]) {
+        expect(light![1], `档 ${level} 须重定义 ${token}`).toMatch(new RegExp(`${token}\\s*:`));
+      }
+      const dark = styles.match(
+        new RegExp(`\\[data-theme='dark'\\]\\[data-glass-level='${level}'\\]\\s*\\{([^}]*)\\}`),
+      );
+      expect(dark, `需存在档 ${level} 深色覆盖块`).toBeTruthy();
+      expect(dark![1], '深色须单独定义 --glass-bg').toMatch(/--glass-bg\s*:/);
+    }
+    // 三档模糊半径须递变（1 最通透 = 最大 blur），否则滑块无意义。
+    expect(styles).toMatch(/--glass-blur\s*:\s*28px/);
+    expect(styles).toMatch(/--glass-blur\s*:\s*24px/);
+    expect(styles).toMatch(/--glass-blur\s*:\s*20px/);
+  });
+
+  it('#606 遮罩用带色调 --glass-mask（替代中性黑，解决灰色根因）', () => {
+    const gate = glassRule('.modal-mask') + glassRule('.detail-backdrop');
+    expect(gate).toMatch(/background\s*:\s*var\(--glass-mask\)/);
+    // --glass-mask 是深紫 rgba(28,24,48)：B 通道显著高于 R/G ⇒ 带紫调，非中性黑。
+    const light = styles.match(/--glass-mask\s*:\s*rgba\((\d+),\s*(\d+),\s*(\d+)/);
+    expect(light, '--glass-mask 须存在').toBeTruthy();
+    expect(Number(light![3]) > Number(light![1]) + 10, 'B 明显高于 R ⇒ 紫调而非中性黑').toBe(true);
+    // 门禁不得再写死 --overlay（中性黑是去色根因）。
+    expect(gate).not.toMatch(/background\s*:\s*var\(--overlay\)/);
+  });
+
+  it('#606 浮层玻璃有上亮下暗不对称内阴影（macOS 27 景深）', () => {
+    const body = glassRule('.modal');
+    const shadow = body.match(/box-shadow\s*:\s*([^;]+);/);
+    expect(shadow, '须有 box-shadow').toBeTruthy();
+    expect(shadow![1], '顶部亮高光 inset 0 1px').toMatch(
+      /inset\s+0\s+1px\s+0\s+var\(--glass-highlight\)/,
+    );
+    expect(shadow![1], '底部暗边 inset 0 -1px').toMatch(
+      /inset\s+0\s+-1px\s+0\s+var\(--glass-shadow-low\)/,
+    );
+    expect(shadow![1], '外投影让面板悬浮').toMatch(/\d+px[^,]*var\(--glass-shadow\)/);
+  });
+
+  it('#606 浮层文字补偿色按档位递变（越通透补偿越深）', () => {
+    const t3 = (level: 1 | 2 | 3): string => {
+      // 档 2 是默认值（定义在 :root 与 [data-theme='dark']），无独立覆盖块。
+      // 用 html[data-glass-level] 门禁块里的 --text-3 引用无法拿到值，
+      // 故档 2 直接取 :root 块；档 1/3 取各自覆盖块。
+      if (level === 2) {
+        return styles.match(/:root\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+      }
+      const block = styles.match(
+        new RegExp(`html\\[data-glass-level='${level}'\\]\\s*\\{([^}]*)\\}`),
+      );
+      return block?.[1] ?? '';
+    };
+    const shades = ([1, 2, 3] as const).map((lv) => {
+      const m = t3(lv).match(/--glass-text-3\s*:\s*#([0-9a-f]{6})/);
+      expect(m, `档 ${lv} 须有 --glass-text-3 十六进制补偿色`).toBeTruthy();
+      return parseInt(m![1].slice(0, 2), 16);
+    });
+    // 档1 最通透（底最暗）⇒ 补偿色最深（数值最小）；档3 反之。
+    expect(shades[0]).toBeLessThan(shades[1]);
+    expect(shades[1]).toBeLessThan(shades[2]);
   });
 });

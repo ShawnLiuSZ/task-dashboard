@@ -114,22 +114,28 @@ describe('字体设置接线（#444）', () => {
 });
 
 /**
- * 毛玻璃开关接线（#毛玻璃）。
+ * 毛玻璃开关 + 3 档透明度接线（#606）。
  *
- * 与主题/字体同款「即时生效」契约：开关 onChange 必须**同时** setState 与
- * 写 glassPrefs —— 只 setState 不写偏好 ⇒ 重启后毛玻璃开关丢失，而类型检查
- * 抓不到这种漏接。故按既有接线断言范式补一条。
+ * 与主题/字体同款「即时生效」契约：开关/档位 onChange 必须**同时** setState 与
+ * 写 glassPrefs —— 只 setState 不写偏好 ⇒ 重启后设置丢失，而类型检查抓不到。
  */
-describe('毛玻璃开关接线（#毛玻璃）', () => {
+describe('毛玻璃开关接线（#606 档位化）', () => {
   it('handleGlassChange 同时 setState + 写 glassPrefs（即时生效，不等保存）', () => {
     const fn = fnBody('handleGlassChange');
     expect(fn, '应能取到 handleGlassChange 函数体').not.toBe('');
-    expect(fn).toMatch(/setGlassEnabled\(on\)/);
-    expect(fn).toMatch(/glassPrefs\.setEnabled\(on\)/);
+    expect(fn).toMatch(/setGlassLevel\(/);
+    expect(fn).toMatch(/glassPrefs\.setLevel\(/);
   });
 
-  it('开关初值来自 glassPrefs 持久化（不是写死 false）', () => {
-    expect(raw).toMatch(/useState<boolean>\(glassPrefs\.getEnabled\(\)\)/);
+  it('档位切换 handleGlassLevelChange 同时 setState + 写偏好', () => {
+    const fn = fnBody('handleGlassLevelChange');
+    expect(fn, '应能取到 handleGlassLevelChange 函数体').not.toBe('');
+    expect(fn).toMatch(/setGlassLevel\(level\)/);
+    expect(fn).toMatch(/glassPrefs\.setLevel\(level\)/);
+  });
+
+  it('开关/档位初值来自 glassPrefs 持久化（不是写死）', () => {
+    expect(raw).toMatch(/useState<GlassLevel \| null>\(glassPrefs\.getLevel\(\)\)/);
   });
 
   it('渲染 .toggle + .slider 开关，label/hint 走 i18n，onChange 接 handleGlassChange', () => {
@@ -137,8 +143,16 @@ describe('毛玻璃开关接线（#毛玻璃）', () => {
     expect(raw).toMatch(/<span className="slider" \/>/);
     expect(raw).toMatch(/t\('settings\.glassEffect'\)/);
     expect(raw).toMatch(/t\('settings\.glassEffectHint'\)/);
-    expect(raw).toMatch(/checked=\{glassEnabled\}/);
+    expect(raw).toMatch(/checked=\{glassLevel !== null\}/);
     expect(raw).toMatch(/onChange=\{\(e\) => handleGlassChange\(e\.target\.checked\)\}/);
+  });
+
+  it('#606 三档分段控件：仅开启时显示，档位来自白名单，i18n label 存在', () => {
+    expect(raw).toMatch(/glassLevel !== null && \(/);
+    expect(raw).toMatch(/GLASS_LEVELS\.map\(/);
+    expect(raw).toMatch(/handleGlassLevelChange\(level\)/);
+    expect(raw).toMatch(/t\(`settings\.glassLevel\$\{level\}`\)/);
+    expect(raw).toMatch(/aria-pressed=\{glassLevel === level\}/);
   });
 
   /**

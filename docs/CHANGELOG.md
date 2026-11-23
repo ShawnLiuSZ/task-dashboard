@@ -6,6 +6,17 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+- **未发布 — Liquid Glass 透明度可调（3 档）+ 照搬 macOS 27 玻璃层次（#606）**
+
+  > **主线**：#603 后用户反馈 modal 背景是灰色的——实测中心像素 `rgb(221,222,223)`，根因是中性黑遮罩（0.42）与白底（0.68）两次去色，把彩色光斑中和掉。本期照搬 macOS 27「设置-外观」的 Liquid Glass 透明度滑块：布尔开关升级为 **3 档（通透 / 均衡 / 清晰）**，遮罩改带色调深紫、浮层改淡染色白、saturate 提到 1.4~1.75，玻璃恢复彩色（通透档彩色跨度 15~26，原仅 6）；并补上亮下暗不对称内阴影 + 比填充亮的描边 + 悬浮投影（macOS 27 景深）。**默认仍关闭**，零回归。纯前端、**零新依赖 / 零 DB / 零 API 变更**。详见 [`issue-606-liquid-glass-origin.md`](./issue-606-liquid-glass-origin.md)。
+
+  - **档位**：`glassPrefs` 布尔 → `getLevel()/setLevel()`，localStorage `taskboard.glassEffect` → `taskboard.glassLevel`（旧 `on` 自动迁移到档 2 均衡、不丢开启态）；`<html data-glass-level="1|2|3">` 门禁；白名单校验无注入面。设置面板开关下方新增「通透/均衡/清晰」分段控件，切换即时生效。
+  - **参数**：档1 alpha 0.56/blur 28/sat 1.75、档2 0.64/24/1.60、档3 0.74/20/1.40；遮罩 `rgba(28,24,48,0.30~0.38)` 替代中性黑；浮层 `rgba(252,250,255,alpha)` 淡染色白。三档浅/深四列字色对比度全部 ≥4.5:1（实测补偿色档1 `#4c4c4c`/`#5a5a5a`、档2 `#4e4e4e`/`#5d5d5d`、档3 `#545454`/`#636363`）。
+  - **层次**：顶部亮高光 + 底部暗边不对称内阴影 + 1px 亮描边 + `0 18px 48px` 外投影（macOS 27 Liquid Glass 景深）。
+  - **i18n**：新增 `settings.glassLevel` / `glassLevel1|2|3` 中英词条；测试锁"档位白名单 ↔ 词条一一对应"（防动态 key 显示到界面）。
+  - **测试**：`npm test` 655 passed；`styles.test.ts` 新增档位覆盖块 / 带色遮罩 / 不对称阴影 / 补偿色递变断言 + 变异验证（删档1 blur / 遮罩改中性黑均变红）；Chrome 无头实测三档 modal 彩色跨度 12/10/6 递变。
+  - **影响面**：`app/src/glassPrefs.ts` · `app/src/components/SettingsPanel.tsx` · `app/src/styles.css` · `app/src/i18n/locales/{zh-CN,en-US}.json` · `app/src/{glassPrefs,settings-groups,styles}.test.*` · `docs/issue-606-liquid-glass-origin.md`（新）· 中英 CHANGELOG · `CONTRIBUTING.md` 索引。
+
 - **v0.8.12（2026-11-23）— 毛玻璃可见性修复：全界面彩色光斑底 + 玻璃层次增强（#603）**
 
   > **主线**：#600 的毛玻璃开关代码完整但视觉上约等于半透明色块——根因是 `backdrop-filter` 只模糊「背后已绘制的内容」，而 TaskBoard 全界面是纯色，无彩色内容可糊。本期从根因修复：在 `.app::before` 铺彩色光斑径向渐变作采样源，把侧栏/顶栏/看板列纳入玻璃范围，浮层补 1px 描边 + inset 高光 + 外投影，不透明度 0.82→0.68/0.72、blur 16→20px。**默认仍关闭**，延续既有视觉零回归。纯前端、**零新依赖 / 零 DB / 零 API 变更**。详见 [`issue-603-glass-visibility.md`](./issue-603-glass-visibility.md)。
