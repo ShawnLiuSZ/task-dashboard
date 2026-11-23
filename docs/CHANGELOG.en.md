@@ -2,7 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **Unreleased — Frosted-glass visibility fix: app-wide color blob layer + glass depth (#603)**
+- **v0.8.12 (2026-11-23) — Frosted-glass visibility fix: app-wide color blob layer + glass depth (#603)**
 
   > **Main thread**: #600's frosted-glass toggle was fully wired but visually amounted to a translucent color block — the root cause is that `backdrop-filter` only blurs "already-painted content behind the element", and TaskBoard's entire UI uses solid-color tokens, leaving nothing colorful to blur. This release fixes the root cause: a color-blob layer on `.app::before` as the blur source, sidebar/topbar/board columns brought into the glass scope, floating surfaces given a 1px border + inset highlight + outer shadow, opacity 0.82→0.68/0.72 and blur 16→20px. **Still off by default**, preserving the existing zero-regression promise. Pure frontend, **zero new dependencies / zero DB / zero API changes**. See [`issue-603-glass-visibility.md`](./issue-603-glass-visibility.md).
 
