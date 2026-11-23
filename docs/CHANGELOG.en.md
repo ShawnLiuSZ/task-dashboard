@@ -2,7 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-- **Unreleased — Liquid Glass adjustable opacity (3 levels) + macOS 27 glass depth (#606)**
+- **v0.8.13 (2026-11-23) — Liquid Glass adjustable opacity (3 levels) + macOS 27 glass depth (#606)**
 
   > **Main thread**: after #603 the user reported the modal background was **gray** — measured center pixel `rgb(221,222,223)`. Root cause: the neutral-black overlay (0.42) and white surface (0.68) desaturated the color blobs twice. This release adopts macOS 27's "Settings → Appearance" Liquid Glass opacity slider: the boolean toggle becomes **3 levels (Clear / Balanced / Opaque)**, the overlay becomes tinted deep purple, the surface a lightly-tinted white, saturate raised to 1.4–1.75, and the glass regains color (clear-level chroma span 15–26, up from 6). Also adds macOS 27 depth: asymmetric inset highlight + bottom shadow, brighter-than-fill border, and a floating outer shadow. **Still off by default**, zero regression. Pure frontend, **zero new dependencies / zero DB / zero API changes**. See [`issue-606-liquid-glass-origin.md`](./issue-606-liquid-glass-origin.md).
 
