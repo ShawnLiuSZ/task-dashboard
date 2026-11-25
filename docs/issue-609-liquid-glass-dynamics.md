@@ -91,7 +91,7 @@ sticky 的 `.detail-head` 沿用同一组 `--glass-mx/--glass-my`（CSS 变量�
 |---|---|
 | `glassPointer.test.ts`（新） | `glassHighlightAt` 中心 / 相对坐标 / 0–100% 夹紧 / 零尺寸回退；`initGlassPointer` 事件委托只绑一次、rAF 节流、rect 只在 flush 读、只写两个 CSS 变量、非玻璃区域不排帧 |
 | `styles.test.ts` | 三层背景（末层仍 `--glass-bg`）+ `background-size`、四边不等亮阴影、动态令牌浅深各一套且深色高光更弱、光斑动画 + reduced-motion、sticky 头高光连续；更新深色补偿色断言 |
-| 变异验证 | 5 组注入全部变红、还原基线全绿：删高光层引用 / 深色高光改 0.14 / 删 reduced-motion 块 / 删漂移动画 / 倒角退回均匀描边 |
+| 变异验证 | 6 组注入全部变红、还原基线全绿：删高光层引用 / 深色高光改 0.14 / 删 reduced-motion 块 / 删漂移动画 / 倒角退回均匀描边 / grain 退回 3px |
 
 ### 验收标准
 
