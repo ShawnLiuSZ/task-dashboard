@@ -6,9 +6,7 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
-> **未发布（功能 PR，待归入下个版本）**
-
-- **Liquid Glass 动态光学增强——指针高光 / 倒角描边 / 活背景（#609）**
+- **v0.8.14（2026-11-25）— Liquid Glass 动态光学增强：指针高光 / 倒角描边 / 活背景（#609）**
 
   > **主线**：#606 已把玻璃参数推到 WCAG AA 边界，但用户反馈与 macOS 27 原生 Liquid Glass 相比仍「像贴膜」。根因不是参数而是材料模型：`backdrop-filter` 均匀模糊 + 静态高光 + 四边等亮描边 + 平涂背景。本期补三项纯前端动态光学，不调 alpha/blur/saturate。**默认仍关闭**，零回归。详见 [`issue-609-liquid-glass-dynamics.md`](./issue-609-liquid-glass-dynamics.md)。
 
@@ -16,7 +14,7 @@
   - **倒角描边**：`box-shadow` 四条化——左上亮边 + 内侧柔光带 + 右下暗边 + 外投影，取代四边等亮白边；sticky 头沿用同一高光中心，避免滚动时头身亮度不连续。
   - **活背景**：光斑加 38s `transform` 微动 + `prefers-reduced-motion` 静止；浮层叠 2px 极淡白色点阵 grain（Chrome 截图实测 3px/0.5alpha 形成可见网格像塑料磨砂板 ⇒ 降到 2px/0.18alpha；不铺主界面——灰度噪点会把浅色原生 `--text-3` 从 4.55 压到 4.31）。
   - **对比度**：深色 `--glass-sheen` 压到 0.04、`--glass-text-3` 补偿 `#9099a8` → `#98a1af`，按真实层叠最坏底实测三档浅深四列全部达标（浅 t3 4.80~4.99 / 深 t3 4.73~4.86，非文字 accent 3.30~3.64）。
-  - **测试**：`glassPointer.test.ts`（新 4 例）+ `styles.test.ts` 断言更新与新增；5 组反向变异（删高光层 / 深色高光改浅色值 / 删 reduced-motion / 删动画 / 退回均匀描边）全部变红、还原全绿。
+  - **测试**：`glassPointer.test.ts`（新 4 例）+ `styles.test.ts` 断言更新与新增；6 组反向变异（删高光层 / 深色高光改浅色值 / 删 reduced-motion / 删动画 / 退回均匀描边 / grain 退回 3px）全部变红、还原全绿。
   - **影响面**：`app/src/glassPointer.ts`（新）· `app/src/main.tsx` · `app/src/styles.css` · `app/src/{glassPointer,styles}.test.ts` · `docs/issue-609-liquid-glass-dynamics.md`（新）· 中英 CHANGELOG · `CONTRIBUTING.md` 索引。**零新依赖 / 零 DB / 零 API / 零 Tauri command 变更**。
 
 - **v0.8.13（2026-11-23）— Liquid Glass 透明度可调（3 档）+ 照搬 macOS 27 玻璃层次（#606）**

@@ -2,9 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-> **Unreleased (feature PR, to be folded into the next version)**
-
-- **Liquid Glass dynamic optics — pointer highlight / bevelled rim / living backdrop (#609)**
+- **v0.8.14 (2026-11-25) — Liquid Glass dynamic optics: pointer highlight / bevelled rim / living backdrop (#609)**
 
   > **Main thread**: #606 pushed glass parameters to the WCAG AA boundary, yet the user reported it still looks "like a film overlay" next to native macOS 27 Liquid Glass. The gap is the material model, not the numbers: uniform `backdrop-filter` blur + static highlight + evenly-lit rim + flat backdrop. This change adds three pure-frontend dynamic optics without touching alpha/blur/saturate. **Still off by default**, zero regression. See [`issue-609-liquid-glass-dynamics.md`](./issue-609-liquid-glass-dynamics.md).
 
@@ -12,7 +10,7 @@
   - **Bevelled rim**: four-layer `box-shadow` — top-left bright edge + inner soft glow + bottom-right dark edge + outer shadow, replacing the evenly-lit 1px border. The sticky header inherits the same highlight centre so it stays continuous while scrolling.
   - **Living backdrop**: 38s `transform` drift on the colour blobs with `prefers-reduced-motion` opt-out; 2px faint white dot-matrix grain on floats only (headless Chrome screenshots showed 3px/0.5alpha forming a visible grid like plastic frosting ⇒ reduced to 2px/0.18alpha; grayscale noise over the whole app would drop native light-theme `--text-3` from 4.55 to 4.31).
   - **Contrast**: dark `--glass-sheen` lowered to 0.04 and `--glass-text-3` compensated `#9099a8` → `#98a1af`. Real-layer stacking on worst-case bases passes all three levels in both themes (light t3 4.80–4.99 / dark t3 4.73–4.86, non-text accent 3.30–3.64).
-  - **Tests**: new `glassPointer.test.ts` (4 cases) plus updated/added `styles.test.ts` assertions; five reverse mutations (remove highlight layer / dark sheen to light value / remove reduced-motion / remove animation / revert to uniform rim) all go red, baseline green after restore.
+  - **Tests**: new `glassPointer.test.ts` (4 cases) plus updated/added `styles.test.ts` assertions; six reverse mutations (remove highlight layer / dark sheen to light value / remove reduced-motion / remove animation / revert to uniform rim / grain back to 3px) all go red, baseline green after restore.
   - **Impact**: `app/src/glassPointer.ts` (new) · `app/src/main.tsx` · `app/src/styles.css` · `app/src/{glassPointer,styles}.test.ts` · `docs/issue-609-liquid-glass-dynamics.md` (new) · both CHANGELOGs · `CONTRIBUTING.md` index. **Zero new dependencies / zero DB / zero API / zero Tauri command changes**.
 
 - **v0.8.13 (2026-11-23) — Liquid Glass adjustable opacity (3 levels) + macOS 27 glass depth (#606)**
