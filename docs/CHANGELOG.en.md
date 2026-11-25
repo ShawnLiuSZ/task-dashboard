@@ -2,9 +2,7 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
-> **Unreleased (feature PR, to be folded into the next version)**
-
-- **Sessions one-click cleanup extended to board done (#612)**
+- **v0.8.15 (2026-11-25) — Sessions one-click cleanup extended to board done (#612)**
 
   > **Main thread**: #541's "Clear closed" only filtered on `issueState === 'closed'`, so sessions for tasks already dragged into the board's **done** column (but with an open issue) could not be cleared. Per user confirmation, the **existing button is extended** (no new button): clear sessions for issues that are closed **or** tasks in `done`. Zero backend / DB / API changes. See [`issue-612-sessions-clear-done.md`](./issue-612-sessions-clear-done.md).
 
