@@ -113,6 +113,8 @@ cd app && npm run i18n:check
 
 - [`PRD.md`](./PRD.md) — 需求文档与决策演进（含已放弃的 Projects v2 方案、归属维度设计、API 避坑点）
 
+- [`docs/issue-612-sessions-clear-done.md`](./docs/issue-612-sessions-clear-done.md) — **会话面板一键清除扩展到看板 done**：#541 的「清除已关闭会话」只按 `issueState=closed` 过滤，已拖到看板 done 列但 issue 未关闭的任务会话清不掉。用户确认扩展现有按钮（不新增按钮），一次清除「已关闭 **或** 看板 done」。判定抽纯函数 `isClearableSession(issueState, status)` = `isClosedIssueState(...) || status === 'done'`（前者大小写不敏感 #543、后者精确匹配本地四态），四种组合由新 `sessionCleanup.test.ts`（11 例）真实数据流覆盖；组件更名 `clearable*`，按钮/确认/tooltip 文案改「清除已关闭/已完成会话」，i18n key 名不变只改文案。清除仍走 `api.clearSessions(keys)` + issueKey 去重 + 保留任务行。**零后端 / 零 DB / 零 API 变更**；4 组反向变异全红（含首轮暴露的「去掉 new Set 仍绿」盲点，补断言后复验红）+ 还原基线绿。
+
 - [`docs/issue-598-fnm-bin-dirs.md`](./docs/issue-598-fnm-bin-dirs.md) — **设备扫描漏探版本管理器安装的 CLI，codebuddy 被误判「疑似已卸载」**：GUI 应用（Finder/Dock 启动）只有 launchd 最小 PATH（实测 `/usr/bin:/bin:/usr/sbin:/sbin`），继承不到终端里 fnm/nvm 注入的目录；而硬编码的通用惯例目录不含 fnm / nvm / mise / asdf / pnpm / yarn 的安装目录 ⇒ 本机装了 codebuddy 却判 `config-only` → 「已接入 + 仅残留配置 → 疑似已卸载」（同批漏判 codex）。修法：新增 `HOME_BIN_PATTERNS` 模式表 + 单层 `*` 通配自展开（`std::fs::read_dir`，零新依赖），刻意**不含** `~/.local/state/fnm_multishells/*/bin`（实测 6000+ 残留会话目录，慢且把「开过 shell」当安装证据）；拆出 `home_bin_dirs()`（只含 `$HOME` 下路径、不含 PATH）供测试确定性注入，避开 #263 记过的「断言随开发机 PATH 漂移」坑。**零前端 / 零 MCP / 零 Schema 变更**；+3 单测 + 变异验证（删模式 / 退化通配 ⇒ 各自变红）
 
 - [`docs/issue-600-notes-fullscreen-scroll.md`](./docs/issue-600-notes-fullscreen-scroll.md) — **备忘录全屏时列表只占上半屏**：`.notes-scroll` 写死 `max-height: 520px`（#465 的窗口假设），最大化窗口下面板 1008px 而列表只到 520px ⇒ 下半屏空白且滚轮无效（用户截图内容止于 65% 高度）。修法：去掉限高，由 `flex: 1 1 auto` + `min-height: 0` 撑满 `.notes-panel` 剩余高度；保留 #465「滚动宿主 / 多列容器分离」（`.notes-list` 仍 `height: auto`），实测 40 张卡可滚到底、0 张跨列切断。静态测试从「锁 max-height:520px」改为「禁止任何 max-height / 固定 height」+ 变异验证

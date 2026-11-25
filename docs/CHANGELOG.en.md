@@ -2,6 +2,18 @@
 
 > Per-version release notes and fix records for TaskBoard. For the current version and a project overview, see [README](../README.md).
 
+> **Unreleased (feature PR, to be folded into the next version)**
+
+- **Sessions one-click cleanup extended to board done (#612)**
+
+  > **Main thread**: #541's "Clear closed" only filtered on `issueState === 'closed'`, so sessions for tasks already dragged into the board's **done** column (but with an open issue) could not be cleared. Per user confirmation, the **existing button is extended** (no new button): clear sessions for issues that are closed **or** tasks in `done`. Zero backend / DB / API changes. See [`issue-612-sessions-clear-done.md`](./issue-612-sessions-clear-done.md).
+
+  - **Predicate**: new pure function `isClearableSession(issueState, status)` = `isClosedIssueState(issueState) || status === 'done'`; the former is case-insensitive (#543), the latter matches the local four-state enum exactly. All four combinations are covered with real data in `sessionCleanup.test.ts` (11 new cases), avoiding the mutation blind spot of static assertions on an `a || b` expression.
+  - **UI**: `SessionsPanel`'s `closedSessions/closedCount/handleClearClosed` renamed to `clearable*`; button label becomes "Clear closed/done", confirmation and disabled tooltip updated; i18n **keys unchanged**, only zh/en copy updated.
+  - **Cleanup**: still via `api.clearSessions(keys)`, de-duplicated by issueKey in aggregate view, task rows preserved and only session columns cleared.
+  - **Tests**: the #541 describe in `sessions-panel.test.ts` migrated to #612 (must not regress to closed-only + de-dup assertion); four reverse mutations all go red (including the "removing `new Set` still green" blind spot found in the first pass), baseline green after restore.
+  - **Impact**: `app/src/utils/sessionCleanup.ts` (new) · `app/src/utils/sessionCleanup.test.ts` (new) · `app/src/components/SessionsPanel.tsx` · `app/src/sessions-panel.test.ts` · `app/src/i18n/locales/{zh-CN,en-US}.json` · `docs/issue-612-sessions-clear-done.md` (new) · `docs/issue-541-sessions-clear-closed.md` (pointer) · both CHANGELOGs · `CONTRIBUTING.md` index.
+
 - **v0.8.14 (2026-11-25) — Liquid Glass dynamic optics: pointer highlight / bevelled rim / living backdrop (#609)**
 
   > **Main thread**: #606 pushed glass parameters to the WCAG AA boundary, yet the user reported it still looks "like a film overlay" next to native macOS 27 Liquid Glass. The gap is the material model, not the numbers: uniform `backdrop-filter` blur + static highlight + evenly-lit rim + flat backdrop. This change adds three pure-frontend dynamic optics without touching alpha/blur/saturate. **Still off by default**, zero regression. See [`issue-609-liquid-glass-dynamics.md`](./issue-609-liquid-glass-dynamics.md).

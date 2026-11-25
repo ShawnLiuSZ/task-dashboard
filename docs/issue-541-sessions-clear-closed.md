@@ -1,5 +1,7 @@
 # 一键删除已关闭 issue 的任务会话（#541）
 
+> ⚠️ 本功能在 #612 中已扩展：清除范围从「issue 已关闭」扩大为「已关闭 **或** 看板 done」，按钮文案改为「清除已关闭/已完成会话」。以 [`issue-612-sessions-clear-done.md`](./issue-612-sessions-clear-done.md) 为准，本文保留作为设计沿革。
+
 ## 背景 / 动机
 
 任务会话面板（`SessionsPanel`，#287）列出所有活跃 session，但**删除某个会话前无法知道它对应的 issue 是否已关闭** —— 只能逐个点开链接去 GitHub 确认，清理收尾会话全靠人工核对。
