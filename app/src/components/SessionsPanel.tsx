@@ -4,7 +4,7 @@ import ConfirmDialog from './ConfirmDialog';
 import { useT } from '../i18n';
 import type { Task } from '../types';
 import { taskIdentity } from '../utils/taskIdentity';
-import { isClosedIssueState } from '../utils/issueState';
+import { isClearableSession } from '../utils/sessionCleanup';
 
 function Icon({ d, size = 13 }: { d: string; size?: number }) {
   return (
@@ -72,8 +72,8 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
   const [selectMode, setSelectMode] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [confirmMulti, setConfirmMulti] = useState(false);
-  // #541：一键清除「已关闭 issue」的会话——确认弹窗。
-  const [confirmClosed, setConfirmClosed] = useState(false);
+  // #541 / #612：一键清除「已关闭 或 看板已完成」的会话——确认弹窗。
+  const [confirmClearable, setConfirmClearable] = useState(false);
   const [columns, setColumns] = useState(3);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -253,26 +253,27 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
     }
   }, [selectedKeys, sessions, exitSelectMode, loadSessions]);
 
-  // #541：已关闭 issue 的会话（本地 issue_state === 'closed'，同步路径已权威归一化小写）。
-  // 一键清空它们的 session 字段（保留任务行，与 clear_sessions 语义一致）。
-  const closedSessions = useMemo(
-    () => sessions.filter((s) => isClosedIssueState(s.issueState)),
+  // #541 / #612：已关闭 issue **或** 看板已完成（status=done）的会话。
+  // 两个维度正交，满足任一即纳入；一键清空它们的 session 字段（保留任务行）。
+  // 判定走纯函数 isClearableSession，四种组合由单测覆盖。
+  const clearableSessions = useMemo(
+    () => sessions.filter((s) => isClearableSession(s.issueState, s.status)),
     [sessions],
   );
-  const closedCount = closedSessions.length;
+  const clearableCount = clearableSessions.length;
 
-  // #541：一键清除（确认后调用）。聚合视图下同一 issueKey 可来自两个账号 ⇒ 去重。
-  const handleClearClosed = useCallback(async () => {
-    const keys = [...new Set(closedSessions.map((s) => s.issueKey))];
+  // #541 / #612：一键清除（确认后调用）。聚合视图下同一 issueKey 可来自两个账号 ⇒ 去重。
+  const handleClearClearable = useCallback(async () => {
+    const keys = [...new Set(clearableSessions.map((s) => s.issueKey))];
     try {
       await api.clearSessions(keys);
-      setConfirmClosed(false);
+      setConfirmClearable(false);
       void loadSessions();
     } catch (e) {
-      console.error('清除已关闭会话失败:', e);
-      setConfirmClosed(false);
+      console.error('清除已关闭/已完成会话失败:', e);
+      setConfirmClearable(false);
     }
-  }, [closedSessions, loadSessions]);
+  }, [clearableSessions, loadSessions]);
 
   const allSelected = selectedKeys.size === sessions.length && sessions.length > 0;
 
@@ -316,13 +317,13 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
                   <button type="button" className="btn small" onClick={() => setSelectMode(true)}>
                     {t('sessions.select')}
                   </button>
-                  {/* #541：一键清除已关闭 issue 的会话。无已关闭会话时置灰禁用。 */}
+                  {/* #541 / #612：一键清除已关闭 issue 或看板已完成的会话。无可清除时置灰禁用。 */}
                   <button
                     type="button"
                     className="btn small"
-                    disabled={closedCount === 0}
-                    title={closedCount === 0 ? t('sessions.clearClosedDisabled') : undefined}
-                    onClick={() => setConfirmClosed(true)}
+                    disabled={clearableCount === 0}
+                    title={clearableCount === 0 ? t('sessions.clearClosedDisabled') : undefined}
+                    onClick={() => setConfirmClearable(true)}
                   >
                     {t('sessions.clearClosed')}
                   </button>
@@ -501,12 +502,12 @@ export default function SessionsPanel({ accountId }: { accountId?: number | null
             onCancel={() => setConfirmMulti(false)}
           />
         )}
-        {/* #541：一键清除已关闭会话确认框。 */}
-        {confirmClosed && (
+        {/* #541 / #612：一键清除已关闭或已完成会话确认框。 */}
+        {confirmClearable && (
           <ConfirmDialog
-            message={t('sessions.clearClosedConfirm', { n: closedCount })}
-            onConfirm={() => void handleClearClosed()}
-            onCancel={() => setConfirmClosed(false)}
+            message={t('sessions.clearClosedConfirm', { n: clearableCount })}
+            onConfirm={() => void handleClearClearable()}
+            onCancel={() => setConfirmClearable(false)}
           />
         )}
       </div>

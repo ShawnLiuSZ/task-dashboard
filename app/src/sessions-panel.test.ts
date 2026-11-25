@@ -234,51 +234,58 @@ describe('SessionsPanel 复制高亮键（#452）', () => {
 });
 
 /**
- * #541 一键清除「已关闭 issue」的会话回归。
+ * #541 → #612 一键清除「已关闭 issue 或看板 done」的会话回归。
  *
  * 痛点：删除某会话前无法知道对应 issue 是否已关闭，只能逐个点开链接去 GitHub 确认。
- * 方案：用**本地** `tasks.issue_state`（同步路径已权威归一化小写）过滤，
- * 复用现有 `api.clearSessions(keys)` 一键清空 —— **零后端改动**。
- * #543：判据改走 `isClosedIssueState`（大小写不敏感，对齐后端 `is_closed_state`）。
+ * 方案：用**本地** `tasks.issue_state`（同步路径已权威归一化小写）+ 看板 `status`
+ * 过滤，复用现有 `api.clearSessions(keys)` 一键清空 —— **零后端改动**。
+ * #543：issue_state 判据改走 `isClosedIssueState`（大小写不敏感）。
+ * #612：判据抽纯函数 `isClearableSession`，范围扩展到 `status === 'done'`。
  *
- * 静态锁定：过滤判据、按钮禁用态、确认弹窗、handleClearClosed 的接线。
+ * 静态锁定：过滤判据、按钮禁用态、确认弹窗、handleClearClearable 的接线。
+ * 四种组合的真实数据流断言见 `utils/sessionCleanup.test.ts`。
  */
-describe('SessionsPanel 一键清除已关闭会话（#541）', () => {
-  it('closedSessions 用 isClosedIssueState（大小写不敏感）过滤', () => {
+describe('SessionsPanel 一键清除已关闭/已完成会话（#541 → #612）', () => {
+  it('clearableSessions 用 isClearableSession（issueState + status）过滤', () => {
     const expr =
       sessionsRaw.match(
-        /const closedSessions = useMemo\([\s\S]*?sessions\.filter\(\(s\) => isClosedIssueState\(s\.issueState\)\)[\s\S]*?\[sessions\][\s\S]*?\);/,
+        /const clearableSessions = useMemo\([\s\S]*?sessions\.filter\(\(s\) => isClearableSession\(s\.issueState, s\.status\)\)[\s\S]*?\[sessions\][\s\S]*?\);/,
       )?.[0] ?? '';
-    expect(expr, '应能取到 closedSessions 定义').not.toBe('');
-    expect(expr).toMatch(/isClosedIssueState\(s\.issueState\)/);
+    expect(expr, '应能取到 clearableSessions 定义').not.toBe('');
+    expect(expr).toMatch(/isClearableSession\(s\.issueState, s\.status\)/);
+    // 不得退回只判一个维度（#612 的回归点）。
+    expect(expr).not.toMatch(/isClosedIssueState\(s\.issueState\)/);
   });
 
-  it('无已关闭会话时按钮置灰禁用，带 clearClosedDisabled 提示', () => {
-    expect(sessionsRaw).toMatch(/disabled=\{closedCount === 0\}/);
+  it('无可清除会话时按钮置灰禁用，带 clearClosedDisabled 提示', () => {
+    expect(sessionsRaw).toMatch(/disabled=\{clearableCount === 0\}/);
     expect(sessionsRaw).toMatch(
-      /title=\{closedCount === 0 \? t\('sessions\.clearClosedDisabled'\) : undefined\}/,
+      /title=\{clearableCount === 0 \? t\('sessions\.clearClosedDisabled'\) : undefined\}/,
     );
     // 按钮仅在非选择模式工具栏（与「选择」并列），不侵入选择模式。
     expect(sessionsRaw).toMatch(/t\('sessions\.select'\)/);
     expect(sessionsRaw).toMatch(/t\('sessions\.clearClosed'\)/);
-    expect(sessionsRaw).toMatch(/onClick=\{\(\) => setConfirmClosed\(true\)\}/);
+    expect(sessionsRaw).toMatch(/onClick=\{\(\) => setConfirmClearable\(true\)\}/);
   });
 
-  it('handleClearClosed：确认后调 api.clearSessions 并传去重的已关闭 issueKey', () => {
+  it('handleClearClearable：确认后调 api.clearSessions 并传去重的已关闭/done issueKey', () => {
     const fn =
       sessionsRaw.match(
-        /const handleClearClosed = useCallback\(async \(\) => \{[\s\S]*?\n {2}\}, \[[^\]]*\]\);/,
+        /const handleClearClearable = useCallback\(async \(\) => \{[\s\S]*?\n {2}\}, \[[^\]]*\]\);/,
       )?.[0] ?? '';
-    expect(fn, '应能取到 handleClearClosed 函数体').not.toBe('');
+    expect(fn, '应能取到 handleClearClearable 函数体').not.toBe('');
     // 聚合视图下同一 issueKey 可来自两个账号 ⇒ 去重后传 issue_key（后端按 issue_key 定位）。
-    expect(fn).toMatch(/closedSessions\.map\(\(s\) => s\.issueKey\)/);
+    expect(fn).toMatch(/clearableSessions\.map\(\(s\) => s\.issueKey\)/);
+    expect(fn, '必须 new Set 去重，否则同一 issueKey 被清两次').toMatch(
+      /\[\.\.\.new Set\(clearableSessions\.map\(\(s\) => s\.issueKey\)\)\]/,
+    );
     expect(fn).toMatch(/await api\.clearSessions\(keys\)/);
   });
 
-  it('确认弹窗使用 clearClosedConfirm 并接 handleClearClosed', () => {
+  it('确认弹窗使用 clearClosedConfirm 并接 handleClearClearable', () => {
     expect(sessionsRaw).toMatch(
-      /t\('sessions\.clearClosedConfirm',\s*\{\s*n:\s*closedCount\s*\}\)/,
+      /t\('sessions\.clearClosedConfirm',\s*\{\s*n:\s*clearableCount\s*\}\)/,
     );
-    expect(sessionsRaw).toMatch(/onConfirm=\{\(\) => void handleClearClosed\(\)\}/);
+    expect(sessionsRaw).toMatch(/onConfirm=\{\(\) => void handleClearClearable\(\)\}/);
   });
 });

@@ -6,6 +6,18 @@
 
 > TaskBoard 各版本的更新说明与修复记录。当前版本与项目概览见 [README](../README.md)。
 
+> **未发布（功能 PR，待归入下个版本）**
+
+- **会话面板一键清除扩展到看板 done（#612）**
+
+  > **主线**：#541 的「清除已关闭会话」只按 `issueState === 'closed'` 过滤，已拖到看板 done 列但 issue 未关闭的任务会话清不掉。本期按用户确认**扩展现有按钮**（不新增按钮），一次清除「已关闭 **或** 看板 done」的会话。零后端 / 零 DB / 零 API 变更。详见 [`issue-612-sessions-clear-done.md`](./issue-612-sessions-clear-done.md)。
+
+  - **判定**：新纯函数 `isClearableSession(issueState, status)` = `isClosedIssueState(issueState) || status === 'done'`；前者大小写不敏感（#543 口径），后者精确匹配本地四态枚举。四种组合由 `sessionCleanup.test.ts`（新 11 例）以真实数据流覆盖，避开静态断言对「漏掉一个分支」的变异盲点。
+  - **UI**：`SessionsPanel` 的 `closedSessions/closedCount/handleClearClosed` 更名 `clearable*`；按钮文案改「清除已关闭/已完成会话」，确认与禁用 tooltip 同步；i18n **key 名不变**、只更新中英文案。
+  - **清除**：仍走 `api.clearSessions(keys)`，聚合视图同一 issueKey 去重，保留任务行只清 session 三列。
+  - **测试**：`sessions-panel.test.ts` 的 #541 describe 迁移到 #612（不得退回只判 closed + 去重断言）；4 组反向变异全红（含首轮暴露的「去掉 new Set 仍绿」盲点，补断言后复验红）、还原基线绿。
+  - **影响面**：`app/src/utils/sessionCleanup.ts`（新）· `app/src/utils/sessionCleanup.test.ts`（新）· `app/src/components/SessionsPanel.tsx` · `app/src/sessions-panel.test.ts` · `app/src/i18n/locales/{zh-CN,en-US}.json` · `docs/issue-612-sessions-clear-done.md`（新）· `docs/issue-541-sessions-clear-closed.md`（指针）· 中英 CHANGELOG · `CONTRIBUTING.md` 索引。
+
 - **v0.8.14（2026-11-25）— Liquid Glass 动态光学增强：指针高光 / 倒角描边 / 活背景（#609）**
 
   > **主线**：#606 已把玻璃参数推到 WCAG AA 边界，但用户反馈与 macOS 27 原生 Liquid Glass 相比仍「像贴膜」。根因不是参数而是材料模型：`backdrop-filter` 均匀模糊 + 静态高光 + 四边等亮描边 + 平涂背景。本期补三项纯前端动态光学，不调 alpha/blur/saturate。**默认仍关闭**，零回归。详见 [`issue-609-liquid-glass-dynamics.md`](./issue-609-liquid-glass-dynamics.md)。
