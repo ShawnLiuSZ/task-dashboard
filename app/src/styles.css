@@ -64,6 +64,14 @@
   --glass-shadow: rgba(16, 20, 28, 0.26);
   --glass-text-2: #4e4e4e;
   --glass-text-3: #5d5d5d;
+  /* #609 动态光学：指针镜面高光中心（由 glassPointer.ts 写百分比，默认居中）、
+   * 高光强度、内侧柔光带、玻璃细颗粒（白色点阵，只叠在浮层上）。
+   * ⚠️ 深色必须独立重定义整组，否则沿用浅色值 ⇒ 亮斑 + 对比度崩。 */
+  --glass-mx: 50%;
+  --glass-my: 50%;
+  --glass-sheen: rgba(255, 255, 255, 0.14);
+  --glass-inner-glow: rgba(255, 255, 255, 0.12);
+  --glass-grain: rgba(255, 255, 255, 0.18);
 
   /* ===== accent（主色 + 交互态 + 焦点环）===== */
   --accent: #0a6cff;
@@ -328,7 +336,12 @@ html {
   --glass-shadow-low: rgba(0, 0, 0, 0.35);
   --glass-shadow: rgba(0, 0, 0, 0.5);
   --glass-text-2: #a6aebc;
-  --glass-text-3: #9099a8;
+  /* #609：深色高光压到 0.04（白色 0.14 会把三级文字推到 4.2:1 以下）。
+   * 三级文字补偿 #9099a8 → #98a1af，按 sheen 0.04 + grain 2.2% 实测 4.65~4.77 ✅。 */
+  --glass-text-3: #98a1af;
+  --glass-sheen: rgba(255, 255, 255, 0.04);
+  --glass-inner-glow: rgba(255, 255, 255, 0.06);
+  --glass-grain: rgba(255, 255, 255, 0.1);
 
   /* ===== accent（提亮补偿深底对比损失）===== */
   --accent: #4a9eff;
@@ -498,7 +511,7 @@ html[data-theme='dark'][data-glass-level='1'] {
   --glass-bg-strong: rgba(35, 39, 47, 0.68);
   --glass-mask: rgba(10, 10, 16, 0.34);
   --glass-text-2: #a6aebc;
-  --glass-text-3: #9099a8;
+  --glass-text-3: #98a1af;
 }
 
 /* 档 3 · 清晰：偏不透明，文字最清晰，blur/saturate 最弱 */
@@ -517,7 +530,7 @@ html[data-theme='dark'][data-glass-level='3'] {
   --glass-bg-strong: rgba(35, 39, 47, 0.82);
   --glass-mask: rgba(10, 10, 16, 0.42);
   --glass-text-2: #a6aebc;
-  --glass-text-3: #9099a8;
+  --glass-text-3: #98a1af;
 }
 
 * {
@@ -4194,6 +4207,9 @@ html[data-glass-level] .app::before {
   inset: 0;
   z-index: var(--z-base);
   pointer-events: none;
+  /* #609 活背景：光斑 38s 极缓慢漂移 + 呼吸，给模糊层「背后有世界」的动感。
+   * 只动 transform（合成层，不触发重排）；reduced-motion 下静止，见文件末尾。 */
+  animation: glass-blob-drift 38s ease-in-out infinite;
   background:
     radial-gradient(ellipse 55% 45% at 12% 8%, rgba(124, 92, 252, 0.3), transparent 70%),
     radial-gradient(ellipse 50% 40% at 88% 22%, rgba(80, 200, 220, 0.26), transparent 70%),
@@ -4206,6 +4222,28 @@ html[data-theme='dark'][data-glass-level] .app::before {
     radial-gradient(ellipse 50% 40% at 88% 22%, rgba(80, 200, 220, 0.24), transparent 70%),
     radial-gradient(ellipse 48% 42% at 78% 88%, rgba(255, 140, 150, 0.2), transparent 70%),
     radial-gradient(ellipse 42% 38% at 18% 82%, rgba(255, 190, 110, 0.16), transparent 70%);
+}
+
+/* #609 光斑漂移：只改 transform / opacity 之外的位移与缩放，不触发重排。
+ * 38s 一轮，幅度 <2% —— 肉眼几乎察觉不到「在动」，但模糊后的玻璃底不再是静帧。 */
+@keyframes glass-blob-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  34% {
+    transform: translate3d(1.4%, -0.9%, 0) scale(1.03);
+  }
+  67% {
+    transform: translate3d(-1%, 1.2%, 0) scale(0.99);
+  }
+}
+
+/* 无障碍：系统开启「减少动态效果」时彻底静止（WCAG 2.3.3）。 */
+@media (prefers-reduced-motion: reduce) {
+  html[data-glass-level] .app::before {
+    animation: none;
+  }
 }
 
 /* ①b #606：遮罩改带色调深紫（--glass-mask），替代中性黑 --overlay。
@@ -4235,13 +4273,32 @@ html[data-glass-level] .column {
  *    三档补偿色 #4c4c4c/#4e4e4e/#545454 与 #5a5a5a/#5d5d5d/#636363 均实测达标）。 */
 html[data-glass-level] .modal,
 html[data-glass-level] .detail:not(.detail-window) {
-  background: var(--glass-bg);
+  /* #609 三层背景：① 指针镜面高光（中心随 --glass-mx/--glass-my 移动）
+   * ② 白色细颗粒（2px 极淡点阵，近看才有质感；截图实测 3px/0.5alpha 会形成
+   *    肉眼可见的规则网格像塑料磨砂板 ⇒ 降到 2px/0.18alpha；只叠浮层，
+   *    不动主界面文字对比度）
+   * ③ 半透明染色底。高光画在背景层而非伪元素 ⇒ 不遮挡正文、不影响焦点环。 */
+  background:
+    radial-gradient(
+      240px circle at var(--glass-mx) var(--glass-my),
+      var(--glass-sheen),
+      transparent 72%
+    ),
+    radial-gradient(circle at 0.5px 0.5px, var(--glass-grain) 0.4px, transparent 0.55px),
+    var(--glass-bg);
+  background-size:
+    auto,
+    2px 2px,
+    auto;
   border: 1px solid var(--glass-border);
   --text-2: var(--glass-text-2);
   --text-3: var(--glass-text-3);
+  /* #609 四边不等亮倒角：左上亮边 + 内侧柔光带 + 右下暗边 + 外悬浮投影。
+   * 均匀 1px 白边像贴膜；四边不同亮度才有玻璃厚度与弧度。 */
   box-shadow:
-    inset 0 1px 0 var(--glass-highlight),
-    inset 0 -1px 0 var(--glass-shadow-low),
+    inset 1px 1px 0 var(--glass-highlight),
+    inset 0 6px 12px -8px var(--glass-inner-glow),
+    inset -1px -1px 0 var(--glass-shadow-low),
     0 18px 48px var(--glass-shadow);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
@@ -4275,7 +4332,15 @@ html[data-glass-level] .panel-page .modal:not(.confirm-modal) {
 
 /* sticky 头部随面板半透明 + 模糊，避免滚动正文从下透出形成实心横带。 */
 html[data-glass-level] .detail:not(.detail-window) .detail-head {
-  background: var(--glass-bg-strong);
+  /* #609：sticky 头沿用同一高光中心（CSS 变量从浮层继承），避免滚动时
+   * 头/身两截亮度不连续。不加 grain —— 滚动时少一层重复纹理重绘。 */
+  background:
+    radial-gradient(
+      240px circle at var(--glass-mx) var(--glass-my),
+      var(--glass-sheen),
+      transparent 72%
+    ),
+    var(--glass-bg-strong);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }

@@ -1136,10 +1136,17 @@ describe('毛玻璃门禁（html[data-glass-level]）', () => {
     expect(d, '须还原实心阴影').toMatch(/box-shadow\s*:\s*var\(--elevation-3\)/);
   });
 
-  it('毛玻璃面板用半透明底 --glass-bg（保留不透明以保正文可读性）', () => {
+  it('#609 毛玻璃面板背景 = 指针高光 + 细颗粒 + 半透明染色底三层（末层仍是 --glass-bg）', () => {
     for (const sel of ['.modal', '.detail:not(.detail-window)']) {
-      expect(glassRule(sel), `${sel} 门禁规则须引用 --glass-bg`).toMatch(
-        /background\s*:\s*var\(--glass-bg\)/,
+      const body = glassRule(sel);
+      expect(body, `${sel} 末层须为 --glass-bg（保正文可读性）`).toMatch(/var\(--glass-bg\)/);
+      expect(body, `${sel} 须叠指针镜面高光层`).toMatch(/var\(--glass-sheen\)/);
+      expect(body, `${sel} 须叠白色细颗粒层`).toMatch(/var\(--glass-grain\)/);
+      expect(body, `${sel} 高光中心须由 JS 写的 CSS 变量驱动`).toMatch(
+        /at\s+var\(--glass-mx\)\s+var\(--glass-my\)/,
+      );
+      expect(body, `${sel} grain 须 2px 平铺（3px/0.5alpha 实测形成可见网格）`).toMatch(
+        /background-size\s*:\s*auto,\s*2px 2px,\s*auto/,
       );
     }
   });
@@ -1172,14 +1179,16 @@ describe('毛玻璃门禁（html[data-glass-level]）', () => {
   });
 
   it('文字补偿令牌 --glass-text-2/-3 在浅/深两主题都定义（深色不得沿用浅色值）', () => {
-    // #606 实测：彩色玻璃底上原生 --text-3 不达 AA，
-    // 必须补偿到 #5d5d5d = 4.73:1；--text-2 补偿到 #4e4e4e = 5.51:1。
+    // #606 实测：彩色玻璃底上原生 --text-3 不达 AA，补偿到 #5d5d5d；
+    // #609 深色叠加指针高光（sheen 0.04）+ grain 后底变亮，原 #9099a8 掉到 4.2:1，
+    // 故补偿加深一档到 #98a1af（实测 4.65~4.77:1）；浅色原补偿保持。
     expect(styles).toMatch(/--glass-text-2\s*:\s*#4e4e4e/);
     expect(styles).toMatch(/--glass-text-3\s*:\s*#5d5d5d/);
     const dark = styles.match(/\[data-theme='dark'\]\s*\{([^}]*)\}/);
     expect(dark, '需存在 [data-theme=dark] 覆盖块').toBeTruthy();
     expect(dark![1]).toMatch(/--glass-text-2\s*:\s*#a6aebc/);
-    expect(dark![1]).toMatch(/--glass-text-3\s*:\s*#9099a8/);
+    expect(dark![1]).toMatch(/--glass-text-3\s*:\s*#98a1af/);
+    expect(dark![1]).not.toMatch(/--glass-text-3\s*:\s*#9099a8/);
     // 门禁规则须把两级文字作用域覆盖到补偿令牌（否则补偿从未生效）
     expect(glassGate()).toMatch(/--text-2\s*:\s*var\(--glass-text-2\)/);
     expect(glassGate()).toMatch(/--text-3\s*:\s*var\(--glass-text-3\)/);
@@ -1232,15 +1241,18 @@ describe('毛玻璃门禁（html[data-glass-level]）', () => {
     expect(gate).not.toMatch(/background\s*:\s*var\(--overlay\)/);
   });
 
-  it('#606 浮层玻璃有上亮下暗不对称内阴影（macOS 27 景深）', () => {
+  it('#609 浮层玻璃四边不等亮倒角（左上亮 + 内侧柔光 + 右下暗 + 外悬浮投影）', () => {
     const body = glassRule('.modal');
     const shadow = body.match(/box-shadow\s*:\s*([^;]+);/);
     expect(shadow, '须有 box-shadow').toBeTruthy();
-    expect(shadow![1], '顶部亮高光 inset 0 1px').toMatch(
-      /inset\s+0\s+1px\s+0\s+var\(--glass-highlight\)/,
+    expect(shadow![1], '左上亮边 inset 1px 1px').toMatch(
+      /inset\s+1px\s+1px\s+0\s+var\(--glass-highlight\)/,
     );
-    expect(shadow![1], '底部暗边 inset 0 -1px').toMatch(
-      /inset\s+0\s+-1px\s+0\s+var\(--glass-shadow-low\)/,
+    expect(shadow![1], '内侧柔光带（玻璃厚度）').toMatch(
+      /inset\s+0\s+6px\s+12px\s+-8px\s+var\(--glass-inner-glow\)/,
+    );
+    expect(shadow![1], '右下暗边 inset -1px -1px').toMatch(
+      /inset\s+-1px\s+-1px\s+0\s+var\(--glass-shadow-low\)/,
     );
     expect(shadow![1], '外投影让面板悬浮').toMatch(/\d+px[^,]*var\(--glass-shadow\)/);
   });
@@ -1266,5 +1278,47 @@ describe('毛玻璃门禁（html[data-glass-level]）', () => {
     // 档1 最通透（底最暗）⇒ 补偿色最深（数值最小）；档3 反之。
     expect(shades[0]).toBeLessThan(shades[1]);
     expect(shades[1]).toBeLessThan(shades[2]);
+  });
+
+  // ===== #609：动态光学（指针高光 / 活背景 / 深色对比度补偿） =====
+
+  it('#609 动态光学令牌浅深各一套（深色高光须显著弱于浅色）', () => {
+    const root = styles.match(/:root\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+    for (const token of [
+      '--glass-mx',
+      '--glass-my',
+      '--glass-sheen',
+      '--glass-inner-glow',
+      '--glass-grain',
+    ]) {
+      expect(root, `:root 须定义 ${token}`).toMatch(new RegExp(`${token}\\s*:`));
+    }
+    const dark = styles.match(/\[data-theme='dark'\]\s*\{([^}]*)\}/)?.[1] ?? '';
+    for (const token of ['--glass-sheen', '--glass-inner-glow', '--glass-grain']) {
+      expect(dark, `深色块须独立重定义 ${token}（否则亮斑 + 对比度崩）`).toMatch(
+        new RegExp(`${token}\\s*:`),
+      );
+    }
+    const sheen = (block: string): number =>
+      Number(block.match(/--glass-sheen[^;]*?([\d.]+)\)/)?.[1] ?? NaN);
+    expect(sheen(dark), '深色高光须弱于浅色，否则 --text-3 掉到 4.2:1').toBeLessThan(sheen(root));
+  });
+
+  it('#609 光斑活背景有 38s 漂移动画，且 reduced-motion 下静止', () => {
+    expect(glassRule('.app::before'), '光斑须挂漂移动画').toMatch(
+      /animation\s*:\s*glass-blob-drift/,
+    );
+    expect(styles, '须定义 @keyframes glass-blob-drift').toMatch(/@keyframes\s+glass-blob-drift/);
+    const reduced = styles.match(
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\n\}/,
+    );
+    expect(reduced, '须有 prefers-reduced-motion 媒体查询（WCAG 2.3.3）').toBeTruthy();
+    expect(reduced![1]).toMatch(/animation\s*:\s*none/);
+  });
+
+  it('#609 sticky 头沿用同一高光中心（头身亮度连续，不出现实心横带）', () => {
+    const head = glassRule('.detail:not(.detail-window) .detail-head');
+    expect(head).toMatch(/var\(--glass-sheen\)/);
+    expect(head).toMatch(/at\s+var\(--glass-mx\)\s+var\(--glass-my\)/);
   });
 });
